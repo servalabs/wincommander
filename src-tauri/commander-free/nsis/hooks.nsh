@@ -106,7 +106,21 @@ ${Using:StrFunc} UnStrStr
 ; settings.  The elevated installer owns this product root, so first reclaim
 ; ownership of its machine-owned files and then apply the deliberate shared
 ; read-only ACL.  Per-user preferences are in LocalAppData and are untouched.
+; A clean installation has no product ProgramData folder yet.  `takeown`
+; correctly returns ERROR_FILE_NOT_FOUND in that case, so create the narrow
+; product root before attempting the legacy-owner repair.  CreateDirectory is
+; idempotent and does not modify an existing store.
+!macro WC_ENSURE_SHARED_MACHINE_DATA_DIRECTORY_OR_ABORT stage
+  ClearErrors
+  CreateDirectory "$R5\WinCommander"
+  ${If} ${Errors}
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-directory" "failed" "Could not create the product ProgramData directory"
+    Abort "WinCommander could not prepare its shared machine data directory."
+  ${EndIf}
+!macroend
+
 !macro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT stage
+  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_DIRECTORY_OR_ABORT "${stage}"
   nsExec::ExecToStack 'takeown.exe /F "$R5\WinCommander" /A /R /D Y'
   Pop $0
   Pop $1

@@ -102,6 +102,8 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("WC_LEGACY_LAUNCH_MIGRATION");
     expect(hooks).toContain("WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT");
     expect(hooks).toContain("WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT");
+    expect(hooks).toContain("WC_ENSURE_SHARED_MACHINE_DATA_DIRECTORY_OR_ABORT");
+    expect(hooks).toContain('CreateDirectory "$R5\\WinCommander"');
     expect(hooks).toContain('takeown.exe /F "$R5\\WinCommander" /A /R /D Y');
     expect(hooks).toContain("shared-machine-data-owner-repair");
     expect(hooks).toContain('"*S-1-5-32-545:(OI)(CI)RX"');
