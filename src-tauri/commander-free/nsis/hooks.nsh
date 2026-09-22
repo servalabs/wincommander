@@ -99,6 +99,24 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 !macroend
 
+; Older builds could leave an individual ProgramData file (most importantly
+; `store\settings.dat` or `.install.material`) with a protected ACL owned by
+; SYSTEM.  `icacls /T /C` then continues past that file and reports success for
+; the directory, while every desktop account later fails before it can read
+; settings.  The elevated installer owns this product root, so first reclaim
+; ownership of its machine-owned files and then apply the deliberate shared
+; read-only ACL.  Per-user preferences are in LocalAppData and are untouched.
+!macro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT stage
+  nsExec::ExecToStack 'takeown.exe /F "$R5\WinCommander" /A /R /D Y'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-owner-repair" "$0" "$1"
+  ${If} $0 != 0
+    Abort "WinCommander could not repair ownership of its shared machine data."
+  ${EndIf}
+  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT "${stage}"
+!macroend
+
 ; `sc stop` returns before SCM has necessarily released the service process.
 ; Replacing its executable early can fail silently, then leave the next start
 ; using a stale image. Wait until SCM confirms STOPPED before copying.
@@ -217,7 +235,7 @@ ${Using:StrFunc} UnStrStr
 
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "postinstall"
-  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
+  !insertmacro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
   ; Prefer the normal preserved token. Only restore this fallback if an older
   ; uninstaller lost it; never overwrite a freshly activated/repaired token.
   IfFileExists "$R5\WinCommander\license_cache.json" wc_remove_upgrade_license_backup 0
