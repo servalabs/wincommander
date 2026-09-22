@@ -15,7 +15,7 @@ test("snapshot IPC distinguishes attach, restore, and refresh from the legacy em
     expect(backendHook).toMatch(new RegExp(`execute(?:<[^>]+>)?\\(\\"${command}\\"`));
     expect(freeBackend).toContain(`"${command}"`);
   }
-  expect(backendHook).toContain('execute("Create-StegoMp4"');
+  expect(backendHook).toMatch(/execute(?:<[^>]+>)?\("Create-StegoMp4"/);
   expect(backendHook).toContain('execute("Extract-StegoMp4"');
 });
 

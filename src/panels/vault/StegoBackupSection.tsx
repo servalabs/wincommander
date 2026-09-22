@@ -13,6 +13,9 @@ export default function StegoBackupSection() {
   const stego = useStegoBackup();
   const [showLegacyPassword, setShowLegacyPassword] = useState(false);
   const { fields, set, busy } = stego;
+  const attachPath = stego.attachResult?.kind === "ok" ? stego.attachResult.path : null;
+  const restorePath = stego.restoreResult?.kind === "ok" ? stego.restoreResult.path : null;
+  const legacyPath = stego.legacyResult?.kind === "ok" ? stego.legacyResult.path : null;
   const locked = busy !== null;
   return (
     <SectionCard title="Stego Backup" icon="video" headerRight={<div className="stego-header-actions"><Tooltip content="Never trim, re-encode or upload a backup video through services that rewrite it."><Button minimal small icon="warning-sign" aria-label="Important stego backup warning" /></Tooltip><InfoDot content={INFO.what} /></div>}>
@@ -33,7 +36,7 @@ export default function StegoBackupSection() {
               <IssueLine issues={stego.attachErrors} field="confirmation" />
               {busy === "attach" && <BusyBar label="Copying and verifying the sealed container; an existing backup is replaced only after this succeeds." />}
               {stego.attachResult?.kind === "fail" && <FailureCallout failure={stego.attachResult.failure} />}
-              {stego.attachResult?.kind === "ok" && <SuccessCallout title="Video backup created" path={stego.attachResult.path} onReveal={() => void stego.revealFolder(stego.attachResult!.path)}>Recover and mount it once before deleting or replacing any other copy.</SuccessCallout>}
+              {attachPath && <SuccessCallout title="Video backup created" path={attachPath} onReveal={() => void stego.revealFolder(attachPath)}>Recover and mount it once before deleting or replacing any other copy.</SuccessCallout>}
               <Button intent="primary" loading={busy === "attach"} disabled={locked || stego.attachBlocked} onClick={() => void stego.runAttach()}>Create or update backup video</Button>
             </section>
             <section className="stego-block stego-block--restore" aria-labelledby="stego-restore-title">
@@ -46,7 +49,7 @@ export default function StegoBackupSection() {
               <IssueLine issues={stego.restoreErrors} field="destination" /><IssueLine issues={stego.restoreWarnings} field="destination" tone="warn" />
               {busy === "restore" && <BusyBar label="Reading the video and recovering the original-name container." />}
               {stego.restoreResult?.kind === "fail" && <FailureCallout failure={stego.restoreResult.failure} />}
-              {stego.restoreResult?.kind === "ok" && <SuccessCallout title="Container recovered" path={stego.restoreResult.path} onReveal={() => void stego.revealFolder(stego.restoreResult!.path)}>Mount it from Encrypted Volumes with its existing password.</SuccessCallout>}
+              {restorePath && <SuccessCallout title="Container recovered" path={restorePath} onReveal={() => void stego.revealFolder(restorePath)}>Mount it from Encrypted Volumes with its existing password.</SuccessCallout>}
               <Button loading={busy === "restore"} disabled={locked || stego.restoreBlocked} onClick={() => void stego.runRestore()}>Recover container</Button>
             </section>
           </div>
@@ -64,7 +67,7 @@ export default function StegoBackupSection() {
               <IssueLine issues={stego.legacyErrors} field="password" />
               {busy === "legacy" && <BusyBar label="Creating the empty encrypted container and verifying the video." />}
               {stego.legacyResult?.kind === "fail" && <FailureCallout failure={stego.legacyResult.failure} />}
-              {stego.legacyResult?.kind === "ok" && <SuccessCallout title="Empty container created" path={stego.legacyResult.path} onReveal={() => void stego.revealFolder(stego.legacyResult!.path)}>Recover it below before relying on it.</SuccessCallout>}
+              {legacyPath && <SuccessCallout title="Empty container created" path={legacyPath} onReveal={() => void stego.revealFolder(legacyPath)}>Recover it below before relying on it.</SuccessCallout>}
               <Button loading={busy === "legacy"} disabled={locked || stego.legacyBlocked} onClick={() => void stego.runLegacyCreate()}>Create empty hidden container</Button>
             </section>
           </details>

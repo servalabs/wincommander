@@ -53,7 +53,9 @@ export function useStegoBackup() {
     try {
       const result = await backend.attachStegoContainer({ carrierPath, containerPath, outputPath: outputPath || undefined, replaceExisting: replacementConfirmed });
       if (!result.success) { setAttachResult({ kind: "fail", failure: report(result.error, "attach") }); return; }
-      setAttachResult({ kind: "ok", path: result.data?.outputPath || outputPath }); showSuccess("Encrypted container attached to the video");
+      // The destination is known from the submitted form: a selected output
+      // path creates a new video; otherwise the selected carrier is refreshed.
+      setAttachResult({ kind: "ok", path: outputPath || carrierPath }); showSuccess("Encrypted container attached to the video");
     } catch (error) { setAttachResult({ kind: "fail", failure: report(String(error), "attach") }); } finally { setBusy(null); }
   };
   const runRestore = async () => {

@@ -1922,7 +1922,7 @@ export function useBackend() {
         } : {}),
       }),
     createStegoMp4: (params: CreateStegoMp4Params) =>
-      execute("Create-StegoMp4", {
+      execute<{ outputPath?: string }>("Create-StegoMp4", {
         CarrierMp4: params.carrierMp4,
         OutputPath: params.outputPath,
         SizeMB: parseSizeToMB(params.size),
@@ -1937,7 +1937,7 @@ export function useBackend() {
       execute("Attach-StegoContainer", {
         CarrierPath: params.carrierPath,
         ContainerPath: params.containerPath,
-        OutputPath: params.outputPath,
+        ...(params.outputPath ? { OutputPath: params.outputPath } : {}),
         ReplaceExisting: params.replaceExisting === true,
       }),
     restoreStegoContainer: (params: RestoreStegoContainerParams) =>
