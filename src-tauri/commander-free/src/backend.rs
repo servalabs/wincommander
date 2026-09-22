@@ -1578,7 +1578,12 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "security_threat_snapshot"
         | "security_cve_snapshot" => "paid",
         // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
-        "Create-StegoMp4" | "Extract-StegoMp4" | "Launch-VeraCryptForSystemEncryption" => "paid",
+        "Create-StegoMp4"
+        | "Extract-StegoMp4"
+        | "Attach-StegoContainer"
+        | "Restore-StegoContainer"
+        | "Refresh-StegoContainer"
+        | "Launch-VeraCryptForSystemEncryption" => "paid",
         // ── Two-password volume creation (paid; headless engine, Pro-Rust handler) ──
         "Create-DualVolume" => "paid",
         // ── Vault/volumes create+mount+dismount (paid; stdin-based engine, Pro-Rust handler) ──
@@ -2582,6 +2587,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Create-DualVolume" => Some("vault/volumes"),
         "Create-StegoMp4" => Some("vault/volumes"),
         "Extract-StegoMp4" => Some("vault/volumes"),
+        "Attach-StegoContainer" => Some("vault/volumes"),
+        "Restore-StegoContainer" => Some("vault/volumes"),
+        "Refresh-StegoContainer" => Some("vault/volumes"),
         "Get-VolumeInfo" => Some("vault/volumes"),
         "Get-SystemEncryptionStatus" => Some("vault/volumes"),
         "Get-SystemEncryptionEligibility" => Some("vault/volumes"),
@@ -2775,6 +2783,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Create-DualVolume",
         "Create-StegoMp4",
         "Extract-StegoMp4",
+        "Attach-StegoContainer",
+        "Restore-StegoContainer",
+        "Refresh-StegoContainer",
         "Get-EncryptedBackupTargetStatus",
         "Provision-EncryptedBackupTarget",
         "Clear-EncryptedBackupTarget",

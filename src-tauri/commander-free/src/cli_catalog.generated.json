@@ -55,6 +55,14 @@
       ]
     },
     {
+      "id": "backend:Attach\u002dStegoContainer",
+      "name": "Attach\u002dStegoContainer",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Block\u002dAnonymousSamEnumeration",
       "name": "Block\u002dAnonymousSamEnumeration",
       "transport": "backend\u002dscript",
@@ -6269,6 +6277,14 @@
       ]
     },
     {
+      "id": "backend:Refresh\u002dStegoContainer",
+      "name": "Refresh\u002dStegoContainer",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Register\u002dUSBKeySerial",
       "name": "Register\u002dUSBKeySerial",
       "transport": "backend\u002dscript",
@@ -6569,6 +6585,14 @@
       "frontendReferences": [
         "src/registry/tweaks.toggles.ts"
       ]
+    },
+    {
+      "id": "backend:Restore\u002dStegoContainer",
+      "name": "Restore\u002dStegoContainer",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
     },
     {
       "id": "backend:Scan\u002dAcquisitionThreats",

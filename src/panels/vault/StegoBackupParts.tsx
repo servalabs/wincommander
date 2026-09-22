@@ -10,11 +10,11 @@ import { formatBytes, type CapacityPlan } from "../../lib/stegoBackup";
 import type { StegoFailure, StegoField, StegoIssue } from "../../lib/stegoBackupValidation";
 
 export const INFO = {
-  what: "Steganographic backup: WinCommander builds an encrypted VeraCrypt volume and appends it to a normal video file. The result still plays in any player, so a copy on a phone or a cloud drive looks like an ordinary clip — but the hidden volume only opens with your password.",
+  what: "Steganographic snapshot: WinCommander appends your existing encrypted VeraCrypt container to a normal video file. The result still plays in a player, but it is not invisible to forensic inspection. Do not re-encode it or send it through services that rewrite video files.",
   size: "The usable space inside the hidden volume. It is fixed at creation — to store more later you have to build a new one.",
   carrier: "The payload rides along inside the file, so a large hidden volume in a tiny clip produces a video whose file size makes no sense for its length. Roughly three times the payload keeps the file size believable.",
   password: "This password is the only key. There is no reset, no recovery file and no support route back in — lose it and the backup is unreadable forever.",
-  restore: "Pulling the container out is a plain byte copy, so it needs no password. You enter the password later, when you mount the recovered container from the Volumes list above.",
+  restore: "Pulling the container out is a plain byte copy, so it needs no password. The saved metadata restores its original filename; you enter the existing password later when mounting it from the Volumes list above.",
 };
 
 export function InfoDot({ content }: { content: string }) {

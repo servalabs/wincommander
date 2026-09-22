@@ -9,6 +9,8 @@ import {
   freeBytesForPath,
   isSamePath,
   isSupportedCarrier,
+  isSupportedContainer,
+  fileName,
   normalizeContainerOutputPath,
   parseContainerSize,
   requiredFreeBytes,
@@ -128,6 +130,18 @@ describe("isSupportedCarrier", () => {
   it("does not read an extension out of a folder name", () => {
     expect(fileExtension("C:\\v1.2\\clip")).toBe("");
     expect(isSupportedCarrier("C:\\v1.2\\clip")).toBe(false);
+  });
+});
+
+describe("existing container helpers", () => {
+  it("accepts common container extensions and an extensionless NTFS container", () => {
+    expect(isSupportedContainer("D:\\Vault\\Private.HC")).toBe(true);
+    expect(isSupportedContainer("D:\\Vault\\Private.tc")).toBe(true);
+    expect(isSupportedContainer("D:\\Vault\\NtfsVault")).toBe(true);
+    expect(isSupportedContainer("")).toBe(false);
+  });
+  it("keeps the embedded filename separate from its source folder", () => {
+    expect(fileName("D:/Vault/Private Files.hc")).toBe("Private Files.hc");
   });
 });
 
