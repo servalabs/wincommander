@@ -22,7 +22,7 @@ export default function StegoBackupSection() {
           <div className="stego-blocks-row">
             <section className="stego-block" aria-labelledby="stego-attach-title">
               <span id="stego-attach-title" className="stego-block__title">Create or update a video backup</span>
-              <p className="stego-intro">Choose a carrier video and the container you already use. `.hc`, `.tc`, and extensionless NTFS containers are accepted. Its password is never requested or stored.</p>
+              <p className="stego-intro">Choose a carrier video and the container you already use. Its filename can have any extension or none at all; an extensionless NTFS container is accepted. Its password is never requested or stored.</p>
               <FilePick label="Carrier video or existing backup…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="carrier" /><IssueLine issues={stego.attachWarnings} field="carrier" tone="warn" />
               <FilePick label="Existing container…" value={fields.containerPath} onPick={() => void stego.pickContainer()} onClear={() => set.setContainerPath("")} disabled={locked} />
