@@ -62,14 +62,15 @@ describe("Print Monitoring contract", () => {
     expect(component).toContain("Document names, printer names, usernames, paths, and document contents are never sent to Fleet.");
   });
 
-  test("watermarking is truthful, unavailable, and non-interactive without a controlled pipeline", async () => {
+  test("watermarking is a truthful Fleet-controlled workflow handoff, not a false local switch", async () => {
     const component = await Bun.file(componentPath).text();
     const watermarking = component.split('data-testid="print-watermarking"')[1] ?? "";
 
-    expect(watermarking).toContain("Planned — no controlled print/export pipeline is wired to this monitor.");
-    expect(watermarking).toContain("Visible watermarking: off by default and unavailable here.");
-    expect(watermarking).toContain("Invisible/forensic markers: off by default and unavailable here.");
-    expect(watermarking).toContain("cannot watermark arbitrary jobs after they have been submitted");
+    expect(watermarking).toContain("FLEET WORKFLOW");
+    expect(watermarking).toContain("Fleet-managed controlled-PDF workflow");
+    expect(watermarking).toContain("Fleet-issued ticket and a verified renderer");
+    expect(watermarking).toContain("does not receive renderer or ticket read-back");
+    expect(watermarking).toContain("Ordinary Windows print jobs remain unmodified");
     expect(watermarking).not.toContain("<Switch");
   });
 

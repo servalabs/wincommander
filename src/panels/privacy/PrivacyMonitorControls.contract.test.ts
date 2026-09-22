@@ -16,22 +16,26 @@ describe("Privacy Monitor control accessibility", () => {
     );
   });
 
-  test("keeps RDP session protection within remote access and the requested monitors on the right", async () => {
+  test("places RDP beside Privacy Shield, moves DLP to its former left-column position, and keeps Print Monitoring on the right", async () => {
     const [panel, remoteAccess, rdp] = await Promise.all([
       Bun.file("src/panels/privacy/index.tsx").text(),
       Bun.file("src/panels/privacy/RemoteAccessMonitorSection.tsx").text(),
       Bun.file("src/panels/privacy/RdpIdleCard.tsx").text(),
     ]);
 
-    expect(panel).toContain('rdpProtection={<RdpIdleCard embedded />}');
     expect(remoteAccess).toContain('Remote Desktop & Access Monitor');
-    expect(remoteAccess).toContain('{rdpProtection}');
     expect(rdp).toContain('embedded?: boolean');
     expect(rdp).toContain('remote-access-rdp-protection');
 
-    const rightColumn = panel.slice(panel.indexOf('<div className="privacy-monitor-col">', panel.indexOf('privacy-monitor-col') + 1));
-    expect(rightColumn).toContain('<ArgusDlpSection />');
+    const firstColumnStart = panel.indexOf('<div className="privacy-monitor-col">');
+    const rightColumnStart = panel.indexOf('<div className="privacy-monitor-col">', firstColumnStart + 1);
+    const leftColumn = panel.slice(firstColumnStart, rightColumnStart);
+    const rightColumn = panel.slice(rightColumnStart);
+    expect(leftColumn).toContain('<PrivacyShieldCard />');
+    expect(leftColumn).toContain('<ArgusDlpSection />');
+    expect(rightColumn).toContain('<RdpIdleCard />');
     expect(rightColumn).toContain('<RansomwareMonitorSection');
+    expect(rightColumn).toContain('<PrintMonitoringSection />');
   });
 
   test("labels monitor switches, disclosure buttons, and clear actions", async () => {
