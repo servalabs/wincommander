@@ -95,6 +95,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// (deadlock, blocked PowerShell child, OS swap-storm) as an error
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Stego operations copy the complete encrypted container byte-for-byte. An
+/// NTFS volume can be many gigabytes, so the normal interactive timeout would
+/// kill a healthy copy mid-transfer and may cause a duplicate retry.
+const STEGO_TRANSFER_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// A Fleet-lab enrollment pass is one-use.  Bound its IPC wait more tightly
 /// than a normal GUI operation and never replay it after a timeout.
 const FLEET_LAB_JOIN_TIMEOUT: Duration = Duration::from_secs(45);
@@ -102,6 +106,11 @@ const FLEET_LAB_JOIN_TIMEOUT: Duration = Duration::from_secs(45);
 fn request_timeout_for(feature_id: &str) -> Option<Duration> {
     match feature_id {
         "Mount-EncryptionVolume" => None,
+        "Create-StegoMp4"
+        | "Extract-StegoMp4"
+        | "Attach-StegoContainer"
+        | "Restore-StegoContainer"
+        | "Refresh-StegoContainer" => Some(STEGO_TRANSFER_TIMEOUT),
         "fleet_lab_join" => Some(FLEET_LAB_JOIN_TIMEOUT),
         _ => Some(SESSION_REQUEST_TIMEOUT),
     }
@@ -1963,6 +1972,23 @@ mod tests {
                 request_timeout_for(feature_id),
                 Some(Duration::from_secs(120)),
                 "{feature_id} must not receive the mount timeout"
+            );
+        }
+    }
+
+    #[test]
+    fn stego_file_copies_receive_a_transfer_timeout() {
+        for feature_id in [
+            "Create-StegoMp4",
+            "Extract-StegoMp4",
+            "Attach-StegoContainer",
+            "Restore-StegoContainer",
+            "Refresh-StegoContainer",
+        ] {
+            assert_eq!(
+                request_timeout_for(feature_id),
+                Some(Duration::from_secs(24 * 60 * 60)),
+                "{feature_id} must not be cut off mid-copy"
             );
         }
     }
