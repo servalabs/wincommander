@@ -89,6 +89,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(css).toContain("@container (max-width: 600px)");
     expect(css).toContain(".fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(css).toContain(".fleet-owner-inputs { grid-template-columns: 1fr; }");
+    expect(css).toContain("overflow: visible;");
   });
 
   test("keeps the everyday Vault workflow primary and technical recovery details secondary", () => {

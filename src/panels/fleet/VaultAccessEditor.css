@@ -20,6 +20,14 @@
 
 .vault-access-editor .fleet-field > select { width: 100%; }
 
+/* High Windows display scaling reduces the usable CSS width. Long paths and
+   localized labels must grow vertically instead of widening the editor. */
+.vault-access-editor .fleet-field > span,
+.vault-access-editor .fleet-field > small,
+.vault-access-field-heading > span {
+  overflow-wrap: anywhere;
+}
+
 .vault-access-container-path {
   display: flex;
   gap: 8px;
@@ -117,17 +125,23 @@
 .vault-access-details dt { margin-top: 10px; color: var(--text); font-weight: 600; }
 .vault-access-details dd { margin: 3px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
 
-@container (max-width: 960px) {
+/* Use the actual panel width so the layout reflows at high-DPI scaling too. */
+@container (max-width: 1100px) {
   .vault-access-editor .fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-@container (max-width: 600px) {
+@container (max-width: 720px) {
   .vault-access-editor .fleet-owner-inputs,
   .vault-access-editor .fleet-vault-grant-row { grid-template-columns: minmax(0, 1fr); }
   .vault-access-editor .fleet-vault-grant-row > button { justify-self: start; }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 1100px) {
+  .vault-access-editor .fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
   .vault-access-editor .fleet-owner-inputs,
   .vault-access-editor .fleet-vault-grant-row { grid-template-columns: minmax(0, 1fr); }
+  .vault-access-editor .fleet-vault-grant-row > button { justify-self: start; }
 }

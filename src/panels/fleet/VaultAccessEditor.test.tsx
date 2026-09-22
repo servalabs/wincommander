@@ -137,8 +137,10 @@ describe("Vault access editor presentation", () => {
 
   test("uses responsive tracks and wrapping without adding an overflow owner", () => {
     expect(css).toContain("repeat(3, minmax(0, 1fr))");
-    expect(css).toContain("@container (max-width: 960px)");
-    expect(css).toContain("@container (max-width: 600px)");
+    expect(css).toContain("@container (max-width: 1100px)");
+    expect(css).toContain("@container (max-width: 720px)");
+    expect(css).toContain("@media (max-width: 1100px)");
+    expect(css).toContain("@media (max-width: 720px)");
     expect(css).toContain("overflow-wrap: anywhere");
     expect(css).toContain(":focus-visible");
     expect(/overflow(?:-[xy])?\s*:\s*(?:auto|scroll|hidden|clip)/.test(css)).toBe(false);
