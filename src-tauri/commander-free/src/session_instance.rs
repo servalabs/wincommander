@@ -31,7 +31,8 @@
 //
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 //
-//   run() calls acquire() BEFORE the Tauri builder:
+//   run() resolves the optional UAC relaunch, then calls acquire() BEFORE the
+//   Tauri builder:
 //     Primary instance   → owns mutex, returns true,  startup continues.
 //     Duplicate instance → forwards args via pipe, returns false → exit(0).
 //
@@ -45,13 +46,12 @@ use std::sync::OnceLock;
 
 use tauri::{Emitter, Manager};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, STILL_ACTIVE, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, STILL_ACTIVE},
     System::{
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
             CreateMutexW, GetCurrentProcessId, GetExitCodeProcess, OpenProcess, ReleaseMutex,
-            TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_TERMINATE,
+            PROCESS_QUERY_LIMITED_INFORMATION,
         },
     },
 };
@@ -151,6 +151,11 @@ pub fn acquire(cli_args: &[String]) -> bool {
     };
 
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        if crate::startup_elevation::should_handoff_existing_instance(cli_args) {
+            unsafe { CloseHandle(hmutex) };
+            return acquire_after_cooperative_elevation_handoff(sid, &mutex_name);
+        }
+
         // Another instance is already running in this session.
         // Decide what — if anything — to forward to the primary:
         //
@@ -234,31 +239,30 @@ pub fn acquire(cli_args: &[String]) -> bool {
                         );
                         false
                     }
+                    Some(pid) if !is_pid_alive(pid) => {
+                        // A dead process cannot retain a mutex indefinitely.
+                        // Retry acquisition, but never terminate a live process
+                        // merely because its IPC listener is unavailable.
+                        crate::log_message_src(
+                            "info",
+                            "core",
+                            &format!(
+                                "[SessionInstance] PID {} is dead — retrying mutex acquisition",
+                                pid
+                            ),
+                        );
+                        true
+                    }
                     Some(pid) => {
-                        if is_pid_alive(pid) {
-                            // Alive but not answering the pipe — hung zombie. Kill it.
-                            crate::log_message_src(
-                                "warn",
-                                "core",
-                                &format!(
-                                    "[SessionInstance] PID {} alive but pipe-silent — terminating hung zombie",
-                                    pid
-                                ),
-                            );
-                            kill_and_wait(pid);
-                            true
-                        } else {
-                            // Already dead — OS will release its mutex shortly.
-                            crate::log_message_src(
-                                "info",
-                                "core",
-                                &format!(
-                                    "[SessionInstance] PID {} is dead — proceeding with takeover",
-                                    pid
-                                ),
-                            );
-                            true
-                        }
+                        crate::log_message_src(
+                            "warn",
+                            "core",
+                            &format!(
+                                "[SessionInstance] PID {} is alive but pipe-silent — preserving it and declining takeover",
+                                pid
+                            ),
+                        );
+                        false
                     }
                 };
 
@@ -312,32 +316,51 @@ pub fn release() {
     }
 }
 
-/// Temporarily release the primary mutex while a foreground process asks UAC
-/// to start its elevated replacement. The handle remains open so a cancelled
-/// consent can reclaim it without rebuilding the single-instance state.
-pub fn relinquish_for_elevation_handoff() {
-    if let Some(&h) = MUTEX_HANDLE.get() {
-        unsafe {
-            let _ = ReleaseMutex(h as _);
-        }
+/// Ask the normal primary to exit through its Tauri event loop, then wait for
+/// its mutex to be released. This is a controlled restart for elevation, not a
+/// liveness recovery path: a non-responsive primary is deliberately preserved.
+fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> bool {
+    let handoff = ["--elevated-relaunch".to_string()];
+    let (delivered, primary_pid) = forward_args_with_liveness(sid, &handoff);
+    if !delivered {
+        crate::log_message_src(
+            "warn",
+            "core",
+            &format!(
+                "[SessionInstance] cannot request elevation handoff from primary pid {:?}; preserving the existing instance",
+                primary_pid
+            ),
+        );
+        return false;
     }
-}
 
-/// Reclaim the mutex after UAC is cancelled or cannot create the child. If a
-/// second foreground launch won the tiny handoff window, that process is the
-/// primary and this process still remains fully usable; we never exit or show
-/// an error merely because elevation was declined.
-pub fn reclaim_after_elevation_cancel() {
-    if let Some(&h) = MUTEX_HANDLE.get() {
-        let result = unsafe { WaitForSingleObject(h as _, 0) };
-        if result != WAIT_OBJECT_0 {
+    // app.exit() releases the mutex after sidecar shutdown. Ten seconds covers
+    // a normal clean exit without turning a slow or hung process into a target
+    // for forced termination.
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let hmutex = unsafe { CreateMutexW(std::ptr::null(), 1, mutex_name.as_ptr()) };
+        if !hmutex.is_null() && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+            persist_primary_pid();
+            MUTEX_HANDLE.set(hmutex as isize).ok();
             crate::log_message_src(
-                "warn",
+                "info",
                 "core",
-                "[SessionInstance] could not reclaim mutex after cancelled elevation handoff",
+                "[SessionInstance] acquired mutex after cooperative elevation handoff",
             );
+            return true;
+        }
+        if !hmutex.is_null() {
+            unsafe { CloseHandle(hmutex) };
         }
     }
+
+    crate::log_message_src(
+        "warn",
+        "core",
+        "[SessionInstance] primary did not exit for elevation handoff; preserving it",
+    );
+    false
 }
 
 /// Spawn the async named-pipe server in the Tauri async runtime.
@@ -543,24 +566,6 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Terminate a process by PID and wait up to ~2s for it to exit.
-fn kill_and_wait(pid: u32) {
-    unsafe {
-        let h = OpenProcess(
-            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
-            0,
-            pid,
-        );
-        if h.is_null() {
-            return;
-        }
-        let _ = TerminateProcess(h, 1);
-        // Wait up to 2 000 ms for the process to fully exit.
-        let _ = WaitForSingleObject(h, 2000);
-        let _ = CloseHandle(h);
-    }
-}
-
 /// Write the CLI args to the running instance's named pipe so it can handle
 /// them (e.g. open the scrubber / shredder with the supplied paths).
 /// Returns (delivered, stored_primary_pid).
@@ -613,6 +618,19 @@ pub(crate) fn resolve_context_menu_event(has_flag: impl Fn(&str) -> bool) -> &'s
 /// Parse a forwarded arg payload and emit the appropriate Tauri event.
 /// Format: `path1|--flag|path2` (same separator as the original plugin used).
 fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
+    let parts: Vec<&str> = payload.split('|').collect();
+    if should_exit_for_elevation_handoff(
+        parts.contains(&"--elevated-relaunch"),
+        crate::startup_elevation::is_current_process_elevated(),
+    ) {
+        crate::log_message_src(
+            "info",
+            "core",
+            "[SessionInstance] cooperative elevation handoff requested",
+        );
+        app.exit(0);
+        return;
+    }
     // If the app is still initializing, queue the payload — showing the window
     // or re-entering calc mode before the frontend has booted produces a black
     // frame and races the startup window-decision. set_app_ready() replays it.
@@ -625,7 +643,14 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
         );
         return;
     }
-    let parts: Vec<&str> = payload.split('|').collect();
+    if parts.contains(&"--elevated-relaunch") {
+        crate::log_message_src(
+            "warn",
+            "core",
+            "[SessionInstance] elevation handoff ignored because this instance is already elevated",
+        );
+        return;
+    }
     // Win32 ShowWindow (which desynced Tauri's window state and crashed on
     // maximize). A dead app can't toggle — it cold-starts and reveals instead.
     // --focus is the sentinel sent by a bare double-click of the exe — an
@@ -696,10 +721,15 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     }
 }
 
+fn should_exit_for_elevation_handoff(requested: bool, primary_is_elevated: bool) -> bool {
+    requested && !primary_is_elevated
+}
+
 #[cfg(test)]
 mod resolve_context_menu_event_tests {
     use super::{
         instance_object_name, pipe_path, primary_pid_value_name, resolve_context_menu_event,
+        should_exit_for_elevation_handoff,
     };
 
     #[cfg(wincommander_dev_profile)]
@@ -755,6 +785,13 @@ mod resolve_context_menu_event_tests {
             resolve_context_menu_event(|f| f == "--context-shred"),
             "shred-requested"
         );
+    }
+
+    #[test]
+    fn only_a_normal_primary_exits_for_an_elevation_handoff() {
+        assert!(should_exit_for_elevation_handoff(true, false));
+        assert!(!should_exit_for_elevation_handoff(true, true));
+        assert!(!should_exit_for_elevation_handoff(false, false));
     }
 
     #[test]

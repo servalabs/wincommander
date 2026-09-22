@@ -1518,21 +1518,22 @@ pub fn run() {
     #[cfg(windows)]
     {
         let cli_args: Vec<String> = std::env::args().collect();
-        if !cli_mode && !session_instance::acquire(&cli_args) {
-            // Primary instance already running in this session and has received
-            // the forwarded args.  Nothing more to do.
-            std::process::exit(0);
-        }
         // Keep the desktop manifest asInvoker. A normal interactive launch
         // asks Windows for an elevated replacement; cancelling that UAC prompt
-        // simply continues this already-initialised standard-user instance.
-        // Autostart, CLI, helper, duplicate, and elevated-relaunch launches
-        // are deliberately excluded so there is no prompt loop or logon UAC.
+        // simply continues with the user's standard token. This runs before
+        // single-instance acquisition: an elevated child can then cleanly
+        // replace an already-running normal instance instead of being treated
+        // as a duplicate.
         if !cli_mode
             && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args)
             && startup_elevation::offer_startup_elevation(&cli_args)
                 == startup_elevation::StartupElevationResult::ElevatedCopyStarted
         {
+            std::process::exit(0);
+        }
+        if !cli_mode && !session_instance::acquire(&cli_args) {
+            // Primary instance already running in this session and has received
+            // the forwarded args.  Nothing more to do.
             std::process::exit(0);
         }
     }
@@ -1927,6 +1928,23 @@ pub fn run() {
                     let _ = window.set_skip_taskbar(false);
                     // Native setup can finish before bundled scripts have painted.
                     app.state::<startup_window::StartupWindow>().arm();
+                    // The first frontend paint normally consumes this arm through
+                    // `startup_window_ready`.  Do not let a missing splash asset,
+                    // font, or renderer IPC leave a normal launch permanently
+                    // invisible: the armed state is never set for hidden or
+                    // calculator-mode startup, so this fallback cannot reveal
+                    // a deliberately concealed window.
+                    let fallback_window = window.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if let Err(error) = startup_window::reveal_armed_startup_window(&fallback_window) {
+                            crate::log_message_src(
+                                "warn",
+                                "core",
+                                &format!("[Startup] native window fallback reveal failed: {error}"),
+                            );
+                        }
+                    });
                 }
                 dev_startup_trace("main window reveal prepared");
                 startup_trace::milestone(app.handle(), "main_window_reveal_prepared");

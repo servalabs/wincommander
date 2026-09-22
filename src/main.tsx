@@ -7,9 +7,8 @@ import "@fontsource/ibm-plex-mono/600.css";
 import "@fontsource/space-grotesk/600.css";
 import "@fontsource/space-grotesk/700.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { message } from "@tauri-apps/plugin-dialog";
 import { applyMotionClass } from "./lib/motionPolicy";
-import { showStartupAnimation } from "./startup/animationRoot";
-import { getDisplayBranding } from "./lib/branding";
 
 const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
@@ -39,16 +38,15 @@ if (isNotificationWindow) {
 } else {
   void import("./entries/mainWindow")
     .then(({ mountMainWindow }) => mountMainWindow())
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       console.error("Unable to load the main window", error);
-      showStartupAnimation({
-        branding: getDisplayBranding(null),
-        isLight: document.documentElement.classList.contains('light'),
-        reducedMotion: document.documentElement.classList.contains('wc-no-motion'),
-        isAppReady: false,
-        startupError: 'WinCommander could not start. Retry to reload the app.',
-        onComplete: () => {},
-        onRetry: () => location.reload(),
-      });
+      // A code-loading failure is not recoverable by replaying the same broken
+      // page.  Report it natively, then close cleanly instead of leaving a
+      // white/empty window or offering a retry loop.
+      await message(
+        "WinCommander could not complete startup. Please install the latest WinCommander update.",
+        { title: "WinCommander could not start", kind: "error" },
+      );
+      await getCurrentWindow().close();
     });
 }

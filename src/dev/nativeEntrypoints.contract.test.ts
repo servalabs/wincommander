@@ -49,4 +49,20 @@ describe("native and UI-audit entrypoints", () => {
     expect(source).toContain('import("./entries/notificationAlerts")');
     expect(source).toContain('import("./entries/mainWindow")');
   });
+
+  test("main desktop reveal is not gated by startup artwork or a retry loop", async () => {
+    const [startup, main] = await Promise.all([
+      read("src/startup.tsx"),
+      read("src/main.tsx"),
+    ]);
+
+    expect(startup).toContain("showStartupAnimation(initialAnimation)");
+    expect(startup).toContain("await revealStartupWindow()");
+    expect(startup).not.toContain("waitForStartupAnimationReady");
+    expect(startup.indexOf("await revealStartupWindow()")).toBeLessThan(
+      startup.indexOf("await import('./main')"),
+    );
+    expect(main).not.toContain("Retry startup");
+    expect(main).not.toContain("location.reload()");
+  });
 });

@@ -18,26 +18,56 @@ pub enum StartupElevationResult {
 }
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
+const ELEVATED_LAUNCH_TASK: &str = "WinCommander Elevated Launcher";
+const ELEVATED_AUTOSTART_TASK: &str = "WinCommander Elevated Autostart";
 
-/// A UAC prompt is useful only for an interactive, foreground GUI launch.
-/// It must never appear at logon, for command-line work, context-menu helpers,
-/// or when the newly elevated process re-enters this function.
+/// A UAC prompt is useful for every interactive desktop launch, including the
+/// logon launch. This lets Windows show its normal consent/credential prompt
+/// instead of silently pinning WinCommander to a limited token.
 pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String]) -> bool {
     if cli_mode || args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG) {
         return false;
     }
 
-    !args.iter().any(|arg| {
+    !is_helper_launch(args)
+}
+
+fn is_helper_launch(args: &[String]) -> bool {
+    args.iter().any(|arg| {
         matches!(
             arg.as_str(),
-            "--autostart"
-                | "--minimized"
-                | "--safe-copy"
-                | "--context-shred"
-                | "--scrub"
-                | "--safe-paste"
+            "--safe-copy" | "--context-shred" | "--scrub" | "--safe-paste"
         )
     })
+}
+
+pub fn is_elevated_relaunch(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG)
+}
+
+fn elevated_launcher_task(args: &[String]) -> &'static str {
+    if args.iter().any(|arg| arg == "--autostart") {
+        ELEVATED_AUTOSTART_TASK
+    } else {
+        ELEVATED_LAUNCH_TASK
+    }
+}
+
+#[cfg(windows)]
+pub fn is_current_process_elevated() -> bool {
+    (unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() }) != 0
+}
+
+#[cfg(not(windows))]
+pub fn is_current_process_elevated() -> bool {
+    false
+}
+
+/// Only the child created by this module can replace a normal primary through
+/// a cooperative exit request. Other duplicate launches remain ordinary
+/// forwards, even when Explorer already started them elevated.
+pub fn should_handoff_existing_instance(args: &[String]) -> bool {
+    !is_helper_launch(args) && is_elevated_relaunch(args)
 }
 
 /// Build the child arguments without passing the internal sentinel on again.
@@ -88,6 +118,7 @@ fn quote_windows_argument(argument: &str) -> String {
 #[cfg(windows)]
 pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
     use windows_sys::Win32::UI::{
         Shell::{IsUserAnAdmin, ShellExecuteW},
         WindowsAndMessaging::SW_SHOWNORMAL,
@@ -99,15 +130,27 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
         return StartupElevationResult::ContinueNormally;
     }
 
-    // The session mutex is deliberately handed off before ShellExecuteW.
-    // UAC starts the elevated child before this call returns; keeping the
-    // mutex here would make the child look like a duplicate and exit instead.
-    crate::session_instance::relinquish_for_elevation_handoff();
+    // The machine installer owns this Administrators-group task. Task
+    // Scheduler verifies group membership and starts the configured high-token
+    // child without another consent dialog. If the task is absent, blocked by
+    // policy, or this is a standard user, deliberately fall through to UAC.
+    let task_name = elevated_launcher_task(args);
+    let task_status = std::process::Command::new("schtasks.exe")
+        .args(["/Run", "/TN", task_name])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .status();
+    if matches!(task_status, Ok(status) if status.success()) {
+        crate::log_message_src(
+            "info",
+            "core",
+            &format!("[StartupElevation] trusted task started: {task_name}"),
+        );
+        return StartupElevationResult::ElevatedCopyStarted;
+    }
 
     let executable = match std::env::current_exe() {
         Ok(path) => path,
         Err(error) => {
-            crate::session_instance::reclaim_after_elevation_cancel();
             crate::log_message_src(
                 "warn",
                 "core",
@@ -140,7 +183,6 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     if (result as isize) <= 32 {
         // UAC cancel is intentionally quiet. It is a normal choice, not an
         // application error; the original app carries on with its user token.
-        crate::session_instance::reclaim_after_elevation_cancel();
         crate::log_message_src(
             "info",
             "core",
@@ -171,20 +213,17 @@ mod tests {
     }
 
     #[test]
-    fn background_and_helper_launches_never_prompt() {
-        for flag in [
-            "--autostart",
-            "--minimized",
-            "--safe-copy",
-            "--context-shred",
-            "--scrub",
-            "--safe-paste",
-        ] {
+    fn helpers_never_prompt_but_autostart_uses_the_same_uac_contract() {
+        for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste"] {
             assert!(!should_offer_startup_elevation(
                 false,
                 &["app.exe".into(), flag.into()]
             ));
         }
+        assert!(should_offer_startup_elevation(
+            false,
+            &["app.exe".into(), "--autostart".into()]
+        ));
         assert!(!should_offer_startup_elevation(true, &["app.exe".into()]));
     }
 
@@ -194,6 +233,32 @@ mod tests {
             false,
             &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()]
         ));
+    }
+
+    #[test]
+    fn elevated_launchers_preserve_manual_and_autostart_contracts() {
+        assert_eq!(
+            elevated_launcher_task(&["app.exe".into()]),
+            ELEVATED_LAUNCH_TASK
+        );
+        assert_eq!(
+            elevated_launcher_task(&["app.exe".into(), "--autostart".into()]),
+            ELEVATED_AUTOSTART_TASK
+        );
+    }
+
+    #[test]
+    fn elevated_child_requests_a_cooperative_instance_handoff() {
+        assert!(!should_handoff_existing_instance(&["app.exe".into()]));
+        assert!(should_handoff_existing_instance(&[
+            "app.exe".into(),
+            ELEVATED_RELAUNCH_FLAG.into()
+        ]));
+        assert!(!should_handoff_existing_instance(&[
+            "app.exe".into(),
+            "--context-shred".into(),
+            ELEVATED_RELAUNCH_FLAG.into()
+        ]));
     }
 
     #[test]

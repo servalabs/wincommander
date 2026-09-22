@@ -23,6 +23,10 @@ const legacyLaunchMigration = readFileSync(
   "src-tauri/commander-free/nsis/migrate-legacy-user-launches.ps1",
   "utf8",
 );
+const closeInstalledApp = readFileSync(
+  "src-tauri/commander-free/nsis/close-installed-app.ps1",
+  "utf8",
+);
 
 describe("Free machine-wide release packaging", () => {
   test("uses a shared Program Files install and a product-specific Start Menu location", () => {
@@ -54,6 +58,26 @@ describe("Free machine-wide release packaging", () => {
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
     expect(hooks).toContain("WC_STOP_OWNED_SERVICE_OR_ABORT");
+    expect(hooks).toContain("WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT");
+    expect(hooks).toContain("close-installed-app.ps1");
+    expect(hooks).toContain('!insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "preinstall"');
+    expect(hooks).toContain('!insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "uninstall"');
+    expect(hooks).toContain("Win32_Process.ExecutablePath matching rather than a broad `/IM` kill");
+    expect(closeInstalledApp).toContain("Win32_Process");
+    expect(closeInstalledApp).toContain("$process.ExecutablePath");
+    expect(closeInstalledApp).toContain("taskkill.exe\" /PID $processId");
+    expect(closeInstalledApp).toContain("/PID $processId /F");
+    expect(closeInstalledApp).toContain("Normal close request for WinCommander process ID $processId was refused; waiting before forced shutdown");
+    expect(closeInstalledApp).toContain("Forced close request for WinCommander process ID $processId");
+    expect(closeInstalledApp).not.toContain(" /IM ");
+    expect(hooks).toContain("configure-elevated-launchers.ps1");
+    expect(hooks).toContain("WinCommander Elevated Launcher");
+    expect(hooks).toContain("WinCommander Elevated Autostart");
+    expect(hooks).toContain("WC_SERVICE_STOP_TIMEOUT_SECONDS 135");
+    expect(hooks).toContain("SCM's STATE, CHECKPOINT and WAIT_HINT");
+    expect(hooks).toContain('!insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "uninstall" "un"');
+    expect(hooks).toContain('!insertmacro WC_DELETE_OWNED_SERVICE_OR_ABORT "uninstall"');
+    expect(hooks).toContain("sc.exe delete ${WC_SERVICE_NAME}");
     expect(hooks).toContain("installer-lifecycle.log");
     expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
     expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
@@ -116,12 +140,15 @@ describe("Free machine-wide release packaging", () => {
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain('${GetOptions} $CMDLINE "/UPDATE" $R7');
     expect(hooks).toContain("An update must retain");
-    expect(hooks).toContain('RMDir /r "$PROGRAMDATA\\WinCommander"');
+    expect(hooks).toContain('ReadEnvStr $R5 "ProgramData"');
+    expect(hooks).toContain('RMDir /r "$R5\\WinCommander"');
     expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(
-      hooks.indexOf('RMDir /r "$PROGRAMDATA\\WinCommander"'),
+      hooks.indexOf('RMDir /r "$R5\\WinCommander"'),
     );
     expect(hooks).toContain('license_cache.json');
-    expect(hooks).toContain('icacls.exe "$PROGRAMDATA\\WinCommander" /inheritance:r');
+    expect(hooks).toContain('icacls.exe "$R5\\WinCommander" /inheritance:r');
+    expect(hooks).not.toContain('IfFileExists "$PROGRAMDATA\\');
+    expect(hooks).not.toContain('IfFileExists "$COMMONAPPDATA\\');
     expect(hooks).toContain('RMDir /r "$LOCALAPPDATA\\WinCommander"');
   });
 });

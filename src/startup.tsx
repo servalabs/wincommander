@@ -1,4 +1,4 @@
-import { showStartupAnimation, hideStartupAnimation, waitForStartupAnimationReady } from './startup/animationRoot';
+import { showStartupAnimation, hideStartupAnimation } from './startup/animationRoot';
 import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
 import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
@@ -12,7 +12,15 @@ const isMain = Boolean(native) && (!label || label === 'main')
 
 applyMotionClass();
 async function startMainWindow(): Promise<void> {
-    await prepareStartupTheme();
+    try {
+        await prepareStartupTheme();
+    } catch (error: unknown) {
+        // Theme persistence is optional.  It must never prevent the desktop
+        // window from appearing; the application will apply its normal theme
+        // once its providers mount.
+        console.warn('Unable to prepare the cached startup theme', error);
+    }
+
     const initialAnimation = {
         branding: readStartupBranding(),
         isLight: document.documentElement.classList.contains('light'),
@@ -20,34 +28,22 @@ async function startMainWindow(): Promise<void> {
         isAppReady: false,
         isWindowVisible: false,
         startupError: null,
+        // The bootstrap never presents a retry control.  A no-op preserves the
+        // shared splash component contract until the dashboard takes ownership.
         onComplete: () => {},
-        onRetry: () => location.reload(),
+        onRetry: () => {},
     };
+    // Mount content before asking the native side to show the HWND.  Do not
+    // gate visibility on a stylesheet, logo decode, web font, or animation
+    // frame: any one of those can be delayed or unavailable after an update.
     showStartupAnimation(initialAnimation);
-    try {
-        await waitForStartupAnimationReady();
-        const shown = await revealStartupWindow();
-        // The intro clock starts after the real native window is revealed.
-        showStartupAnimation({ ...initialAnimation, isWindowVisible: true });
-        if (!shown) hideStartupAnimation();
-        await import('./main');
-    } catch (error: unknown) {
-        console.error('Unable to load the application', error);
-        showStartupAnimation({
-            ...initialAnimation,
-            isWindowVisible: true,
-            startupError: 'WinCommander could not start. Retry to reload the app.',
-        });
-        try {
-            await waitForStartupAnimationReady();
-            await revealStartupWindow();
-        } catch {
-            const { message } = await import('@tauri-apps/plugin-dialog');
-            await message('WinCommander could not load its startup artwork. Please close and reopen the app. If this continues, reinstall WinCommander.', {
-                title: 'WinCommander could not start', kind: 'error',
-            });
-        }
-    }
+    const shown = await revealStartupWindow();
+    // The intro clock starts after the real native window is revealed.
+    showStartupAnimation({ ...initialAnimation, isWindowVisible: true });
+    if (!shown) hideStartupAnimation();
+    // Loading the dashboard is deliberately last: a slow module can no longer
+    // leave a hidden, white-looking native window during startup.
+    await import('./main');
 }
 
 if (isMain) void startMainWindow();

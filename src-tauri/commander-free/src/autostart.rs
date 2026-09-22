@@ -7,12 +7,13 @@
 //   2. A Run value goes stale if a portable exe is moved; we re-point the task
 //      at the CURRENT exe on every launch (idempotent), so it self-heals.
 //   3. A Run key can go stale when a portable executable is moved. The task is
-//      refreshed on launch and deliberately runs at the user's normal level.
+//      refreshed on launch. The process then uses the same UAC
+//      consent/credential flow as a foreground launch.
 //
 // The task uses a BUILTIN\Users (S-1-5-32-545) group principal + an at-logon
 // trigger, so it fires for any user's logon inside that user's interactive
-// session. It must not run elevated: update and autostart work must never gain
-// the ability to affect another RDS user's desktop.
+// session. Task Scheduler starts it in that session; WinCommander then asks
+// Windows for elevation instead of suppressing UAC.
 
 const COVERED_TASK_NAME: &str = "System Update Service";
 
@@ -37,10 +38,6 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
 const AUTOSTART_POWERSHELL: &str = "powershell.exe";
 
-/// The desktop app runs as the invoking user. Preserve the limited group task
-/// so a logon launch can never become elevated or affect another user's
-/// desktop session.
-///
 /// Task Scheduler discards a child process's stderr. Keep that evidence in the
 /// relevant profile rather than ProgramData, which a standard user cannot
 /// write. The file is overwritten on each autostart attempt so it stays useful
@@ -49,7 +46,7 @@ const AUTOSTART_POWERSHELL: &str = "powershell.exe";
 fn autostart_action_args(exe: &str) -> String {
     let exe_ps = exe.replace('\'', "''");
     format!(
-        "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$ErrorActionPreference='Stop'; $dir=Join-Path $env:LOCALAPPDATA 'WinCommander'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $log=Join-Path $dir 'autostart.stderr.log'; $env:__COMPAT_LAYER='RunAsInvoker'; & '{exe_ps}' --autostart 2> $log; exit $LASTEXITCODE\""
+        "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$ErrorActionPreference='Stop'; $dir=Join-Path $env:LOCALAPPDATA 'WinCommander'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $log=Join-Path $dir 'autostart.stderr.log'; & '{exe_ps}' --autostart 2> $log; exit $LASTEXITCODE\""
     )
 }
 

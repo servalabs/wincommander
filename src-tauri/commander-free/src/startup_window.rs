@@ -21,6 +21,28 @@ impl StartupWindow {
     }
 }
 
+/// Reveal a normal startup that was armed by native setup but never received
+/// the frontend readiness IPC. This is intentionally narrower than the usual
+/// `reveal_main_window` path: an armed state exists only for a normal,
+/// interactive launch, never for hidden or calculator-mode startup.
+pub(crate) fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return Ok(false);
+    };
+    if !state.take_reveal() {
+        return window.is_visible().map_err(|error| error.to_string());
+    }
+    if let Err(error) = window.show() {
+        state.arm();
+        return Err(error.to_string());
+    }
+    let _ = window.maximize();
+    crate::set_wincommander_window_icon(window);
+    let _ = window.set_focus();
+    crate::startup_trace::milestone(window.app_handle(), "main_window_show_requested");
+    Ok(true)
+}
+
 #[tauri::command]
 pub(crate) fn startup_window_ready(
     window: tauri::WebviewWindow,
@@ -29,9 +51,9 @@ pub(crate) fn startup_window_ready(
     if window.label() != "main" {
         return Err("Startup readiness is only available to the main window".into());
     }
-    let Some(state) = window.try_state::<StartupWindow>() else {
+    if window.try_state::<StartupWindow>().is_none() {
         return Ok(false);
-    };
+    }
     let background = if is_light {
         tauri::window::Color(255, 255, 255, 255)
     } else {
@@ -40,19 +62,8 @@ pub(crate) fn startup_window_ready(
     window
         .set_background_color(Some(background))
         .map_err(|error| error.to_string())?;
-    if !state.take_reveal() {
-        return window.is_visible().map_err(|error| error.to_string());
-    }
     // Showing before maximizing delivers WebView2's resize on scaled displays.
-    if let Err(error) = window.show() {
-        state.arm();
-        return Err(error.to_string());
-    }
-    let _ = window.maximize();
-    crate::set_wincommander_window_icon(&window);
-    let _ = window.set_focus();
-    crate::startup_trace::milestone(window.app_handle(), "main_window_show_requested");
-    Ok(true)
+    reveal_armed_startup_window(&window)
 }
 
 #[cfg(test)]
