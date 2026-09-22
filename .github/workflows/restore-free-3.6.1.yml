@@ -1,0 +1,131 @@
+name: Restore Free updater to 3.6.1
+
+# This is an incident-only rollback. It intentionally accepts no version input:
+# the signed, previously published 3.6.1 release is the only artifact it can
+# promote. The protected release environment supplies the R2 credentials.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RESTORE_FREE_3_6_1 to restore the public updater and remove 3.6.2 and 3.6.3.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.event.inputs.confirmation == 'RESTORE_FREE_3_6_1'
+    name: Restore signed Free 3.6.1 release
+    runs-on: windows-latest
+    environment:
+      name: release
+      url: https://winupdates.servalabs.com/free/latest.json
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download and verify the published 3.6.1 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assetRoot = Join-Path $env:RUNNER_TEMP 'wincommander-free-3.6.1-rollback'
+          New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
+          gh release download v3.6.1 --repo $env:GITHUB_REPOSITORY --dir $assetRoot --pattern 'WinCommander_3.6.1_x64-setup.exe' --pattern 'WinCommander_3.6.1_x64-setup.exe.sig' --pattern 'SHA256SUMS.txt' --pattern 'latest.json' --pattern 'wincommander-free.sbom.cdx.json'
+
+          $setup = Join-Path $assetRoot 'WinCommander_3.6.1_x64-setup.exe'
+          $signature = "$setup.sig"
+          $checksums = Join-Path $assetRoot 'SHA256SUMS.txt'
+          $manifestPath = Join-Path $assetRoot 'latest.json'
+          $sbom = Join-Path $assetRoot 'wincommander-free.sbom.cdx.json'
+          foreach ($required in @($setup, $signature, $checksums, $manifestPath, $sbom)) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required 3.6.1 rollback asset is missing: $required" }
+          }
+
+          $expected = ((Get-Content -LiteralPath $checksums -Raw).Trim() -split '\s+')[0].ToUpperInvariant()
+          $actual = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($actual -ne $expected) { throw 'The downloaded 3.6.1 setup does not match its published SHA-256.' }
+
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '3.6.1') { throw 'The downloaded updater manifest is not version 3.6.1.' }
+          $platform = $manifest.platforms.'windows-x86_64'
+          if ($null -eq $platform -or $platform.url -notmatch '/free/v3\.6\.1/WinCommander_3\.6\.1_x64-setup\.exe$' -or [string]::IsNullOrWhiteSpace($platform.signature)) {
+            throw 'The downloaded 3.6.1 updater manifest is incomplete or points to the wrong setup.'
+          }
+
+          "ASSET_ROOT=$assetRoot" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Restore R2 updater and remove broken Free builds
+        shell: pwsh
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.CF_R2_API }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
+          RCLONE_CONFIG_R2_REGION: auto
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rcloneZip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $rcloneDir = Join-Path $env:RUNNER_TEMP 'rclone'
+          Invoke-WebRequest -Uri 'https://downloads.rclone.org/rclone-current-windows-amd64.zip' -OutFile $rcloneZip
+          Expand-Archive -Path $rcloneZip -DestinationPath $rcloneDir -Force
+          $rclone = (Get-ChildItem $rcloneDir -Filter 'rclone.exe' -Recurse | Select-Object -First 1).FullName
+          if (-not $rclone) { throw 'rclone.exe was not found after download.' }
+
+          $remote = 'r2:windows'
+          $setup = Join-Path $env:ASSET_ROOT 'WinCommander_3.6.1_x64-setup.exe'
+          $signature = "$setup.sig"
+          $checksums = Join-Path $env:ASSET_ROOT 'SHA256SUMS.txt'
+          $manifest = Join-Path $env:ASSET_ROOT 'latest.json'
+          $sbom = Join-Path $env:ASSET_ROOT 'wincommander-free.sbom.cdx.json'
+          $immutable = @(
+            @{ Local = $setup; Remote = 'free/v3.6.1/WinCommander_3.6.1_x64-setup.exe'; Label = 'versioned setup' },
+            @{ Local = $signature; Remote = 'free/v3.6.1/WinCommander_3.6.1_x64-setup.exe.sig'; Label = 'versioned signature' },
+            @{ Local = $checksums; Remote = 'free/v3.6.1/SHA256SUMS.txt'; Label = 'versioned checksum' },
+            @{ Local = $sbom; Remote = 'free/v3.6.1/wincommander-free.sbom.cdx.json'; Label = 'versioned SBOM' }
+          )
+          foreach ($asset in $immutable) {
+            & $rclone copyto $asset.Local "$remote/$($asset.Remote)" '--ignore-times' '--s3-no-check-bucket'
+            if ($LASTEXITCODE -ne 0) { throw "Could not restore the 3.6.1 $($asset.Label) to R2." }
+          }
+          foreach ($asset in $immutable) {
+            $verificationPath = Join-Path $env:RUNNER_TEMP ("verify-" + [IO.Path]::GetFileName($asset.Remote))
+            & $rclone copyto "$remote/$($asset.Remote)" $verificationPath '--s3-no-check-bucket'
+            if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $verificationPath -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $asset.Local -Algorithm SHA256).Hash) {
+              throw "The restored 3.6.1 $($asset.Label) did not round-trip from R2." }
+          }
+
+          & $rclone copyto $setup "$remote/free/latest.exe" '--ignore-times' '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore free/latest.exe.' }
+          $latestSetupVerification = Join-Path $env:RUNNER_TEMP 'verify-latest.exe'
+          & $rclone copyto "$remote/free/latest.exe" $latestSetupVerification '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $latestSetupVerification -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash) {
+            throw 'The restored free/latest.exe did not round-trip from R2.' }
+          & $rclone copyto $manifest "$remote/free/latest.json" '--ignore-times' '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore free/latest.json.' }
+
+          $publicManifest = Invoke-RestMethod -Uri ("$($env:UPDATE_DOMAIN.TrimEnd('/'))/free/latest.json?rollback=3.6.1")
+          if ($publicManifest.version -ne '3.6.1') { throw 'The public updater manifest did not roll back to 3.6.1.' }
+
+          foreach ($brokenVersion in @('v3.6.2', 'v3.6.3')) {
+            & $rclone purge "$remote/free/$brokenVersion" '--s3-no-check-bucket'
+            if ($LASTEXITCODE -ne 0) { throw "Could not remove R2 artifact directory $brokenVersion." }
+          }
+
+      - name: Delete broken GitHub release archives and tags
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($tag in @('v3.6.2', 'v3.6.3')) {
+            gh release delete $tag --repo $env:GITHUB_REPOSITORY --yes
+            if ($LASTEXITCODE -ne 0) { throw "Could not delete GitHub Release $tag." }
+            git push origin ":refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Could not delete Git tag $tag." }
+          }
