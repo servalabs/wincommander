@@ -38,6 +38,66 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   frontend job milestones. It stores no paths, settings values, command
   arguments, licence material, or error text.
 
+## Startup sample reports
+
+`bun run startup:benchmark samples.json report.json --require-complete`
+validates and summarizes measurements supplied by a separate capture run. It
+does not launch the application. Omit `report.json` to write JSON to stdout.
+An output file must be new: existing reports and raw inputs are never replaced,
+including when another filename points to the same file.
+
+The versioned input is `{ "schemaVersion": 1, "metadata": { ... }, "samples": [...] }`.
+Use a separate envelope whenever the build, machine, fixture, or protection
+configuration changes. Each sample has a `scenario` and an `elapsedMs` object.
+Scenarios are `warm`, `cold`, `first-install`, `offline`, and `downloads-50k`.
+Timings are finite, non-negative milliseconds from the same monotonic process
+clock. The required milestones, in order, are:
+
+1. `process_start` (zero)
+2. `native_setup_entered`
+3. `main_window_show_requested`
+4. `webview_dom_ready`
+5. `settings_cache_hydrated`
+6. `dashboard_first_visible`
+7. `dashboard_interactive`
+8. `fresh_system_probe_complete`
+9. `background_idle`
+
+Also record exactly one protection outcome from the same clock:
+`protection_required_ready`, `protection_not_required`, or `protection_failed`.
+It must occur by `background_idle`. A failed outcome cannot qualify successful
+startup data; the other outcomes must agree with `protectionRequired`.
+
+| Metadata field | Required value |
+| --- | --- |
+| `freeRevision`, `proRevision` | Full 40-character source commit hashes |
+| `freeArtifactHash`, `proArtifactHash` | SHA-256 of the measured artifacts, 64 hexadecimal characters |
+| `machineId` | Stable non-sensitive machine label, not a user name or serial number |
+| `windowsVersion`, `webviewVersion` | Versions actually used during capture |
+| `capturedAt` | UTC ISO timestamp including milliseconds, such as `2026-09-22T00:00:00.000Z` |
+| `downloadsEntries` | Non-negative integer; exactly `50000` for the `downloads-50k` scenario |
+| `protectionRequired` | Boolean reflecting the measured launch configuration |
+
+For a Free-only measurement, set both Pro fields to `null`. Text labels are
+limited to 160 characters; unknown metadata fields are rejected. Hashes identify
+inputs but the helper cannot attest that those artifacts produced the samples.
+
+Legacy arrays and valid partial samples remain usable for diagnostics without
+`--require-complete`. Empty timings, unknown scenarios/phases, malformed numbers,
+conflicting outcomes, and reordered milestones are rejected and cause exit 1.
+Strict mode also exits 1 for missing metadata or incomplete milestones. A valid
+report still records these issues so omitted samples cannot disappear silently.
+Malformed JSON or an invalid envelope fails without a report.
+
+Reports contain per-phase sample counts, p50, nearest-rank p95, and maximum.
+`dataComplete` only means every **supplied** sample has the required fields and
+successful outcome. It does not require all scenarios, sufficient repetitions,
+or a performance budget pass; inspect `unmeasuredScenarios` and the counts.
+`reportOnly` remains true and `externalGates` lists evidence this tool cannot
+establish. `generatedAt` is report time; `metadata.capturedAt` is capture time.
+Synthetic test fixtures verify the helper, not startup speed or installed
+Windows behavior. Preserve original captures beside generated reports.
+
 ## Public measurement status
 
 No reproducible public baseline, device-class budget, or benchmark result is

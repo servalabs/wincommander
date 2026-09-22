@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Startup benchmark reports reject empty or malformed measurements, record
+  per-phase sample counts, and distinguish partial diagnostics from complete
+  supplied data. Strict reports require build/environment provenance and a
+  successful protection outcome. Report files never overwrite existing files.
+
 - Fleet reconnect preserves managed state. Connection changes validate keys,
   bind native approval to the complete request, and recheck the observed
   authority before saving. A failed settings read no longer implies a new device.
