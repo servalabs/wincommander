@@ -44,6 +44,7 @@ import {
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showWarning } from "../../utils/toast";
+import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import './index.css';
@@ -227,7 +228,7 @@ export default function DashboardPanel() {
   const [internetPending, setInternetPending] = useState(false);
   const isExpert = visibility.density === "expert";
   const borrowedActive = useBorrowedActive();
-  const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
+  const borrowedHidden = appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS;
   // Secret Settings owns both the permanent and Borrowed Mode visibility of
   // these dashboard destinations. `null` preserves the existing default of
   // showing them; only an explicit false is a permanent concealment choice.

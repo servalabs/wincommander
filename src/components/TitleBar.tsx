@@ -19,6 +19,7 @@ import { useAuthMode } from "../context/AuthModeContext";
 import { allTopics } from "../content/guide";
 import { tourIdForPanel } from "../lib/tour";
 import { PANEL_MANIFESTS, type PanelId } from "../types/panels";
+import { DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 
 const appWindow = (window as any).__TAURI_INTERNALS__ ? getCurrentWindow() : null;
 
@@ -105,7 +106,7 @@ function TitleBar({ activePanel }: TitleBarProps) {
   }, []);
   const panelsLocked = !panelsUnlocked && (appSettings?.app?.lockedPanelIds?.length ?? 0) > 0;
   const borrowedActive = useBorrowedActive();
-  const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
+  const borrowedHidden = appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS;
   const hideTour =
     appSettings?.app?.hideTour === true ||
     (borrowedActive && borrowedHidden.includes("tour"));

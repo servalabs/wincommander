@@ -15,7 +15,7 @@ import { executeBackendCommand } from "../hooks/useBackend";
 import { runOperation } from "../context/OperationContext";
 import useVisibility from "../hooks/useVisibility";
 import useBorrowedActive from "../hooks/useBorrowedActive";
-import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
+import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_EXTRAS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
 import { canOpenFleetNavigation } from "../lib/fleetNavigationAccess";
 import { Icon, type IconName } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
@@ -98,10 +98,10 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   const borrowedActive = useBorrowedActive();
   const licenseHidden =
     appSettings?.app?.hideLicensePanel === true ||
-    (borrowedActive && (appSettings?.app?.borrowedHidden ?? []).includes("license-panel"));
+    (borrowedActive && (appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS).includes("license-panel"));
   const preferencesHidden =
     appSettings?.app?.hideSidebarPreferences === true ||
-    (borrowedActive && (appSettings?.app?.borrowedHidden ?? []).includes("sidebar-preferences"));
+    (borrowedActive && (appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS).includes("sidebar-preferences"));
   useEffect(() => {
     const revealSecretSettings = () => setSecretSettingsRevealed(true);
     const hideSecretSettings = () => setSecretSettingsRevealed(false);

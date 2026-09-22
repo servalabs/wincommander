@@ -16,7 +16,7 @@ import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useEntitlements from "../../hooks/useEntitlements";
 import { Icon } from "@/components/ui/bp";
 import { PANEL_MANIFESTS, NAV_GROUP_ORDER, navGroupFor, type PanelId } from "../../types/panels";
-import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS, DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
+import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS, DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 import {
     getPopupAlertsEnabled,
     setPopupAlertsEnabled,
@@ -116,7 +116,7 @@ export default function VisibilityTable() {
         [appSettings?.app?.permanentlyHiddenPanels],
     );
     const hiddenActions = useMemo(
-        () => (appSettings?.app?.hiddenSidebarActions ?? []) as string[],
+        () => (appSettings?.app?.hiddenSidebarActions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS) as string[],
         [appSettings?.app?.hiddenSidebarActions],
     );
     const borrowedHidden = useMemo(

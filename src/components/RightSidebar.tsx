@@ -17,7 +17,7 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
-import { DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
+import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import './RightSidebar.css';
 
@@ -131,7 +131,7 @@ export default function RightSidebar() {
     // An action is also hidden when Borrowed Mode is active and its key is in
     // borrowedHidden (key format: "action:<key>").
     const hiddenActions = new Set([
-        ...(appSettings?.app?.hiddenSidebarActions ?? []),
+        ...(appSettings?.app?.hiddenSidebarActions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS),
         ...(borrowedActive
             ? borrowedHidden
                 .filter(k => k.startsWith("action:"))

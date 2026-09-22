@@ -23,6 +23,7 @@ pub const SETTINGS_VERSION: u32 = 2;
 // New installations expose all ordinary panels. An explicit per-user list is
 // still honoured, so this default never re-enables a panel a user hid.
 const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &[];
+const DEFAULT_HIDDEN_SIDEBAR_ACTIONS: &[&str] = &["ai-advisor"];
 const USER_SETTINGS_FILENAME: &str = "user-settings.dat";
 const USER_SETTINGS_MAX_PLAINTEXT_BYTES: usize = 1_048_576;
 
@@ -897,7 +898,10 @@ impl Default for AppPreferences {
             decoy_mode: DecoyModeSettings::default(),
             hide_notification_bell: false,
             disable_native_notifications: false,
-            hidden_sidebar_actions: Vec::new(),
+            hidden_sidebar_actions: DEFAULT_HIDDEN_SIDEBAR_ACTIONS
+                .iter()
+                .map(|action| action.to_string())
+                .collect(),
             mute_notifications_when_locked: false,
             permanently_hidden_panels: Some(
                 DEFAULT_PERMANENTLY_HIDDEN_PANELS

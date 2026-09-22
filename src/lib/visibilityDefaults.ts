@@ -13,8 +13,10 @@
 //     itself remains hidden-until-revealed via its own 5×-click gate.)
 //   • When Borrowed Mode is active, only dashboard / tweaks / apps / system-identity
 //     remain visible; all other panels are hidden.
-//   • Right-sidebar: only Search + AI Advisor remain when borrowed; all
-//     destructive/sensitive quick-actions are hidden.
+//   • Borrowed Mode also conceals the dashboard's alternate views, all
+//     notification surfaces, and the sidebar's persona/interface controls.
+//   • Right-sidebar: only Search remains when borrowed; all other quick
+//     actions are hidden.
 
 // Panels hidden while Borrowed Mode is active. Everything except the four
 // "safe" panels (dashboard, tweaks, apps, system-identity).
@@ -38,14 +40,24 @@ export const DEFAULT_BORROWED_PANELS = [
 // This is only the unconfigured first-run fallback.
 export const DEFAULT_ALWAYS_PANELS = [] satisfies PanelId[];
 
-// Right-sidebar surfaces hidden when borrowed. ai-advisor and search are
-// intentionally absent — they stay visible while borrowed.
+// Extra surfaces hidden when borrowed. This covers the dashboard's alternate
+// views, every notification surface, and the sidebar's persona/interface
+// controls as well as the sensitive quick actions.
 export const DEFAULT_BORROWED_EXTRAS: string[] = [
+  "risk-matrix",
+  "more-products",
+  "notif-bell",
+  "popup-alerts",
+  "desktop-alerts",
+  "sidebar-preferences",
+  "action:ai-advisor",
   "action:dismount",
   "action:delete",
   "action:scrubMeta",
   "action:lockdown",
-  "popup-alerts",
-  "desktop-alerts",
   "engines-section",
 ];
+
+// AI Advisor starts hidden everywhere. An explicit empty persisted list still
+// means the person using the PC chose to show it.
+export const DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS = ["ai-advisor"];
