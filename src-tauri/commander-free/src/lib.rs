@@ -1100,6 +1100,14 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
     result.map(|_| ())
 }
 
+/// Reports the effective Windows token, not mere membership in Administrators.
+/// The frontend uses this to avoid auto-starting a machine-wide update from a
+/// normal token; that path must remain a visible UAC-approved action.
+#[tauri::command]
+fn is_current_process_elevated() -> bool {
+    startup_elevation::is_current_process_elevated()
+}
+
 /// Build the updater endpoint list with a `?t=<unix_ms>` cache-buster
 /// appended to each URL. Reads the configured endpoints from
 /// tauri.conf.json so the source-of-truth stays in one place; we just
@@ -2482,6 +2490,7 @@ pub fn run() {
             get_public_ip_trace,
             app_check_for_updates_doh,
             app_install_update_doh,
+            is_current_process_elevated,
             updater::app_install_staged_update,
             updater::updater_current_state,
             update_tray_shield_label,

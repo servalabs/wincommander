@@ -133,7 +133,7 @@ export default function VersionManagementCard() {
                     <div>
                         <div className="version-auto-update__title">Automatically update WinCommander{canUpdatePro ? " and Pro" : ""}</div>
                         <div className="version-auto-update__description">
-                            Downloads and installs covered updates in the background, then restarts WinCommander when Free changes. {canUpdatePro ? "Pro updates automatically after its one-time Defender approval." : "Your installed Pro build is not changed when paid-update coverage has ended."} Turn this off to review each update first.
+                            Downloads covered updates in the background. If WinCommander is already elevated, it can install them automatically; otherwise it asks you to approve Windows UAC before changing the shared installation. {canUpdatePro ? "Pro updates automatically after its one-time Defender approval." : "Your installed Pro build is not changed when paid-update coverage has ended."} Turn this off to review each update first.
                         </div>
                     </div>
                     <Switch

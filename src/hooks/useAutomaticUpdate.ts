@@ -34,15 +34,35 @@ export function automaticUpdatesAllowedForBuild(isDevBuild: boolean | null): boo
     return isDevBuild === false;
 }
 
+/**
+ * A machine-wide Free update replaces files under Program Files and may repair
+ * shared ProgramData state.  A background worker must never initiate that
+ * privileged hand-off from a normal user token: stage the verified update and
+ * let the visible update flow ask the user to approve UAC instead.
+ */
+export function canAutomaticallyInstallMachineUpdate(
+    automaticUpdatesEnabled: boolean,
+    processElevated: boolean,
+): boolean {
+    return automaticUpdatesEnabled && processElevated;
+}
+
 /** Runs a no-dialog update only after the user chose automatic updates. */
-export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds: boolean) {
+export default function useAutomaticUpdate(
+    automaticUpdatesEnabled: boolean,
+    processElevated: boolean,
+    canUpdatePaidBuilds: boolean,
+) {
     const [isDevBuild, setIsDevBuild] = useState<boolean | null>(null);
     useEffect(() => {
         invoke<boolean>("is_dev_build")
             .then(setIsDevBuild)
             .catch(() => setIsDevBuild(null));
     }, []);
-    const runtimeEnabled = enabled && automaticUpdatesAllowedForBuild(isDevBuild);
+    const runtimeEnabled = canAutomaticallyInstallMachineUpdate(
+        automaticUpdatesEnabled,
+        processElevated,
+    ) && automaticUpdatesAllowedForBuild(isDevBuild);
     const updater = useUpdater();
     const pro = useProInstall({
         status: runtimeEnabled && canUpdatePaidBuilds,

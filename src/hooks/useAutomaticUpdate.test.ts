@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   automaticUpdatesAllowedForBuild,
+  canAutomaticallyInstallMachineUpdate,
   canAutomaticallyUpdatePro,
   proNeedsUpdate,
 } from "./useAutomaticUpdate";
@@ -10,6 +11,12 @@ describe("automatic Pro updates", () => {
     expect(automaticUpdatesAllowedForBuild(null)).toBe(false);
     expect(automaticUpdatesAllowedForBuild(true)).toBe(false);
     expect(automaticUpdatesAllowedForBuild(false)).toBe(true);
+  });
+
+  test("never starts a machine-wide installer automatically from a normal token", () => {
+    expect(canAutomaticallyInstallMachineUpdate(true, false)).toBe(false);
+    expect(canAutomaticallyInstallMachineUpdate(false, true)).toBe(false);
+    expect(canAutomaticallyInstallMachineUpdate(true, true)).toBe(true);
   });
 
     test("updates legacy installed Pro copies that do not yet have a saved hash", () => {

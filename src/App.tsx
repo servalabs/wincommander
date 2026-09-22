@@ -241,7 +241,14 @@ function AppContent({ splashDone, onSplashComplete }: {
   const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupError, retryStartup, startupDataState, runStartupJob, systemInfo } = appState;
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
-  useAutomaticUpdate(automaticUpdatesEnabled, canUpdatePro);
+  const [processElevated, setProcessElevated] = useState<boolean | null>(null);
+  useEffect(() => {
+    void invoke<boolean>("is_current_process_elevated")
+      .then(setProcessElevated)
+      // Never assume a normal token is elevated merely because the probe failed.
+      .catch(() => setProcessElevated(false));
+  }, []);
+  useAutomaticUpdate(automaticUpdatesEnabled, processElevated === true, canUpdatePro);
   useAutomaticAppUpdates();
 
   const lockHiddenPanels = useCallback(() => {
@@ -417,7 +424,12 @@ function AppContent({ splashDone, onSplashComplete }: {
   const updateFlowAutoPromptedRef = useRef(false);
   const freeUpdatePromptedRef = useRef(false);
   useEffect(() => {
-    if (automaticUpdatesEnabled) return;
+    // A machine-wide update changes Program Files and shared ProgramData. An
+    // already elevated process may install it automatically. A normal process
+    // only stages the signed update and opens this visible flow, so the person
+    // can explicitly approve the UAC prompt before installation starts.
+    if (processElevated === null) return;
+    if (automaticUpdatesEnabled && processElevated) return;
     // Free side: the background scheduler has something to do. This has its OWN
     // guard (checked ABOVE the Pro guard) because the Rust updater has a ~30s
     // initial delay before its first check, while the Pro status/manifest probe
@@ -552,6 +564,7 @@ function AppContent({ splashDone, onSplashComplete }: {
     lastAnnouncedUpdateVersion,
     patchAppSettings,
     automaticUpdatesEnabled,
+    processElevated,
   ]);
 
   // RDP idle disconnect (Idle Session Monitor) -- runs globally so the
