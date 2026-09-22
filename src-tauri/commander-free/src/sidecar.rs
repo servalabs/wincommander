@@ -197,16 +197,20 @@ fn pro_hash_is_accepted(actual: &str) -> bool {
     matches(ACCEPTED_PRO_SHA256_CURRENT) || matches(ACCEPTED_PRO_SHA256_PREVIOUS)
 }
 
+/// Development builds deliberately allow a locally-built Pro sidecar whose
+/// release pin has not been generated. Keep this plainly successful and at
+/// info level: it is expected development state, not an integrity warning.
+fn debug_pro_hash_bypass_message(actual: &str) -> String {
+    format!(
+        "[Sidecar] Debug build: Pro hash pinning is intentionally bypassed; local sidecar handshake accepted (hash {}).",
+        if actual.is_empty() { "<empty>" } else { actual }
+    )
+}
+
 fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     // Debug builds skip hash pinning entirely — .pro_hash may be stale during local dev.
     if cfg!(debug_assertions) {
-        crate::log_message(
-            "warn",
-            &format!(
-                "[Sidecar] Pro binary hash check skipped (debug build). Got hash: {}",
-                if actual.is_empty() { "<empty>" } else { actual }
-            ),
-        );
+        crate::log_message("info", &debug_pro_hash_bypass_message(actual));
         return Ok(());
     }
 
@@ -1989,6 +1993,16 @@ mod tests {
     fn each_desktop_session_keeps_only_one_normal_pro_worker() {
         assert_eq!(POOL_CAPACITY, 1);
         assert_eq!(PRO_POOL_IDLE_TIMEOUT, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn debug_hash_bypass_is_explicitly_successful_not_a_warning() {
+        let message = debug_pro_hash_bypass_message("abc123");
+        assert!(message.contains("Debug build"));
+        assert!(message.contains("intentionally bypassed"));
+        assert!(message.contains("handshake accepted"));
+        assert!(message.contains("abc123"));
+        assert!(!message.contains("skipped"));
     }
 
     #[test]

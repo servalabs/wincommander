@@ -383,6 +383,7 @@ export default function PrivacyPanel() {
                                                     enabled={remoteAccessEnabled}
                                                     toolOverrides={remoteAccessTools}
                                                     onPatch={patchRemoteAccess}
+                                                    rdpProtection={<RdpIdleCard embedded />}
                                                 />
                                             </div>
                                             <div className="privacy-monitor-cell">
@@ -398,7 +399,6 @@ export default function PrivacyPanel() {
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
                                         </div>
                                         <div className="privacy-monitor-col">
-                                            <div className="privacy-monitor-cell"><RdpIdleCard /></div>
                                             <div className="privacy-monitor-cell">
                                                 <RansomwareMonitorSection
                                                     isAdvanced={isAdvanced}

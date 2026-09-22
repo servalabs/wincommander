@@ -16,6 +16,11 @@ const getSchedulerCategoryId = (categoryId: string): string =>
         ?.schedulerCategoryId ?? categoryId;
 
 const SCHEDULE_CACHE_KEY = "wincommander.cleanup.schedule-cache.v1";
+// A machine-level SSD/NVMe ReTrim task accompanies bulk scheduled wipes.  It
+// is tracked with the bulk schedules so turning the control off removes it;
+// no cleanup card reads this synthetic id.
+const AUTO_SCHEDULE_TRIM_ID = "maintenanceTrim";
+const AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES = 1440;
 
 function readScheduleCache(): Record<string, number> {
     if (typeof window === "undefined") return {};
@@ -935,6 +940,26 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         summary.failed++;
                         firstFailure ??= `Failed to schedule ${category.label}.`;
                     }
+                }
+                // Schedule a daily SSD/NVMe ReTrim alongside the privacy
+                // wipes.  This is a Windows Scheduled Task running as SYSTEM,
+                // so it continues after navigating away from Cleanup or
+                // closing WinCommander.  The embedded action skips HDDs.
+                try {
+                    const trim = await setAutoEraseSchedule(
+                        AUTO_SCHEDULE_TRIM_ID,
+                        AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES,
+                        true,
+                        true,
+                        true,
+                    );
+                    if (!trim.success) {
+                        summary.failed++;
+                        firstFailure ??= trim.error || "Failed to schedule automatic SSD trim.";
+                    }
+                } catch {
+                    summary.failed++;
+                    firstFailure ??= "Failed to schedule automatic SSD trim.";
                 }
             }
         } finally {

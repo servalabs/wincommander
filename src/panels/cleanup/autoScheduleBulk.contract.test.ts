@@ -59,4 +59,16 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scheduler).toContain("managedByAutoSet =");
     expect(scheduler).toContain("$targetUser = $null");
   });
+
+  test("adds a durable daily SSD/NVMe trim task when bulk scheduling is enabled", async () => {
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
+    const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text().then(text => text.replace(/\r\n/g, "\n"));
+
+    expect(scan).toContain('const AUTO_SCHEDULE_TRIM_ID = "maintenanceTrim"');
+    expect(scan).toContain('const AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES = 1440');
+    expect(scan).toContain('AUTO_SCHEDULE_TRIM_ID,');
+    expect(scheduler).toContain("'maintenanceTrim'");
+    expect(scheduler).toContain('Optimize-Volume -DriveLetter $drive -ReTrim');
+    expect(scheduler).toContain("'WinCommander Auto-set scheduled wipe v2'");
+  });
 });

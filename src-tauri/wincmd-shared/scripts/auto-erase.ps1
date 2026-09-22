@@ -105,6 +105,30 @@ function Erase-Dir($d) {
 '@
 
 $script:AutoEraseScripts = @{
+    # Machine maintenance -------------------------------------------------
+    # This is intentionally a SYSTEM task rather than a per-user cleanup
+    # task.  It is created together with the bulk "Auto-set scheduled wipes"
+    # switch, so closing the Cleanup panel cannot stop it.  ReTrim is only
+    # issued for volumes backed by an SSD/NVMe disk; HDDs are never defragged
+    # by this privacy-clean schedule.
+    'maintenanceTrim'  = @'
+Get-Volume -ErrorAction SilentlyContinue | Where-Object {
+    $_.DriveLetter -and $_.DriveType -eq 'Fixed'
+} | ForEach-Object {
+    $drive = [string]$_.DriveLetter
+    try {
+        $partition = Get-Partition -DriveLetter $drive -ErrorAction Stop
+        $disk = Get-Disk -Number $partition.DiskNumber -ErrorAction Stop
+        $physical = Get-PhysicalDisk -ErrorAction SilentlyContinue |
+            Where-Object { $_.DeviceId -eq $disk.Number } |
+            Select-Object -First 1
+        if ($physical -and $physical.MediaType -in @('SSD', 'NVMe')) {
+            Optimize-Volume -DriveLetter $drive -ReTrim -ErrorAction Stop
+        }
+    } catch {}
+}
+'@
+
     # Standard categories ----------------------------------------------
     'clipboard'         = "Set-Clipboard -Value `$null -ErrorAction SilentlyContinue; Get-Service cbdhsvc_* -ErrorAction SilentlyContinue | Restart-Service -Force -ErrorAction SilentlyContinue"
     'rdpHistory'        = @"

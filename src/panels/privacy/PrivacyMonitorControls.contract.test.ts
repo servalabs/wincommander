@@ -33,7 +33,8 @@ describe("Privacy Monitor control accessibility", () => {
     const rightColumn = panel.slice(rightColumnStart);
     expect(leftColumn).toContain('<PrivacyShieldCard />');
     expect(leftColumn).toContain('<ArgusDlpSection />');
-    expect(rightColumn).toContain('<RdpIdleCard />');
+    expect(leftColumn).toContain('rdpProtection={<RdpIdleCard embedded />}');
+    expect(rightColumn).not.toContain('<RdpIdleCard />');
     expect(rightColumn).toContain('<RansomwareMonitorSection');
     expect(rightColumn).toContain('<PrintMonitoringSection />');
   });

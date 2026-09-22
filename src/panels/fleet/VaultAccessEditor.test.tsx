@@ -11,7 +11,7 @@ import { vaultMountGate } from "./vaultAccessUiState";
 // Synthetic identities only. No actual location, credential, or Vault is used.
 const directory: FleetAccessDirectory = {
   schema: 1,
-  users: [{ id: "example-user", username: "ExampleUser", displayName: "Example user" }],
+  users: [{ id: "example-user", username: "ExampleUser", displayName: "Example user", isCurrent: true, isAvailable: true }],
   groups: [{ id: "example-group", name: "Example team", localGroup: "ExampleTeam", userIds: [] }],
 };
 const entry: VaultAccessEntry = {
@@ -50,6 +50,7 @@ describe("Vault access editor presentation", () => {
     const html = renderEditor();
     expect(html).toContain('aria-label="About primary owner"');
     expect(html).toContain('aria-label="About drive letter"');
+    expect(html).toContain('placeholder="ExampleUser"');
     expect(html).not.toContain("The Windows account responsible for this Vault.");
     expect(html).not.toContain("The preferred letter in File Explorer.");
     expect(helpSource).toContain('TooltipTrigger type="button" aria-label={label}');

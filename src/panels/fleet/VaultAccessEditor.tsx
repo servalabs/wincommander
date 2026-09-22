@@ -29,6 +29,9 @@ function Field({ label, help, children }: { label: string; help: string; childre
 export default function VaultAccessEditor({ entry, entryIndex, directory, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
   const vaultNumber = entryIndex + 1;
+  // Use the actually discovered signed-in account for guidance instead of
+  // assuming every PC calls its administrator account "Administrator".
+  const currentWindowsAccount = directory.users.find(user => user.isCurrent && user.isAvailable !== false)?.username;
 
   const browseContainerFile = async () => {
     try {
@@ -59,7 +62,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
       <Field label="Primary owner" help="The Windows account responsible for this Vault.">
-        <Input aria-label={`Vault ${vaultNumber} owner`} value={entry.owner_account} placeholder="PC\username" onChange={event => onOwnerChange(event.target.value)} />
+        <Input aria-label={`Vault ${vaultNumber} owner`} value={entry.owner_account} placeholder={currentWindowsAccount ?? "PC\\username"} onChange={event => onOwnerChange(event.target.value)} />
         <small>Use PC-or-domain\username.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
