@@ -85,6 +85,20 @@ fn full_replacement_cannot_bypass_a_locked_preference() {
 }
 
 #[test]
+fn local_or_elevated_writes_cannot_disable_a_locked_monitor_reporter() {
+    let fixture = Fixture::managed();
+    {
+        let mut state = SETTINGS_CACHE.lock().unwrap();
+        let current = state.as_mut().unwrap();
+        current.policy.locked_paths = vec!["security.monitorAlertReporting.remoteAccess".into()];
+        current.ideal.security.monitor_alert_reporting.remote_access = Some(true);
+    }
+    fixture.deny(Mutation::Patch(json!({
+        "ideal": { "security": { "monitorAlertReporting": { "remoteAccess": false } } }
+    })));
+}
+
+#[test]
 fn imported_backup_cannot_bypass_a_locked_preference() {
     let fixture = Fixture::managed();
     let mut proposed = fixture.current();

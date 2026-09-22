@@ -39,6 +39,15 @@ export interface SecuritySettings {
   /** Signed Fleet policy master gate. When enabled, every supported
    * device-side alert is reported through its existing Fleet queue. */
   requireAllDeviceAlertsInFleet?: boolean;
+  /** Signed, device-scoped Fleet reporting gates for monitor detections that
+   * do not have an independent local report setting. */
+  monitorAlertReporting?: FleetMonitorAlertReporting;
+}
+
+export interface FleetMonitorAlertReporting {
+  remoteAccess?: boolean | null;
+  driverHealth?: boolean | null;
+  networkHoneypot?: boolean | null;
 }
 
 export interface DriverHealthSettings {

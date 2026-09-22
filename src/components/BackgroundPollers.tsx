@@ -643,7 +643,7 @@ export default function BackgroundPollers({
         reportConfiguredFleetAlert("remote_access", {
           class: conf === "high" ? "incoming_session" : "tool_detected",
           severity: conf === "high" ? "danger" : "warning",
-        });
+        }, appSettingsRef.current?.ideal?.security?.monitorAlertReporting?.remoteAccess === true);
       },
     );
 
@@ -690,7 +690,11 @@ export default function BackgroundPollers({
           context: { reason_category: "critical_problem", state: "detected" } });
         recordEvidence("system", "warn", `Driver problem: ${name}`, text);
         showError(`Driver problem: ${name} — ${text}`, 12_000);
-        reportConfiguredFleetAlert("driver_health", { class: "critical_problem", severity: "warning" });
+        reportConfiguredFleetAlert(
+          "driver_health",
+          { class: "critical_problem", severity: "warning" },
+          appSettingsRef.current?.ideal?.security?.monitorAlertReporting?.driverHealth === true,
+        );
       },
     );
 
@@ -710,7 +714,11 @@ export default function BackgroundPollers({
         lifecycle: "verified", outcome: "succeeded", severity: "warn", retryability: "never",
         suggestedNextAction: "review_status", privacyClass: "local_sensitive",
         context: { reason_category: "honeypot_connection", state: "detected" } });
-      reportConfiguredFleetAlert("network_honeypot", { class: "connection", severity: "warning" });
+      reportConfiguredFleetAlert(
+        "network_honeypot",
+        { class: "connection", severity: "warning" },
+        appSettingsRef.current?.ideal?.security?.monitorAlertReporting?.networkHoneypot === true,
+      );
     });
 
     // ── Tauri event: panic-trigger-test ──────────────────────────────────
