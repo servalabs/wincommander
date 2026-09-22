@@ -6,14 +6,16 @@ import {
 
 describe("visibility defaults", () => {
   test("conceals the requested surfaces in Borrowed Mode", () => {
-    expect(DEFAULT_BORROWED_EXTRAS).toEqual(expect.arrayContaining([
+    for (const surface of [
       "risk-matrix",
       "more-products",
       "notif-bell",
       "popup-alerts",
       "desktop-alerts",
       "sidebar-preferences",
-    ]));
+    ]) {
+      expect(DEFAULT_BORROWED_EXTRAS).toContain(surface);
+    }
   });
 
   test("starts AI Advisor hidden until the user enables it", () => {
