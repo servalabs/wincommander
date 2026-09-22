@@ -339,25 +339,6 @@ export default function PrintMonitoringSection() {
             <div className="text-xs text-[var(--color-text-muted)]">No Fleet-safe print signals recorded yet.</div>
           ) : null}
         </section>
-
-        <section data-testid="print-watermarking" aria-labelledby="print-watermarking-title" className="flex flex-col gap-3 border-t border-[var(--color-border)] pt-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <h3 id="print-watermarking-title" className="text-sm font-semibold">Watermarking</h3>
-              <InfoButton label="About print watermarking">
-                Visible watermarks require a controlled PDF or export pipeline before submission. This monitor reads Windows events after a job reaches the spooler, so it cannot add a watermark to arbitrary print jobs. Fleet owns the controlled workflow, ticket, renderer health, and applied read-back.
-              </InfoButton>
-            </div>
-            <Tag minimal intent="none" className="font-mono text-[10px]">FLEET WORKFLOW</Tag>
-          </div>
-
-          <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs leading-5">
-            <div className="font-semibold">Fleet-managed controlled-PDF workflow</div>
-            <div className="mt-1 text-[var(--color-text-muted)]">Configure this in Fleet. A Fleet-issued ticket and a verified renderer are required before a controlled PDF can be watermarked.</div>
-            <div className="text-[var(--color-text-muted)]">This desktop monitor does not receive renderer or ticket read-back, so it never claims that a watermark is ready or applied.</div>
-            <div className="mt-1 text-[var(--color-text-muted)]">Ordinary Windows print jobs remain unmodified; the local record and Fleet-safe signals above are monitoring-only.</div>
-          </div>
-        </section>
       </div>
     </SectionCard>
   );

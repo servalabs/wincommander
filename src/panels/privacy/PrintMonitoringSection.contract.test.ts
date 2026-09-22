@@ -62,16 +62,12 @@ describe("Print Monitoring contract", () => {
     expect(component).toContain("Document names, printer names, usernames, paths, and document contents are never sent to Fleet.");
   });
 
-  test("watermarking is a truthful Fleet-controlled workflow handoff, not a false local switch", async () => {
+  test("does not expose unfinished watermarking controls in Privacy Monitor", async () => {
     const component = await Bun.file(componentPath).text();
-    const watermarking = component.split('data-testid="print-watermarking"')[1] ?? "";
 
-    expect(watermarking).toContain("FLEET WORKFLOW");
-    expect(watermarking).toContain("Fleet-managed controlled-PDF workflow");
-    expect(watermarking).toContain("Fleet-issued ticket and a verified renderer");
-    expect(watermarking).toContain("does not receive renderer or ticket read-back");
-    expect(watermarking).toContain("Ordinary Windows print jobs remain unmodified");
-    expect(watermarking).not.toContain("<Switch");
+    expect(component).not.toContain('data-testid="print-watermarking"');
+    expect(component).not.toContain('About print watermarking');
+    expect(component).not.toContain('Fleet-managed controlled-PDF workflow');
   });
 
   test("info buttons support hover, keyboard, click, Escape, and touch", async () => {
