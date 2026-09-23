@@ -410,7 +410,7 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
                 transition={SPRING.snappy}
               />
             )}
-            <Icon icon="code" size={17} className="item-icon" />
+            <Icon icon="bug" size={17} className="item-icon" />
             <span className="sidebar-label">Dev Tools</span>
           </button>
         )}

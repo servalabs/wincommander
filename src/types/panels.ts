@@ -321,7 +321,7 @@ export const PANEL_MANIFESTS: PanelManifest[] = [
     // In the sidebar, DevPanelLink wires a conditional entry.
     id: "dev",
     label: "Dev Tools",
-    icon: "code",
+    icon: "bug",
     importFn: () => import("../panels/dev"),
     navTier: "hidden",
     searchKeywords: ["dev", "debug", "test", "simulate", "reset", "consent", "entitlement", "log"],
