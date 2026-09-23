@@ -2,11 +2,8 @@ import { useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import PanelHeader from "../../components/shared/PanelHeader";
-import TierGate from "../../components/shared/TierGate";
 import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
-import { MalwareCenter } from "./MalwareCenter";
-import { SecurityData } from "./SecurityData";
 import { SystemHygieneTools } from "./SystemHygieneTools";
 import { StartupDriverTools } from "./StartupDriverTools";
 import { AppBrowserCacheCard, WindowsStorageCard } from "./ReclaimSpaceCard";
@@ -21,8 +18,12 @@ const APP_CACHE_SESSION_KEY = `routine-cleaner.${[...APP_CACHE_CLEANUP_CATEGORIE
 
 export default function MaintenancePanel() {
   const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-tab", "files");
+  const visibleTab = ["files", "registry", "startup"].includes(activeTab) ? activeTab : "files";
   const diskCleanupRef = useRef<HTMLDivElement>(null);
   const diskAnalyzerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (activeTab !== visibleTab) setActiveTab(visibleTab);
+  }, [activeTab, setActiveTab, visibleTab]);
   useEffect(() => {
     const openStorage = (target: "cleanup" | "analyzer") => {
       setActiveTab("files");
@@ -48,20 +49,18 @@ export default function MaintenancePanel() {
       <PanelHeader
         panelId="maintenance"
         title="System Maintenance"
-        description="Reclaim space and check startup, drivers, and security. Windows repair, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
+        description="Reclaim space and review startup and drivers. Windows repair, security, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
       />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={visibleTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start">
           <TabsTrigger value="files">Storage &amp; files</TabsTrigger>
           <TabsTrigger value="registry">Registry &amp; cleanup</TabsTrigger>
           <TabsTrigger value="startup">Startup &amp; drivers</TabsTrigger>
-          <TabsTrigger value="security">Security Center</TabsTrigger>
         </TabsList>
         <TabsContent value="files"><StorageAndFileTools cleanupRef={diskCleanupRef} analyzerRef={diskAnalyzerRef} /></TabsContent>
         <TabsContent value="registry"><RegistryAndHygieneTools /></TabsContent>
         <TabsContent value="startup"><StartupDriverTools /></TabsContent>
-        <TabsContent value="security"><SecurityCenter /></TabsContent>
       </Tabs>
     </div>
   );
@@ -151,19 +150,4 @@ function RegistryAndHygieneTools() {
 // different things and read as duplicates of each other without a label.
 function RepairSectionLabel({ children }: { children: React.ReactNode }) {
   return <span className="font-[family-name:var(--font-mono)] text-[10.5px] uppercase tracking-wider text-[var(--text-mute)]">{children}</span>;
-}
-
-function SecurityCenter() {
-  return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Security Center</CardTitle>
-          <CardDescription>Microsoft Defender response and local security posture are kept together. Cleanup tools do not remove protection history from this workflow.</CardDescription>
-        </CardHeader>
-      </Card>
-      <TierGate tier="paid" featureLabel="Malware scanning"><MalwareCenter /></TierGate>
-      <TierGate tier="paid" featureLabel="Security data"><SecurityData /></TierGate>
-    </div>
-  );
 }

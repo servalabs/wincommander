@@ -1,10 +1,13 @@
 use super::filesystem::is_link_or_reparse;
-use super::installed::installed_tokens;
+use super::installed::{
+    installed_app_evidence, normalize_name, running_app_evidence, InstalledAppEvidence,
+    RunningAppEvidence,
+};
 use super::{
     CachedFolder, UninstallLeftover, UninstallLeftoverScan, MAX_CANDIDATES, MIN_AGE, MIN_BYTES,
     SAFE_NAMES,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +17,8 @@ use uuid::Uuid;
 pub(super) fn scan_leftovers(
     cancelled: &AtomicBool,
 ) -> (UninstallLeftoverScan, HashMap<String, CachedFolder>) {
-    let installed = installed_tokens();
+    let installed = installed_app_evidence();
+    let running = running_app_evidence();
     let mut public = Vec::new();
     let mut cached = HashMap::new();
     let mut scanned = 0;
@@ -43,7 +47,11 @@ pub(super) fn scan_leftovers(
             }
             scanned += 1;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if is_safe_name(&name) || matches_installed(&name, &installed) || is_recent(&meta) {
+            if is_safe_name(&name)
+                || matches_installed(&name, &path, &installed)
+                || matches_running(&name, &path, &running)
+                || is_recent(&meta)
+            {
                 skipped += 1;
                 continue;
             }
@@ -155,9 +163,38 @@ fn directory_size(path: &Path, cancelled: &AtomicBool) -> Result<u64, String> {
     }
     Ok(total)
 }
-pub(super) fn matches_installed(name: &str, tokens: &HashSet<String>) -> bool {
-    let name = name.to_ascii_lowercase();
-    tokens.iter().any(|token| {
-        token.len() >= 4 && (name == *token || name.contains(token) || token.contains(&name))
-    })
+pub(super) fn matches_installed(name: &str, path: &Path, evidence: &InstalledAppEvidence) -> bool {
+    let normalized = normalize_name(name);
+    evidence.names.contains(&normalized)
+        || evidence.locations.iter().any(|location| {
+            same_or_child_path(location, path)
+                || location
+                    .file_name()
+                    .is_some_and(|folder| normalize_name(&folder.to_string_lossy()) == normalized)
+        })
+}
+
+pub(super) fn matches_running(name: &str, path: &Path, evidence: &RunningAppEvidence) -> bool {
+    let normalized = normalize_name(name);
+    evidence.names.contains(&normalized)
+        || evidence
+            .executable_paths
+            .iter()
+            .any(|executable| same_or_child_path(executable, path))
+}
+
+fn same_or_child_path(candidate: &Path, parent: &Path) -> bool {
+    let candidate = candidate
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    let parent = parent
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    candidate == parent
+        || candidate
+            .strip_prefix(&parent)
+            .is_some_and(|remaining| remaining.starts_with('\\'))
 }

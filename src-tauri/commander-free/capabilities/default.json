@@ -30,7 +30,14 @@
     "core:window:allow-set-always-on-top",
     "core:window:allow-set-title",
     "shell:allow-open",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "ms-settings:windowsdefender"
+        }
+      ]
+    },
     "autostart:default",
     "dialog:default",
     "dialog:allow-open",

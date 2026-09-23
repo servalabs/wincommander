@@ -166,8 +166,9 @@ export function SystemHygieneTools() {
             <CardTitle>Possible uninstall leftovers</CardTitle>
             <CardDescription>
               {tools.leftovers.scannedFolders.toLocaleString()} app-data folders
-              inspected. Recent, installed-app-matching, running, tiny,
-              protected, and linked folders are excluded.
+              inspected. These are unverified candidates: Windows does not prove
+              an app was uninstalled. Recognized installed and running apps are
+              excluded; review each folder before removing it.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 xl:grid-cols-2">
@@ -176,7 +177,7 @@ export function SystemHygieneTools() {
                 key={item.id}
                 checked={tools.selected.has(item.id)}
                 onClick={() => tools.select(item.id)}
-                title={`${item.name} · ${formatBytes(item.bytes)}`}
+                title={`${item.name} · ${formatBytes(item.bytes)} · possible remnant`}
                 detail={`${item.scope} · ${item.path}`}
                 path={item.path}
                 onReveal={(path) => void openParentFolder(openPath, path)}
@@ -272,8 +273,8 @@ function ShortcutPath({
       <Icon icon={icon} size={12} className="mt-0.5 text-[var(--text-mute)]" />
       <span className="min-w-0">
         <span className="block text-[10px] uppercase tracking-wide text-[var(--text-mute)]">{label}</span>
-        <button type="button" onClick={() => onReveal(path)} className="block w-full text-left font-mono text-[11px] text-[var(--text-dim)] line-clamp-2 hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}>
-          <CompactPath path={path} />
+        <button type="button" onClick={() => onReveal(path)} className="block w-full min-w-0 text-left font-mono text-[11px] text-[var(--text-dim)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}>
+          <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{path}</span>
         </button>
       </span>
       <span className="mt-3 flex items-center gap-0.5">
@@ -308,7 +309,7 @@ function Row({
       <CheckboxControl checked={checked} onChange={onClick} ariaLabel={`${checked ? "Deselect" : "Select"} ${title}`} className="mt-0.5" />
       <span className="min-w-0 flex-1">
         <span className="block text-sm text-[var(--text)]">{title}</span>
-        <button type="button" onClick={() => onReveal(path)} className="block text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}><CompactPath path={detail} /></button>
+        <button type="button" onClick={() => onReveal(path)} className="block min-w-0 max-w-full text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}><CompactPath path={detail} /></button>
       </span>
       <span className="flex shrink-0 items-center gap-0.5">
         <Button size="icon" variant="ghost" className="size-7" title="Copy full location" aria-label={`Copy ${title} location`} onClick={() => void copyPath()}><Icon icon="clipboard" size={14} /></Button>
@@ -329,7 +330,13 @@ function CompactPath({ path }: { path: string }) {
   const normalized = path.replace(/^[A-Za-z]:\\/, (root) => `${root.slice(0, 2)} › `).replace(/\\/g, " › ");
   const isWindows = /^[A-Za-z]:\\Windows(?:\\|$)/i.test(path);
   const isProgramFiles = /^[A-Za-z]:\\Program Files(?: \(x86\))?(?:\\|$)/i.test(path);
-  return <span className="inline-flex min-w-0 items-center gap-1"><Icon icon="drive-time" size={11} className="shrink-0 text-[var(--text-mute)]" />{isWindows || isProgramFiles ? <Icon icon={isWindows ? "desktop" : "folder-shared"} size={11} className="shrink-0 text-[var(--text-mute)]" /> : null}<span>{normalized}</span></span>;
+  return (
+    <span className="flex min-w-0 items-start gap-1">
+      <Icon icon="drive-time" size={11} className="mt-0.5 shrink-0 text-[var(--text-mute)]" />
+      {isWindows || isProgramFiles ? <Icon icon={isWindows ? "desktop" : "folder-shared"} size={11} className="mt-0.5 shrink-0 text-[var(--text-mute)]" /> : null}
+      <span className="line-clamp-2 min-w-0 whitespace-normal [overflow-wrap:anywhere]">{normalized}</span>
+    </span>
+  );
 }
 function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) {
   return (

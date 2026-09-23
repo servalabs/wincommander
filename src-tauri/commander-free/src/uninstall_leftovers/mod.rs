@@ -159,9 +159,11 @@ fn ensure_mutation_allowed() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::scanner::{is_recent, is_safe_name, matches_installed};
+    use super::installed::{InstalledAppEvidence, RunningAppEvidence};
+    use super::scanner::{is_recent, is_safe_name, matches_installed, matches_running};
     use std::collections::HashSet;
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn protects_common_folder_names() {
@@ -170,14 +172,60 @@ mod tests {
         assert!(!is_safe_name("OldVendor"));
     }
     #[test]
-    fn retains_installed_application_folders() {
+    fn excludes_exact_installed_application_matches_without_substring_collisions() {
+        let installed = InstalledAppEvidence {
+            names: HashSet::from(["exampleapp".into()]),
+            locations: Vec::new(),
+        };
         assert!(matches_installed(
-            "Example App",
-            &HashSet::from(["example app".into()])
+            "Example-App",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Example-App"),
+            &installed
         ));
         assert!(!matches_installed(
-            "oldvendor",
-            &HashSet::from(["example app".into()])
+            "Old-Example-App-Cache",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Old-Example-App-Cache"),
+            &installed
+        ));
+    }
+
+    #[test]
+    fn excludes_installed_locations_nested_under_candidate_folder() {
+        let installed = InstalledAppEvidence {
+            names: HashSet::new(),
+            locations: vec![PathBuf::from(
+                "C:\\Users\\User\\AppData\\Local\\Vendor\\App\\Current",
+            )],
+        };
+        assert!(matches_installed(
+            "Vendor",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Vendor"),
+            &installed
+        ));
+    }
+
+    #[test]
+    fn excludes_running_application_names_and_executable_paths() {
+        let running = RunningAppEvidence {
+            names: HashSet::from(["exampleapp".into()]),
+            executable_paths: vec![PathBuf::from(
+                "C:\\Users\\User\\AppData\\Local\\Vendor\\App\\app.exe",
+            )],
+        };
+        assert!(matches_running(
+            "Example-App",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Example-App"),
+            &running
+        ));
+        assert!(matches_running(
+            "Vendor",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Vendor"),
+            &running
+        ));
+        assert!(!matches_running(
+            "Old-Vendor-Cache",
+            Path::new("C:\\Users\\User\\AppData\\Local\\Old-Vendor-Cache"),
+            &running
         ));
     }
     #[test]
