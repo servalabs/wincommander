@@ -10,6 +10,7 @@
 import type { GuideTopic } from "./types";
 import { products } from "../../assets/products";
 import PrivacyShieldAnimation from "../../panels/privacy/PrivacyShieldAnimation";
+import LockdownTourChoice from "../../components/guide/LockdownTourChoice";
 
 // Guide media belongs to the same pinned asset map as the rest of the app.
 // Keeping URLs in that map lets Vite bundle them while Bun unit tests remain
@@ -468,6 +469,25 @@ export const GUIDE_TOPICS: GuideTopic[] = [
         { id: "tour-apps", order: 30 },
         { id: "tour-dashboard", order: 85 },
       ],
+    },
+  },
+  {
+    id: "dashboard-tour-lockdown-choice",
+    title: "Would you like Lockdown enabled?",
+    summary: "Lockdown adds an emergency control to the right-hand action rail and arms your configured Lockdown triggers. Those triggers may run when their conditions are met. Choosing here never presses the Lockdown button.",
+    keywords: ["lockdown", "enable", "disable", "emergency", "dashboard tour"],
+    body: "Choose whether WinCommander should show the Lockdown action and arm its configured triggers.",
+    tour: {
+      // Put the explicit opt-in at the end of the complete Dashboard tour.
+      // If Lockdown is off its action button is absent, so the rail itself is
+      // the stable fallback anchor for this centered hero step.
+      anchor: '[data-tour="right-sidebar-lockdown"], .right-sidebar',
+      navigateTo: "dashboard",
+      placement: "auto",
+      variant: "hero",
+      component: LockdownTourChoice,
+      showWhen: (ctx) => ctx.lockdownEnabled !== true,
+      tours: [{ id: "tour-dashboard", order: 90 }],
     },
   },
 ];

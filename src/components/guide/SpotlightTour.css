@@ -235,6 +235,52 @@
   border: 1px solid var(--border);
 }
 
+.spotlight-component-box:has(.lockdown-tour-choice) {
+  height: auto;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.lockdown-tour-choice {
+  width: 100%;
+}
+.lockdown-tour-choice__control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+.lockdown-tour-choice__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.lockdown-tour-choice__description {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.lockdown-tour-choice__note,
+.lockdown-tour-choice__error {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.lockdown-tour-choice__note {
+  color: var(--warn);
+}
+.lockdown-tour-choice__error {
+  color: var(--danger);
+}
+
 /* ── Do-it-yourself warning note ── */
 .spotlight-warning {
   display: flex;

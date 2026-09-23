@@ -16,14 +16,11 @@ import { GUIDE_TOPICS } from "../../content/guide";
 import { resolveTourSteps } from "../../lib/tour";
 import type { TourStep } from "../../content/guide/types";
 import { getDensityForSettings } from "../../lib/personaMigration";
-import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { setTourActive } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
 import useVisibility from "../../hooks/useVisibility";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
-import { Button } from "../ui/bp";
-import { CompatDialog, CompatDialogBody, CompatDialogFooter } from "../ui/compat-dialog";
 
 // The full onboarding sequence — Dashboard's hero moments (Fix all, Scrub,
 // Lockdown, quick toggles) continuing straight through Privacy Settings,
@@ -32,7 +29,7 @@ import { CompatDialog, CompatDialogBody, CompatDialogFooter } from "../ui/compat
 const FIRST_RUN_TOUR_ID = "tour-dashboard";
 
 export default function GuideHost() {
-  const { appSettings, startupComplete, systemInfo, patchAppSettings } = useAppState();
+  const { appSettings, startupComplete, patchAppSettings } = useAppState();
   const [steps, setSteps] = useState<TourStep[] | null>(null);
   // True only for the auto-started first-run tour, and only until it has
   // been completed once — SpotlightTour suppresses its own X/Escape while
@@ -41,8 +38,6 @@ export default function GuideHost() {
   // fresh-install run after hasSeenMandatoryTour is already true) stays
   // fully cancellable.
   const [mandatory, setMandatory] = useState(false);
-  const [selfDestructConsentOpen, setSelfDestructConsentOpen] = useState(false);
-  const [savingSelfDestructConsent, setSavingSelfDestructConsent] = useState(false);
   const firstRunTourRef = useRef(false);
   const tourAutoStartedRef = useRef(false);
 
@@ -67,7 +62,7 @@ export default function GuideHost() {
     appSettings?.ideal?.privacy?.selfDestruct?.enabled === true
     && !appSettings?.app?.hiddenSidebarActions?.includes("lockdown")
     && !(borrowedActive && borrowedHidden.includes("action:lockdown"));
-  const lockdownEnableBlocked = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
+  const lockdownEnabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true;
 
   // Manual tour starts (title bar "?", dashboard "Take the tour", deep
   // links) — always dismissable.
@@ -75,7 +70,7 @@ export default function GuideHost() {
     const onStart = (e: Event) => {
       if (tourHidden) return;
       const tourId = (e as CustomEvent<{ tourId?: string }>).detail?.tourId ?? "welcome";
-      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled, lockdownVisible, scrubMetadataVisible });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled, lockdownVisible, lockdownEnabled, scrubMetadataVisible });
       if (resolved.length > 0) {
         firstRunTourRef.current = false;
         setMandatory(false);
@@ -84,7 +79,7 @@ export default function GuideHost() {
     };
     window.addEventListener("start-tour", onStart as EventListener);
     return () => window.removeEventListener("start-tour", onStart as EventListener);
-  }, [density, braveInstalled, lockdownVisible, scrubMetadataVisible, tourHidden]);
+  }, [density, braveInstalled, lockdownVisible, lockdownEnabled, scrubMetadataVisible, tourHidden]);
 
   // First launch auto-starts the full spotlight tour instead of the removed
   // Setup Wizard. Closing it does not re-open it during the same app session.
@@ -96,14 +91,14 @@ export default function GuideHost() {
     if (!shouldStart) return;
     tourAutoStartedRef.current = true;
     const timer = window.setTimeout(() => {
-      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled, lockdownVisible, scrubMetadataVisible });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled, lockdownVisible, lockdownEnabled, scrubMetadataVisible });
       if (resolved.length === 0) return;
       firstRunTourRef.current = true;
       setMandatory(appSettings?.app?.hasSeenMandatoryTour !== true);
       setSteps(resolved);
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [appSettings, startupComplete, density, braveInstalled, lockdownVisible, scrubMetadataVisible, tourHidden]);
+  }, [appSettings, startupComplete, density, braveInstalled, lockdownVisible, lockdownEnabled, scrubMetadataVisible, tourHidden]);
 
   useEffect(() => {
     if (!tourHidden) return;
@@ -122,74 +117,25 @@ export default function GuideHost() {
     return () => setTourActive(false);
   }, [tourRunning]);
 
-  const handleSelfDestructConsentClose = useCallback(() => {
-    if (!savingSelfDestructConsent) setSelfDestructConsentOpen(false);
-  }, [savingSelfDestructConsent]);
-
-  const handleEnableSelfDestruct = useCallback(async () => {
-    if (savingSelfDestructConsent || lockdownEnableBlocked) return;
-    setSavingSelfDestructConsent(true);
-    try {
-      await patchAppSettings({ ideal: { privacy: { selfDestruct: { enabled: true } } } } as any);
-      setSelfDestructConsentOpen(false);
-    } catch (error) {
-      reportSettingsWriteFailure(error);
-    } finally {
-      setSavingSelfDestructConsent(false);
-    }
-  }, [lockdownEnableBlocked, patchAppSettings, savingSelfDestructConsent]);
-
   const handleClose = useCallback((completed: boolean) => {
     // useTour can invoke onClose from a state updater. Consume the marker
-    // synchronously so React Strict Mode or a duplicate completion callback
-    // cannot replay the opt-in prompt or settings write.
+    // synchronously so React Strict Mode or a duplicate callback cannot
+    // write first-run completion twice.
     const completedFirstRun = firstRunTourRef.current && completed;
     firstRunTourRef.current = false;
     if (completedFirstRun) {
       void patchAppSettings({ app: { firstRunComplete: true, hasSeenMandatoryTour: true } }).catch(reportSettingsWriteFailure);
       window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "dashboard" }));
-      if (appSettings?.ideal?.privacy?.selfDestruct?.enabled !== true) {
-        setSelfDestructConsentOpen(true);
-      }
     }
     setSteps(null);
     setMandatory(false);
-  }, [appSettings?.ideal?.privacy?.selfDestruct?.enabled, patchAppSettings]);
+  }, [patchAppSettings]);
 
   return (
     <>
       {steps && steps.length > 0 && (
         <SpotlightTour steps={steps} onClose={handleClose} dismissable={!mandatory} />
       )}
-      <CompatDialog
-        isOpen={selfDestructConsentOpen}
-        onClose={handleSelfDestructConsentClose}
-        title="Enable Lockdown?"
-        icon="warning-sign"
-        className="w-[min(32rem,calc(100vw-2rem))]"
-        canEscapeKeyClose={!savingSelfDestructConsent}
-        canOutsideClickClose={!savingSelfDestructConsent}
-        isCloseButtonShown={!savingSelfDestructConsent}
-      >
-        <CompatDialogBody className="space-y-3">
-          <p className="text-sm leading-6 text-[var(--text-dim)]">
-            Lockdown is the emergency action on the right side of the window. Enabling it also arms any Lockdown triggers you have configured, which may run when their conditions are met. This prompt will not press the Lockdown button for you.
-          </p>
-          {lockdownEnableBlocked && (
-            <p role="status" className="text-sm leading-6 text-[var(--warn)]">
-              {MACHINE_SCOPE_ELEVATION_MESSAGE}
-            </p>
-          )}
-        </CompatDialogBody>
-        <CompatDialogFooter className="flex-wrap">
-          <Button small minimal disabled={savingSelfDestructConsent} onClick={handleSelfDestructConsentClose}>
-            Leave Lockdown off
-          </Button>
-          <Button small intent="danger" disabled={lockdownEnableBlocked} loading={savingSelfDestructConsent} onClick={() => void handleEnableSelfDestruct()}>
-            Enable Lockdown
-          </Button>
-        </CompatDialogFooter>
-      </CompatDialog>
     </>
   );
 }
