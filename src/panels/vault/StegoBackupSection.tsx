@@ -1,6 +1,6 @@
 // Stego Container Snapshots: attach, restore, and safely refresh an existing
 // encrypted container. The app never asks for the container password here.
-import { Button, Checkbox, FormGroup, HTMLSelect, InputGroup, Tooltip } from "@/components/ui/bp";
+import { Button, Checkbox, FormGroup, HTMLSelect, Icon, InputGroup, Popover } from "@/components/ui/bp";
 import { useState } from "react";
 import SectionCard from "../../components/shared/SectionCard";
 import TierGate from "../../components/shared/TierGate";
@@ -8,6 +8,20 @@ import type { SizeUnit } from "../../lib/stegoBackup";
 import { useStegoBackup } from "./useStegoBackup";
 import { BusyBar, FailureCallout, FilePick, INFO, InfoDot, IssueLine, SuccessCallout } from "./StegoBackupParts";
 import "./StegoBackupSection.css";
+
+function StegoInfoPopover({ content }: { content: string }) {
+  return (
+    <Popover
+      position="bottom-end"
+      popoverClassName="stego-info-popover"
+      content={<p>{content}</p>}
+    >
+      <button type="button" className="stego-info-trigger" aria-label="Stego Backup information">
+        <Icon icon="info-sign" size={12} />
+      </button>
+    </Popover>
+  );
+}
 
 export default function StegoBackupSection() {
   const stego = useStegoBackup();
@@ -18,7 +32,7 @@ export default function StegoBackupSection() {
   const legacyPath = stego.legacyResult?.kind === "ok" ? stego.legacyResult.path : null;
   const locked = busy !== null;
   return (
-    <SectionCard title="Stego Backup" icon="video" headerRight={<div className="stego-header-actions"><Tooltip content="Never trim, re-encode or upload a backup video through services that rewrite it."><Button minimal small icon="warning-sign" aria-label="Important stego backup warning" /></Tooltip><InfoDot content={INFO.what} /></div>}>
+    <SectionCard title="Stego Backup" icon="video" headerRight={<div className="stego-header-actions"><StegoInfoPopover content={INFO.what} /></div>}>
       <div className="stego-section">
         <p className="stego-intro">Attach an existing encrypted container to a normal-looking video that still plays. It is a sealed snapshot: this screen copies the locked container without opening it.</p>
         <TierGate tier="paid" featureLabel="Stego Backup">

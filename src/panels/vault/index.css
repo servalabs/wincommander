@@ -1154,7 +1154,23 @@ input::-webkit-credentials-auto-fill-button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
+}
+
+/* Stretch both cards to the row height and let the volume area use the extra
+   room so empty or short lists do not leave a blank strip inside the shorter
+   card. */
+.vault-volumes-ramdisks-grid > .section-card > .section-collapse {
+  flex: 1 1 auto;
+}
+
+.vault-volumes-ramdisks-grid > .section-card > .section-collapse > .overflow-hidden {
+  display: flex;
+  flex-direction: column;
+}
+
+.vault-volumes-ramdisks-grid .vault-content {
+  flex: 1 1 auto;
 }
 
 /* Dynamic one-line status under a SectionCard title (e.g. RAM Disks' mounted

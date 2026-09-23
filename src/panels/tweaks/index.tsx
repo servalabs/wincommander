@@ -391,6 +391,7 @@ function SecurityAppsTab({ showExpertSpeed, noSearch, searchQuery, handlePostTog
                         toggles={TWEAKS_TOGGLES}
                         onToggled={handlePostToggle}
                         bare
+                        gridClassName={noSearch ? "tweaks-security-apps-toggle-grid" : undefined}
                         searchQuery={searchQuery}
                     />
                     {noSearch && <WindowsAiAdvancedActions />}
