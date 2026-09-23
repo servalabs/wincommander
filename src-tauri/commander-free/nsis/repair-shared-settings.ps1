@@ -27,6 +27,24 @@ try {
             $cursor = [IO.Path]::GetDirectoryName($cursor)
         }
     }
+    # Do not use Get-Acl or Set-Acl here.  NSIS runs this helper from its
+    # temporary directory and some stripped-down Windows runner images cannot
+    # load Microsoft.PowerShell.Security, even though PowerShell can discover
+    # the cmdlet.  The .NET APIs are available in Windows PowerShell itself.
+    function Get-EntrySecurity([string]$Path, [bool]$Directory) {
+        if ($Directory) {
+            return [IO.Directory]::GetAccessControl($Path)
+        }
+        return [IO.File]::GetAccessControl($Path)
+    }
+    function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
+        if ($Directory) {
+            [IO.Directory]::SetAccessControl($Path, [Security.AccessControl.DirectorySecurity]$Acl)
+        }
+        else {
+            [IO.File]::SetAccessControl($Path, [Security.AccessControl.FileSecurity]$Acl)
+        }
+    }
     function Repair-Entry([string]$Path, [bool]$Directory) {
         Assert-NoLinks $Path
         $item = Get-Item -LiteralPath $Path -Force
@@ -42,9 +60,9 @@ try {
             $rule = New-Object Security.AccessControl.FileSystemAccessRule ([Security.Principal.SecurityIdentifier]$sid), $rights, $inheritance, ([Security.AccessControl.PropagationFlags]::None), ([Security.AccessControl.AccessControlType]::Allow)
             $acl.AddAccessRule($rule)
         }
-        Set-Acl -LiteralPath $Path -AclObject $acl
+        Set-EntrySecurity $Path $Directory $acl
         # Read the actual descriptor back, rather than trusting a /C exit code.
-        $actual = Get-Acl -LiteralPath $Path
+        $actual = Get-EntrySecurity $Path $Directory
         # Windows may add the auto-inherited control flag when canonicalizing
         # a descriptor. Compare the effective rules, not that bookkeeping flag.
         $ruleKey = { '{0}:{1}:{2}:{3}:{4}:{5}' -f $_.IdentityReference.Value, [int]$_.FileSystemRights, $_.AccessControlType, $_.InheritanceFlags, $_.PropagationFlags, $_.IsInherited }

@@ -10,6 +10,17 @@ if (@(Get-ChildItem -LiteralPath $parent -Force).Count -ne 0) { throw 'Fixture p
 $root = Join-Path $parent 'WinCommander'
 $report = Join-Path $parent 'result.txt'
 try {
+    function Get-EntrySecurity([string]$Path, [bool]$Directory) {
+        if ($Directory) { return [IO.Directory]::GetAccessControl($Path) }
+        return [IO.File]::GetAccessControl($Path)
+    }
+    function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
+        if ($Directory) { [IO.Directory]::SetAccessControl($Path, [Security.AccessControl.DirectorySecurity]$Acl) }
+        else { [IO.File]::SetAccessControl($Path, [Security.AccessControl.FileSecurity]$Acl) }
+    }
+    if ((Get-Content -LiteralPath $repair -Raw) -match '(?im)^\s*(Get|Set)-Acl\b') {
+        throw 'Installer repair must not depend on Microsoft.PowerShell.Security ACL cmdlets.'
+    }
     function Repair {
         $ErrorActionPreference = 'Continue'
         $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $repair -DataRoot $root 2>&1 | Out-String
@@ -29,21 +40,21 @@ try {
     $privateAcl = New-Object Security.AccessControl.DirectorySecurity
     $privateAcl.SetAccessRuleProtection($true, $false)
     $privateAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544'), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-    Set-Acl -LiteralPath $private -AclObject $privateAcl
-    $privateBefore = (Get-Acl -LiteralPath $private).Sddl
+    Set-EntrySecurity $private $true $privateAcl
+    $privateBefore = (Get-EntrySecurity $private $true).Sddl
     foreach ($path in @($settings, $material)) {
-        $acl = Get-Acl -LiteralPath $path
+        $acl = Get-EntrySecurity $path $false
         $acl.SetAccessRuleProtection($true, $false)
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ([Security.Principal.SecurityIdentifier]'S-1-5-32-545'), 'ReadData', 'Deny'))
-        Set-Acl -LiteralPath $path -AclObject $acl
+        Set-EntrySecurity $path $false $acl
     }
     Repair
     Repair
     if ([IO.File]::ReadAllText($settings) -ne 'fixture-encrypted-settings') { throw 'Settings contents changed.' }
     if ([IO.File]::ReadAllText($material) -ne 'fixture-protected-material') { throw 'Material contents changed.' }
-    if ((Get-Acl -LiteralPath $private).Sddl -ne $privateBefore) { throw 'Unrelated protected state permissions changed.' }
+    if ((Get-EntrySecurity $private $true).Sddl -ne $privateBefore) { throw 'Unrelated protected state permissions changed.' }
     foreach ($path in @($settings, $material)) {
-        $rules = @((Get-Acl -LiteralPath $path).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+        $rules = @((Get-EntrySecurity $path $false).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
         if ($rules.Count -ne 3) { throw 'Unexpected residual access rules.' }
         $users = @($rules | Where-Object { $_.IdentityReference.Value -eq 'S-1-5-32-545' })
         $readOnlyRights = [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize
