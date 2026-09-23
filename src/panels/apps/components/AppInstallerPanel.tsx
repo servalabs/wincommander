@@ -117,7 +117,7 @@ function AppInstallerPanel({
   updatesTools?: ReactNode;
   onStatusChange?: (status: AppInstallerStatus) => void;
 }) {
-  const { appInventory, runAppInventoryScan, loading: contextLoading, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
+  const { appInventory, runAppInventoryScan, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
   const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -140,8 +140,8 @@ function AppInstallerPanel({
   const [justInstalledIds, setJustInstalledIds] = useState<Set<string>>(new Set());
   const [apps, setApps] = useState<AppItem[]>([]);
   const [appsLoading, setAppsLoading] = useState(!appInventory);
-  const [inventoryScanPending, setInventoryScanPending] = useState(false);
   const inventoryScanRequestedRef = useRef(false);
+  const wingetCheckRequestedRef = useRef(false);
   const [wingetStatus, setWingetStatus] = useState<"checking" | "installed" | "not-installed" | "installing" | "failed">("checking");
   const [upgradingApp, setUpgradingApp] = useState<string | null>(null);
   const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
@@ -509,10 +509,12 @@ function AppInstallerPanel({
     // visits. The context coalesces concurrent scans with package completion.
     if (!inventoryScanRequestedRef.current) {
       inventoryScanRequestedRef.current = true;
-      setInventoryScanPending(true);
-      runAppInventoryScan(true).finally(() => setInventoryScanPending(false));
+      void runAppInventoryScan(true);
     }
-    checkWinget();
+    if (!wingetCheckRequestedRef.current) {
+      wingetCheckRequestedRef.current = true;
+      checkWinget();
+    }
   }, [testWingetInstalled, appInventory, runAppInventoryScan]);
 
   useEffect(() => {
@@ -525,18 +527,6 @@ function AppInstallerPanel({
     window.addEventListener("apps-open-updates-tab", openUpdates);
     return () => window.removeEventListener("apps-open-updates-tab", openUpdates);
   }, []);
-
-  const handleRefreshAll = useCallback(async () => {
-    if (inventoryScanPending || contextLoading?.apps) return;
-    setInventoryScanPending(true);
-    try {
-      await runAppInventoryScan(false);
-      const w = await testWingetInstalled();
-      if (w.success && w.data) setWingetStatus(w.data.status);
-    } finally {
-      setInventoryScanPending(false);
-    }
-  }, [contextLoading?.apps, inventoryScanPending, runAppInventoryScan, testWingetInstalled]);
 
   // Toast notifications for winget status and backend errors (replaces inline callouts)
   useEffect(() => {
@@ -1069,16 +1059,6 @@ function AppInstallerPanel({
               />
             </div>
             <div className="installer-search-actions">
-              <Button
-                icon={contextLoading?.apps ? undefined : "refresh"}
-                minimal
-                className="installer-icon-btn"
-                onClick={handleRefreshAll}
-                disabled={contextLoading?.apps || appsLoading || inventoryScanPending}
-                loading={contextLoading?.apps || inventoryScanPending}
-                aria-label="Refresh software catalog"
-                title="Refresh software catalog"
-              />
               <Button
                 icon="cross"
                 minimal

@@ -3,25 +3,19 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { resolveAvailableTab } from "../../components/ui/tabSelection";
-import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBackend";
+import { Checkbox } from "../../components/ui/bp";
+import { Spinner } from "../../components/ui/spinner";
+import type { PackageUpdateInventory } from "../../hooks/useBackend";
 import { useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
 import { useAppState } from "../../context/AppContext";
-import { filterCatalogDuplicates } from "./packageUpdateDisplay";
+import AppIcon from "./components/AppIcon";
+import { collectManagerUpdates, managerUpdateStatus, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
 
 // Display labels for the manager ids the backend reports (package_updates.rs
 // `Manager::label`) — always winget/chocolatey/scoop/npm, in that order.
-// npm keeps its lowercase brand casing; the id itself is the tab value.
+// npm keeps its lowercase brand casing.
 const MANAGER_LABELS: Record<string, string> = { winget: "Winget", chocolatey: "Chocolatey", scoop: "Scoop", npm: "npm" };
-
-// Tab that opens by default: whichever manager has the most pending updates,
-// or the first manager (backend order) if none do.
-function pickDefaultManager(managers: ManagerInventory[]): string | undefined {
-  if (!managers.length) return undefined;
-  return managers.reduce((best, manager) => (manager.updates.length > best.updates.length ? manager : best), managers[0]).manager;
-}
 
 /**
  * The single multi-manager update executor. Packages & Apps is its only
@@ -36,33 +30,18 @@ export function PackageUpdateTools() {
   backendRef.current = backend;
   const [packages, setPackages] = useState<PackageUpdateInventory>();
   const [packageIds, setPackageIds] = useState<Set<string>>(new Set());
-  const [activeManager, setActiveManager] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [checkingManagers, setCheckingManagers] = useState(false);
+  const [applyingUpdateId, setApplyingUpdateId] = useState<string>();
   const [message, setMessage] = useState<string>();
-  const displayedManagers = useMemo(
-    () => packages ? filterCatalogDuplicates(packages.managers, appInventory) : [],
+  const updateRows = useMemo(
+    () => packages ? collectManagerUpdates(packages.managers, appInventory) : [],
     [appInventory, packages],
   );
-  const hiddenUpdateCounts = useMemo(() => new Map(
-    (packages?.managers ?? []).map((manager) => {
-      const visible = displayedManagers.find((candidate) => candidate.manager === manager.manager);
-      return [manager.manager, manager.updates.length - (visible?.updates.length ?? 0)];
-    }),
-  ), [displayedManagers, packages]);
   const displayedUpdateIds = useMemo(
-    () => new Set(displayedManagers.flatMap((manager) => manager.updates.map((update) => update.id))),
-    [displayedManagers],
+    () => new Set(updateRows.map(({ update }) => update.id)),
+    [updateRows],
   );
-  const visibleActiveManager = resolveAvailableTab(
-    displayedManagers.map((manager) => manager.manager),
-    activeManager,
-    pickDefaultManager(displayedManagers),
-  );
-
-  useEffect(() => {
-    if (!packages || visibleActiveManager === activeManager) return;
-    setActiveManager(visibleActiveManager ?? pickDefaultManager(displayedManagers));
-  }, [activeManager, displayedManagers, packages, visibleActiveManager]);
 
   useEffect(() => {
     setPackageIds((selected) => {
@@ -73,61 +52,145 @@ export function PackageUpdateTools() {
 
   const inspectPackages = async () => {
     if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
-    setBusy(true); setMessage(undefined);
+    setBusy(true); setMessage("Refreshing installed apps…");
     try {
-      const result = await backendRef.current.packageUpdatesInventory();
-      setPackages(result); setPackageIds(new Set()); setActiveManager(undefined);
+      const result = await refreshPackageAndAppInventories(
+        async () => {
+          setMessage("Refreshing installed app inventory…");
+          await runAppInventoryScan(true);
+        },
+        async () => {
+          setMessage("Checking Winget, Chocolatey, Scoop, and npm…");
+          setCheckingManagers(true);
+          try { return await backendRef.current.packageUpdatesInventory(); }
+          finally { setCheckingManagers(false); }
+        },
+      );
+      setPackages(result); setPackageIds(new Set());
+      setMessage(result.cancelled
+        ? "App inventory refreshed; package manager check was cancelled."
+        : "App inventory and package manager updates refreshed.");
     }
     catch (cause) { setMessage(String(cause)); }
-    finally { setBusy(false); releasePackageOperation(); }
+    finally { setCheckingManagers(false); setBusy(false); releasePackageOperation(); }
   };
-  const applyPackages = async () => {
-    if (!packageIds.size) return;
+  const applyPackages = async (updateIds = [...packageIds]) => {
+    if (!updateIds.length) return;
     if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
+    setApplyingUpdateId(updateIds.length === 1 ? updateIds[0] : undefined);
     setBusy(true); setMessage(undefined);
     try {
-      const result = await backendRef.current.packageUpdatesApply([...packageIds]);
-      setMessage(result.cancelled ? `Package updates cancelled after ${result.updated} update(s).` : `Updated ${result.updated} package(s)${result.errors.length ? `; ${result.errors.length} failed.` : "."}`);
-      // Package-manager update data and the curated app inventory are two
-      // different views. Reconcile both after completion so cards immediately
-      // reflect real installed/not-installed state without a panel reload.
-      await runAppInventoryScan(true);
-      setPackages(await backendRef.current.packageUpdatesInventory()); setPackageIds(new Set()); setActiveManager(undefined);
+      const result = await backendRef.current.packageUpdatesApply(updateIds);
+      const updateSummary = result.cancelled
+        ? `Package updates cancelled after ${result.updated} update(s).`
+        : `Updated ${result.updated} package(s)${result.errors.length ? `; ${result.errors.length} failed.` : "."}`;
+      // Reconcile both inventories through the same flow used by Check updates.
+      const refreshed = await refreshPackageAndAppInventories(
+        () => runAppInventoryScan(true),
+        async () => {
+          setCheckingManagers(true);
+          try { return await backendRef.current.packageUpdatesInventory(); }
+          finally { setCheckingManagers(false); }
+        },
+      );
+      setPackages(refreshed); setPackageIds(new Set());
+      setMessage(`${updateSummary} App inventory refreshed.`);
     } catch (cause) { setMessage(String(cause)); }
-    finally { setBusy(false); releasePackageOperation(); }
+    finally { setCheckingManagers(false); setApplyingUpdateId(undefined); setBusy(false); releasePackageOperation(); }
   };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
 
-  const displayedUpdateCount = displayedManagers.reduce((count, manager) => count + manager.updates.length, 0);
+  const displayedUpdateCount = updateRows.length;
 
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
     <Card>
-      <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit machine-scope updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
-      <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check updates"}</Button>{busy && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel</Button>}{packages && <Badge tone="accent">{displayedUpdateCount} additional</Badge>}</CardContent>
+      <CardHeader><CardTitle>App and package updates</CardTitle><CardDescription>One check refreshes the installed app list and checks Winget, Chocolatey, Scoop, and npm. Catalog apps appear once; extra package manager updates use the same cards and actions below.</CardDescription></CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check for updates"}</Button>{checkingManagers && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel package check</Button>}{packages && <Badge tone="accent">{displayedUpdateCount} additional update{displayedUpdateCount === 1 ? "" : "s"}</Badge>}</CardContent>
     </Card>
-    {visibleActiveManager && <Tabs value={visibleActiveManager} onValueChange={setActiveManager}>
-      <TabsList className="w-full flex-wrap justify-start">{displayedManagers.map((manager) => <TabsTrigger key={manager.manager} value={manager.manager} className="gap-1.5">{MANAGER_LABELS[manager.manager] ?? manager.manager}<Badge tone={manager.updates.length ? "accent" : "neutral"}>{manager.updates.length}</Badge></TabsTrigger>)}</TabsList>
-      {displayedManagers.map((manager) => <TabsContent key={manager.manager} value={manager.manager}><PackageManager manager={manager} hiddenUpdateCount={hiddenUpdateCounts.get(manager.manager) ?? 0} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} /></TabsContent>)}
-    </Tabs>}
+    {packages && <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Package manager check results">
+        {packages.managers.map((manager) => {
+          const status = managerUpdateStatus(manager);
+          const label = MANAGER_LABELS[manager.manager] ?? manager.manager;
+          return <div key={manager.manager} className="flex flex-wrap items-center gap-1.5 rounded-[var(--r)] border border-[var(--border)] px-2 py-1.5 text-xs" title={manager.error ?? undefined}>
+            <span className="text-[var(--text-dim)]">{label}</span><Badge tone={status.tone}>{status.label}</Badge>
+            {manager.error && <span className="text-[var(--text-mute)]">{manager.error}</span>}
+          </div>;
+        })}
+      </div>
+      {updateRows.length ? <>
+        <div className="grid-divider"><div className="divider-line" /><div className="divider-label">OTHER PACKAGES ({updateRows.length})</div><div className="divider-line" /></div>
+        <div className="app-group-grid app-group-grid--updates">
+          {updateRows.map(({ manager, update }) => <PackageUpdateRow
+            key={update.id}
+            manager={MANAGER_LABELS[manager.manager] ?? manager.manager}
+            packageName={update.package}
+            currentVersion={update.currentVersion}
+            availableVersion={update.availableVersion}
+            checked={packageIds.has(update.id)}
+            disabled={busy}
+            applying={applyingUpdateId === update.id}
+            onToggle={() => setPackageIds((selected) => toggle(selected, update.id))}
+            onApply={() => void applyPackages([update.id])}
+          />)}
+        </div>
+      </> : <Notice tone="success" text="No additional package manager updates are available." />}
+    </div>}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={busy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
     {message && <Notice tone={message.includes("failed") ? "warning" : "success"} text={message} />}
   </section>;
 }
 
-function PackageManager({ manager, hiddenUpdateCount, selected, toggle: onToggle }: { manager: ManagerInventory; hiddenUpdateCount: number; selected: Set<string>; toggle: (id: string) => void }) {
-  if (!manager.available) {
-    if (manager.manager === "chocolatey" || manager.manager === "scoop") {
-      const label = MANAGER_LABELS[manager.manager] ?? manager.manager;
-      return <Notice tone="warning" text={`${label} is optional and is not available on this device. Its updates are unavailable; other package managers remain available.`} />;
-    }
-    return <Notice tone="warning" text={`${manager.manager}: ${manager.error ?? "not available"}`} />;
-  }
-  if (manager.error) return <Notice tone="warning" text={`${manager.manager}: ${manager.error}`} />;
-  return <Card><CardHeader><CardTitle>{manager.manager}</CardTitle><CardDescription>{manager.updates.length ? "Select the additional updates to apply." : hiddenUpdateCount ? "All detected updates are already shown in the catalog lists above." : "No updates reported."}</CardDescription></CardHeader>{!!manager.updates.length && <CardContent className="grid grid-cols-1 gap-2 md:grid-cols-2 2xl:grid-cols-3">{manager.updates.map((item) => <SelectableRow key={item.id} checked={selected.has(item.id)} onClick={() => onToggle(item.id)} title={item.package} detail={`${item.currentVersion} → ${item.availableVersion}`} />)}</CardContent>}</Card>;
-}
-
-function SelectableRow({ checked, onClick, title, detail }: { checked: boolean; onClick: () => void; title: string; detail: string }) {
-  return <button type="button" onClick={onClick} aria-pressed={checked} aria-label={`${checked ? "Deselect" : "Select"} ${title} update`} className="flex w-full items-start gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"><span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>{checked && <Icon icon="check" />}</span><span className="min-w-0"><span className="block text-sm text-[var(--text)]">{title}</span><span className="block break-all font-mono text-[11px] text-[var(--text-mute)]">{detail}</span></span></button>;
+function PackageUpdateRow({ manager, packageName, currentVersion, availableVersion, checked, disabled, applying, onToggle, onApply }: {
+  manager: string;
+  packageName: string;
+  currentVersion: string;
+  availableVersion: string;
+  checked: boolean;
+  disabled: boolean;
+  applying: boolean;
+  onToggle: () => void;
+  onApply: () => void;
+}) {
+  return <div
+    className={`app-card app-card--upgrade update-available ${checked ? "selected" : ""}`}
+    role="button"
+    tabIndex={disabled ? -1 : 0}
+    aria-pressed={checked}
+    aria-label={`${checked ? "Deselect" : "Select"} ${packageName} update from ${manager}`}
+    onClick={(event) => {
+      if ((event.target as HTMLElement).closest("button, label")) return;
+      if (!disabled) onToggle();
+    }}
+    onKeyDown={(event) => {
+      if (event.target !== event.currentTarget || disabled) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onToggle();
+      }
+    }}
+  >
+    <span className="app-checkbox-wrap" onClick={(event) => event.stopPropagation()}>
+      <Checkbox checked={checked} onChange={onToggle} className="app-checkbox" disabled={disabled} ariaLabel={`Select ${packageName} update`} />
+    </span>
+    <AppIcon id={packageName} category="misc" />
+    <div className="app-info">
+      <span className="app-name app-name--truncate" title={packageName}>{packageName}</span>
+      <span className="app-description">Detected by {manager} package inventory</span>
+      <span className="app-version mono">{currentVersion} → {availableVersion}</span>
+    </div>
+    <Button
+      variant="ghost"
+      size="icon"
+      className="app-update-btn app-card-action--update size-8"
+      onClick={(event) => { event.stopPropagation(); onApply(); }}
+      disabled={disabled}
+      aria-label={`Update ${packageName} with ${manager}`}
+      title={`Update ${packageName}`}
+    >
+      {applying ? <Spinner size={14} /> : <Icon icon="refresh" />}
+    </Button>
+  </div>;
 }
 function Notice({ tone, text }: { tone: "success" | "warning"; text: string }) { return <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }
 function toggle(current: Set<string>, id: string) { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }
