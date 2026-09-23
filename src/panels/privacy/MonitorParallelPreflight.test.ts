@@ -13,8 +13,17 @@ describe("Privacy Monitor preflight", () => {
 
     expect(start).toBeGreaterThan(-1);
     expect(preflight).toContain("Promise.allSettled([");
-    expect(preflight).toContain('executeBackendCommand("Get-InstalledBrowsersJson")');
+    expect(preflight).toContain("getBrowserInventory()");
     expect(preflight).toContain('executeBackendCommand("Get-PrivacyShieldStatus")');
+    expect(preflight).not.toContain("Get-InstalledBrowsersJson");
+  });
+
+  test("browser preflight shares the cached inventory request with startup preload", async () => {
+    const source = await Bun.file("src/lib/onboardingExperience.ts").text();
+
+    expect(source).toContain("createBrowserInventoryCache");
+    expect(source).toContain('Get-InstalledBrowsersJson');
+    expect(source).toContain("export const getBrowserInventory = browserInventoryCache.get;");
   });
 
   test("places Browser Hardening first while Shield status keeps loading in parallel", async () => {

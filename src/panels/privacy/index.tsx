@@ -45,6 +45,7 @@ import {
 import type { AuthAnomalyTimeBasis, RansomwareAction } from "../../types/settings";
 import useClipboardGuardRules from "../../hooks/useClipboardGuardRules";
 import { executeBackendCommand } from "../../hooks/useBackend";
+import { getBrowserInventory } from "../../lib/onboardingExperience";
 import { isFleetReportControlLocked } from "../../lib/fleetReportingPolicyLock";
 import './index.css';
 
@@ -77,15 +78,13 @@ export default function PrivacyPanel() {
         if (tourActive) setActiveTab("monitor");
     }, [tourActive, setActiveTab]);
 
-    // Start the two independent physical-privacy probes together as soon as
-    // Monitor is opened. Browser Hardening and Privacy Shield each retain
-    // their own card-level loading/error UI; the shared backend request map
-    // joins those card requests to these in-flight probes rather than starting
-    // a second PowerShell process for the same command.
+    // Start the physical-privacy probes together as soon as Monitor is opened.
+    // Browser inventory shares the startup/card cache; Privacy Shield keeps its
+    // own card-level loading and error UI.
     useEffect(() => {
         if (!showMonitoring || activeTab !== "monitor") return;
         void Promise.allSettled([
-            executeBackendCommand("Get-InstalledBrowsersJson"),
+            getBrowserInventory(),
             executeBackendCommand("Get-PrivacyShieldStatus"),
         ]);
     }, [activeTab, showMonitoring]);

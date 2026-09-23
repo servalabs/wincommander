@@ -12,6 +12,12 @@ import { runOperation } from "../../../context/OperationContext";
 import { showSuccess, showError } from "../../../utils/toast";
 import { formatMaintenanceSuccess } from "../../../utils/maintenance";
 import { useAppConfirm } from "../../shared/AppConfirmDialog";
+import {
+    loadDiskCleanupProfiles,
+    loadDiskCleanupSchedules,
+    subscribeToDiskCleanupScheduleInvalidation,
+    type DiskCleanupSchedule,
+} from "../../../panels/maintenance/diskCleanupScheduleState";
 
 interface CleanupCategory {
     Id: string;
@@ -23,16 +29,7 @@ interface CleanupCategory {
     SizeMb: number;
 }
 
-interface AutoEraseSchedule {
-    categoryId: string;
-    taskName: string;
-    enabled: boolean;
-    intervalMinutes: number;
-    targetUser: string | null;
-    ownerAccount?: string | null;
-    lastRun: string | null;
-    lastResult: number | null;
-}
+type AutoEraseSchedule = DiskCleanupSchedule;
 
 interface WindowsAccount {
     name: string;
@@ -191,11 +188,12 @@ export default function DiskCleanupGranular() {
     }, []);
 
     const refreshSchedules = useCallback(async () => {
-        const res = await getAutoEraseSchedules();
+        const res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true);
         if (!res.success || !res.data?.schedules) {
             setScheduleError(res.error || "Unable to read auto-clean task status");
             return;
         }
+        setScheduleError(null);
         const entries = res.data.schedules.filter((entry) => entry.categoryId === "diskCleanup") as AutoEraseSchedule[];
         setScheduleEntries(entries);
         const enabled = entries.find((entry) => entry.enabled && entry.intervalMinutes > 0);
@@ -204,10 +202,16 @@ export default function DiskCleanupGranular() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    useEffect(() => subscribeToDiskCleanupScheduleInvalidation(() => {
+        void refreshSchedules();
+    }), [refreshSchedules]);
+
     // Load the existing schedule and the accounts that can own its per-user tasks.
     useEffect(() => {
-        (async () => {
-            const profiles = await getUserProfiles();
+        void Promise.all([
+            loadDiskCleanupProfiles(getUserProfiles),
+            loadDiskCleanupSchedules(getAutoEraseSchedules),
+        ]).then(([profiles, schedules]) => {
             if (profiles.success && profiles.data) {
                 const visible = profiles.data.profiles
                     .filter((account) => account.name && account.name !== "Default" && account.name !== "Public")
@@ -223,8 +227,16 @@ export default function DiskCleanupGranular() {
             } else {
                 setScheduleError(profiles.error || "Unable to identify the signed-in Windows account");
             }
-            await refreshSchedules();
-        })();
+            if (!schedules.success || !schedules.data?.schedules) {
+                setScheduleError(schedules.error || "Unable to read auto-clean task status");
+                return;
+            }
+            setScheduleEntries(schedules.data.schedules.filter((entry) => entry.categoryId === "diskCleanup"));
+            const enabled = schedules.data.schedules.find((entry) => entry.categoryId === "diskCleanup" && entry.enabled && entry.intervalMinutes > 0);
+            setScheduleMinutes(enabled ? enabled.intervalMinutes : null);
+        }).catch((cause) => {
+            setScheduleError(String(cause));
+        });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 

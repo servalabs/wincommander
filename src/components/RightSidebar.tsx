@@ -19,6 +19,7 @@ import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
+import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -523,6 +524,7 @@ export default function RightSidebar() {
                             failures.push(`${s.categoryId}: ${String(err)}`);
                         }
                     }));
+                    invalidateDiskCleanupScheduleStatus();
                     if (failures.length > 0) {
                         def.reject(new Error(failures.join('; ')));
                     } else {

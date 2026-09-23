@@ -9,6 +9,10 @@ import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSetti
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import {
+    invalidateDiskCleanupScheduleStatus,
+    loadDiskCleanupSchedules,
+} from "../maintenance/diskCleanupScheduleState";
 
 const getSchedulerCategoryId = (categoryId: string): string =>
     [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]
@@ -490,7 +494,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const migrationStarted = useRef(false);
 
     const refreshSchedules = async () => {
-        const res = await getAutoEraseSchedules();
+        const res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true);
         if (res.success && res.data?.schedules) {
             const map: Record<string, number> = {};
             const autoSetIds = new Set<string>();
@@ -546,6 +550,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         // an open scheduler with LicenseGate or the Pro installer.
         void (async () => {
             try { await invokeAutoEraseMigration(); } catch {}
+            invalidateDiskCleanupScheduleStatus();
             await refreshSchedules();
         })();
         // Stable refs from useBackend's useMemo — safe to omit from deps.
@@ -558,6 +563,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const schedulerId = getSchedulerCategoryId(categoryId);
             const res = await setAutoEraseSchedule(schedulerId, minutes, runAsSystem);
             if (res.success) {
+                invalidateDiskCleanupScheduleStatus();
                 setSchedulesById(prev => {
                     const next = { ...prev, [categoryId]: minutes };
                     writeScheduleCache(next);
@@ -580,6 +586,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const schedulerId = getSchedulerCategoryId(categoryId);
             const res = await removeAutoEraseSchedule(schedulerId);
             if (res.success) {
+                invalidateDiskCleanupScheduleStatus();
                 setSchedulesById(prev => {
                     const next = { ...prev };
                     delete next[categoryId];
@@ -965,6 +972,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         } finally {
             // Always re-read the source of truth so every clock icon reflects
             // both successful tasks and any pre-existing/manual configuration.
+            invalidateDiskCleanupScheduleStatus();
             try { await refreshSchedules(); } catch {}
             setAutoSetSchedulesBusy(false);
         }

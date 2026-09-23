@@ -3,6 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SectionCard from "../../components/shared/SectionCard";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import useBackend, { type InstalledBrowser } from "../../hooks/useBackend";
+import {
+  getBrowserInventory,
+  getCachedBrowserInventory,
+  refreshBrowserInventory,
+} from "../../lib/onboardingExperience";
 import { useAppState } from "../../context/AppContext";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Switch } from "../../components/ui/switch";
@@ -23,15 +28,22 @@ interface BrowserRestoreData {
 
 export default function BrowserHardeningSection({ isAdvanced, searchQuery }: BrowserHardeningSectionProps) {
   const {
-    getInstalledBrowsers,
     hardenBrowserByName,
     restoreBrowserByName,
   } = useBackend();
   const { appSettings, patchAppSettings } = useAppState();
 
-  const [detectedBrowsers, setDetectedBrowsers] = useState<InstalledBrowser[] | null>(null);
-  const [browserStatus, setBrowserStatus] = useState<Record<string, boolean>>({});
-  const [browsersLoading, setBrowsersLoading] = useState(false);
+  const [detectedBrowsers, setDetectedBrowsers] = useState<InstalledBrowser[] | null>(
+    () => getCachedBrowserInventory()?.data?.browsers ?? null,
+  );
+  const [browserStatus, setBrowserStatus] = useState<Record<string, boolean>>(() => {
+    const status: Record<string, boolean> = {};
+    for (const browser of getCachedBrowserInventory()?.data?.browsers ?? []) {
+      status[browser.Name] = Boolean(browser.Hardened);
+    }
+    return status;
+  });
+  const [browsersLoading, setBrowsersLoading] = useState(() => getCachedBrowserInventory() === undefined);
   const [browserDetectionSlow, setBrowserDetectionSlow] = useState(false);
   const [browserDetectError, setBrowserDetectError] = useState<string | null>(null);
   const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
@@ -70,7 +82,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
     }
   };
 
-  const loadBrowsers = useCallback(async (options?: { showLoading?: boolean }) => {
+  const loadBrowsers = useCallback(async (options?: { showLoading?: boolean; refresh?: boolean }) => {
     const showLoading = options?.showLoading ?? true;
     if (showLoading) {
       setBrowsersLoading(true);
@@ -79,7 +91,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
     }
     const slowTimer = showLoading ? setTimeout(() => setBrowserDetectionSlow(true), 3500) : undefined;
     try {
-      const result = await getInstalledBrowsers();
+      const result = options?.refresh ? await refreshBrowserInventory() : await getBrowserInventory();
       requireBackendSuccess(result, "Browser detection failed.");
       const list = result.data?.browsers ?? [];
       setDetectedBrowsers(list);
@@ -102,7 +114,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
         setBrowsersLoading(false);
       }
     }
-  }, [getInstalledBrowsers]);
+  }, []);
 
   const handleBrowserToggle = useCallback(async (browser: InstalledBrowser, checked: boolean) => {
     const key = `browser_${browser.Name}`;
@@ -116,7 +128,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
     } catch (error) {
       showError(error instanceof Error ? error.message : String(error));
     } finally {
-      await loadBrowsers({ showLoading: false });
+      await loadBrowsers({ showLoading: false, refresh: true });
       setLocalLoadingMap((prev) => ({ ...prev, [key]: false }));
     }
   }, [hardenBrowserByName, restoreBrowserByName, loadBrowsers]);
@@ -151,12 +163,13 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
       }
       if (failures.length > 0) showError(failures.join(" "));
     } finally {
-      await loadBrowsers({ showLoading: false });
+      await loadBrowsers({ showLoading: false, refresh: true });
       setAllBrowsersLoading(false);
     }
   }, [browserStatus, detectedBrowsers, hardenBrowserByName, loadBrowsers, restoreBrowserByName]);
 
   useEffect(() => {
+    if (getCachedBrowserInventory() !== undefined) return;
     void loadBrowsers({ showLoading: true });
   }, [loadBrowsers]);
 

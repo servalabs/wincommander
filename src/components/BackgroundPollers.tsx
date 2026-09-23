@@ -24,6 +24,8 @@ import useEntitlements from "../hooks/useEntitlements";
 import { isModuleEnabled } from "../types/modules";
 import { showWarning, showError, showSuccess } from "../utils/toast";
 import { recordEvidence } from "../lib/evidence";
+import { preloadOnboardingExperience } from "../lib/onboardingExperience";
+import { preloadDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import { savedRamDiskMountRequest } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
@@ -111,8 +113,8 @@ export default function BackgroundPollers({
 }: BackgroundPollersProps) {
   useAutoHeal();
   useAdoptCurrentState();
-  const { startPrivacyShield, invokeProductivityEngineMaintenance, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus } = useBackend();
-  const { appSettings } = useAppState();
+  const { startPrivacyShield, invokeProductivityEngineMaintenance, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus, getUserProfiles, getAutoEraseSchedules } = useBackend();
+  const { appSettings, startupComplete } = useAppState();
   const { hasPaid } = useEntitlements();
   const modules = appSettings?.app?.modules;
   const productivityQuietManaged = appSettings?.ideal?.identity?.hideBackendAppsList?.includes("productivityEngine") === true;
@@ -144,6 +146,8 @@ export default function BackgroundPollers({
   const privacyShieldAutostartRef = useRef(privacyShieldAutostart);
   const hasPaidRef = useRef(hasPaid);
   const appSettingsRef = useRef(appSettings);
+  const onboardingPreloadStartedRef = useRef(false);
+  const diskCleanupStatusPreloadStartedRef = useRef(false);
   const fleetShieldReportedStateRef = useRef<string | null>(null);
   const fleetShieldReceivedStateRef = useRef<string | null>(null);
   // A device-scoped Fleet Start/Stop carries a durable command id. Every
@@ -157,6 +161,30 @@ export default function BackgroundPollers({
     hasPaidRef.current = hasPaid;
     appSettingsRef.current = appSettings;
   }, [modules, productivityQuietManaged, ramdiskAutostart, privacyShieldAutostart, hasPaid, appSettings]);
+
+  // Warm the first-run actions in the background once settings are ready.
+  // The helper is read-only and deduplicates its browser inventory request;
+  // this never changes browser policy or starts a lockdown operation.
+  useEffect(() => {
+    if (!startupComplete || !appSettings || onboardingPreloadStartedRef.current) return;
+    onboardingPreloadStartedRef.current = true;
+    void preloadOnboardingExperience().catch(() => {});
+  }, [appSettings, startupComplete]);
+
+  // Read the Windows cleanup schedule and account coverage after the startup
+  // burst has settled. Maintenance's Storage card shares this cache, so its
+  // schedule status is ready by the first visit without delaying startup.
+  useEffect(() => {
+    if (!startupComplete || diskCleanupStatusPreloadStartedRef.current) return;
+    const timer = window.setTimeout(() => {
+      diskCleanupStatusPreloadStartedRef.current = true;
+      void preloadDiskCleanupScheduleStatus({
+        getProfiles: getUserProfiles,
+        getSchedules: getAutoEraseSchedules,
+      }).catch(() => {});
+    }, 10_000);
+    return () => window.clearTimeout(timer);
+  }, [getAutoEraseSchedules, getUserProfiles, startupComplete]);
 
   // Fleet-managed Privacy Shield supervisor. Privacy Shield remains the sole
   // local camera client; Fleet supplies signed policy and receives status/
