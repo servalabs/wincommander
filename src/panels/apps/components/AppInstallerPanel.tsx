@@ -8,6 +8,8 @@ import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../..
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
 import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
+import { isAppInventoryRefreshDue } from "../../../lib/appInventoryStartup";
+import { getPackageUpdateInventorySnapshot } from "../../../lib/packageUpdateInventoryStore";
 import { recordPackageActivity, setPackageActivityStatus, usePackageActivities } from "../../../lib/packageActivityStore";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
@@ -117,7 +119,7 @@ function AppInstallerPanel({
   updatesTools?: ReactNode;
   onStatusChange?: (status: AppInstallerStatus) => void;
 }) {
-  const { appInventory, runAppInventoryScan, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
+  const { appInventory, runAppInventoryScan, waitForAppInventoryScan, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
   const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -509,13 +511,28 @@ function AppInstallerPanel({
     // visits. The context coalesces concurrent scans with package completion.
     if (!inventoryScanRequestedRef.current) {
       inventoryScanRequestedRef.current = true;
-      void runAppInventoryScan(true);
+      void waitForPackageOperation().then(async () => {
+        try {
+          // A startup update check may have refreshed the catalog while this
+          // effect was waiting for the shared package lock. Recheck freshness
+          // after acquiring it so entering this panel does not launch Winget
+          // inventory a second time.
+          await waitForAppInventoryScan();
+          const catalogIsFresh = getPackageUpdateInventorySnapshot().catalogInventoryFresh
+            || !isAppInventoryRefreshDue(appInventory?.lastScanAt);
+          if (!catalogIsFresh) {
+            await runAppInventoryScan(true);
+            await waitForAppInventoryScan();
+          }
+        }
+        finally { releasePackageOperation(); }
+      });
     }
     if (!wingetCheckRequestedRef.current) {
       wingetCheckRequestedRef.current = true;
       checkWinget();
     }
-  }, [testWingetInstalled, appInventory, runAppInventoryScan]);
+  }, [testWingetInstalled, appInventory, runAppInventoryScan, waitForAppInventoryScan]);
 
   useEffect(() => {
     const openUpdates = () => {
@@ -904,7 +921,6 @@ function AppInstallerPanel({
   }, [appsLoading, installApps]);
 
   const notInstalledApps = filteredApps.filter(app => !installedApps.has(app.id));
-  const updateApps = filteredApps.filter(app => installedApps.has(app.id) && updateAvailableApps.has(app.id));
   const noActionApps = filteredApps.filter(app => installedApps.has(app.id) && !updateAvailableApps.has(app.id));
 
   const renderApp = (app: AppItem, showCheckbox = true) => {
@@ -997,50 +1013,6 @@ function AppInstallerPanel({
     </div>
     );
   };
-
-  const renderUpgradeCard = (item: UpgradeItem) => (
-    <div
-      key={item.id}
-      className={`app-card app-card--upgrade update-available ${selectedApps.has(item.id) ? "selected" : ""}`}
-      onClick={() => toggleApp(item.id)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          toggleApp(item.id);
-        }
-      }}
-    >
-      <span className="app-checkbox-wrap" onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          checked={selectedApps.has(item.id)}
-          onChange={() => toggleApp(item.id)}
-          className="app-checkbox"
-          ariaLabel={`Select ${item.name || item.id}`}
-        />
-      </span>
-      <AppIcon id={item.id} category="misc" iconData={item.iconData} />
-      <div className="app-info">
-        <span className="app-name app-name--truncate" title={item.name || item.id}>{item.name || item.id}</span>
-        <span className="app-description">Detected by Windows package inventory</span>
-        <span className="app-version mono">{item.version || "?"} → {item.availableVersion || "?"}</span>
-      </div>
-      <Button
-        icon={upgradingApp === item.id ? undefined : "refresh"}
-        small
-        minimal
-        intent="warning"
-        className="app-update-btn app-card-action--update"
-        onClick={(e) => handleUpgradeSingle(item.id, e)}
-        disabled={upgradingApp !== null || installing || needsElevation}
-        aria-label={`Update ${item.name || item.id}`}
-        title={`Update ${item.name || item.id}`}
-      >
-        {upgradingApp === item.id && <Spinner size={12} />}
-      </Button>
-    </div>
-  );
 
   return (
     <div className="app-installer-panel">
@@ -1240,7 +1212,7 @@ function AppInstallerPanel({
           <Tabs value={installerView} onValueChange={(value) => setInstallerView(value as typeof installerView)}>
             <TabsList className="w-full flex-wrap justify-start">
               <TabsTrigger value="not-installed">Not Installed ({notInstalledApps.length})</TabsTrigger>
-              <TabsTrigger value="updates">Updates ({outdatedInstalledCount})</TabsTrigger>
+              <TabsTrigger value="updates">Updates</TabsTrigger>
               <TabsTrigger value="installed">Installed ({noActionApps.length})</TabsTrigger>
             </TabsList>
 
@@ -1264,70 +1236,9 @@ function AppInstallerPanel({
               </div>
             </TabsContent>
 
-            {/* Tour anchor: wraps the actual per-app update cards (both
-                manifest apps with updateAvailable and "other" packages from
-                the winget inventory scan). The tour's anchor resolver falls
-                back to the apps-update-section button anchor when this tab
-                isn't the active inner tab, so gating stays correct. */}
             <TabsContent value="updates">
-              {updatesTools && <div className="mb-6">{updatesTools}</div>}
-              <div className="apps-grid" data-tour="apps-updates-grid">
-                {appsLoading ? (
-                  <div className="empty-state">
-                    <Icon icon="time" size={32} className="scanning-icon" />
-                    <p>Loading app catalog...</p>
-                  </div>
-                ) : outdatedInstalledCount === 0 ? (
-                  <div className="empty-state">
-                    <Icon icon="tick-circle" size={32} className="empty-icon" />
-                    <p>Nothing needs an update</p>
-                  </div>
-                ) : (
-                  <>
-                    {updateApps.length > 0 && (
-                      <>
-                        <div className="grid-divider">
-                          <div className="divider-line"></div>
-                          <div className="divider-label">FROM THE CATALOG ({updateApps.length})</div>
-                          <div className="divider-line"></div>
-                        </div>
-                        <div className="app-group-grid app-group-grid--updates">
-                          {updateApps.map((app, idx) => (
-                            // Staggered fade+rise on entrance so items arrive
-                            // in sequence rather than all at once.
-                            <motion.div
-                              key={app.id}
-                              initial={{ opacity: 0, y: 6 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{
-                                delay: staggerDelay(idx),
-                                duration: DURATION_S.normal,
-                                ease: EASE.enter,
-                              }}
-                            >
-                              {renderApp(app)}
-                            </motion.div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
-                    {/* Other system-wide updates — packages winget reports
-                        outside the curated manifest. */}
-                    {filteredOtherUpgrades.length > 0 && (
-                      <>
-                        <div className="grid-divider">
-                          <div className="divider-line"></div>
-                          <div className="divider-label">OTHER PACKAGES ({filteredOtherUpgrades.length})</div>
-                          <div className="divider-line"></div>
-                        </div>
-                        <div className="app-group-grid app-group-grid--updates">
-                          {filteredOtherUpgrades.map(renderUpgradeCard)}
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
+              <div className="w-full" data-tour="apps-updates-grid">
+                {updatesTools || <div className="empty-state"><Icon icon="time" size={32} className="scanning-icon" /><p>Loading package updates…</p></div>}
               </div>
             </TabsContent>
 

@@ -11,6 +11,7 @@ export const STARTUP_JOB_IDS = [
   "dependencies",
   "mesh-status",
   "app-inventory",
+  "package-updates",
   "panel-preload",
   "disk-cleanup-preload",
   "search-preload",

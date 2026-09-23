@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ManagerInventory } from "../../hooks/useBackend";
 import type { AppInventorySnapshot } from "../../types/settings";
-import { collectManagerUpdates, filterCatalogDuplicates, managerUpdateStatus, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
+import { collectManagerUpdates, collectUnifiedPackageUpdates, filterCatalogDuplicates, managerUpdateStatus, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
 
 const manager = (name: string, packages: string[]): ManagerInventory => ({
   manager: name,
@@ -53,6 +53,39 @@ describe("package update display", () => {
       { manager: "chocolatey", package: "git" },
       { manager: "chocolatey", package: "powershell-core" },
       { manager: "scoop", package: "7zip" },
+    ]);
+  });
+
+  test("puts catalog, Winget, Chocolatey, Scoop, and npm results in one deduplicated list", () => {
+    const inventory = {
+      manifestApps: [{
+        id: "Git.Git",
+        name: "Git",
+        updateAvailable: true,
+        installedVersion: "2.0",
+        latestVersion: "2.1",
+      }],
+      pendingUpdates: [{
+        id: "Git.Git",
+        name: "Git",
+        installedVersion: "2.0",
+        latestVersion: "2.1",
+        source: "winget",
+      }],
+    } as unknown as Pick<AppInventorySnapshot, "manifestApps" | "pendingUpdates">;
+    const rows = collectUnifiedPackageUpdates([
+      manager("winget", ["Git.Git", "Microsoft.PowerShell"]),
+      manager("chocolatey", ["git"]),
+      manager("scoop", ["7zip"]),
+      manager("npm", ["@scope/package"]),
+    ], inventory);
+
+    expect(rows.map(({ manager: source, packageName, kind }) => ({ source, packageName, kind }))).toEqual([
+      { source: "winget", packageName: "Git", kind: "catalog" },
+      { source: "winget", packageName: "Microsoft.PowerShell", kind: "manager" },
+      { source: "chocolatey", packageName: "git", kind: "manager" },
+      { source: "scoop", packageName: "7zip", kind: "manager" },
+      { source: "npm", packageName: "@scope/package", kind: "manager" },
     ]);
   });
 

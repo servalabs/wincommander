@@ -28,6 +28,7 @@ pub enum StartupJobId {
     Dependencies,
     MeshStatus,
     AppInventory,
+    PackageUpdates,
     PanelPreload,
     DiskCleanupPreload,
     SearchPreload,
@@ -46,6 +47,7 @@ impl StartupJobId {
             Self::Dependencies => "dependencies",
             Self::MeshStatus => "mesh-status",
             Self::AppInventory => "app-inventory",
+            Self::PackageUpdates => "package-updates",
             Self::PanelPreload => "panel-preload",
             Self::DiskCleanupPreload => "disk-cleanup-preload",
             Self::SearchPreload => "search-preload",
@@ -296,6 +298,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<StartupJobId>(r#""settings-cache""#).unwrap(),
             StartupJobId::SettingsCache
+        );
+        assert_eq!(
+            serde_json::from_str::<StartupJobId>(r#""package-updates""#).unwrap(),
+            StartupJobId::PackageUpdates
         );
         assert_eq!(
             serde_json::from_str::<StartupMilestone>(r#""timed-out""#).unwrap(),

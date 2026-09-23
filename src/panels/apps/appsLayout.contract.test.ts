@@ -10,11 +10,18 @@ describe("Packages and Apps layout", () => {
   test("keeps package updates inside Install software's Updates view", async () => {
     const panel = await read("src/panels/apps/index.tsx");
     const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+    const updates = await read("src/panels/apps/PackageUpdateTools.tsx");
 
     expect(panel).not.toContain('value="updates-tools"');
     expect(panel).toContain("updatesTools={<PackageUpdateTools />}");
     expect(installer).toContain('<TabsContent value="updates">');
-    expect(installer).toContain("{updatesTools &&");
+    expect(installer).toContain("{updatesTools ||");
+    expect(installer).not.toContain('divider-label">FROM THE CATALOG');
+    expect(installer).not.toContain('divider-label">OTHER PACKAGES');
+    expect(updates).toContain('aria-label="Refresh app and package updates"');
+    expect(updates).not.toContain("Check for updates");
+    expect(updates).not.toContain('aria-label="Package manager check results"');
+    expect(updates).not.toContain('divider-label">OTHER PACKAGES');
   });
 
   test("keeps optional package managers out of engine readiness and removes obsolete package surfaces", async () => {
@@ -32,7 +39,8 @@ describe("Packages and Apps layout", () => {
     const updates = await read("src/panels/apps/PackageUpdateTools.tsx");
     const dependencies = await read("src-tauri/commander-free/scripts/modules/dependencies/dependencies.ps1");
 
-    expect(updates).toContain('manager.manager === "chocolatey" || manager.manager === "scoop"');
+    expect(updates).toContain('chocolatey: "Chocolatey"');
+    expect(updates).toContain('scoop: "Scoop"');
     expect(updates).not.toContain('INSTALLABLE_MANAGERS');
     expect(dependencies).toContain("$Id -eq 'chocolatey' -or $Id -eq 'scoop'");
     expect(dependencies).not.toContain("Install-Chocolatey");

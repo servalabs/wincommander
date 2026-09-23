@@ -49,6 +49,7 @@ export function canRunStartupJob(
     case "mesh-status":
       return eligibility.hasVerifiedPaidEntitlement && eligibility.meshEnabled;
     case "app-inventory":
+    case "package-updates":
       return eligibility.hasIdleWindow;
   }
 

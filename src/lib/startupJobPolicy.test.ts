@@ -19,6 +19,7 @@ describe("startup job policy", () => {
     expect(canRunStartupJob("defender-status", denied)).toBe(false);
     expect(canRunStartupJob("mesh-status", denied)).toBe(false);
     expect(canRunStartupJob("app-inventory", denied)).toBe(false);
+    expect(canRunStartupJob("package-updates", denied)).toBe(false);
   });
 
   test("requires paid entitlement, configuration, install state and idle time for optional work", () => {
@@ -38,5 +39,6 @@ describe("startup job policy", () => {
     expect(canRunStartupJob("dependencies", enabled)).toBe(true);
     expect(canRunStartupJob("mesh-status", enabled)).toBe(true);
     expect(canRunStartupJob("app-inventory", enabled)).toBe(true);
+    expect(canRunStartupJob("package-updates", enabled)).toBe(true);
   });
 });

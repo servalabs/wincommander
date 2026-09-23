@@ -3,14 +3,25 @@ import type { AppInventorySnapshot } from "../../types/settings";
 
 type CatalogInventory = Pick<AppInventorySnapshot, "manifestApps" | "pendingUpdates"> | null;
 
+export interface UnifiedPackageUpdateRow {
+  key: string;
+  kind: "catalog" | "manager";
+  /** The package id for catalog upgrades or opaque backend id for manager updates. */
+  actionId: string;
+  manager: string;
+  packageName: string;
+  currentVersion: string;
+  availableVersion: string;
+}
+
 function packageIdentity(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
 /**
- * The app catalog already gives Winget updates their own actionable cards.
- * Keep the manager scanner for updates outside that inventory, rather than
- * presenting the same Winget package twice with two competing actions.
+ * The app catalog owns the display and upgrade action for packages it found.
+ * Suppress matching Winget scanner rows so the unified list contains one
+ * actionable row per package.
  */
 export function filterCatalogDuplicates(
   managers: ManagerInventory[],
@@ -49,6 +60,68 @@ export function collectManagerUpdates(
   return filterCatalogDuplicates(managers, inventory).flatMap((manager) =>
     manager.updates.map((update) => ({ manager, update })),
   );
+}
+
+/**
+ * Keep inventory-discovered Winget updates and the other manager results in
+ * one actionable list. Winget results already represented by the app
+ * inventory are removed by `collectManagerUpdates`, so each package appears
+ * once while Chocolatey, Scoop, and npm rows remain alongside it.
+ */
+export function collectUnifiedPackageUpdates(
+  managers: ManagerInventory[],
+  inventory: CatalogInventory,
+): UnifiedPackageUpdateRow[] {
+  const catalogRows: UnifiedPackageUpdateRow[] = [];
+  const seenCatalogIds = new Set<string>();
+  const manifestById = new Map(
+    (inventory?.manifestApps ?? []).map((app) => [packageIdentity(app.id), app]),
+  );
+
+  for (const update of inventory?.pendingUpdates ?? []) {
+    const id = update.id.trim();
+    const identity = packageIdentity(id);
+    if (!id || seenCatalogIds.has(identity)) continue;
+    seenCatalogIds.add(identity);
+    const app = manifestById.get(identity);
+    catalogRows.push({
+      key: `catalog:${identity}`,
+      kind: "catalog",
+      actionId: id,
+      manager: update.source?.trim() || "winget",
+      packageName: update.name?.trim() || app?.name || id,
+      currentVersion: update.installedVersion?.trim() || app?.installedVersion || "Unknown",
+      availableVersion: update.latestVersion?.trim() || app?.latestVersion || "Unknown",
+    });
+  }
+
+  for (const app of inventory?.manifestApps ?? []) {
+    const id = app.id.trim();
+    const identity = packageIdentity(id);
+    if (!id || !app.updateAvailable || seenCatalogIds.has(identity)) continue;
+    seenCatalogIds.add(identity);
+    catalogRows.push({
+      key: `catalog:${identity}`,
+      kind: "catalog",
+      actionId: id,
+      manager: "winget",
+      packageName: app.name?.trim() || id,
+      currentVersion: app.installedVersion?.trim() || "Unknown",
+      availableVersion: app.latestVersion?.trim() || "Unknown",
+    });
+  }
+
+  const managerRows = collectManagerUpdates(managers, inventory).map(({ manager, update }) => ({
+    key: `manager:${manager.manager.toLocaleLowerCase()}:${update.id}`,
+    kind: "manager" as const,
+    actionId: update.id,
+    manager: manager.manager,
+    packageName: update.package,
+    currentVersion: update.currentVersion || "Unknown",
+    availableVersion: update.availableVersion || "Unknown",
+  }));
+
+  return [...catalogRows, ...managerRows];
 }
 
 /**

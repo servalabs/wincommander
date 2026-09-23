@@ -33,6 +33,8 @@ import { useLicenseQuery } from '../hooks/queries/useLicenseQuery';
 import { createTauriStartupReporter } from '../events/startup';
 import { reportStartupPhase } from '../hooks/startupTrace';
 import { recoverSettingsWrite } from '../lib/settingsWriteRecovery';
+import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
+import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -108,6 +110,8 @@ interface AppState {
      * Auto-persists to settings.json → current.apps.inventory.
      * Called when the startup cache is stale and after install/upgrade/uninstall. */
     runAppInventoryScan: (silent?: boolean) => Promise<void>;
+    /** Wait until the underlying native Get-AppInventory call actually drains. */
+    waitForAppInventoryScan: () => Promise<void>;
     /** Refresh dependency status (Get-DependencyStatus). Called on startup. */
     refreshDependencies: (silent?: boolean) => Promise<void>;
     /** Refresh SMART health for visible logical drives using smartctl CLI. */
@@ -166,6 +170,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const settingsReadStoreRef = useRef(createStartupProbeStore<AppSettings>());
     const systemProbeStoreRef = useRef(createStartupProbeStore<unknown>());
     const startupStatusStoreRef = useRef(createStartupProbeStore<unknown>());
+    const packageUpdateStartupRequestedRef = useRef(false);
     const {
         getSystemInfo,
         getDriveSmartHealth,
@@ -179,6 +184,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getEncryptedVolumeStatus,
         getProductivityStatus,
         getAppInventory,
+        packageUpdatesInventory,
     } = useBackend();
     if (!startupCoordinatorRef.current) {
         startupCoordinatorRef.current = createStartupCoordinator({
@@ -812,6 +818,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             setAppSettings(updatedSettings);
                             appSettingsRef.current = updatedSettings;
                             seedFromCachedSettings(updatedSettings);
+                            setPackageUpdateCatalogInventoryFresh(true);
                         } catch { /* best-effort */ }
                     } else if (!res.success) {
                         console.warn('App inventory scan did not return data:', res.error ?? res);
@@ -841,6 +848,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!silent) setLoading(prev => ({ ...prev, apps: false }));
         }
     }, [getAppInventory, seedFromCachedSettings]);
+
+    const waitForAppInventoryScan = useCallback(async () => {
+        await appInventoryBackendInFlightRef.current;
+    }, []);
 
     const refreshMesh = useCallback(async (silent: boolean = false) => {
         if (!silent) setLoading(prev => ({ ...prev, mesh: true }));
@@ -1226,7 +1237,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setStartupDataState('stale');
                 hydratedSettings = await hydrateWithinBudget(signal => initSettings(false, undefined, signal));
                 if (cancelled) return;
-                if (!hydratedSettings) {
+            if (!hydratedSettings) {
                     // A soft timeout only bounds the splash's first attempt; it
                     // cannot cancel a native DPAPI/filesystem read.  Keep one
                     // shared read alive instead of presenting a false
@@ -1242,6 +1253,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     }
                 }
             }
+
+            const cachedInventoryAt = appSettingsRef.current?.current?.apps?.inventory?.lastScanAt;
+            setPackageUpdateCatalogInventoryFresh(!isAppInventoryRefreshDue(cachedInventoryAt));
 
             // Cached settings are enough to begin the native readiness check,
             // but not enough to reveal the shell. Otherwise a cached launch
@@ -1261,6 +1275,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 // trapping the person behind a permanent loading screen.
                 setStartupDataState(result.outcome === 'completed' && result.value === true ? 'ready' : 'stale');
                 setStartupComplete(true);
+
+                // Once the dashboard is usable, start the combined update
+                // check at the first browser idle window. The startup
+                // coordinator serializes this expensive scan behind the
+                // readiness/system probes, while the shell remains interactive.
+                if (
+                    authMode !== 'decoy' &&
+                    !packageUpdateStartupRequestedRef.current &&
+                    getPackageUpdateInventorySnapshot().lastCheckedAt === null
+                ) {
+                    packageUpdateStartupRequestedRef.current = true;
+                    scheduleWhenIdle(0, () => {
+                        void runStartupJob({
+                            id: 'package-updates',
+                            priority: 'idle',
+                            cost: 'expensive',
+                            timeoutMs: 120_000,
+                            run: async () => {
+                                await waitForPackageOperation();
+                                try {
+                                    const existingPackageInventory = getPackageUpdateInventorySnapshot();
+                                    if (existingPackageInventory.status === 'ready' && existingPackageInventory.inventory) {
+                                        return existingPackageInventory.inventory;
+                                    }
+                                    const inventoryAtStart = appSettingsRef.current?.current?.apps?.inventory?.lastScanAt;
+                                    if (isAppInventoryRefreshDue(inventoryAtStart)) {
+                                        setPackageUpdateCatalogInventoryFresh(false);
+                                        await runAppInventoryScan(true);
+                                        // The public refresh has a UI timeout;
+                                        // wait for native work to finish before
+                                        // probing Winget and other managers.
+                                        await waitForAppInventoryScan();
+                                    }
+                                    return await runPackageUpdateInventoryCheck(() => packageUpdatesInventory());
+                                } finally {
+                                    releasePackageOperation();
+                                }
+                            },
+                        }).then((packageResult) => {
+                            if (packageResult.outcome === 'failed') {
+                                console.warn('Startup package update check failed.');
+                            }
+                        });
+                    });
+                }
             });
 
             emitProgress(95, 'refreshing system data');
@@ -1323,10 +1382,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     canRunStartupJob('app-inventory', { ...startupEligibilityRef.current, hasIdleWindow: true })
                 ) {
                     void runStartupJob({ id: 'app-inventory', priority: 'idle', cost: 'expensive', timeoutMs: APP_INVENTORY_SOFT_TIMEOUT_MS, run: async () => {
-                        await runAppInventoryScan(true);
-                        // The public refresh returns after its UI timeout. Keep
-                        // the coordinator occupied until native scanning drains.
-                        await appInventoryBackendInFlightRef.current;
+                        await waitForPackageOperation();
+                        try {
+                            const latestCachedInventoryAt = appSettingsRef.current?.current?.apps?.inventory?.lastScanAt;
+                            if (isAppInventoryRefreshDue(latestCachedInventoryAt)) {
+                                await runAppInventoryScan(true);
+                                // The public refresh returns after its UI timeout. Keep
+                                // the coordinator occupied until native scanning drains.
+                                await appInventoryBackendInFlightRef.current;
+                            }
+                        } finally {
+                            releasePackageOperation();
+                        }
                     } })
                         .then((result) => {
                             // A frontend timeout cannot kill winget/native work.
@@ -1357,7 +1424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 idleCallbacks.forEach((handle) => win.cancelIdleCallback!(handle));
             }
         };
-    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings, runStartupJob, startupAttempt]);
+    }, [authMode, initializeApp, initSettings, packageUpdatesInventory, refreshMesh, runAppInventoryScan, waitForAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings, runStartupJob, startupAttempt]);
 
     const ctx = useMemo(() => ({
         systemInfo,
@@ -1394,6 +1461,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshVault,
         refreshProductivity,
         runAppInventoryScan,
+        waitForAppInventoryScan,
         refreshDependencies,
         refreshDriveHealth,
         runStartupJob,
@@ -1432,6 +1500,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshVault,
         refreshProductivity,
         runAppInventoryScan,
+        waitForAppInventoryScan,
         refreshDependencies,
         refreshDriveHealth,
         runStartupJob,

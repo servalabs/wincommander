@@ -21,4 +21,17 @@ describe("AppContext startup coordination", () => {
     expect(source).toContain("startupEligibilityRef.current");
     expect(source).not.toContain("runStartupJob,\n    startupEligibility,");
   });
+
+  test("checks package updates automatically after launch without blocking startup", async () => {
+    const source = await Bun.file("src/context/AppContext.tsx").text();
+
+    expect(source).toContain("id: 'package-updates'");
+    expect(source).toContain("scheduleWhenIdle(0");
+    expect(source).toContain("runPackageUpdateInventoryCheck(() => packageUpdatesInventory())");
+    expect(source).toContain("existingPackageInventory.status === 'ready'");
+    expect(source).toContain("if (isAppInventoryRefreshDue(inventoryAtStart))");
+    expect(source).toContain("authMode !== 'decoy'");
+    expect(source).toContain("isAppInventoryRefreshDue(latestCachedInventoryAt)");
+    expect(source).not.toContain("PACKAGE_UPDATE_STARTUP_DELAY_MS");
+  });
 });
