@@ -11,12 +11,22 @@ $root = Join-Path $parent 'WinCommander'
 $report = Join-Path $parent 'result.txt'
 try {
     function Get-EntrySecurity([string]$Path, [bool]$Directory) {
-        if ($Directory) { return [IO.Directory]::GetAccessControl($Path) }
-        return [IO.File]::GetAccessControl($Path)
+        $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
+        $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
+        if ($extensions) { return [IO.FileSystemAclExtensions]::GetAccessControl($entry) }
+        return $entry.GetAccessControl()
     }
     function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
-        if ($Directory) { [IO.Directory]::SetAccessControl($Path, [Security.AccessControl.DirectorySecurity]$Acl) }
-        else { [IO.File]::SetAccessControl($Path, [Security.AccessControl.FileSecurity]$Acl) }
+        $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
+        $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
+        if ($Directory) {
+            if ($extensions) { [IO.FileSystemAclExtensions]::SetAccessControl($entry, [Security.AccessControl.DirectorySecurity]$Acl) }
+            else { $entry.SetAccessControl([Security.AccessControl.DirectorySecurity]$Acl) }
+        }
+        else {
+            if ($extensions) { [IO.FileSystemAclExtensions]::SetAccessControl($entry, [Security.AccessControl.FileSecurity]$Acl) }
+            else { $entry.SetAccessControl([Security.AccessControl.FileSecurity]$Acl) }
+        }
     }
     if ((Get-Content -LiteralPath $repair -Raw) -match '(?im)^\s*(Get|Set)-Acl\b') {
         throw 'Installer repair must not depend on Microsoft.PowerShell.Security ACL cmdlets.'

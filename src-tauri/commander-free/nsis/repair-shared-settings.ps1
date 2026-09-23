@@ -32,17 +32,23 @@ try {
     # load Microsoft.PowerShell.Security, even though PowerShell can discover
     # the cmdlet.  The .NET APIs are available in Windows PowerShell itself.
     function Get-EntrySecurity([string]$Path, [bool]$Directory) {
-        if ($Directory) {
-            return [IO.Directory]::GetAccessControl($Path)
+        $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
+        $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
+        if ($extensions) {
+            return [IO.FileSystemAclExtensions]::GetAccessControl($entry)
         }
-        return [IO.File]::GetAccessControl($Path)
+        return $entry.GetAccessControl()
     }
     function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
+        $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
+        $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
         if ($Directory) {
-            [IO.Directory]::SetAccessControl($Path, [Security.AccessControl.DirectorySecurity]$Acl)
+            if ($extensions) { [IO.FileSystemAclExtensions]::SetAccessControl($entry, [Security.AccessControl.DirectorySecurity]$Acl) }
+            else { $entry.SetAccessControl([Security.AccessControl.DirectorySecurity]$Acl) }
         }
         else {
-            [IO.File]::SetAccessControl($Path, [Security.AccessControl.FileSecurity]$Acl)
+            if ($extensions) { [IO.FileSystemAclExtensions]::SetAccessControl($entry, [Security.AccessControl.FileSecurity]$Acl) }
+            else { $entry.SetAccessControl([Security.AccessControl.FileSecurity]$Acl) }
         }
     }
     function Repair-Entry([string]$Path, [bool]$Directory) {
