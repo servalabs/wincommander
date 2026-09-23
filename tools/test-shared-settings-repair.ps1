@@ -3,6 +3,7 @@ param([Parameter(Mandatory)][string]$FixtureParent)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+try { Add-Type -AssemblyName System.IO.FileSystem.AccessControl -ErrorAction Stop } catch { }
 $repair = Join-Path $PSScriptRoot '..\src-tauri\commander-free\nsis\repair-shared-settings.ps1'
 $parent = [IO.Path]::GetFullPath($FixtureParent)
 if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw 'Create an empty fixture parent first.' }
@@ -10,11 +11,20 @@ if (@(Get-ChildItem -LiteralPath $parent -Force).Count -ne 0) { throw 'Fixture p
 $root = Join-Path $parent 'WinCommander'
 $report = Join-Path $parent 'result.txt'
 try {
-    function Get-EntrySecurity([string]$Path, [bool]$Directory) {
+    function Get-EntrySecurity(
+        [string]$Path,
+        [bool]$Directory,
+        [Security.AccessControl.AccessControlSections]$Sections = [Security.AccessControl.AccessControlSections]::Access
+    ) {
         $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
         $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
-        if ($extensions) { return [IO.FileSystemAclExtensions]::GetAccessControl($entry) }
-        return $entry.GetAccessControl()
+        if ($extensions) { return [IO.FileSystemAclExtensions]::GetAccessControl($entry, $Sections) }
+        return $entry.GetAccessControl($Sections)
+    }
+    function Get-EntrySddl([string]$Path, [bool]$Directory) {
+        $sections = [Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group
+        $security = Get-EntrySecurity $Path $Directory $sections
+        return $security.GetSecurityDescriptorSddlForm($sections)
     }
     function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
         $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
@@ -51,7 +61,7 @@ try {
     $privateAcl.SetAccessRuleProtection($true, $false)
     $privateAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544'), 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
     Set-EntrySecurity $private $true $privateAcl
-    $privateBefore = (Get-EntrySecurity $private $true).Sddl
+    $privateBefore = Get-EntrySddl $private $true
     foreach ($path in @($settings, $material)) {
         $acl = Get-EntrySecurity $path $false
         $acl.SetAccessRuleProtection($true, $false)
@@ -62,7 +72,7 @@ try {
     Repair
     if ([IO.File]::ReadAllText($settings) -ne 'fixture-encrypted-settings') { throw 'Settings contents changed.' }
     if ([IO.File]::ReadAllText($material) -ne 'fixture-protected-material') { throw 'Material contents changed.' }
-    if ((Get-EntrySecurity $private $true).Sddl -ne $privateBefore) { throw 'Unrelated protected state permissions changed.' }
+    if ((Get-EntrySddl $private $true) -ne $privateBefore) { throw 'Unrelated protected state permissions changed.' }
     foreach ($path in @($settings, $material)) {
         $rules = @((Get-EntrySecurity $path $false).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
         if ($rules.Count -ne 3) { throw 'Unexpected residual access rules.' }

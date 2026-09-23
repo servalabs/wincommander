@@ -33,6 +33,11 @@ const elevatedLaunchers = readFileSync(
   "utf8",
 );
 const proInstaller = readFileSync("src-tauri/commander-free/src/pro_install.rs", "utf8");
+const sharedSettingsRepair = readFileSync(
+  "src-tauri/commander-free/nsis/repair-shared-settings.ps1",
+  "utf8",
+);
+const sharedSettingsRepairTest = readFileSync("tools/test-shared-settings-repair.ps1", "utf8");
 
 describe("Free machine-wide release packaging", () => {
   test("uses a shared Program Files install and a product-specific Start Menu location", () => {
@@ -148,6 +153,15 @@ describe("Free machine-wide release packaging", () => {
     expect(helperManifest).toContain('requestedExecutionLevel level="asInvoker"');
     expect(helperManifest).not.toContain("highestAvailable");
     expect(helperManifest).not.toContain("requireAdministrator");
+  });
+
+  test("repairs shared settings ACLs without PowerShell Security cmdlets or wrapper-only properties", () => {
+    expect(sharedSettingsRepair).toContain("Add-Type -AssemblyName System.IO.FileSystem.AccessControl");
+    expect(sharedSettingsRepair).toContain("FileSystemAclExtensions]::SetAccessControl");
+    expect(sharedSettingsRepair).toContain("$entry.SetAccessControl");
+    expect(sharedSettingsRepair).not.toMatch(/^\s*(Get|Set)-Acl\b/m);
+    expect(sharedSettingsRepairTest).toContain("GetSecurityDescriptorSddlForm");
+    expect(sharedSettingsRepairTest).not.toContain(".Sddl");
   });
 
   test("runs a machine-wide release setup and uninstaller with service lifecycle and cleanup that preserves the license", () => {

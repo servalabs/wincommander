@@ -4,6 +4,11 @@ param([Parameter(Mandatory)][string]$DataRoot)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# PowerShell 7 ships filesystem ACL extensions in a separate assembly that may
+# not be loaded in a clean runner process. Windows PowerShell 5.1 uses the
+# FileInfo/DirectoryInfo instance methods below instead.
+try { Add-Type -AssemblyName System.IO.FileSystem.AccessControl -ErrorAction Stop } catch { }
+
 # Installer-only repair. Never recurse through private service state, Vaults,
 # user profiles, or linked directories, and never replace encrypted contents.
 try {
@@ -31,13 +36,17 @@ try {
     # temporary directory and some stripped-down Windows runner images cannot
     # load Microsoft.PowerShell.Security, even though PowerShell can discover
     # the cmdlet.  The .NET APIs are available in Windows PowerShell itself.
-    function Get-EntrySecurity([string]$Path, [bool]$Directory) {
+    function Get-EntrySecurity(
+        [string]$Path,
+        [bool]$Directory,
+        [Security.AccessControl.AccessControlSections]$Sections = [Security.AccessControl.AccessControlSections]::Access
+    ) {
         $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
         $extensions = 'System.IO.FileSystemAclExtensions' -as [type]
         if ($extensions) {
-            return [IO.FileSystemAclExtensions]::GetAccessControl($entry)
+            return [IO.FileSystemAclExtensions]::GetAccessControl($entry, $Sections)
         }
-        return $entry.GetAccessControl()
+        return $entry.GetAccessControl($Sections)
     }
     function Set-EntrySecurity([string]$Path, [bool]$Directory, [Security.AccessControl.FileSystemSecurity]$Acl) {
         $entry = if ($Directory) { [IO.DirectoryInfo]::new($Path) } else { [IO.FileInfo]::new($Path) }
