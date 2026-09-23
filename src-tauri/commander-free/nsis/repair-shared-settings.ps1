@@ -66,9 +66,15 @@ try {
         if ($item.PSIsContainer -ne $Directory) { throw 'Unexpected shared settings entry type.' }
         $output = & "$env:SystemRoot\System32\takeown.exe" /F $Path /A 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Could not reclaim shared settings ownership: $output" }
-        $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+        # Start from the existing descriptor and modify only its DACL. Creating
+        # a blank descriptor and assigning its owner makes SetAccessControl
+        # attempt a separate WRITE_OWNER operation, which can be denied even
+        # after takeown has successfully transferred ownership to Administrators.
+        $acl = Get-EntrySecurity $Path $Directory
         $acl.SetAccessRuleProtection($true, $false)
-        $acl.SetOwner([Security.Principal.SecurityIdentifier]'S-1-5-32-544')
+        foreach ($existingRule in @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+            [void]$acl.RemoveAccessRuleSpecific($existingRule)
+        }
         $inheritance = if ($Directory) { [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit' } else { [Security.AccessControl.InheritanceFlags]::None }
         foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
             $rights = if ($sid -eq 'S-1-5-32-545') { [Security.AccessControl.FileSystemRights]::ReadAndExecute } else { [Security.AccessControl.FileSystemRights]::FullControl }
@@ -77,7 +83,11 @@ try {
         }
         Set-EntrySecurity $Path $Directory $acl
         # Read the actual descriptor back, rather than trusting a /C exit code.
-        $actual = Get-EntrySecurity $Path $Directory
+        $sections = [Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner
+        $actual = Get-EntrySecurity $Path $Directory $sections
+        if ($actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') {
+            throw 'Shared settings ownership verification failed.'
+        }
         # Windows may add the auto-inherited control flag when canonicalizing
         # a descriptor. Compare the effective rules, not that bookkeeping flag.
         $ruleKey = { '{0}:{1}:{2}:{3}:{4}:{5}' -f $_.IdentityReference.Value, [int]$_.FileSystemRights, $_.AccessControlType, $_.InheritanceFlags, $_.PropagationFlags, $_.IsInherited }

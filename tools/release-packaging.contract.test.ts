@@ -159,6 +159,9 @@ describe("Free machine-wide release packaging", () => {
     expect(sharedSettingsRepair).toContain("Add-Type -AssemblyName System.IO.FileSystem.AccessControl");
     expect(sharedSettingsRepair).toContain("FileSystemAclExtensions]::SetAccessControl");
     expect(sharedSettingsRepair).toContain("$entry.SetAccessControl");
+    expect(sharedSettingsRepair).toContain("$acl = Get-EntrySecurity $Path $Directory");
+    expect(sharedSettingsRepair).not.toContain("$acl.SetOwner");
+    expect(sharedSettingsRepair).toContain("Shared settings ownership verification failed.");
     expect(sharedSettingsRepair).not.toMatch(/^\s*(Get|Set)-Acl\b/m);
     expect(sharedSettingsRepairTest).toContain("GetSecurityDescriptorSddlForm");
     expect(sharedSettingsRepairTest).not.toContain(".Sddl");
