@@ -171,6 +171,9 @@ pub struct PersonalVaultMountRequest {
     pub password: String,
     pub volume_kind: VaultContainerKind,
     pub volume_role: VaultVolumeRole,
+    /// Older callers requested private mounts and omitted presentation.
+    #[serde(default = "legacy_personal_presentation")]
+    pub presentation: VaultPresentation,
     #[serde(default)]
     pub preferred_letter: Option<String>,
     #[serde(default)]
@@ -195,6 +198,7 @@ impl std::fmt::Debug for PersonalVaultMountRequest {
             .debug_struct("PersonalVaultMountRequest")
             .field("volume_kind", &self.volume_kind)
             .field("volume_role", &self.volume_role)
+            .field("presentation", &self.presentation)
             .field("preferred_letter", &self.preferred_letter)
             .field("read_only", &self.read_only)
             .field("container_path", &"[redacted]")
@@ -218,6 +222,20 @@ impl PersonalVaultMountRequest {
     }
 }
 
+fn legacy_personal_presentation() -> VaultPresentation {
+    VaultPresentation::PerUser
+}
+
+/// Bounded service-registry projection; backing paths and credentials stay private.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalVaultMountedVolume {
+    pub drive_letter: String,
+    pub internal_drive: u8,
+    pub presentation: VaultPresentation,
+    pub cleanup_required: bool,
+}
+
 /// Service-produced, authenticated service-to-Pro mount plan. Renderer input
 /// is never deserialized into this type. The service derives the path, ACL,
 /// presentation, session and operation id, validates the complete plan once,
@@ -235,8 +253,8 @@ pub struct VaultMountPlan {
     pub preferred_letter: Option<String>,
     #[serde(default)]
     pub read_only: bool,
-    /// Service-derived only. Personal mounts may be presented without a
-    /// filesystem-root ACL when the encrypted filesystem cannot store one.
+    /// Service-derived only. Personal mounts preserve existing filesystem
+    /// permissions rather than applying the managed filesystem-root ACL.
     /// Absence defaults to `false` so older plans remain fail-closed.
     #[serde(default)]
     pub personal: bool,
@@ -937,6 +955,45 @@ mod tests {
     }
 
     #[test]
+    fn legacy_personal_mount_requests_remain_private_without_explicit_presentation() {
+        let legacy = serde_json::json!({
+            "container_path":"C:\\vault.hc",
+            "password":"test-password",
+            "volume_kind":"standard",
+            "volume_role":"outer"
+        });
+        let request: PersonalVaultMountRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(request.presentation, VaultPresentation::PerUser);
+        assert!(!request.read_only);
+
+        for presentation in ["machine", "per-user"] {
+            let mut explicit = legacy.clone();
+            explicit["presentation"] = serde_json::json!(presentation);
+            explicit["read_only"] = serde_json::json!(true);
+            let request: PersonalVaultMountRequest = serde_json::from_value(explicit).unwrap();
+            assert_eq!(
+                request.presentation,
+                if presentation == "machine" {
+                    VaultPresentation::Machine
+                } else {
+                    VaultPresentation::PerUser
+                }
+            );
+            assert!(request.read_only);
+            assert_eq!(
+                serde_json::to_value(request).unwrap()["presentation"],
+                presentation
+            );
+        }
+
+        for invalid in [serde_json::Value::Null, serde_json::json!("auto")] {
+            let mut request = legacy.clone();
+            request["presentation"] = invalid;
+            assert!(serde_json::from_value::<PersonalVaultMountRequest>(request).is_err());
+        }
+    }
+
+    #[test]
     fn mount_plan_and_personal_request_redact_and_zeroize_all_credentials() {
         let mut plan = sample_mount_plan();
         let debug = format!("{plan:?}");
@@ -961,6 +1018,7 @@ mod tests {
             password: "canary-password".into(),
             volume_kind: VaultContainerKind::Dual,
             volume_role: VaultVolumeRole::Outer,
+            presentation: VaultPresentation::PerUser,
             preferred_letter: Some("V".into()),
             read_only: false,
             pim: Some(1),

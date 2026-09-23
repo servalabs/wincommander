@@ -366,6 +366,14 @@ caller may edit policy. Non-administrators use the caller-filtered **My
 vaults** view and do not invoke privileged policy or status commands. This is
 a source-level interface contract; live mount acceptance is not claimed here.
 
+Secure Storage uses machine-wide unmanaged mounts while preserving existing
+filesystem permissions. Its authenticated service calls reuse
+`svc.vault.list_authorized` with exactly `{ "personal": true }`, returning
+bounded drive/slot/scope information without backing paths. The service derives
+the caller identity; Fleet entry authorization remains separate. Existing
+dismount behavior is unchanged. Logging off the originating session still
+triggers mount cleanup.
+
 ### AI Security Advisor & appearance
 
 | Command | Purpose |

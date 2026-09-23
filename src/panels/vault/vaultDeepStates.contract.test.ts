@@ -82,15 +82,15 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("Not available in this Windows sign-in");
   });
 
-  test("every interactive mount is private and verifies the Explorer-facing drive", () => {
-    expect(vaultSource).toContain('scope: "per-user"');
+  test("Secure Storage mounts machine-wide and verifies the Explorer-facing drive", () => {
+    expect(vaultSource).toContain('scope: "machine"');
     expect(vaultSource).toContain("hardenAcl: true");
     expect(vaultSource).toContain("await verifyVaultDrive(result.data.drive)");
     expect(vaultSource).toContain("setMountedVolume(result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
-    expect(sidebarSource).toContain('scope: "per-user"');
+    expect(sidebarSource).toContain('scope: "machine"');
     expect(sidebarSource).toContain('readOnly: false');
-    expect(sidebarSource).toContain("Mounts read/write in this Windows sign-in.");
+    expect(sidebarSource).toContain("Mounts machine-wide, read/write. Existing file permissions still apply.");
     expect(sidebarSource).toContain("hardenAcl: true");
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
@@ -102,7 +102,7 @@ describe("secure storage deep-state contracts", () => {
 
   test("reports when a personal mount has no filesystem ACL attestation", () => {
     expect(backendSource).toContain("aclAttested: boolean");
-    expect(vaultSource).toContain("Windows filesystem permissions were not applied.");
+    expect(vaultSource).toContain("Existing file permissions are preserved");
   });
 
   test("does not spawn an unsupported system-encryption probe when Secure Storage opens", () => {

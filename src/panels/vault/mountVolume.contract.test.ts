@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { buildMountVolumeRequest } from "../../hooks/useBackend";
 
+test("Secure Storage defaults to machine-wide write and retains explicit read-only", () => {
+  const params = { volumePath: "C:\\Vaults\\sample.hc", password: "test-password" };
+  expect(buildMountVolumeRequest(params)).toMatchObject({ Scope: "machine", ReadOnly: false });
+  expect(buildMountVolumeRequest({ ...params, readOnly: true })).toMatchObject({ Scope: "machine", ReadOnly: true });
+});
+
 test("outer-decoy mount sends distinct non-default PIM values and its exact role", () => {
   const request = buildMountVolumeRequest({
     volumePath: "C:\\Vaults\\outer.hc",

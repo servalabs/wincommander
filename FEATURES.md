@@ -83,9 +83,11 @@ operational risk, or proprietary enforcement logic.
 - Advanced automation rules and event-driven actions.
 - Encrypted-volume create, mount, dismount, recovery, and secure-erasure
   workflows. Personal and Quick Mount use the supplied password, PIM, and
-  keyfile to select a standard, outer, or hidden volume automatically and are
-  read-only; writable outer-volume mounts require the explicit protected
-  policy workflow.
+  keyfile to select a standard, outer, or hidden volume automatically. Secure
+  Storage and Quick Mount use machine-wide, writable mounts by default;
+  Secure Storage also offers explicit read-only mounting. Existing file
+  permissions remain unchanged and can still restrict access. Fleet-managed
+  containers retain their separate selected-user and group permission checks.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
 - Signed evidence-vault export and advanced verification/reporting options.

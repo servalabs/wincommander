@@ -294,10 +294,8 @@ pub struct VaultAclPlan {
     pub parent: PathBuf,
     pub container: PathBuf,
     pub grants: Vec<ResolvedGrant>,
-    /// Principals eligible to request a mount. This includes direct user SIDs
-    /// as well as the group SIDs used by the host/container ACL. Keeping the
-    /// direct SIDs here lets an explicit grant take effect for an already
-    /// logged-on user whose Windows token predates managed-group creation.
+    /// Current direct users and explicitly selected groups eligible to mount.
+    /// Generated group membership in an old token never confers access.
     pub authorization_grants: Vec<ResolvedGrant>,
     pub managed_groups: Vec<GroupMembershipPlan>,
 }
@@ -1534,7 +1532,7 @@ impl VaultAccessStore {
                     ),
                     container_path: normalized_path,
                     owner_sid: caller_sid.to_owned(),
-                    scope: VaultPresentation::PerUser,
+                    scope: VaultPresentation::Machine,
                     created_by_session: caller_session,
                 },
             });
@@ -1586,7 +1584,7 @@ impl VaultAccessStore {
                 container_path: normalized_path,
                 container_identity: identity,
                 owner_sid: caller_sid.to_owned(),
-                scope: VaultPresentation::PerUser,
+                scope: VaultPresentation::Machine,
                 created_by_session: caller_session,
             },
         })
@@ -1789,27 +1787,46 @@ impl VaultAccessStore {
             .map_err(|_| VaultError::Persistence)
     }
 
-    /// Policies written before direct authorization SIDs were persisted are
-    /// upgraded only after re-deriving them from the trusted policy and current
-    /// principal resolver. Exact ACL and membership checks still run before the
-    /// migrated bytes replace the durable policy.
+    /// Upgrade only known legacy authorization sets; identity, ACL and group
+    /// readback must still succeed before the migrated policy is persisted.
     fn migrate_authorization_grants(
         &self,
         persisted: &mut PersistedPolicy,
     ) -> Result<bool, VaultError> {
-        let mut plans = self.resolve_and_plan(&persisted.policy)?;
+        let plans = self.resolve_and_plan(&persisted.policy)?;
         if plans.len() != persisted.resolved.len() {
             return Err(VaultError::Validation);
         }
         let mut migrated = false;
-        for (entry, plan) in &mut plans {
+        for (entry, plan) in &plans {
             let stored = persisted
                 .resolved
                 .iter_mut()
                 .find(|stored| stored.id == entry.id)
                 .ok_or(VaultError::Validation)?;
-            if stored.authorization_grants.is_empty() {
-                self.hydrate_managed_group_sids(plan)?;
+            let mut current = plan.authorization_grants.clone();
+            current.sort_by(|left, right| left.sid.cmp(&right.sid));
+            let mut legacy = current.clone();
+            for group in &plan.managed_groups {
+                merge_grant(
+                    &mut legacy,
+                    self.principals.resolve_sid(&group.group)?,
+                    group.access,
+                );
+            }
+            legacy.sort_by(|left, right| left.sid.cmp(&right.sid));
+            let mut stored_authorization = stored
+                .authorization_grants
+                .iter()
+                .map(|grant| ResolvedGrant {
+                    sid: grant.sid.clone(),
+                    access: grant.access,
+                })
+                .collect::<Vec<_>>();
+            stored_authorization.sort_by(|left, right| left.sid.cmp(&right.sid));
+            if stored.authorization_grants.is_empty()
+                || (stored_authorization == legacy && legacy != current)
+            {
                 stored.authorization_grants = plan
                     .authorization_grants
                     .iter()
@@ -1834,7 +1851,7 @@ impl VaultAccessStore {
         if plans.len() != persisted.resolved.len() {
             return Err(VaultError::Validation);
         }
-        for (entry, mut plan) in plans {
+        for (entry, plan) in plans {
             let stored = persisted
                 .resolved
                 .iter()
@@ -1865,7 +1882,6 @@ impl VaultAccessStore {
                 let name = drifted_group.unwrap_or_else(|| entry.id.clone());
                 return Err(VaultError::PrincipalResolution(name));
             }
-            self.hydrate_managed_group_sids(&mut plan)?;
             let mut derived = plan
                 .grants
                 .iter()
@@ -1879,9 +1895,9 @@ impl VaultAccessStore {
             derived.sort_by(|left, right| left.0.cmp(right.0));
             stored_grants.sort_by(|left, right| left.0.cmp(right.0));
             if derived != stored_grants {
-                // A grant-set mismatch spans potentially many principals, so
-                // the entry id (not any single SID) is the admin-facing name.
-                return Err(VaultError::PrincipalResolution(entry.id.clone()));
+                // Older generated-group ACLs require an administrator to save
+                // the policy again; startup never silently rewrites file permissions.
+                return Err(VaultError::AclReadback);
             }
             let mut derived_authorization = plan
                 .authorization_grants
@@ -1951,24 +1967,17 @@ impl VaultAccessStore {
             .iter()
             .find(|resolved| resolved.id == entry_id)?;
         let container = PathBuf::from(&entry.container_path);
-        // The durable container ACL uses managed groups for direct users so
-        // policy changes remain manageable.  A signed-in Windows token does
-        // not acquire a newly-created local-group SID until its next logon,
-        // however.  The temporary mounted-root ACL must therefore also carry
-        // each direct authorization SID.  Otherwise a user can be allowed to
-        // mount a Vault and still receive Access Denied from Explorer until
-        // they sign out and back in.
-        let mut mounted_root_grants = resolved
-            .grants
+        // Generated group SIDs can outlive a membership change in a signed-in
+        // token. Mount authorization and the mounted root use only the current
+        // direct users and explicitly selected groups, never generated groups.
+        let mounted_root_grants = resolved
+            .authorization_grants
             .iter()
             .map(|grant| ResolvedGrant {
                 sid: grant.sid.clone(),
                 access: grant.access,
             })
             .collect::<Vec<_>>();
-        for grant in &resolved.authorization_grants {
-            merge_grant(&mut mounted_root_grants, grant.sid.clone(), grant.access);
-        }
         Some((
             VaultAclPlan {
                 parent: container.parent()?.to_path_buf(),
@@ -2079,7 +2088,7 @@ impl VaultAccessStore {
         self.normalize_policy_paths(&mut policy)?;
         validate_policy(&policy)?;
         let access_directory = state.access_directory.clone();
-        let mut resolved = self.resolve_and_plan_with_access_directory(&policy, &access_directory)?;
+        let resolved = self.resolve_and_plan_with_access_directory(&policy, &access_directory)?;
         let removed = state
             .active
             .as_ref()
@@ -2114,13 +2123,6 @@ impl VaultAccessStore {
                 .groups
                 .reconcile_exact_members(&group.group, &group.members)
             {
-                self.rollback_after_apply(&mut state, &snapshots);
-                let _ = self.groups.restore(&group_snapshots);
-                return Err(error);
-            }
-        }
-        for (_, plan) in &mut resolved {
-            if let Err(error) = self.hydrate_managed_group_sids(plan) {
                 self.rollback_after_apply(&mut state, &snapshots);
                 let _ = self.groups.restore(&group_snapshots);
                 return Err(error);
@@ -2478,9 +2480,8 @@ impl VaultAccessStore {
                         return Err(VaultError::ContainerIdentity);
                     }
                 }
-                // Direct user grants are materialized as exact membership of
-                // deterministic local groups. Existing group grants remain
-                // direct ACL principals; we never infer or create nesting.
+                // Keep compatibility group memberships synchronized, but grant
+                // file access to exact current users so old tokens cannot retain it.
                 let mut grants = Vec::new();
                 let mut authorization_grants = Vec::new();
                 let mut read_members = Vec::new();
@@ -2502,6 +2503,7 @@ impl VaultAccessStore {
                     match owner.kind {
                         PrincipalKind::User => {
                             write_members.push(owner.sid.clone());
+                            merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
                             merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
                         }
                         PrincipalKind::Group => {
@@ -2531,6 +2533,7 @@ impl VaultAccessStore {
                     }
                     let principal = self.principals.resolve_principal(&grant.principal_name)?;
                     if principal.kind == PrincipalKind::User {
+                        merge_grant(&mut grants, principal.sid.clone(), grant.access);
                         merge_grant(
                             &mut authorization_grants,
                             principal.sid.clone(),
@@ -2605,7 +2608,10 @@ impl VaultAccessStore {
             active.policy.clone()
         };
         policy.expected_previous_version = policy.version;
-        policy.version = policy.version.checked_add(1).ok_or(VaultError::Validation)?;
+        policy.version = policy
+            .version
+            .checked_add(1)
+            .ok_or(VaultError::Validation)?;
         self.apply(policy, applied_at)
     }
 
@@ -2628,7 +2634,12 @@ impl VaultAccessStore {
             .collect::<Vec<_>>();
         active.policy.entries.iter().any(|entry| {
             std::iter::once(entry.owner_account.as_str())
-                .chain(entry.grants.iter().map(|grant| grant.principal_name.as_str()))
+                .chain(
+                    entry
+                        .grants
+                        .iter()
+                        .map(|grant| grant.principal_name.as_str()),
+                )
                 .any(|principal| {
                     let local_name = principal.rsplit('\\').next().unwrap_or(principal);
                     group_names
@@ -2743,24 +2754,6 @@ impl VaultAccessStore {
                 ))
             })
             .collect()
-    }
-
-    fn hydrate_managed_group_sids(&self, plan: &mut VaultAclPlan) -> Result<(), VaultError> {
-        for group in &plan.managed_groups {
-            let sid = self.principals.resolve_sid(&group.group)?;
-            if let Some(existing) = plan.grants.iter_mut().find(|existing| existing.sid == sid) {
-                if group.access == VaultAccess::Write {
-                    existing.access = VaultAccess::Write;
-                }
-            } else {
-                plan.grants.push(ResolvedGrant {
-                    sid: sid.clone(),
-                    access: group.access,
-                });
-            }
-            merge_grant(&mut plan.authorization_grants, sid, group.access);
-        }
-        Ok(())
     }
 
     /// Backs `svc.vault.reconcile_access_groups` (Privileged / SYSTEM-Admin
@@ -3546,6 +3539,105 @@ impl AclApplier for WindowsAclApplier {
         // after service restart.
         verify_one_acl(&plan.container, &plan.grants)
     }
+}
+
+#[cfg(windows)]
+pub(crate) struct UnmanagedMountFileGuard {
+    _files: Vec<std::fs::File>,
+}
+
+#[cfg(windows)]
+pub(crate) fn hold_unmanaged_mount_files(
+    record: &PersonalVaultRecord,
+    request: &wincmd_shared::vault_access::PersonalVaultMountRequest,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<UnmanagedMountFileGuard, VaultError> {
+    with_caller_impersonation(caller_token, || {
+        let mut files = Vec::new();
+        if wincmd_shared::vault_access::is_supported_vault_device_path(&record.container_path) {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+            let device = format!(r"\\?\GLOBALROOT{}", record.container_path.trim());
+            files.push(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(!request.read_only)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(device)
+                    .map_err(|_| VaultError::AclReadback)?,
+            );
+        } else {
+            let file = hold_mount_file(
+                Path::new(&record.container_path),
+                !request.read_only,
+                &mut files,
+            )?;
+            if file_identity_from_handle(&file)? != record.container_identity {
+                return Err(VaultError::ContainerIdentity);
+            }
+            files.push(file);
+        }
+        for path in request.keyfiles.iter().chain(&request.hidden_keyfiles) {
+            let file = hold_mount_file(Path::new(path), false, &mut files)?;
+            files.push(file);
+        }
+        Ok(UnmanagedMountFileGuard { _files: files })
+    })
+}
+
+#[cfg(windows)]
+fn hold_mount_file(
+    path: &Path,
+    writable: bool,
+    held: &mut Vec<std::fs::File>,
+) -> Result<std::fs::File, VaultError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    if !valid_creation_path(path) {
+        return Err(VaultError::Validation);
+    }
+    // Pin ancestors before resolving their children so the elevated broker
+    // cannot reopen a substituted path after the caller's access check.
+    for ancestor in path
+        .ancestors()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        if !ancestor.is_absolute() {
+            continue;
+        }
+        let directory = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(ancestor)
+            .map_err(|_| VaultError::AclReadback)?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| VaultError::ContainerIdentity)?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(VaultError::ContainerIdentity);
+        }
+        held.push(directory);
+    }
+    let access = FILE_GENERIC_READ | if writable { FILE_GENERIC_WRITE } else { 0 };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(access)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|_| VaultError::AclReadback)?;
+    let metadata = file.metadata().map_err(|_| VaultError::ContainerIdentity)?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(VaultError::ContainerIdentity);
+    }
+    Ok(file)
 }
 
 #[cfg(windows)]
@@ -5424,6 +5516,7 @@ mod tests {
             .commit_legacy_personal_mount(&recovery, "S-1-5-21-owner", 7)
             .unwrap();
         assert_eq!(record.owner_sid, "S-1-5-21-owner");
+        assert_eq!(record.scope, VaultPresentation::PerUser);
         assert_eq!(prepared.load(Ordering::SeqCst), 1);
         assert_eq!(restored.load(Ordering::SeqCst), 0);
         drop(recovery);
@@ -5439,10 +5532,18 @@ mod tests {
             Arc::new(AtomicUsize::new(0)),
         );
         restarted.load_at_startup();
-        assert!(restarted
-            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
-            .unwrap()
-            .is_some());
+        assert_eq!(
+            restarted
+                .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+                .unwrap()
+                .unwrap()
+                .scope,
+            VaultPresentation::PerUser
+        );
+        assert!(
+            matches!(restarted.selected_container_mount_route("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7).unwrap(),
+            SelectedContainerMountRoute::Unmanaged { record } if record.scope == VaultPresentation::Machine)
+        );
     }
 
     #[test]
@@ -6067,7 +6168,7 @@ mod tests {
         assert_eq!(s.policy().unwrap().version, 1);
     }
     #[test]
-    fn managed_group_sid_controls_eligibility_and_is_launch_ready() {
+    fn only_explicit_principals_control_eligibility_and_are_launch_ready() {
         let s = store(Arc::new(Mutex::new(HashMap::new())));
         s.apply(policy(1, 0), 7).unwrap();
         let r = s.authorize_mount(
@@ -6077,9 +6178,9 @@ mod tests {
                 managed_group_name("shared", VaultAccess::Write)
             )],
         );
-        assert!(r.allowed);
-        assert!(r.launch_ready);
-        assert_eq!(r.denial_reason, None);
+        assert!(!r.allowed);
+        assert!(!r.launch_ready);
+        assert_eq!(r.denial_reason, Some(VaultMountDenial::NotAuthorized));
         let already_logged_on_partner = s.authorize_mount("shared", &["S-1-test-Partner".into()]);
         assert!(
             already_logged_on_partner.allowed,
@@ -6102,8 +6203,188 @@ mod tests {
             plan.grants.iter().any(|grant| {
                 grant.sid == "S-1-test-Partner" && grant.access == VaultAccess::Write
             }),
-            "the mounted root must include the direct user SID as well as its managed group"
+            "the mounted root must include the current direct user SID"
         );
+    }
+
+    #[test]
+    fn stale_generated_writer_group_cannot_restore_removed_or_downgraded_user_access() {
+        for access in [None, Some(VaultAccess::Read)] {
+            let files = Arc::new(Mutex::new(HashMap::new()));
+            let installed = store(files.clone());
+            installed.apply(policy(1, 0), 7).unwrap();
+            let mut updated = policy(2, 1);
+            updated.entries[0]
+                .grants
+                .retain(|grant| grant.principal_name != "Partner");
+            updated.entries[0]
+                .grants
+                .push(wincmd_shared::vault_access::VaultGrantInput {
+                    principal_name: "CurrentWriter".into(),
+                    access: VaultAccess::Write,
+                });
+            if let Some(access) = access {
+                updated.entries[0]
+                    .grants
+                    .push(wincmd_shared::vault_access::VaultGrantInput {
+                        principal_name: "Partner".into(),
+                        access,
+                    });
+            }
+            installed.apply(updated, 8).unwrap();
+            let generated_writer = format!(
+                "S-1-test-{}",
+                managed_group_name("shared", VaultAccess::Write)
+            );
+            let stale_token = vec!["S-1-test-Partner".into(), generated_writer.clone()];
+            let restarted = store(files);
+            restarted.load_at_startup();
+            for current in [&installed, &restarted] {
+                let authorization = current.authorize_mount("shared", &stale_token);
+                assert_eq!(authorization.allowed, access.is_some());
+                assert_eq!(authorization.mode, access);
+                assert_eq!(
+                    current
+                        .authorize_mount("shared", &["S-1-test-Admin".into()])
+                        .mode,
+                    Some(VaultAccess::Write)
+                );
+                let (plan, ..) = current.mount_plan("shared").unwrap();
+                assert!(!plan
+                    .grants
+                    .iter()
+                    .any(|grant| grant.sid == generated_writer));
+                assert_eq!(
+                    plan.grants
+                        .iter()
+                        .find(|grant| grant.sid == "S-1-test-Partner")
+                        .map(|grant| grant.access),
+                    access
+                );
+                let state = current.state.lock().unwrap();
+                let backing_grants = &state.active.as_ref().unwrap().resolved[0].grants;
+                assert!(!backing_grants
+                    .iter()
+                    .any(|grant| grant.sid == generated_writer));
+                assert_eq!(
+                    backing_grants
+                        .iter()
+                        .find(|grant| grant.sid == "S-1-test-Partner")
+                        .map(|grant| grant.access),
+                    access
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_group_keeps_authorization_and_mounted_root_access() {
+        struct GroupResolver;
+        impl PrincipalResolver for GroupResolver {
+            fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+                Resolver.resolve_sid(name)
+            }
+            fn resolve_principal(&self, name: &str) -> Result<ResolvedPrincipal, VaultError> {
+                Ok(ResolvedPrincipal {
+                    sid: self.resolve_sid(name)?,
+                    kind: if name == "Editors" {
+                        PrincipalKind::Group
+                    } else {
+                        PrincipalKind::User
+                    },
+                })
+            }
+        }
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+            Box::new(GroupResolver),
+            Box::new(Acl),
+            PathBuf::from("/policy"),
+        );
+        let mut selected = policy(1, 0);
+        selected.entries[0]
+            .grants
+            .push(wincmd_shared::vault_access::VaultGrantInput {
+                principal_name: "Editors".into(),
+                access: VaultAccess::Write,
+            });
+        installed.apply(selected, 7).unwrap();
+        assert_eq!(
+            installed
+                .authorize_mount("shared", &["S-1-test-Editors".into()])
+                .mode,
+            Some(VaultAccess::Write)
+        );
+        let (plan, ..) = installed.mount_plan("shared").unwrap();
+        assert!(plan
+            .grants
+            .iter()
+            .any(|grant| grant.sid == "S-1-test-Editors" && grant.access == VaultAccess::Write));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unmanaged_mount_guard_pins_files_and_respects_requested_write_access() {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_QUERY};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let directory = std::env::temp_dir().join(format!(
+            "wincmd-mount-guard-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let container = directory.join("container.ec");
+        let keyfile = directory.join("keyfile");
+        std::fs::write(&container, b"fixture").unwrap();
+        std::fs::write(&keyfile, b"fixture key").unwrap();
+        let mut token = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                OpenProcessToken(
+                    GetCurrentProcess(),
+                    TOKEN_DUPLICATE | TOKEN_QUERY,
+                    &mut token,
+                )
+            },
+            0
+        );
+        let record = PersonalVaultRecord {
+            container_path: container.to_string_lossy().into_owned(),
+            container_identity: WindowsVaultFs.stable_file_identity(&container).unwrap(),
+            owner_sid: "S-1-test-caller".into(),
+            scope: VaultPresentation::Machine,
+            created_by_session: 1,
+        };
+        let mut request: wincmd_shared::vault_access::PersonalVaultMountRequest = serde_json::from_value(serde_json::json!({
+            "container_path":record.container_path, "password":"fixture", "volume_kind":"standard", "volume_role":"outer", "keyfiles":[keyfile.to_string_lossy()], "read_only":false
+        })).unwrap();
+        let guard = hold_unmanaged_mount_files(&record, &request, token).unwrap();
+        let renamed = directory.with_extension("renamed");
+        assert!(std::fs::rename(&directory, &renamed).is_err());
+        assert!(std::fs::remove_file(&container).is_err());
+        assert!(std::fs::remove_file(&keyfile).is_err());
+        drop(guard);
+        let mut wrong_identity = record.clone();
+        wrong_identity.container_identity = "wrong".into();
+        assert!(hold_unmanaged_mount_files(&wrong_identity, &request, token).is_err());
+        assert!(hold_unmanaged_mount_files(&record, &request, std::ptr::null_mut()).is_err());
+        let original_permissions = std::fs::metadata(&container).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        std::fs::set_permissions(&container, read_only_permissions).unwrap();
+        assert!(hold_unmanaged_mount_files(&record, &request, token).is_err());
+        request.read_only = true;
+        let guard = hold_unmanaged_mount_files(&record, &request, token).unwrap();
+        drop(guard);
+        std::fs::remove_file(&keyfile).unwrap();
+        assert!(hold_unmanaged_mount_files(&record, &request, token).is_err());
+        std::fs::set_permissions(&container, original_permissions).unwrap();
+        std::fs::remove_file(container).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+        unsafe {
+            CloseHandle(token);
+        }
     }
 
     #[test]
@@ -6148,6 +6429,7 @@ mod tests {
             unmanaged,
             SelectedContainerMountRoute::Unmanaged { ref record }
                 if record.owner_sid == "S-1-test-Alex" && record.container_path == path
+                    && record.scope == VaultPresentation::Machine
         ));
 
         // Historical personal ownership must not turn an ordinary selected
@@ -6265,7 +6547,7 @@ mod tests {
                 SelectedContainerMountRoute::Unmanaged { record } => {
                     assert_eq!(record.container_path, expected);
                     assert_eq!(record.owner_sid, "S-1-5-21-owner");
-                    assert_eq!(record.scope, VaultPresentation::PerUser);
+                    assert_eq!(record.scope, VaultPresentation::Machine);
                     assert_eq!(record.created_by_session, 7);
                     assert_eq!(
                         record.container_identity,
@@ -6668,6 +6950,154 @@ mod tests {
     }
 
     #[test]
+    fn startup_removes_only_known_legacy_generated_authorization_grants() {
+        for unexpected_grant in [false, true] {
+            let files = Arc::new(Mutex::new(HashMap::new()));
+            let installed = store(files.clone());
+            installed.apply(policy(1, 0), 7).unwrap();
+            let path = PathBuf::from("/policy").join(POLICY_FILE);
+            let generated_writer = format!(
+                "S-1-test-{}",
+                managed_group_name("shared", VaultAccess::Write)
+            );
+            let legacy_bytes = {
+                let mut locked = files.lock().unwrap();
+                let mut legacy: PersistedPolicy =
+                    serde_json::from_slice(locked.get(&path).unwrap()).unwrap();
+                legacy.resolved[0]
+                    .authorization_grants
+                    .push(ResolvedGrantRecord {
+                        sid: generated_writer.clone(),
+                        access: VaultAccess::Write,
+                    });
+                if unexpected_grant {
+                    legacy.resolved[0]
+                        .authorization_grants
+                        .push(ResolvedGrantRecord {
+                            sid: "S-1-test-Unselected".into(),
+                            access: VaultAccess::Write,
+                        });
+                }
+                let bytes = serde_json::to_vec(&legacy).unwrap();
+                locked.insert(path.clone(), bytes.clone());
+                bytes
+            };
+            let restarted = store(files.clone());
+            restarted.load_at_startup();
+            assert!(
+                !restarted
+                    .authorize_mount("shared", &[generated_writer.clone()])
+                    .allowed
+            );
+            if unexpected_grant {
+                assert_eq!(
+                    restarted.status().validation_state,
+                    VaultValidationState::Degraded
+                );
+                assert_eq!(files.lock().unwrap().get(&path).unwrap(), &legacy_bytes);
+                continue;
+            }
+            assert_eq!(
+                restarted.status().validation_state,
+                VaultValidationState::Current
+            );
+            assert_eq!(
+                restarted
+                    .authorize_mount("shared", &["S-1-test-Partner".into()])
+                    .mode,
+                Some(VaultAccess::Write)
+            );
+            let migrated: PersistedPolicy =
+                serde_json::from_slice(files.lock().unwrap().get(&path).unwrap()).unwrap();
+            assert!(!migrated.resolved[0]
+                .grants
+                .iter()
+                .any(|grant| grant.sid == generated_writer));
+            assert!(!migrated.resolved[0]
+                .authorization_grants
+                .iter()
+                .any(|grant| grant.sid == generated_writer));
+            let (plan, ..) = restarted.mount_plan("shared").unwrap();
+            assert!(!plan
+                .grants
+                .iter()
+                .any(|grant| grant.sid == generated_writer));
+        }
+    }
+
+    #[test]
+    fn legacy_backing_group_acl_requires_explicit_policy_save() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = store(files.clone());
+        installed.apply(policy(1, 0), 7).unwrap();
+        let path = PathBuf::from("/policy").join(POLICY_FILE);
+        let generated_writer = format!(
+            "S-1-test-{}",
+            managed_group_name("shared", VaultAccess::Write)
+        );
+        let legacy_bytes = {
+            let mut locked = files.lock().unwrap();
+            let mut legacy: PersistedPolicy =
+                serde_json::from_slice(locked.get(&path).unwrap()).unwrap();
+            legacy.resolved[0].grants = vec![ResolvedGrantRecord {
+                sid: generated_writer.clone(),
+                access: VaultAccess::Write,
+            }];
+            legacy.resolved[0]
+                .authorization_grants
+                .push(ResolvedGrantRecord {
+                    sid: generated_writer.clone(),
+                    access: VaultAccess::Write,
+                });
+            let bytes = serde_json::to_vec(&legacy).unwrap();
+            locked.insert(path.clone(), bytes.clone());
+            bytes
+        };
+        let acl = RecordingAcl::default();
+        let applied = acl.grants.clone();
+        let restarted = VaultAccessStore::open(
+            Box::new(Fs(files.clone())),
+            Box::new(Resolver),
+            Box::new(acl),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+        assert!(
+            !restarted
+                .authorize_mount(
+                    "shared",
+                    &["S-1-test-Partner".into(), generated_writer.clone()]
+                )
+                .allowed
+        );
+        assert!(applied.lock().unwrap().is_empty());
+        assert_eq!(files.lock().unwrap().get(&path).unwrap(), &legacy_bytes);
+        restarted.apply(policy(2, 1), 8).unwrap();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Current
+        );
+        let actual = applied.lock().unwrap();
+        assert_eq!(actual.len(), 1);
+        assert!(actual[0].iter().all(|grant| grant.sid != generated_writer));
+        for user in ["S-1-test-Admin", "S-1-test-Partner"] {
+            assert!(actual[0]
+                .iter()
+                .any(|grant| grant.sid == user && grant.access == VaultAccess::Write));
+        }
+        let reloaded = store(files);
+        reloaded.load_at_startup();
+        assert_eq!(
+            reloaded.status().validation_state,
+            VaultValidationState::Current
+        );
+    }
+
+    #[test]
     fn first_apply_creates_exact_groups_and_restart_detects_membership_drift() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let groups = Groups::default();
@@ -6839,11 +7269,13 @@ mod tests {
         let removed = "S-1-5-21-202".to_string();
 
         let mut directory = access_directory();
-        directory.users.push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
-            sid: removed.clone(),
-            username: "Bailey".into(),
-            display_name: Some("Bailey Example".into()),
-        });
+        directory
+            .users
+            .push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
+                sid: removed.clone(),
+                username: "Bailey".into(),
+                display_name: Some("Bailey Example".into()),
+            });
         directory.groups[0].member_sids.push(removed.clone());
         store.save_access_directory(directory.clone()).unwrap();
 
@@ -6870,7 +7302,11 @@ mod tests {
                 .any(|grant| grant.sid == "S-1-test-WC_Sales"),
             "the access-directory group SID must never survive in the mounted-root ACL"
         );
-        assert!(store.authorize_mount("shared", std::slice::from_ref(&removed)).allowed);
+        assert!(
+            store
+                .authorize_mount("shared", std::slice::from_ref(&removed))
+                .allowed
+        );
 
         directory.groups[0].member_sids = vec![alex.clone()];
         store.save_access_directory(directory).unwrap();

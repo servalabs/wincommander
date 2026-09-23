@@ -650,7 +650,11 @@ async fn dispatch_verb(
             peer,
         ),
         "svc.vault.list_authorized" => {
-            handle_vault_list_authorized(vault_access, vault_mount, peer)
+            if args.get("personal").is_some() {
+                handle_personal_vault_list(vault_mount, &args, peer)
+            } else {
+                handle_vault_list_authorized(vault_access, vault_mount, peer)
+            }
         }
         "svc.vault.capabilities" => {
             Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
@@ -1526,8 +1530,8 @@ fn complete_device_create_identity(args: &serde_json::Value) -> bool {
 
 /// A fixed-payload repair may require the signed Pro helper to copy the
 /// service-owned driver into its protected location. It receives neither a
-/// caller path nor credentials; the actual volume engine is launched later as
-/// the authenticated desktop user.
+/// caller path nor credentials; mounting is authorized separately against the
+/// authenticated desktop user's Windows access.
 async fn ensure_vault_driver_for_personal_operation(
     request_id: u64,
 ) -> Result<(), crate::encvol_driver::EnsureDriverError> {
@@ -1615,7 +1619,7 @@ async fn handle_personal_vault_mount(
             "no interactive Windows session",
         ));
     }
-    let record = match vault_access.selected_container_mount_route(
+    let mut record = match vault_access.selected_container_mount_route(
         &request.container_path,
         peer.caller_sid(),
         peer.session_id(),
@@ -1654,6 +1658,8 @@ async fn handle_personal_vault_mount(
             ));
         }
     };
+    // Legacy clients omit presentation and retain their per-user scope.
+    record.scope = request.presentation;
     let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
         .await
         .unwrap_or(Err(
@@ -1672,6 +1678,31 @@ async fn handle_personal_vault_mount(
     // authenticated session and identity.
     let (drive_letter, internal_drive, acl_attested) = vault_mount
         .with_exclusive_operation(|| {
+            // Recheck under the policy/mount lock: a policy may have been saved
+            // while the driver check was running.
+            let current = vault_access.selected_container_mount_route(
+                &request.container_path,
+                peer.caller_sid(),
+                peer.session_id(),
+            );
+            if !matches!(current,
+                Ok(crate::vault_access::SelectedContainerMountRoute::Unmanaged { record: ref fresh })
+                    if fresh.container_identity == record.container_identity
+                        && fresh.container_path == record.container_path)
+            {
+                zeroize_personal_mount(&mut request);
+                return Err(wincmd_shared::vault_access::VaultMountReason::NotAuthorized);
+            }
+            // Hold caller-authorized paths until the elevated broker finishes.
+            let _mount_files = match crate::vault_access::hold_unmanaged_mount_files(
+                &record, &request, peer.token(),
+            ) {
+                Ok(files) => files,
+                Err(_) => {
+                    zeroize_personal_mount(&mut request);
+                    return Err(wincmd_shared::vault_access::VaultMountReason::NotAuthorized);
+                }
+            };
             vault_mount.mount_unmanaged_authorized_locked(
                 operation_id,
                 vault_access,
@@ -1693,7 +1724,7 @@ async fn handle_personal_vault_mount(
         "status": "mounted",
         "drive": drive_letter,
         "internalDrive": internal_drive,
-        "scope": "per-user",
+        "scope": record.scope,
         "aclAttested": acl_attested,
     }))
 }
@@ -2186,6 +2217,49 @@ fn handle_vault_unmount(
             "unmount result could not be created",
         )
     })
+}
+
+fn require_personal_mount_peer(
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<&AuthenticatedPipePeer, VerbError> {
+    peer.filter(|peer| !peer.caller_sid().is_empty() && peer_has_active_interactive_session(peer))
+        .ok_or_else(|| {
+            VerbError::new(
+                PERSONAL_VAULT_SESSION_ABSENT,
+                "no interactive Windows session",
+            )
+        })
+}
+
+fn valid_personal_mount_query(args: &serde_json::Value) -> bool {
+    args.as_object().is_some_and(|object| {
+        object.get("personal") == Some(&serde_json::Value::Bool(true))
+            && object.len() == 1
+    })
+}
+
+fn handle_personal_vault_list(
+    vault_mount: &VaultMountBroker,
+    args: &serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    if !valid_personal_mount_query(args) {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "personal mount query is invalid",
+        ));
+    }
+    let peer = require_personal_mount_peer(peer)?;
+    let mounts = vault_mount
+        .personal_mounts_for_caller(peer.session_id(), peer.caller_sid())
+        .map_err(|reason| {
+            VerbError::new(
+                VaultMountBroker::personal_mount_failure_code(reason),
+                "personal mount list unavailable",
+            )
+        })?;
+    serde_json::to_value(mounts)
+        .map_err(|_| VerbError::new("vault_internal_error", "personal mount list unavailable"))
 }
 
 fn handle_vault_list_authorized(
@@ -3866,6 +3940,24 @@ mod tests {
         );
         assert!(request.hidden_protection_password.is_none());
         assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn personal_mount_queries_reject_forged_identity_and_mutation_fields() {
+        assert!(super::valid_personal_mount_query(
+            &serde_json::json!({"personal":true})
+        ));
+        for invalid in [
+            serde_json::json!({"personal":false}),
+            serde_json::json!({"personal":true,"caller_sid":"forged"}),
+            serde_json::json!({"personal":true,"internal_drive":26}),
+            serde_json::json!({"personal":true,"internal_drive":-1}),
+            serde_json::json!({"personal":true,"internal_drive":1,"session_id":7}),
+            serde_json::json!({"personal":true,"internal_drive":1,"force":"true"}),
+        ] {
+            assert!(!super::valid_personal_mount_query(&invalid));
+        }
+        assert!(super::require_personal_mount_peer(None).is_err());
     }
 
     #[test]

@@ -9567,6 +9567,16 @@
       ]
     },
     {
+      "id": "tauri:is_current_process_elevated",
+      "name": "is_current_process_elevated",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/App.tsx"
+      ]
+    },
+    {
       "id": "tauri:is_dev_build",
       "name": "is_dev_build",
       "transport": "tauri",

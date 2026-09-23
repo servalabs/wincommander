@@ -489,6 +489,7 @@ export interface EncryptionStatus {
     internalDrive?: number;
     /** The current signed-in Windows session can open the drive root. */
     accessible?: boolean;
+    cleanupRequired?: boolean;
   }>;
 }
 
@@ -584,20 +585,19 @@ export interface MountVolumeParams {
   hiddenKeyfiles?: string[];
   hiddenPim?: string;
   scope?: "machine" | "per-user";
-  /** Apply and verify the mounted NTFS root ACL for the mounting account plus
-   * SYSTEM and Administrators when the filesystem supports Windows ACLs. */
+  /** Retain strict service validation. Unmanaged mounts preserve existing file ACLs. */
   hardenAcl?: boolean;
 }
 
 export interface MountVolumeResult {
   status: "mounted";
   drive: string;
-  scope: "per-user";
+  scope: "machine" | "per-user";
   internalDrive?: number;
   readOnly: boolean;
   removable: boolean;
   hiddenProtection: boolean;
-  /** False when this personal mount uses its sign-in drive mapping without a filesystem ACL. */
+  /** False when an unmanaged mount preserves existing ACLs without applying a Fleet policy. */
   aclAttested: boolean;
 }
 
@@ -615,7 +615,7 @@ export const buildMountVolumeRequest = (params: MountVolumeParams) => ({
   ...(params.hiddenPassword ? { HiddenPassword: params.hiddenPassword } : {}),
   HiddenKeyfiles: JSON.stringify(params.hiddenKeyfiles ?? []),
   ...(params.hiddenPim ? { HiddenPim: params.hiddenPim } : {}),
-  ...(params.scope ? { Scope: params.scope } : {}),
+  Scope: params.scope ?? "machine",
   HardenAcl: params.hardenAcl ?? true,
 });
 

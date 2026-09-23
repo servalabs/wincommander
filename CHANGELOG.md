@@ -5,6 +5,15 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage and Quick Mount now request machine-wide writable drives,
+  preserve existing file permissions, and retain explicit read-only mounting.
+  The service checks the caller's access to containers and keyfiles before
+  mounting; Fleet-managed containers keep their separate permission policy.
+- Fleet Vault mounting uses current assigned principals rather than stale
+  generated-group membership retained by an older Windows sign-in.
+  Existing policies using the older generated-group file permissions show
+  degraded health until an administrator saves the policy again.
+
 - Manual NSIS upgrades and reinstalls preserve existing licence, preferences,
   Vault policies and the separately installed Pro runtime instead of invoking
   the previous NSIS uninstaller.

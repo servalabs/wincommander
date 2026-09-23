@@ -259,10 +259,10 @@ export default function RightSidebar() {
               // Hidden-volume protection is not enabled for this flow.
               readOnly: false,
               protectHidden: false,
-              scope: "per-user",
+              scope: "machine",
               hardenAcl: true,
             });
-            if (r?.success && r.data?.scope === "per-user") {
+            if (r?.success && r.data?.scope === "machine") {
                 await verifyVaultDrive(r.data.drive);
                 const refreshed = await refreshVault(true);
                 const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
@@ -277,7 +277,9 @@ export default function RightSidebar() {
                 setQmPassword('');
             } else {
                 // Operational mount result → Notifications tab, not System Alerts.
-                showError(r?.error || 'Mount failed — wrong password?', undefined, { kind: "notification" });
+                showError(r?.error || (r?.success
+                    ? 'Machine-wide mounting was not confirmed. Update both WinCommander and Pro before retrying.'
+                    : 'Mount failed — check your credentials and service diagnostics.'), undefined, { kind: "notification" });
             }
         } catch (e) {
             showError(`Mount failed: ${e}`, undefined, { kind: "notification" });
@@ -1116,7 +1118,7 @@ export default function RightSidebar() {
                                                     {quickMountSlots[qmSelectedIdx].filePath}
                                                 </span>
                                             )}
-                                            <span className="qm-hint">Mounts read/write in this Windows sign-in.</span>
+                                            <span className="qm-hint">Mounts machine-wide, read/write. Existing file permissions still apply.</span>
                                         </div>
 
                                         <div className="qm-field">

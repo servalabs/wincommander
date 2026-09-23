@@ -310,13 +310,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         removable: mountRemovable,
         protectHidden: false,
         hiddenKeyfiles: [],
-        scope: "per-user",
+        scope: "machine",
         hardenAcl: true,
       });
       setMountPassword("");
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
-      if (result.data.scope !== "per-user") {
-        throw new Error("The encrypted volume was not mounted privately for this Windows account.");
+      if (result.data.scope !== "machine") {
+        throw new Error("The encrypted volume was not confirmed as machine-wide. Update both WinCommander and Pro before retrying.");
       }
       await verifyVaultDrive(result.data.drive);
       const refreshed = await refreshVault(true);
@@ -738,10 +738,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
             </label>
-            <div className="quick-toggle quick-toggle--locked" aria-label="Sign-in-only drive mapping enabled">
+            <div className="quick-toggle quick-toggle--locked" aria-label="Machine-wide drive mapping enabled">
               <Icon icon="lock" size={14} />
-              <span>Sign-in-only drive mapping</span>
-              <span className="quick-desc">This personal mount does not require NTFS permissions.</span>
+              <span>Machine-wide drive mapping</span>
+              <span className="quick-desc">Visible to all users on this PC. Existing file permissions are preserved; restricted files stay restricted.</span>
             </div>
           </div>
 
@@ -779,9 +779,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             {mountedVolume?.aclAttested ? (
               <p>Private Windows permissions were applied and verified for this encrypted volume.</p>
             ) : (
-              <p>This encrypted volume is mounted through this sign-in’s drive mapping. Windows filesystem permissions were not applied.</p>
+              <p>This encrypted volume is mounted machine-wide. Existing file permissions are preserved; a writable mount does not override them.</p>
             )}
-            <p className="mount-result-dialog__note">Dismount it when you are finished. Windows administrators can still manage this computer.</p>
+            <p className="mount-result-dialog__note">Dismount it when you are finished. Signing out of the session that mounted it also closes this shared drive. Windows administrators can still manage this computer.</p>
           </div>
         </div>
         <div className="mount-dialog-footer">
