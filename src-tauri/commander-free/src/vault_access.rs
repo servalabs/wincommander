@@ -19,6 +19,7 @@ const APPLY_POLICY: &str = "svc.vault.apply_policy";
 const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
+const DISMOUNT_AUTHORIZED_VOLUMES: &str = "svc.vault.dismount_authorized_volumes";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const CAPABILITIES: &str = "svc.vault.capabilities";
 const RECONCILE_ACCESS_GROUPS: &str = "svc.vault.reconcile_access_groups";
@@ -462,6 +463,66 @@ pub async fn vault_unmount_entry(
     result
 }
 
+/// Dismounts only the active encrypted volumes that the authenticated Windows
+/// account is permitted to close. The SYSTEM service derives every target from
+/// its active-mount registry; the renderer cannot submit drive letters, paths,
+/// or a force flag.
+#[tauri::command]
+pub async fn vault_dismount_authorized_volumes(
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
+    let operation_id = requested_operation_id(diagnostic_operation_id, "dismount_authorized");
+    let started = Instant::now();
+    record_vault_event(
+        &operation_id,
+        "dismount_authorized",
+        "requested",
+        DiagnosticLifecycle::Requested,
+        DiagnosticOutcome::Started,
+        DiagnosticSeverity::Info,
+        None,
+        DiagnosticRetryability::Never,
+        "none",
+        None,
+    );
+    let result = crate::svc_client::call_with_diagnostic_operation(
+        DISMOUNT_AUTHORIZED_VOLUMES,
+        json!({}),
+        Some(operation_id.clone()),
+    )
+    .await;
+    match &result {
+        Ok(_) => record_vault_event(
+            &operation_id,
+            "dismount_authorized",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Succeeded,
+            DiagnosticSeverity::Info,
+            None,
+            DiagnosticRetryability::Never,
+            "none",
+            Some(started),
+        ),
+        Err(error) => {
+            let (code, retryability, next) = vault_failure_code("dismount", error);
+            record_vault_event(
+                &operation_id,
+                "dismount_authorized",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some(code),
+                retryability,
+                next,
+                Some(started),
+            );
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
@@ -545,6 +606,10 @@ mod tests {
         );
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
+        assert_eq!(
+            DISMOUNT_AUTHORIZED_VOLUMES,
+            "svc.vault.dismount_authorized_volumes"
+        );
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
         assert_eq!(RECONCILE_ACCESS_GROUPS, "svc.vault.reconcile_access_groups");

@@ -126,6 +126,19 @@ export interface VaultAuthorizedEntry {
   container_kind: VaultContainerKind;
   mount_state: VaultMountState;
   drive_letter: string | null;
+  /** Service-derived: Fleet mount visibility never implies dismount authority. */
+  can_dismount: boolean;
+}
+
+/**
+ * Bounded outcome of the service-filtered emergency Vault dismount. The
+ * service, not the renderer, determines which active Vaults the caller may
+ * close. Counts deliberately reveal no paths, SIDs, or other users' Vaults.
+ */
+export interface VaultAuthorizedDismountSummary {
+  dismounted: number;
+  denied: number;
+  failed: number;
 }
 
 /** Service-derived caller capability; never infer this from cached machine state. */

@@ -23,6 +23,7 @@ import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostic
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
+import FleetMountedVaultsSection from "./FleetMountedVaultsSection";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -129,6 +130,7 @@ function VaultPanel() {
             />
             <RamDisksSection />
           </div>
+          <FleetMountedVaultsSection onDismounted={() => refreshVault(true)} />
           <StegoBackupSection />
       </div>
     </div>

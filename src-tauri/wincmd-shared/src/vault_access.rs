@@ -449,6 +449,17 @@ pub struct PersonalVaultDismountRequest {
     pub internal_drive: u8,
 }
 
+/// Bounded result for Secure Storage's dismount-permitted-volumes action.
+/// Counts avoid exposing the identity or drive letter of a Vault that the
+/// caller is not authorized to control.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAuthorizedDismountResponse {
+    pub dismounted: u32,
+    pub denied: u32,
+    pub failed: u32,
+}
+
 /// The intentionally small status vocabulary visible outside the SYSTEM
 /// service.  It conveys whether a requested action completed without exposing
 /// a container path, ACL, SID, session, or credential.
@@ -580,9 +591,9 @@ pub struct VaultMountResult {
     pub reason: Option<VaultMountReason>,
 }
 
-/// Ordinary-user projection for “My vaults”.  It is deliberately not a
-/// policy view: a caller only receives entries its connected Windows token is
-/// authorized for, with no paths, grants, SIDs, ACLs, or other entries.
+/// Administrator projection for managed Fleet Vaults. It is deliberately not
+/// a policy view: a caller only receives entries its connected Windows token
+/// is authorized for, with no paths, grants, SIDs, ACLs, or other entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultAuthorizedEntry {
@@ -594,6 +605,11 @@ pub struct VaultAuthorizedEntry {
     pub container_kind: VaultContainerKind,
     pub mount_state: VaultMountState,
     pub drive_letter: Option<String>,
+    /// Mount visibility and file access do not imply permission to close the
+    /// Fleet Vault. The service derives this from the current policy and the
+    /// caller's local-administrator status.
+    #[serde(default)]
+    pub can_dismount: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -797,9 +813,11 @@ mod tests {
             drive_letter: None,
             reason: Some(VaultMountReason::NotAuthorized),
         };
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains("canary-password"));
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("canary-password")
+        );
     }
 
     fn sample_mount_plan() -> VaultMountPlan {

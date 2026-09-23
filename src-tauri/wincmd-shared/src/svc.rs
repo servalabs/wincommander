@@ -109,6 +109,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.create_personal"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
+            | "svc.vault.dismount_authorized_volumes"
             | "svc.vault.list_authorized"
             | "svc.vault.capabilities"
             | "svc.vault.reconcile_access_groups"
@@ -321,6 +322,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.mount"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
+        | "svc.vault.dismount_authorized_volumes"
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
@@ -383,6 +385,7 @@ mod tests {
             "svc.vault.capabilities",
             "svc.vault.list_authorized",
             "svc.vault.dismount_personal",
+            "svc.vault.dismount_authorized_volumes",
         ] {
             assert_eq!(
                 classify_verb(verb),
@@ -473,6 +476,7 @@ mod tests {
             "svc.vault.create_personal",
             "svc.vault.unmount",
             "svc.vault.dismount_personal",
+            "svc.vault.dismount_authorized_volumes",
             "svc.vault.list_authorized",
             "svc.vault.capabilities",
             "svc.vault.reconcile_access_groups",
@@ -505,33 +509,39 @@ mod tests {
 
     #[test]
     fn machine_setting_contract_rejects_mismatched_or_unbounded_values() {
-        assert!(ApplyMachineSettingRequest {
-            setting: MachineSettingId::RdpIncoming,
-            value: MachineSettingValue::RdpIncoming {
-                enabled: true,
-                idle_timeout_seconds: 900,
-            },
-        }
-        .validate()
-        .is_ok());
-        assert!(ApplyMachineSettingRequest {
-            setting: MachineSettingId::RdpIncoming,
-            value: MachineSettingValue::RdpIncoming {
-                enabled: true,
-                idle_timeout_seconds: 9,
-            },
-        }
-        .validate()
-        .is_err());
-        assert!(ApplyMachineSettingRequest {
-            setting: MachineSettingId::RdpLock,
-            value: MachineSettingValue::RdpIncoming {
-                enabled: true,
-                idle_timeout_seconds: 900,
-            },
-        }
-        .validate()
-        .is_err());
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpIncoming,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 900,
+                },
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpIncoming,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 9,
+                },
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpLock,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 900,
+                },
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

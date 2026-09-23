@@ -16,8 +16,9 @@ use zeroize::Zeroize;
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
 use wincmd_shared::vault_access::{
     PersonalVaultMountRequest, PersonalVaultMountedVolume, PersonalVaultRecord,
-    VaultBrokerVolumeRole, VaultContainerKind, VaultMountMode, VaultMountPlan, VaultMountReason,
-    VaultMountResult, VaultMountState, VaultPresentation, VaultVolumeRole,
+    VaultAuthorizedDismountResponse, VaultBrokerVolumeRole, VaultContainerKind, VaultMountMode,
+    VaultMountPlan, VaultMountReason, VaultMountResult, VaultMountState, VaultPresentation,
+    VaultVolumeRole,
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -1068,7 +1069,7 @@ impl VaultMountBroker {
         self.with_exclusive_operation(|| self.dismount_authorized_locked(store, &request))
     }
 
-    fn dismount_authorized_locked(
+    pub(crate) fn dismount_authorized_locked(
         &self,
         store: &VaultAccessStore,
         request: &AuthorizedDismount<'_>,
@@ -1084,8 +1085,23 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(request.entry_id).cloned())
         {
+            // Policy scope is service-owned mount state. A stale request must
+            // never turn a shared-policy authorization into permission to
+            // close a private Fleet Vault.
+            if active.presentation != request.presentation {
+                return denied(request.entry_id, VaultMountReason::NotAuthorized);
+            }
+            // A per-user Fleet policy is private. Its owner may recover a
+            // mount after reconnecting in another interactive session, but
+            // no other policy grant (including another administrator) can
+            // close it. The pipe has already verified current ownership.
+            if active.presentation == VaultPresentation::PerUser
+                && active.caller_sid != request.caller_sid
+            {
+                return denied(request.entry_id, VaultMountReason::NotAuthorized);
+            }
             // The pipe has already rechecked the caller against this Fleet
-            // policy. An authorized member may close the shared mount even
+            // policy. An authorized member may close a machine-shared mount even
             // when another Windows session opened it; use recovery so no
             // foreign session token is ever reused.
             if !same_mount_owner(&active, request.caller_session, request.caller_sid) {
@@ -1114,6 +1130,32 @@ impl VaultMountBroker {
         caller_session: u32,
         caller_sid: &str,
     ) -> VaultMountResult {
+        self.dismount_personal_for_caller_with_administrator(
+            store,
+            operation_id,
+            internal_drive,
+            caller_token,
+            caller_session,
+            caller_sid,
+            false,
+        )
+    }
+
+    /// Secure Storage has one common dismount surface. A local administrator
+    /// may close an ordinary, service-managed personal mount; a normal user
+    /// remains limited to their own mount. Fleet mounts never reach this
+    /// route, so policy ownership cannot be bypassed through Secure Storage.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dismount_personal_for_caller_with_administrator(
+        &self,
+        store: &VaultAccessStore,
+        operation_id: u64,
+        internal_drive: u8,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        caller_session: u32,
+        caller_sid: &str,
+        caller_is_administrator: bool,
+    ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
             let active = self.active.lock().ok();
             let matching = active.as_ref().and_then(|mounts| {
@@ -1139,9 +1181,16 @@ impl VaultMountBroker {
                     || mount.session_id == caller_session);
             if caller_sid.is_empty()
                 || (mount.presentation == VaultPresentation::PerUser && caller_session == 0)
-                || !owns_mount
+                || (!owns_mount && !caller_is_administrator)
             {
                 return denied(&entry_id, VaultMountReason::NotAuthorized);
+            }
+            // An administrator closing another user's per-user presentation
+            // cannot safely reuse their own desktop token for that session.
+            // The service-owned recovery path closes only the recorded driver
+            // slot after the administrator check above.
+            if !owns_mount {
+                return self.dismount_entry_locked_for_authorized_member(store, &entry_id);
             }
             self.dismount_entry_locked_for_client_inner(
                 operation_id,
@@ -1182,11 +1231,7 @@ impl VaultMountBroker {
             .map_err(|_| VaultMountReason::BrokerRejected)?;
         let mut mounts = active
             .values()
-            .filter(|mount| {
-                mount.personal
-                    && (mount.presentation == VaultPresentation::Machine
-                        || same_mount_owner(mount, session_id, caller_sid))
-            })
+            .filter(|mount| mount.personal && same_mount_owner(mount, session_id, caller_sid))
             .map(|mount| PersonalVaultMountedVolume {
                 drive_letter: mount.drive_letter.clone(),
                 internal_drive: mount.internal_drive,
@@ -1196,6 +1241,93 @@ impl VaultMountBroker {
             .collect::<Vec<_>>();
         mounts.sort_by_key(|mount| mount.internal_drive);
         Ok(mounts)
+    }
+
+    /// Dismount every active service-managed volume the authenticated caller
+    /// is entitled to close. The caller-specific Fleet decision is supplied
+    /// by the policy store while this same operation gate is held, preventing
+    /// policy/group changes from racing the exact driver-slot close.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dismount_authorized_volumes_for_caller<F>(
+        &self,
+        store: &VaultAccessStore,
+        operation_id: u64,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        caller_session: u32,
+        caller_sid: &str,
+        caller_is_administrator: bool,
+        mut authorize_fleet: F,
+    ) -> VaultAuthorizedDismountResponse
+    where
+        F: FnMut(&str) -> Option<VaultPresentation>,
+    {
+        self.with_exclusive_operation(|| {
+            let entries = self
+                .active
+                .lock()
+                .map(|active| {
+                    active
+                        .iter()
+                        .map(|(entry_id, mount)| (entry_id.clone(), mount.personal))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut response = VaultAuthorizedDismountResponse::default();
+            for (entry_id, personal) in entries {
+                let result = if personal {
+                    let active = self
+                        .active
+                        .lock()
+                        .ok()
+                        .and_then(|active| active.get(&entry_id).cloned());
+                    let Some(active) = active else {
+                        continue;
+                    };
+                    let owns_mount = same_mount_owner(&active, caller_session, caller_sid);
+                    if caller_sid.is_empty()
+                        || (active.presentation == VaultPresentation::PerUser
+                            && caller_session == 0)
+                        || (!owns_mount && !caller_is_administrator)
+                    {
+                        denied(&entry_id, VaultMountReason::NotAuthorized)
+                    } else if !owns_mount {
+                        // As above, use service recovery for an administrator
+                        // closing a foreign session's non-Fleet mount.
+                        self.dismount_entry_locked_for_authorized_member(store, &entry_id)
+                    } else {
+                        self.dismount_entry_locked_for_client_inner(
+                            operation_id,
+                            store,
+                            &entry_id,
+                            Some(caller_token),
+                        )
+                    }
+                } else if caller_is_administrator {
+                    match authorize_fleet(&entry_id) {
+                        Some(presentation) => self.dismount_authorized_locked(
+                            store,
+                            &AuthorizedDismount {
+                                operation_id,
+                                entry_id: &entry_id,
+                                caller_token,
+                                caller_session,
+                                caller_sid,
+                                presentation,
+                            },
+                        ),
+                        None => denied(&entry_id, VaultMountReason::NotAuthorized),
+                    }
+                } else {
+                    denied(&entry_id, VaultMountReason::NotAuthorized)
+                };
+                match result.state {
+                    VaultMountState::Unmounted => response.dismounted += 1,
+                    VaultMountState::Denied => response.denied += 1,
+                    VaultMountState::Failed | VaultMountState::Mounted => response.failed += 1,
+                }
+            }
+            response
+        })
     }
 
     pub fn dismount_all(&self, store: &VaultAccessStore) -> Result<(), VaultMountReason> {
@@ -1976,9 +2108,11 @@ mod tests {
             .personal_mounts_for_caller(7, "S-1-5-21-owner")
             .unwrap();
         assert_eq!(owner.len(), 2);
-        assert!(broker
-            .personal_mounts_for_caller(0, "S-1-5-21-owner")
-            .is_err());
+        assert!(
+            broker
+                .personal_mounts_for_caller(0, "S-1-5-21-owner")
+                .is_err()
+        );
         broker.mark_registry_untrusted();
         assert_eq!(
             broker.personal_mounts_for_caller(7, "S-1-5-21-owner"),
@@ -2088,11 +2222,13 @@ mod tests {
             events.lock().unwrap().mount_options,
             vec![(VaultPresentation::PerUser, false, true)]
         );
-        assert!(store
-            .read_active_mounts()
-            .unwrap()
-            .windows(8)
-            .any(|window| window == b"personal"));
+        assert!(
+            store
+                .read_active_mounts()
+                .unwrap()
+                .windows(8)
+                .any(|window| window == b"personal")
+        );
 
         broker.dismount_session(&store, 7);
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
@@ -2207,11 +2343,13 @@ mod tests {
         let recovered = restarted.load_and_cleanup(&store).unwrap();
         assert!(recovered.contains("v:1:i:2"));
         assert_eq!(recovery_events.lock().unwrap().recovered, vec![12]);
-        assert!(store
-            .read_active_mounts()
-            .unwrap()
-            .windows(11)
-            .any(|window| window == b"\"mounts\":{}"));
+        assert!(
+            store
+                .read_active_mounts()
+                .unwrap()
+                .windows(11)
+                .any(|window| window == b"\"mounts\":{}")
+        );
     }
 
     #[test]
@@ -2323,10 +2461,12 @@ mod tests {
         );
         let registry: DurableMountRegistry =
             serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
-        assert!(registry
-            .mounts
-            .values()
-            .all(|mount| !mount.cleanup_required));
+        assert!(
+            registry
+                .mounts
+                .values()
+                .all(|mount| !mount.cleanup_required)
+        );
     }
 
     #[test]
@@ -2504,6 +2644,136 @@ mod tests {
         assert!(same_mount_owner(&mount, 4, "S-1-5-21-owner"));
         assert!(!same_mount_owner(&mount, 5, "S-1-5-21-owner"));
         assert!(!same_mount_owner(&mount, 4, "S-1-5-21-other"));
+    }
+
+    #[test]
+    fn secure_storage_bulk_dismount_requires_an_administrator_and_current_shared_membership() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        assert!(broker.retain_cleanup_mount(
+            &store,
+            "sales",
+            active_mount_for_owner(7, "S-1-5-21-owner"),
+        ));
+
+        let normal_member = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            44,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-current-member",
+            false,
+            |entry_id| (entry_id == "sales").then_some(VaultPresentation::Machine),
+        );
+        assert_eq!(normal_member.dismounted, 0);
+        assert_eq!(normal_member.denied, 1);
+        assert_eq!(broker.projection("sales").0, VaultMountState::Mounted);
+
+        let response = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            45,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-current-member",
+            true,
+            |entry_id| (entry_id == "sales").then_some(VaultPresentation::Machine),
+        );
+
+        assert_eq!(response.dismounted, 1);
+        assert_eq!(response.denied, 0);
+        assert_eq!(events.lock().unwrap().recovered, vec![12]);
+    }
+
+    #[test]
+    fn secure_storage_bulk_dismount_denies_unrelated_admin_and_private_non_owner() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        assert!(broker.retain_cleanup_mount(
+            &store,
+            "shared",
+            active_mount_for_owner(7, "S-1-5-21-owner"),
+        ));
+        let mut private = active_mount_for_owner(7, "S-1-5-21-owner");
+        private.presentation = VaultPresentation::PerUser;
+        private.internal_drive = 13;
+        assert!(broker.retain_cleanup_mount(&store, "private", private));
+
+        let response = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            45,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-unrelated-admin",
+            true,
+            |entry_id| (entry_id == "private").then_some(VaultPresentation::PerUser),
+        );
+
+        assert_eq!(response.dismounted, 0);
+        assert_eq!(response.denied, 2);
+        assert!(events.lock().unwrap().dismounted.is_empty());
+        assert_eq!(broker.projection("shared").0, VaultMountState::Mounted);
+        assert_eq!(broker.projection("private").0, VaultMountState::Mounted);
+
+        // A private Fleet owner who reconnects in another interactive
+        // session remains the only eligible administrator. The recovery path
+        // closes the recorded slot without borrowing a foreign session token.
+        let owner = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            46,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-owner",
+            true,
+            |entry_id| (entry_id == "private").then_some(VaultPresentation::PerUser),
+        );
+        assert_eq!(owner.dismounted, 1);
+        assert_eq!(owner.denied, 1);
+        assert_eq!(broker.projection("private").0, VaultMountState::Unmounted);
+    }
+
+    #[test]
+    fn secure_storage_bulk_dismount_allows_administrator_to_close_non_fleet_mounts() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let mut personal = active_mount_for_owner(7, "S-1-5-21-owner");
+        personal.personal = true;
+        assert!(broker.retain_cleanup_mount(&store, "personal", personal));
+
+        let normal = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            46,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-other",
+            false,
+            |_| None,
+        );
+        assert_eq!(normal.denied, 1);
+        assert_eq!(broker.projection("personal").0, VaultMountState::Mounted);
+
+        let administrator = broker.dismount_authorized_volumes_for_caller(
+            &store,
+            47,
+            std::ptr::null_mut(),
+            9,
+            "S-1-5-21-admin",
+            true,
+            |_| None,
+        );
+        assert_eq!(administrator.dismounted, 1);
+        assert_eq!(events.lock().unwrap().recovered, vec![12]);
     }
 
     #[test]

@@ -4,7 +4,7 @@ import type {
   AccessGroupReconcileRequest, AccessGroupReconcileResponse, VaultAccessDirectory,
   VaultSaveAccessDirectoryResponse,
 } from "@/panels/fleet/accessControlTypes";
-import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
+import type { VaultAccessCapabilities, VaultAuthorizedDismountSummary, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
@@ -51,6 +51,10 @@ export default function useVaultAccess<Policy, Status>() {
     () => invoke<VaultAuthorizedEntry[]>("vault_list_authorized_entries"),
     [],
   );
+  const dismountAuthorizedVaults = useCallback(
+    () => invoke<VaultAuthorizedDismountSummary>("vault_dismount_authorized_volumes"),
+    [],
+  );
   const getCapabilities = useCallback(
     () => invoke<VaultAccessCapabilities>("get_vault_access_capabilities"),
     [],
@@ -71,7 +75,7 @@ export default function useVaultAccess<Policy, Status>() {
   );
 
   return {
-    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities,
+    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, dismountAuthorizedVaults, getCapabilities,
     reconcileAccessGroups, getAccessDirectory, saveAccessDirectory,
   };
 }

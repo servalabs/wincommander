@@ -1,11 +1,11 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use tauri::{
+    Emitter, Listener, Manager, WindowEvent,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Listener, Manager, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod action_steps;
@@ -136,8 +136,8 @@ mod vpn_kill_switch;
 mod wifi_check;
 
 pub(crate) use log::{
-    infer_pro_level, log_message, log_message_src, set_logging_enabled_flag, LOG_SRC_FLOWS,
-    LOG_SRC_PRO,
+    LOG_SRC_FLOWS, LOG_SRC_PRO, infer_pro_level, log_message, log_message_src,
+    set_logging_enabled_flag,
 };
 
 /// Dispatch the signed, headless UAC helper before the GUI runtime starts.
@@ -334,12 +334,12 @@ pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::Threading::AttachThreadInput;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
+        KEYEVENTF_KEYUP, SetActiveWindow, SetFocus, VK_MENU, keybd_event,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsZoomed,
-        SetForegroundWindow, SetWindowPos, ShowWindowAsync, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_RESTORE, SW_SHOWMAXIMIZED,
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, HWND_TOP, IsZoomed,
+        SW_RESTORE, SW_SHOWMAXIMIZED, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow,
+        SetWindowPos, ShowWindowAsync,
     };
     let Ok(raw_hwnd) = window.hwnd() else { return };
     let target: HWND = raw_hwnd.0 as HWND;
@@ -570,11 +570,7 @@ fn find_webview2_hwnd(
             &mut found as *mut windows_sys::Win32::Foundation::HWND as _,
         );
     }
-    if found.is_null() {
-        None
-    } else {
-        Some(found)
-    }
+    if found.is_null() { None } else { Some(found) }
 }
 
 /// Update the current user's Start Menu shortcut filename.
@@ -728,7 +724,11 @@ fn set_capture_protection(
         Ok(CaptureProtectionStatus {
             enabled,
             scope: "wincommander-main-window",
-            mode: if enabled { "exclude-from-capture" } else { "none" },
+            mode: if enabled {
+                "exclude-from-capture"
+            } else {
+                "none"
+            },
             limitation: "Best effort only: privileged capture, remote desktop, cameras, and unsupported Windows capture paths can bypass this setting.",
         })
     }
@@ -1073,9 +1073,9 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
             crate::updater::INSTALL_TIMEOUT,
             update.download_and_install(|_, _| {}, || {}),
         )
-            .await
-            .map_err(|_| "Update installation timed out".to_string())?
-            .map_err(|e| format!("Install failed: {}", e))?;
+        .await
+        .map_err(|_| "Update installation timed out".to_string())?
+        .map_err(|e| format!("Install failed: {}", e))?;
         Ok((version, current, body))
     }
     .await;
@@ -1201,8 +1201,8 @@ fn wincommander_hidden_status() -> bool {
 #[cfg(windows)]
 pub(crate) fn write_wc_registry_dword(value_name: &str, data: u32) {
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_DWORD,
-        REG_OPTION_NON_VOLATILE,
+        HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, RegCloseKey,
+        RegCreateKeyExW, RegSetValueExW,
     };
     let key_path: Vec<u16> = "SOFTWARE\\WinCommander\0".encode_utf16().collect();
     let mut hkey: windows_sys::Win32::System::Registry::HKEY = std::ptr::null_mut();
@@ -1565,7 +1565,7 @@ pub fn run() {
             );
         }
         unsafe {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
             let text: Vec<u16> =
                 "Microsoft Edge WebView2 Runtime is required but isn't installed.\r\n\r\nInstall it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and relaunch.\0"
                     .encode_utf16()
@@ -2814,6 +2814,7 @@ pub fn run() {
             vault_access::vault_mount_entry,
             vault_access::get_service_diagnostic_summaries,
             vault_access::vault_unmount_entry,
+            vault_access::vault_dismount_authorized_volumes,
             vault_access::vault_list_authorized_entries,
             vault_access::get_vault_access_capabilities,
             vault_access::reconcile_vault_access_groups,

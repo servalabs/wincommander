@@ -19,6 +19,7 @@ import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
+import useVaultAccess from "../hooks/useVaultAccess";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -112,7 +113,6 @@ export default function RightSidebar() {
     // The hooks below remain because other sidebar surfaces (the
     // individual quick-action buttons) still use them directly.
     const {
-        dismountAllVolumes,
         removeAllRamDisks,
         getAutoEraseSchedules,
         removeAutoEraseSchedule,
@@ -122,6 +122,7 @@ export default function RightSidebar() {
         safePastePrepare,
         scrubMetadataPaths,
     } = useBackend();
+    const { dismountAuthorizedVaults } = useVaultAccess<never, never>();
 
     const visibility = useVisibility();
     const { canUse } = useEntitlements();
@@ -704,20 +705,18 @@ export default function RightSidebar() {
             );
             return;
         }
-        // Sidebar panic action — dismount everything in one tap. The in-panel
-        // VolumeActionsMenu / RamDisksSection still expose per-row eject for
-        // selective dismounts.
+        // The service owns every encrypted-volume target and checks the
+        // caller against its active-mount record before force-dismounting.
+        // Sending a second engine-wide request here would bypass that check.
         void handleAction("dismount", async () => {
-            // Always ask both engines. Their availability probes are deliberately
-            // staggered during startup, so using them as a precondition makes a
-            // real mounted volume impossible to dismount until those probes finish.
-            const [encrypted, ram] = await Promise.all([
-                dismountAllVolumes(true),
-                removeAllRamDisks(),
-            ]);
-            if (!encrypted?.success) {
-                throw new Error(encrypted?.error || "Failed to force-dismount encrypted volumes.");
+            const authorized = await dismountAuthorizedVaults();
+            if (authorized.denied > 0 || authorized.failed > 0) {
+                throw new Error(
+                    "WinCommander could not safely dismount every encrypted volume authorized for this account. Other volumes were left unchanged."
+                );
             }
+
+            const ram = await removeAllRamDisks();
             const ramData = ram?.data as { status?: string; error?: string } | undefined;
             const ramError = String(ram?.error ?? ramData?.error ?? "");
             if (!ram?.success && !/not installed|no ram disks|none found/i.test(ramError)) {
@@ -727,7 +726,7 @@ export default function RightSidebar() {
                 throw new Error(ramData.error || "Failed to dismount RAM disks.");
             }
         });
-    }, [canUse, dismountAllVolumes, handleAction, removeAllRamDisks]);
+    }, [canUse, dismountAuthorizedVaults, handleAction, removeAllRamDisks]);
 
     // The tray action intentionally routes through this same handler instead
     // of maintaining a second native dismount implementation. This keeps the
