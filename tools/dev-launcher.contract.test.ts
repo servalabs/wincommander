@@ -73,7 +73,7 @@ ConvertTo-Json -Compress -InputObject @($results)
     const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
     expect(tauri.build.beforeDevCommand).toContain('dev:server');
     expect(devLauncher).toContain('& $bun run dev:server');
-    expect(devLauncher).toContain('@tauri-apps/cli@2.11.4');
+    expect(devLauncher).toContain('node_modules\\.bin\\tauri.exe');
     expect(packageJson.scripts.tauri).toContain('@tauri-apps/cli@2.11.4');
   });
 
@@ -164,5 +164,13 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(serviceSync).toContain("Using the already-running compatible VeraCrypt driver.");
     expect(serviceSync).toContain("reg.exe add $driverRegistryPath '/v' 'ImagePath' '/t' 'REG_EXPAND_SZ'");
     expect(serviceSync).toContain('(Get-DriverImagePath) -cne $driverNtPath');
+  });
+
+  test("verifies or safely repairs the pinned driver before starting the development service", () => {
+    expect(serviceSync).toContain('Repair-WcPinnedDriverAccess -Path $driverPath');
+    expect(serviceSync).toContain('catch [System.UnauthorizedAccessException]');
+    expect(serviceSync.lastIndexOf('Ensure-EncryptedVolumeDriver')).toBeLessThan(
+      serviceSync.lastIndexOf("Start-Service -Name $serviceName"),
+    );
   });
 });

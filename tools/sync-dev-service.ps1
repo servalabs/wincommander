@@ -26,6 +26,7 @@ $driverServiceName = 'WinCommanderEncVol'
 $driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
 $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
 $driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
+$driverAccessRepair = Join-Path $PSScriptRoot 'repair-vault-driver-access.ps1'
 
 function Write-Diagnostic([string]$Message) {
     if ($DiagnosticPath) {
@@ -64,6 +65,24 @@ function Get-Sha256([string]$Path) {
     finally {
         if ($null -ne $stream) { $stream.Dispose() }
         $hasher.Dispose()
+    }
+}
+
+function Get-VerifiedDriverHash {
+    try {
+        return Get-Sha256 $driverPath
+    }
+    catch [System.UnauthorizedAccessException] {
+        # A prior installer or interrupted update can leave the pinned driver
+        # readable only by SYSTEM. This elevated sync is the safe place to
+        # repair that known, signed payload before any service starts it.
+        Write-Diagnostic 'Repairing trusted encrypted-volume driver read access.'
+        . $driverAccessRepair
+        $repair = Repair-WcPinnedDriverAccess -Path $driverPath
+        if (-not $repair.hashVerified -or -not $repair.signatureVerified) {
+            throw 'Encrypted-volume driver access repair did not verify the pinned signed payload.'
+        }
+        return Get-Sha256 $driverPath
     }
 }
 
@@ -139,7 +158,7 @@ function Ensure-EncryptedVolumeDriver {
         Write-Diagnostic "Encrypted-volume driver payload is not present yet: $driverPath"
         return
     }
-    if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+    if ((Get-VerifiedDriverHash) -ne $driverSha256) {
         throw "The encrypted-volume driver does not match WinCommander's pinned payload: $driverPath"
     }
 
@@ -196,7 +215,14 @@ function Test-EncryptedVolumeDriverReady {
     if (-not (Test-Path -LiteralPath $driverPath -PathType Leaf)) {
         return $true
     }
-    if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+    try {
+        if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+            return $false
+        }
+    }
+    catch {
+        # A non-elevated parent cannot repair an installed driver ACL. Ask the
+        # elevated child to do the verified repair rather than failing startup.
         return $false
     }
     $config = @(& sc.exe qc $driverServiceName 2>$null)
@@ -354,9 +380,12 @@ if (-not $configuredPath -or -not $configuredPath.Equals($stagedService, [String
     throw "Windows did not retain the expected development service path: $configuredPath"
 }
 
+# Verify and, if needed, repair the signed driver before starting the new
+# service. Starting the service first can race its driver probing against this
+# hash read and made fresh checkouts fail after the UAC prompt.
+Ensure-EncryptedVolumeDriver
 Write-Diagnostic 'Starting the staged development service.'
 Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 Assert-StagedDevelopmentService
-Ensure-EncryptedVolumeDriver
 Write-Host 'WinCommander development service synchronized and running.'
