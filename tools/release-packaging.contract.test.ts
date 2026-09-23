@@ -10,6 +10,7 @@ const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.
       nsis: {
         installMode: string;
         installerHooks?: string;
+        template?: string;
         startMenuFolder?: string;
       };
     };
@@ -38,6 +39,7 @@ describe("Free machine-wide release packaging", () => {
     expect(baseConfig.bundle.targets).toBe("nsis");
     expect(baseConfig.bundle.windows.nsis.installMode).toBe("perMachine");
     expect(baseConfig.bundle.windows.nsis.installerHooks).toBe("nsis/hooks.nsh");
+    expect(baseConfig.bundle.windows.nsis.template).toBe("nsis/installer.nsi");
     // The app lives in Program Files, so every Windows account gets one safe,
     // shared executable. A product folder avoids a collision with root-level
     // shortcuts left by earlier releases.
@@ -176,5 +178,21 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).not.toContain('IfFileExists "$PROGRAMDATA\\');
     expect(hooks).not.toContain('IfFileExists "$COMMONAPPDATA\\');
     expect(hooks).toContain('RMDir /r "$LOCALAPPDATA\\WinCommander"');
+  });
+
+  test("manual NSIS setup replaces the installed app in place before any old uninstaller can run", () => {
+    const template = readFileSync("src-tauri/commander-free/nsis/installer.nsi", "utf8");
+    const reinstall = template.slice(template.indexOf("Function PageReinstall"), template.indexOf("FunctionEnd", template.indexOf("Function PageReinstall")));
+    expect(reinstall).toMatch(/\$WixMode != 1\r?\n\s+!if "\$\{ALLOWDOWNGRADES\}" == "true"\r?\n\s+Abort/);
+    expect(reinstall).toMatch(/!else\r?\n\s+\$\{If\} \$R0 != -1\r?\n\s+Abort/);
+    expect(reinstall.indexOf("${If} $WixMode != 1")).toBeLessThan(reinstall.indexOf("${If} $R0 = 0"));
+    expect(template).toContain('Page custom PageReinstall PageLeaveReinstall');
+    expect(template).toContain('ExecWait \'$R1\' $0');
+    expect(template).toContain('Function un.onInit');
+    expect(template).toContain('Section Uninstall');
+    const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+    expect(hooks).toContain('!define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\\..\\..\\..\\tools\\repair-vault-driver-access.ps1"');
+    expect(hooks).toContain('IfFileExists "$R5\\WinCommander\\bin\\engine" 0 wc_no_driver_access_repair');
+    expect(hooks.indexOf('"vault-driver-access-repair"')).toBeLessThan(hooks.indexOf('sc.exe start ${WC_SERVICE_NAME}'));
   });
 });

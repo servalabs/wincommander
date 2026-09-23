@@ -5,6 +5,14 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Manual NSIS upgrades and reinstalls preserve existing licence, preferences,
+  Vault policies and the separately installed Pro runtime instead of invoking
+  the previous NSIS uninstaller.
+- Setup can repair an existing encryption driver's empty protected permission
+  list, requiring the pinned file hash and a valid signature before keeping the
+  repair. Vault diagnostics distinguish payload validation from driver startup
+  failure; container permissions are unchanged.
+
 - File-icon reuse now has entry and string-byte limits with least-recently-used
   eviction. Later lookups refresh aged icons and retry temporary failures while
   preserving visible-row priority and shared in-flight requests.

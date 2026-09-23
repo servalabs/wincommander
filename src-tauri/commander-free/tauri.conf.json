@@ -58,6 +58,7 @@
       "nsis": {
         "installMode": "perMachine",
         "startMenuFolder": "ServaLabs\\WinCommander",
+        "template": "nsis/installer.nsi",
         "installerHooks": "nsis/hooks.nsh"
       }
     }

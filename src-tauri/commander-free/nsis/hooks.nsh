@@ -16,6 +16,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
 !define WC_CONFIGURE_ELEVATED_LAUNCHERS "${__FILEDIR__}\configure-elevated-launchers.ps1"
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
+!define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
 ; The service advertises this same bounded cleanup interval to SCM while it
 ; dismounts an active Vault.  The installer must not replace its EXE sooner.
@@ -159,21 +160,18 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 !macroend
 
-; A setup upgrade runs the installed release's uninstaller between this hook
-; and POSTINSTALL. Keep a short-lived, machine-owned fallback outside the
-; product directory so an older uninstaller cannot remove the active licence
-; token before its own preservation path restores it.
+; The owned NSIS template upgrades existing NSIS installs in place. A WiX
+; migration can run its old uninstaller before this hook, so keep the licence
+; fallback for other update paths without relying on it for Pro preservation.
 !macro NSIS_HOOK_PREINSTALL
   ; Start this install's evidence fresh, then retain it through POSTINSTALL so
   ; an update report includes the desktop close and the old-service shutdown.
   Delete "${WC_LIFECYCLE_DIAGNOSTIC_LOG}"
-  ; This runs before an existing version's uninstaller during /UPDATE, so it
-  ; makes the old executable writable even when that older uninstall hook did
-  ; not know how to close a running desktop application.
+  ; In-place NSIS updates reach this hook before replacing the desktop app,
+  ; including releases whose own uninstall hook did not close the app.
   !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "preinstall"
-  ; Stop with the service's full advertised budget before the older
-  ; uninstaller runs. It will then find a stopped service rather than aborting
-  ; its own shorter legacy wait.
+  ; Stop with the service's full advertised budget before replacing its
+  ; executable. Older service binaries may take longer to dismount a Vault.
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "preinstall"
   IfFileExists "$R5\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup
@@ -218,6 +216,20 @@ ${Using:StrFunc} UnStrStr
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "postinstall"
   !insertmacro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
+  ; An existing Pro driver may have a protected, empty DACL. Run the pinned
+  ; verifier only when its engine directory exists; a file-level existence
+  ; check can fail under that DACL. This never downloads or starts a driver.
+  IfFileExists "$R5\WinCommander\bin\engine" 0 wc_no_driver_access_repair
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-repair-vault-driver-access.ps1 "${WC_REPAIR_VAULT_DRIVER_ACCESS}"
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-repair-vault-driver-access.ps1"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "vault-driver-access-repair" "$0" "$1"
+      DetailPrint "Warning: WinCommander could not verify the existing Vault driver access."
+    ${EndIf}
+  wc_no_driver_access_repair:
   ; Prefer the normal preserved token. Only restore this fallback if an older
   ; uninstaller lost it; never overwrite a freshly activated/repaired token.
   IfFileExists "$R5\WinCommander\license_cache.json" wc_remove_upgrade_license_backup 0

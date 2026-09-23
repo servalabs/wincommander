@@ -111,6 +111,12 @@ fn vault_failure_code(
             DiagnosticRetryability::Never,
             "request_authorization",
         )
+    } else if lower.contains("encryption driver payload validation failed") {
+        (
+            "VLT.DRIVER.PAYLOAD_INVALID",
+            DiagnosticRetryability::Manual,
+            "repair_driver_payload",
+        )
     } else if lower.contains("driver") {
         (
             "VLT.DRIVER.UNAVAILABLE",
@@ -608,6 +614,17 @@ mod tests {
 
     #[test]
     fn vault_transport_failures_map_to_safe_stable_codes() {
+        assert_eq!(
+            vault_failure_code(
+                "mount",
+                "service rejected request: vault_driver_unavailable (encryption driver payload validation failed)"
+            ).0,
+            "VLT.DRIVER.PAYLOAD_INVALID"
+        );
+        assert_eq!(
+            vault_failure_code("mount", "encryption driver service could not be started").0,
+            "VLT.DRIVER.UNAVAILABLE"
+        );
         assert_eq!(
             vault_failure_code(
                 "mount",
