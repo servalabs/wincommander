@@ -1,4 +1,4 @@
-import { Button, Dialog, Tooltip } from "@/components/ui/bp";
+import { Button, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
@@ -20,11 +20,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const [dismounting, setDismounting] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
-  const [forceConfirmOpen, setForceConfirmOpen] = useState(false);
-  const [dismountFailure, setDismountFailure] = useState("");
   const driveLabel = letter.endsWith(":") ? letter : `${letter}:`;
-
-  const requiresForce = (message: string) => /dismount error 29|in use|busy/i.test(message);
 
   const verifyDismounted = async (): Promise<string | null> => {
     const normalizedLetter = driveLabel.toUpperCase();
@@ -45,13 +41,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   const completeDismount = async (forced: boolean) => {
     const verificationError = await verifyDismounted();
     if (verificationError) {
-      setDismountFailure(verificationError);
-      setForceConfirmOpen(verificationError.includes("still reported as mounted"));
       showError(verificationError, undefined, { kind: "notification" });
       return false;
     }
-    setDismountFailure("");
-    setForceConfirmOpen(false);
     onDismounted();
     showSuccess(`Volume ${driveLabel} ${forced ? "force-" : ""}dismounted.`);
     return true;
@@ -60,37 +52,21 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   const handleDismount = async () => {
     setDismounting(true);
     try {
-      const result = await dismountVolume(letter, false, internalDrive);
-      if (!result.success) {
-        const message = result.error || `Failed to dismount ${driveLabel}.`;
-        setDismountFailure(message);
-        setForceConfirmOpen(requiresForce(message));
-        showError(message, undefined, { kind: "notification" });
-        return;
-      }
-      await completeDismount(false);
-    } catch (e) {
-      // Operational volume result → Notifications tab, not System Alerts.
-      const message = e instanceof Error ? e.message : `Failed to dismount ${driveLabel}.`;
-      setDismountFailure(message);
-      setForceConfirmOpen(requiresForce(message));
-      showError(message, undefined, { kind: "notification" });
-    } finally {
-      setDismounting(false);
-    }
-  };
-
-  const handleForceDismount = async () => {
-    setDismounting(true);
-    try {
+      // An unavailable volume can belong to another or stale Windows sign-in
+      // and may not return the normal "in use" failure that used to expose
+      // the second force-dismount step. Dismount its exact engine slot now,
+      // then keep the row until fresh status confirms it has disappeared.
       const result = await dismountVolume(letter, true, internalDrive);
       if (!result.success) {
-        showError(result.error || `Failed to force-dismount ${driveLabel}.`, undefined, { kind: "notification" });
+        const message = result.error || `Failed to dismount ${driveLabel}.`;
+        showError(message, undefined, { kind: "notification" });
         return;
       }
       await completeDismount(true);
     } catch (e) {
-      showError(e instanceof Error ? e.message : `Failed to force-dismount ${driveLabel}.`, undefined, { kind: "notification" });
+      // Operational volume result → Notifications tab, not System Alerts.
+      const message = e instanceof Error ? e.message : `Failed to dismount ${driveLabel}.`;
+      showError(message, undefined, { kind: "notification" });
     } finally {
       setDismounting(false);
     }
@@ -126,7 +102,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </Tooltip>
 
       <TierGate tier="paid" featureLabel="Encrypted volumes">
-        <Tooltip content="Dismount" position="top">
+        <Tooltip content="Force dismount" position="top">
           <Button
             icon="eject"
             intent="danger"
@@ -135,7 +111,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
             loading={dismounting}
             onClick={handleDismount}
             className="vol-danger-btn"
-            aria-label={`Dismount ${driveLabel}`}
+            aria-label={`Force dismount ${driveLabel}`}
           />
         </Tooltip>
       </TierGate>
@@ -147,20 +123,6 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
         path={path}
         type={type}
       />
-      <Dialog
-        isOpen={forceConfirmOpen}
-        onClose={() => setForceConfirmOpen(false)}
-        title={`Force-dismount ${driveLabel}?`}
-      >
-        <div className="wc-dialog-body">
-          <p>The normal dismount was refused because the volume may still be in use. Forcing it can lose unwritten data.</p>
-          {dismountFailure && <p className="mt-3 text-[13px] leading-5 text-[var(--text-dim)]">{dismountFailure}</p>}
-        </div>
-        <div className="mount-dialog-footer">
-          <Button text="CANCEL" minimal onClick={() => setForceConfirmOpen(false)} />
-          <Button intent="danger" text="FORCE DISMOUNT" loading={dismounting} onClick={handleForceDismount} />
-        </div>
-      </Dialog>
     </div>
   );
 }

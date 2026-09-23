@@ -440,6 +440,15 @@ pub struct VaultUnmountRequest {
     pub entry_id: String,
 }
 
+/// A Secure Storage dismount request. The service resolves the active mount
+/// and its owner from this internal driver slot; callers cannot supply a path,
+/// drive-letter mapping, or policy entry id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalVaultDismountRequest {
+    pub internal_drive: u8,
+}
+
 /// The intentionally small status vocabulary visible outside the SYSTEM
 /// service.  It conveys whether a requested action completed without exposing
 /// a container path, ACL, SID, session, or credential.

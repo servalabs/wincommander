@@ -108,6 +108,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.mount"
             | "svc.vault.create_personal"
             | "svc.vault.unmount"
+            | "svc.vault.dismount_personal"
             | "svc.vault.list_authorized"
             | "svc.vault.capabilities"
             | "svc.vault.reconcile_access_groups"
@@ -319,6 +320,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.vault.authorize_mount"
         | "svc.vault.mount"
         | "svc.vault.unmount"
+        | "svc.vault.dismount_personal"
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
@@ -380,6 +382,7 @@ mod tests {
             "svc.diagnostics.query",
             "svc.vault.capabilities",
             "svc.vault.list_authorized",
+            "svc.vault.dismount_personal",
         ] {
             assert_eq!(
                 classify_verb(verb),
@@ -469,6 +472,7 @@ mod tests {
             "svc.vault.mount",
             "svc.vault.create_personal",
             "svc.vault.unmount",
+            "svc.vault.dismount_personal",
             "svc.vault.list_authorized",
             "svc.vault.capabilities",
             "svc.vault.reconcile_access_groups",

@@ -649,6 +649,9 @@ async fn dispatch_verb(
             args,
             peer,
         ),
+        "svc.vault.dismount_personal" => {
+            handle_personal_vault_dismount(request_id, vault_access, vault_mount, args, peer)
+        }
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
                 handle_personal_vault_list(vault_mount, &args, peer)
@@ -2260,6 +2263,51 @@ fn handle_personal_vault_list(
         })?;
     serde_json::to_value(mounts)
         .map_err(|_| VerbError::new("vault_internal_error", "personal mount list unavailable"))
+}
+
+fn handle_personal_vault_dismount(
+    request_id: u64,
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    mut args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let Some(object) = args.as_object_mut() else {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "personal dismount request is invalid",
+        ));
+    };
+    if object.remove("personal") != Some(serde_json::Value::Bool(true)) {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "personal dismount request is invalid",
+        ));
+    }
+    let request: wincmd_shared::vault_access::PersonalVaultDismountRequest =
+        serde_json::from_value(args).map_err(|_| {
+            VerbError::new(
+                "vault_validation_failed",
+                "personal dismount request is invalid",
+            )
+        })?;
+    if request.internal_drive > 25 {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "personal dismount request is invalid",
+        ));
+    }
+    let peer = require_personal_mount_peer(peer)?;
+    let result = vault_mount.dismount_personal_for_caller(
+        vault_access,
+        request_id,
+        request.internal_drive,
+        peer.token(),
+        peer.session_id(),
+        peer.caller_sid(),
+    );
+    serde_json::to_value(result)
+        .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
 }
 
 fn handle_vault_list_authorized(

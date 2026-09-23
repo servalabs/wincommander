@@ -938,6 +938,16 @@ impl VaultMountBroker {
         entry_id: &str,
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
     ) -> VaultMountResult {
+        self.dismount_entry_locked_for_client_inner(operation_id, store, entry_id, caller_token)
+    }
+
+    fn dismount_entry_locked_for_client_inner(
+        &self,
+        operation_id: u64,
+        store: &VaultAccessStore,
+        entry_id: &str,
+        caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+    ) -> VaultMountResult {
         let active = self
             .active
             .lock()
@@ -998,6 +1008,58 @@ impl VaultMountBroker {
         }
     }
 
+    /// An already-authorized Fleet member can close a policy-managed mount
+    /// opened in another user's Windows session.  The SYSTEM recovery broker
+    /// receives only the service-owned driver slot, never a path, user token,
+    /// or renderer-provided drive mapping.
+    fn dismount_entry_locked_for_authorized_member(
+        &self,
+        store: &VaultAccessStore,
+        entry_id: &str,
+    ) -> VaultMountResult {
+        let active = self
+            .active
+            .lock()
+            .ok()
+            .and_then(|mut active| active.remove(entry_id));
+        let Some(active) = active else {
+            return VaultMountResult {
+                entry_id: entry_id.to_owned(),
+                state: VaultMountState::Unmounted,
+                presentation: None,
+                drive_letter: None,
+                reason: None,
+            };
+        };
+        if self.broker.recover_dismount(active.internal_drive).is_err() {
+            if let Ok(mut mounts) = self.active.lock() {
+                mounts.insert(entry_id.to_owned(), active.clone());
+            }
+            return failed(
+                entry_id,
+                Some(active.presentation),
+                VaultMountReason::DismountFailed,
+            );
+        }
+        if let Ok(mounts) = self.active.lock() {
+            if self.persist_active(store, &mounts).is_err() {
+                self.mark_persistence_pending(entry_id);
+                return failed(
+                    entry_id,
+                    Some(active.presentation),
+                    VaultMountReason::DismountFailed,
+                );
+            }
+        }
+        VaultMountResult {
+            entry_id: entry_id.to_owned(),
+            state: VaultMountState::Unmounted,
+            presentation: Some(active.presentation),
+            drive_letter: None,
+            reason: None,
+        }
+    }
+
     pub fn dismount_authorized(
         &self,
         store: &VaultAccessStore,
@@ -1022,12 +1084,12 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(request.entry_id).cloned())
         {
-            // Shared presentation does not make every authorized member an
-            // operator of another member's live mount. The mounter alone may
-            // close it; an administrator can still apply a policy, whose
-            // serialized cleanup is service-owned and closes all mounts.
+            // The pipe has already rechecked the caller against this Fleet
+            // policy. An authorized member may close the shared mount even
+            // when another Windows session opened it; use recovery so no
+            // foreign session token is ever reused.
             if !same_mount_owner(&active, request.caller_session, request.caller_sid) {
-                return denied(request.entry_id, VaultMountReason::NotAuthorized);
+                return self.dismount_entry_locked_for_authorized_member(store, request.entry_id);
             }
         }
         self.dismount_entry_locked_for_client(
@@ -1036,6 +1098,58 @@ impl VaultMountBroker {
             request.entry_id,
             Some(request.caller_token),
         )
+    }
+
+    /// Secure Storage dismounts use the service-owned active-mount record,
+    /// rather than asking the renderer to close a driver slot directly.  This
+    /// removes the durable active record only after the broker confirms the
+    /// same slot closed, so an unavailable presentation cannot linger in the
+    /// UI as a false mounted volume.
+    pub(crate) fn dismount_personal_for_caller(
+        &self,
+        store: &VaultAccessStore,
+        operation_id: u64,
+        internal_drive: u8,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        caller_session: u32,
+        caller_sid: &str,
+    ) -> VaultMountResult {
+        self.with_exclusive_operation(|| {
+            let active = self.active.lock().ok();
+            let matching = active.as_ref().and_then(|mounts| {
+                mounts
+                    .iter()
+                    .find(|(_, mount)| mount.personal && mount.internal_drive == internal_drive)
+                    .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
+            });
+            drop(active);
+
+            let synthetic_entry_id = format!("personal:{internal_drive}");
+            let Some((entry_id, mount)) = matching else {
+                return VaultMountResult {
+                    entry_id: synthetic_entry_id,
+                    state: VaultMountState::Unmounted,
+                    presentation: None,
+                    drive_letter: None,
+                    reason: None,
+                };
+            };
+            let owns_mount = mount.caller_sid == caller_sid
+                && (mount.presentation == VaultPresentation::Machine
+                    || mount.session_id == caller_session);
+            if caller_sid.is_empty()
+                || (mount.presentation == VaultPresentation::PerUser && caller_session == 0)
+                || !owns_mount
+            {
+                return denied(&entry_id, VaultMountReason::NotAuthorized);
+            }
+            self.dismount_entry_locked_for_client_inner(
+                operation_id,
+                store,
+                &entry_id,
+                Some(caller_token),
+            )
+        })
     }
 
     pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
@@ -1983,6 +2097,87 @@ mod tests {
         broker.dismount_session(&store, 7);
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
         assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn personal_force_dismount_removes_the_active_record_after_closing_its_exact_slot() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let entry_id = unmanaged_mount_entry_id(&record);
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+        broker
+            .mount_unmanaged_authorized_locked(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            )
+            .expect("personal mount");
+
+        let denied = broker.dismount_personal_for_caller(
+            &store,
+            42,
+            12,
+            std::ptr::null_mut(),
+            11,
+            "S-1-5-21-different-user",
+        );
+        assert_eq!(denied.state, VaultMountState::Denied);
+        assert_eq!(broker.projection(&entry_id).0, VaultMountState::Mounted);
+
+        let result = broker.dismount_personal_for_caller(
+            &store,
+            43,
+            12,
+            std::ptr::null_mut(),
+            11,
+            "S-1-5-21-owner",
+        );
+        assert_eq!(result.state, VaultMountState::Unmounted);
+        assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn authorized_fleet_member_can_dismount_another_sessions_shared_mount() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let entry_id = "fleet-shared";
+        assert!(broker.retain_cleanup_mount(
+            &store,
+            entry_id,
+            active_mount_for_owner(7, "S-1-5-21-owner"),
+        ));
+
+        let result = broker.dismount_authorized(
+            &store,
+            AuthorizedDismount {
+                operation_id: 43,
+                entry_id,
+                caller_token: std::ptr::null_mut(),
+                caller_session: 11,
+                caller_sid: "S-1-5-21-authorized-member",
+                presentation: VaultPresentation::Machine,
+            },
+        );
+        assert_eq!(result.state, VaultMountState::Unmounted);
+        assert_eq!(broker.projection(entry_id).0, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().recovered, vec![12]);
     }
 
     #[test]
