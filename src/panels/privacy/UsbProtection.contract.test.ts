@@ -48,6 +48,19 @@ describe("USB Protection truthfulness and lifecycle contracts", () => {
     ]) expect(source).toContain(`<summary className="cursor-pointer text-sm font-semibold">${heading}</summary>`);
   });
 
+  test("one master arm state gates every child collector and never locally claims Windows verified a block", async () => {
+    const source = await read("src/panels/privacy/UsbDevicesSection.tsx");
+    const app = await read("src/App.tsx");
+    expect(source).toContain("const protectionActive = masterEnabled && status.running;");
+    expect(source).toContain("Advanced USB settings below are saved configuration, not running.");
+    expect(source).toContain("if (!protectionActive) return;");
+    expect(source).toContain("disabled={childControlsDisabled}");
+    expect(source).toContain("Block requested; Windows verification is pending.");
+    expect(source).not.toContain('now disabled in Windows.');
+    expect(app).toContain("const paidMonitorDesired = usbMonitorEnabled && hasPaid && paidMonitorConfigured;");
+    expect(app).toContain("const basicMonitorDesired = usbMonitorEnabled;");
+  });
+
   test("info help works with mouse, keyboard, click, Escape, and touch-compatible click", async () => {
     const source = await read("src/panels/privacy/UsbDevicesSection.tsx");
     expect(source).toContain("onMouseEnter={() => setOpen(true)}");

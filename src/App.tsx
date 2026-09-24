@@ -754,11 +754,15 @@ function AppContent({ splashDone, onSplashComplete }: {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    const paidMonitorDesired = usbHidGuardEnabled
+    // USB Protection has one master arm state.  Paid child settings are saved
+    // preferences, not an independent authority to start collection.  Without
+    // this gate the card could say Off while a child collector restarted it.
+    const paidMonitorConfigured = usbHidGuardEnabled
       || usbMeteringEnabled
       || usbAutoSandboxEnabled
       || usbHidApprovalGateEnabled;
-    const basicMonitorDesired = usbMonitorEnabled || (hasPaid && paidMonitorDesired);
+    const paidMonitorDesired = usbMonitorEnabled && hasPaid && paidMonitorConfigured;
+    const basicMonitorDesired = usbMonitorEnabled;
     const reconcile = async () => {
       try {
         await invoke(basicMonitorDesired ? "start_usb_monitor" : "stop_usb_monitor");
@@ -795,7 +799,7 @@ function AppContent({ splashDone, onSplashComplete }: {
         }
         if (cancelled) return;
         usbRearmFailureRef.current = null;
-        if (basicMonitorDesired || (hasPaid && paidMonitorDesired)) {
+        if (basicMonitorDesired || paidMonitorDesired) {
           reportStartupProtectionRearm("usb-security", true);
         }
       } catch (err) {
@@ -808,7 +812,7 @@ function AppContent({ splashDone, onSplashComplete }: {
         attempt += 1;
         if (attempt < 3) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
-        } else if (basicMonitorDesired || (hasPaid && paidMonitorDesired)) {
+        } else if (basicMonitorDesired || paidMonitorDesired) {
           reportStartupProtectionRearm("usb-security", false);
         }
       }
