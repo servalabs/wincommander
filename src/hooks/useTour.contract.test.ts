@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { isTourActive, setTourActive } from "../lib/tourActive";
+import {
+  getActiveTourStepId,
+  getLockdownChoicePendingEnabled,
+  isTourActive,
+  setActiveTourStepId,
+  setLockdownChoicePendingEnabled,
+  setTourActive,
+} from "../lib/tourActive";
 
 const source = readFileSync("src/hooks/useTour.ts", "utf8").replace(/\r\n/g, "\n");
 const appSource = readFileSync("src/App.tsx", "utf8").replace(/\r\n/g, "\n");
@@ -25,5 +32,21 @@ describe("tour first-panel navigation", () => {
     setTourActive(true);
     expect(isTourActive()).toBe(true);
     setTourActive(false);
+  });
+
+  test("publishes and clears the current step for temporary tour anchors", () => {
+    setActiveTourStepId(null);
+    setActiveTourStepId("dashboard-tour-lockdown-choice");
+    expect(getActiveTourStepId()).toBe("dashboard-tour-lockdown-choice");
+    setActiveTourStepId(null);
+    expect(getActiveTourStepId()).toBe(null);
+  });
+
+  test("clears a pending Lockdown preview when its tour step ends", () => {
+    setActiveTourStepId("dashboard-tour-lockdown-choice");
+    setLockdownChoicePendingEnabled(true);
+    expect(getLockdownChoicePendingEnabled()).toBe(true);
+    setActiveTourStepId(null);
+    expect(getLockdownChoicePendingEnabled()).toBe(null);
   });
 });

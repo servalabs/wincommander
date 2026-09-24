@@ -479,11 +479,13 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     body: "Choose whether WinCommander should show the Lockdown action and arm its configured triggers.",
     tour: {
       // Put the explicit opt-in at the end of the complete Dashboard tour.
-      // If Lockdown is off its action button is absent, so the rail itself is
-      // the stable fallback anchor for this centered hero step.
-      anchor: '[data-tour="right-sidebar-lockdown"], .right-sidebar',
+      // While off, the disabled impression occupies the exact footer position
+      // where the real control will appear. The full rail stays highlighted as
+      // a secondary target, while the leader always points at the footer item.
+      anchor: '[data-tour="right-sidebar-lockdown"], [data-tour="right-sidebar-lockdown-impression"]',
+      secondaryAnchor: ".right-sidebar",
       navigateTo: "dashboard",
-      placement: "auto",
+      placement: "left",
       variant: "hero",
       component: LockdownTourChoice,
       showWhen: (ctx) => ctx.lockdownEnabled !== true,

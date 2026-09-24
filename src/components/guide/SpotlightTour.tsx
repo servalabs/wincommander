@@ -12,6 +12,7 @@ import { Icon } from "../ui/icon";
 import { SPRING, DURATION_S } from "../shared/motion";
 import useTour from "../../hooks/useTour";
 import type { TourStep, TourPlacement } from "../../content/guide/types";
+import { setActiveTourStepId } from "../../lib/tourActive";
 import "./SpotlightTour.css";
 
 const PAD = 8; // breathing room around the highlighted element
@@ -258,6 +259,11 @@ function Scrim({
 export default function SpotlightTour({ steps, onClose, dismissable = true }: SpotlightTourProps) {
   const { index, total, step, rect, secondaryRect, sidebarRect, actionDone, actionPreStarted, next, back, skip, skipStep } = useTour({ steps, onClose, dismissable });
 
+  useEffect(() => {
+    setActiveTourStepId(step?.topicId ?? null);
+    return () => setActiveTourStepId(null);
+  }, [step?.topicId]);
+
   // Measure the hero modal itself so the connector line can stop at its
   // border instead of its center (2026-07-10 fix). Runs whenever the modal
   // is present; a ResizeObserver catches it changing size (media/component
@@ -307,6 +313,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
 
   const isLast = index === total - 1;
   const isHero = step.variant === "hero";
+  const isLockdownChoice = step.topicId === "dashboard-tour-lockdown-choice";
   const gated = Boolean(step.requiresAction) && !actionDone;
   // A do-it-yourself step stays fully un-dimmed for its whole duration —
   // before the click (so the target and its surrounding context are clearly
@@ -416,7 +423,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
     // do-it-yourself ones. The callout card re-enables pointer-events on
     // itself so Next/Back/Skip still work.
     <div
-      className="spotlight-root"
+      className={`spotlight-root${isLockdownChoice ? " spotlight-root--lockdown-choice" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label="Guided tour"
@@ -443,7 +450,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
           target is, once the darkened background is gone. */}
       {rect && (
         <motion.div
-          className={`spotlight-ring ${isHero ? "spotlight-ring--hero" : ""}`}
+          className={`spotlight-ring spotlight-ring--primary${isHero ? " spotlight-ring--hero" : ""}${isLockdownChoice ? " spotlight-ring--lockdown-choice-anchor" : ""}`}
           initial={false}
           animate={{ x: rect.left - PAD, y: rect.top - PAD, width: rect.width + PAD * 2, height: rect.height + PAD * 2 }}
           transition={SPRING.snappy}
@@ -456,7 +463,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
           ... with another rectangle highlighting box"). */}
       {secondaryRect && (
         <motion.div
-          className="spotlight-ring spotlight-ring--secondary"
+          className={`spotlight-ring spotlight-ring--secondary${isLockdownChoice ? " spotlight-ring--lockdown-choice-rail" : ""}`}
           initial={false}
           animate={{ x: secondaryRect.left - PAD, y: secondaryRect.top - PAD, width: secondaryRect.width + PAD * 2, height: secondaryRect.height + PAD * 2 }}
           transition={SPRING.snappy}
@@ -468,7 +475,9 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
       <motion.div
         key={index}
         ref={isHero ? modalRef : calloutRef}
-        className={isHero ? "spotlight-callout spotlight-hero-modal" : `spotlight-callout spotlight-callout--${step.topicId}`}
+        className={isHero
+          ? `spotlight-callout spotlight-hero-modal${isLockdownChoice ? " spotlight-hero-modal--lockdown-choice" : ""}`
+          : `spotlight-callout spotlight-callout--${step.topicId}`}
         // Opacity-only entrance: animating x/y/scale would set `transform` and
         // clobber the inline translate(-100%) used for top/left placements.
         style={isHero ? undefined : { width: CALLOUT_W, ...calloutStyle(rect, step.placement, calloutH) }}

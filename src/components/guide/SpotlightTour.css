@@ -57,6 +57,21 @@
   animation: spotlight-secondary-pulse 1.6s ease-in-out infinite;
 }
 
+/* Lockdown's final consent step shows the whole action rail and the footer
+   target at once. The rail is the broad outline; keep the smaller footer
+   outline above it so the exact destination remains easy to see. */
+.spotlight-root--lockdown-choice .spotlight-ring--lockdown-choice-rail {
+  z-index: 1;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  animation: none;
+}
+.spotlight-root--lockdown-choice .spotlight-ring--lockdown-choice-anchor {
+  z-index: 2;
+  border-radius: var(--r);
+}
+
 @keyframes spotlight-secondary-pulse {
   0%, 100% {
     box-shadow: 0 0 0 2px var(--accent), 0 0 14px 2px color-mix(in srgb, var(--accent) 55%, transparent);
@@ -320,6 +335,22 @@
      no scrollbar should ever be needed; hidden is the backstop instead of a
      visible scrollbar for the rare edge case (2026-07-20 fix). */
   overflow: hidden;
+}
+
+/* The Lockdown choice sits beside the rail footer so the connector travels
+   from the preview/real control to the popup without crossing unrelated
+   actions. Keep it on-screen beside the fixed-width action rail. */
+.spotlight-hero-modal--lockdown-choice {
+  top: auto;
+  left: auto;
+  right: calc(clamp(64px, 5vw, 72px) + 48px);
+  bottom: max(16px, 2vh);
+  width: min(380px, calc(100vw - 112px));
+  max-width: min(380px, calc(100vw - 112px));
+  transform: none;
+}
+.spotlight-root--lockdown-choice .spotlight-ring--lockdown-choice-anchor.spotlight-ring--hero {
+  border-radius: var(--r);
 }
 
 /* Scoped to the hero modal only — the base .spotlight-media rule above is

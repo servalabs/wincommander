@@ -1,28 +1,49 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAppState } from "../../context/AppContext";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
+import { setLockdownChoicePendingEnabled } from "../../lib/tourActive";
 import { Switch } from "../ui/switch";
 
 /** The last dashboard-tour stop asks before making Lockdown available. */
 export default function LockdownTourChoice() {
   const { appSettings, systemInfo, patchAppSettings } = useAppState();
-  const enabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true;
+  const persistedEnabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true;
   const enableBlocked = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
+  const [savedPendingEnabled, setSavedPendingEnabled] = useState<boolean | null>(null);
+  const enabled = optimisticEnabled ?? persistedEnabled;
+
+  useEffect(() => {
+    if (savedPendingEnabled === null || persistedEnabled !== savedPendingEnabled) return;
+    setOptimisticEnabled(null);
+    setLockdownChoicePendingEnabled(null);
+    setSavedPendingEnabled(null);
+  }, [persistedEnabled, savedPendingEnabled]);
 
   const setLockdownEnabled = async (nextEnabled: boolean) => {
     if (saving || (nextEnabled && enableBlocked)) return;
+    if (enabled === nextEnabled) return;
     setSaving(true);
     setSaveFailed(false);
+    // Respond to the switch immediately while the native settings write is in
+    // flight. The rail uses this same tour-scoped value to reveal its control
+    // immediately, but holds that control disabled until the write completes.
+    setOptimisticEnabled(nextEnabled);
+    setLockdownChoicePendingEnabled(nextEnabled);
     try {
-      if (enabled !== nextEnabled) {
-        await patchAppSettings({
-          ideal: { privacy: { selfDestruct: { enabled: nextEnabled } } },
-        } as any);
-      }
+      await patchAppSettings({
+        ideal: { privacy: { selfDestruct: { enabled: nextEnabled } } },
+      } as any);
+      // Keep the rail button disabled until AppContext has observed the saved
+      // value. This avoids a brief gap where the ON preview can be clicked
+      // before the persisted Lockdown control is safe to use.
+      setSavedPendingEnabled(nextEnabled);
     } catch (error) {
+      setOptimisticEnabled(null);
+      setLockdownChoicePendingEnabled(null);
       setSaveFailed(true);
       reportSettingsWriteFailure(error);
     } finally {
@@ -54,7 +75,7 @@ export default function LockdownTourChoice() {
       )}
       {saveFailed && (
         <p className="lockdown-tour-choice__error" role="alert">
-          WinCommander could not save this setting. Lockdown remains off; try again later.
+          WinCommander could not save this setting. Your saved choice is unchanged; try again later.
         </p>
       )}
     </div>

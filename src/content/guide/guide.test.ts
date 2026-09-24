@@ -39,6 +39,8 @@ describe("guide content SSOT", () => {
     const dashboard = resolveTourSteps(GUIDE_TOPICS, "tour-dashboard", "guided", { lockdownVisible: false });
     expect(dashboard.some((step) => step.topicId === "dashboard-tour-lockdown")).toBe(false);
     expect(dashboard.at(-1)?.topicId).toBe("dashboard-tour-lockdown-choice");
+    expect(dashboard.at(-1)?.anchor).toBe('[data-tour="right-sidebar-lockdown"], [data-tour="right-sidebar-lockdown-impression"]');
+    expect(dashboard.at(-1)?.secondaryAnchor).toBe(".right-sidebar");
     const ids = dashboard.map((step) => step.topicId);
     expect(ids.includes("network-tour-dns-firewall")).toBe(true);
     expect(ids.includes("network-tour-hosts-blocklists")).toBe(true);

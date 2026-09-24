@@ -20,6 +20,7 @@ import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
+import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -127,6 +128,11 @@ export default function RightSidebar() {
     const visibility = useVisibility();
     const { canUse } = useEntitlements();
     const borrowedActive = useBorrowedActive();
+    const activeTourStepId = useActiveTourStepId();
+    const pendingLockdownEnabled = useLockdownChoicePendingEnabled();
+    const lockdownChoiceTourActive = activeTourStepId === "dashboard-tour-lockdown-choice";
+    const lockdownEnabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true;
+    const lockdownVisibleInRail = pendingLockdownEnabled ?? lockdownEnabled;
     const borrowedHidden = appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS;
     // Quick actions the user has hidden via Secret Settings ▸ Sidebar actions.
     // An action is also hidden when Borrowed Mode is active and its key is in
@@ -139,6 +145,12 @@ export default function RightSidebar() {
                 .map(k => k.slice("action:".length))
             : []),
     ]);
+    // The final tour step gets a disabled preview in the real footer position
+    // while Lockdown is off. If the user opts in, reveal the regular control
+    // for the rest of the tour even when a sidebar visibility preference had
+    // hidden it; the preference resumes as soon as the tour closes.
+    const showLockdownControl = lockdownVisibleInRail && (!hiddenActions.has("lockdown") || lockdownChoiceTourActive);
+    const showLockdownImpression = lockdownChoiceTourActive && !lockdownVisibleInRail;
     // Do not wait for the delayed dependency/vault probes before making the
     // emergency control available. Both backend operations are idempotent and
     // report an empty/not-installed state safely, while the old probe-derived
@@ -899,34 +911,51 @@ export default function RightSidebar() {
                     the Secret Settings table (hidden by default). Hidden entirely
                     when self-destruct is not opted in (appSettings null = decoy
                     mode → treat as not-enabled). */}
-                {!hiddenActions.has("lockdown") && appSettings?.ideal?.privacy?.selfDestruct?.enabled === true && (
+                {(showLockdownControl || showLockdownImpression) && (
                 <div className="sidebar-footer">
-                    <div
-                        className="action-item"
-                        data-tour="right-sidebar-lockdown"
-                        onClick={needsElevation ? undefined : handleSelfDestructClick}
-                        data-tip={sdCountdown !== null ? "Click again to abort" : "Lockdown — runs your configured steps (edit in Secret Settings → Lockdown)"}
-                        data-tip-intent="danger"
-                    >
-                        <ActionBtn
-                            className="action-btn"
-                            icon="warning-sign"
-                            disabled={needsElevation}
-                            intent="danger"
-                            minimal
-                            large
-                            loading={loadingAction === "selfDestruct"}
-                            ariaLabel={sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}
-                        />
-                        <span className="action-label">
-                            {sdCountdown !== null
-                                ? `ABORT (${sdCountdown})`
-                                : loadingAction === "selfDestruct"
-                                    ? "PURGING"
-                                    : "Lockdown"}
-                        </span>
-                        {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
-                    </div>
+                    {showLockdownControl ? (
+                        <div
+                            className="action-item"
+                            data-tour="right-sidebar-lockdown"
+                            onClick={needsElevation || pendingLockdownEnabled !== null ? undefined : handleSelfDestructClick}
+                            data-tip={pendingLockdownEnabled !== null ? "Saving Lockdown setting…" : sdCountdown !== null ? "Click again to abort" : "Lockdown — runs your configured steps (edit in Secret Settings → Lockdown)"}
+                            data-tip-intent="danger"
+                        >
+                            <ActionBtn
+                                className="action-btn"
+                                icon="warning-sign"
+                                disabled={needsElevation || pendingLockdownEnabled !== null}
+                                intent="danger"
+                                minimal
+                                large
+                                loading={loadingAction === "selfDestruct"}
+                                ariaLabel={pendingLockdownEnabled !== null ? "Lockdown setting is being saved" : sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}
+                            />
+                            <span className="action-label">
+                                {sdCountdown !== null
+                                    ? `ABORT (${sdCountdown})`
+                                    : loadingAction === "selfDestruct"
+                                        ? "PURGING"
+                                        : "Lockdown"}
+                            </span>
+                            {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
+                        </div>
+                    ) : (
+                        <div
+                            className="action-item action-item--disabled lockdown-tour-impression"
+                            data-tour="right-sidebar-lockdown-impression"
+                            aria-disabled="true"
+                        >
+                            <ActionBtn
+                                className="action-btn"
+                                icon="warning-sign"
+                                intent="danger"
+                                disabled
+                                ariaLabel="Lockdown preview. Turn on Lockdown with the tour switch."
+                            />
+                            <span className="action-label">Lockdown</span>
+                        </div>
+                    )}
                 </div>
                 )}
             </div>

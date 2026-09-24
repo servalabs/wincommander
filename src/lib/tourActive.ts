@@ -18,6 +18,9 @@ import { useSyncExternalStore } from "react";
 
 let tourActive = false;
 const subscribers = new Set<() => void>();
+let activeTourStepId: string | null = null;
+let lockdownChoicePendingEnabled: boolean | null = null;
+const stepSubscribers = new Set<() => void>();
 
 function subscribe(onStoreChange: () => void): () => void {
   subscribers.add(onStoreChange);
@@ -38,4 +41,51 @@ export function setTourActive(active: boolean): void {
 /** Reactive read — re-renders the caller when a tour starts or ends. */
 export function useTourActive(): boolean {
   return useSyncExternalStore(subscribe, isTourActive, isTourActive);
+}
+
+/** The currently visible tour topic, used for temporary guided-tour anchors. */
+export function getActiveTourStepId(): string | null {
+  return activeTourStepId;
+}
+
+export function setActiveTourStepId(topicId: string | null): void {
+  const changed = activeTourStepId !== topicId;
+  const shouldClearPending = topicId !== "dashboard-tour-lockdown-choice" && lockdownChoicePendingEnabled !== null;
+  if (!changed && !shouldClearPending) return;
+  activeTourStepId = topicId;
+  if (shouldClearPending) lockdownChoicePendingEnabled = null;
+  stepSubscribers.forEach((notify) => notify());
+}
+
+export function useActiveTourStepId(): string | null {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      stepSubscribers.add(onStoreChange);
+      return () => stepSubscribers.delete(onStoreChange);
+    },
+    getActiveTourStepId,
+    getActiveTourStepId,
+  );
+}
+
+/** Pending value shown while the final choice is being saved by the backend. */
+export function getLockdownChoicePendingEnabled(): boolean | null {
+  return lockdownChoicePendingEnabled;
+}
+
+export function setLockdownChoicePendingEnabled(enabled: boolean | null): void {
+  if (lockdownChoicePendingEnabled === enabled) return;
+  lockdownChoicePendingEnabled = enabled;
+  stepSubscribers.forEach((notify) => notify());
+}
+
+export function useLockdownChoicePendingEnabled(): boolean | null {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      stepSubscribers.add(onStoreChange);
+      return () => stepSubscribers.delete(onStoreChange);
+    },
+    getLockdownChoicePendingEnabled,
+    getLockdownChoicePendingEnabled,
+  );
 }

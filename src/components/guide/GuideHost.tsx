@@ -16,7 +16,7 @@ import { GUIDE_TOPICS } from "../../content/guide";
 import { resolveTourSteps } from "../../lib/tour";
 import type { TourStep } from "../../content/guide/types";
 import { getDensityForSettings } from "../../lib/personaMigration";
-import { setTourActive } from "../../lib/tourActive";
+import { setActiveTourStepId, setTourActive } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
 import useVisibility from "../../hooks/useVisibility";
@@ -127,6 +127,9 @@ export default function GuideHost() {
       void patchAppSettings({ app: { firstRunComplete: true, hasSeenMandatoryTour: true } }).catch(reportSettingsWriteFailure);
       window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "dashboard" }));
     }
+    // Remove any temporary target from the action rail in the same close
+    // transition that removes the tour overlay.
+    setActiveTourStepId(null);
     setSteps(null);
     setMandatory(false);
   }, [patchAppSettings]);

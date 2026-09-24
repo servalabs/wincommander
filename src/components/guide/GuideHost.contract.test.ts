@@ -27,7 +27,7 @@ describe("first-run guide completion", () => {
     expect(consentTopic).toContain("order: 90");
     expect(choice).toContain("<Switch");
     expect(choice).toContain('aria-label="Enable Lockdown"');
-    expect(choice).toContain("const enabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true");
+    expect(choice).toContain("const persistedEnabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true");
     expect(choice).toContain("Off by default.");
   });
 
@@ -40,5 +40,33 @@ describe("first-run guide completion", () => {
     expect(choice).toContain("reportSettingsWriteFailure(error)");
     expect(choice).toContain("onCheckedChange={(nextEnabled) => void setLockdownEnabled(nextEnabled)}");
     expect(choice).toContain("checked={enabled}");
+  });
+
+  test("the final choice points to a temporary footer preview and highlights the full rail", async () => {
+    const topics = await Bun.file("src/content/guide/topics.ts").text();
+    const sidebar = await Bun.file("src/components/RightSidebar.tsx").text();
+    const choice = await Bun.file("src/components/guide/LockdownTourChoice.tsx").text();
+    const spotlight = await Bun.file("src/components/guide/SpotlightTour.tsx").text();
+    const spotlightCss = await Bun.file("src/components/guide/SpotlightTour.css").text();
+    const tourStore = await Bun.file("src/lib/tourActive.ts").text();
+    const topicStart = topics.indexOf('id: "dashboard-tour-lockdown-choice"');
+    const topicEnd = topics.indexOf("\n  },", topics.indexOf("tours: [{ id: \"tour-dashboard\", order: 90 }]", topicStart));
+    const choiceTopic = topics.slice(topicStart, topicEnd);
+
+    expect(choiceTopic).toContain('[data-tour="right-sidebar-lockdown"], [data-tour="right-sidebar-lockdown-impression"]');
+    expect(choiceTopic).toContain('secondaryAnchor: ".right-sidebar"');
+    expect(choiceTopic).toContain('placement: "left"');
+    expect(sidebar).toContain('activeTourStepId === "dashboard-tour-lockdown-choice"');
+    expect(sidebar).toContain("const showLockdownImpression = lockdownChoiceTourActive && !lockdownVisibleInRail");
+    expect(sidebar).toContain("const lockdownVisibleInRail = pendingLockdownEnabled ?? lockdownEnabled");
+    expect(sidebar).toContain("disabled={needsElevation || pendingLockdownEnabled !== null}");
+    expect(sidebar).toContain('data-tour="right-sidebar-lockdown-impression"');
+    expect(choice).toContain("setLockdownChoicePendingEnabled(nextEnabled)");
+    expect(choice).toContain("setLockdownChoicePendingEnabled(null)");
+    expect(tourStore).toContain("if (shouldClearPending) lockdownChoicePendingEnabled = null");
+    expect(spotlight).toContain("setActiveTourStepId(step?.topicId ?? null)");
+    expect(spotlight).toContain("spotlight-hero-modal--lockdown-choice");
+    expect(spotlightCss).toContain("spotlight-root--lockdown-choice .spotlight-ring--lockdown-choice-rail");
+    expect(spotlightCss).toContain("bottom: max(16px, 2vh)");
   });
 });
