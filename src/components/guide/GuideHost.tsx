@@ -16,7 +16,7 @@ import { GUIDE_TOPICS } from "../../content/guide";
 import { resolveTourSteps } from "../../lib/tour";
 import type { TourStep } from "../../content/guide/types";
 import { getDensityForSettings } from "../../lib/personaMigration";
-import { setActiveTourStepId, setTourActive } from "../../lib/tourActive";
+import { setActiveTourStepId, setTourActive, settleLockdownChoiceIfSaved } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
 import useVisibility from "../../hooks/useVisibility";
@@ -63,6 +63,13 @@ export default function GuideHost() {
     && !appSettings?.app?.hiddenSidebarActions?.includes("lockdown")
     && !(borrowedActive && borrowedHidden.includes("action:lockdown"));
   const lockdownEnabled = appSettings?.ideal?.privacy?.selfDestruct?.enabled === true;
+
+  // The setting write starts from the tour step, but it belongs to AppContext's
+  // serialized backend write queue and continues if the tour unmounts. Keep the
+  // rail preview until the updated settings arrive, even after the tour closes.
+  useEffect(() => {
+    settleLockdownChoiceIfSaved(lockdownEnabled);
+  }, [lockdownEnabled]);
 
   // Manual tour starts (title bar "?", dashboard "Take the tour", deep
   // links) — always dismissable.

@@ -50,10 +50,8 @@ export function getActiveTourStepId(): string | null {
 
 export function setActiveTourStepId(topicId: string | null): void {
   const changed = activeTourStepId !== topicId;
-  const shouldClearPending = topicId !== "dashboard-tour-lockdown-choice" && lockdownChoicePendingEnabled !== null;
-  if (!changed && !shouldClearPending) return;
+  if (!changed) return;
   activeTourStepId = topicId;
-  if (shouldClearPending) lockdownChoicePendingEnabled = null;
   stepSubscribers.forEach((notify) => notify());
 }
 
@@ -68,7 +66,7 @@ export function useActiveTourStepId(): string | null {
   );
 }
 
-/** Pending value shown while the final choice is being saved by the backend. */
+/** Pending value shown while the Lockdown setting is being saved by the backend. */
 export function getLockdownChoicePendingEnabled(): boolean | null {
   return lockdownChoicePendingEnabled;
 }
@@ -77,6 +75,13 @@ export function setLockdownChoicePendingEnabled(enabled: boolean | null): void {
   if (lockdownChoicePendingEnabled === enabled) return;
   lockdownChoicePendingEnabled = enabled;
   stepSubscribers.forEach((notify) => notify());
+}
+
+/** Drop the rail preview only after the app settings reflect the backend write. */
+export function settleLockdownChoiceIfSaved(persistedEnabled: boolean): void {
+  if (lockdownChoicePendingEnabled !== null && lockdownChoicePendingEnabled === persistedEnabled) {
+    setLockdownChoicePendingEnabled(null);
+  }
 }
 
 export function useLockdownChoicePendingEnabled(): boolean | null {

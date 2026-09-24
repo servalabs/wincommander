@@ -34,6 +34,8 @@ export default function LockdownTourChoice() {
     setOptimisticEnabled(nextEnabled);
     setLockdownChoicePendingEnabled(nextEnabled);
     try {
+      // AppContext queues this native settings write independently of the
+      // tour component, so closing the tour does not cancel the backend save.
       await patchAppSettings({
         ideal: { privacy: { selfDestruct: { enabled: nextEnabled } } },
       } as any);

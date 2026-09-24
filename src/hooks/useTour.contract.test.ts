@@ -4,6 +4,7 @@ import {
   getActiveTourStepId,
   getLockdownChoicePendingEnabled,
   isTourActive,
+  settleLockdownChoiceIfSaved,
   setActiveTourStepId,
   setLockdownChoicePendingEnabled,
   setTourActive,
@@ -42,11 +43,16 @@ describe("tour first-panel navigation", () => {
     expect(getActiveTourStepId()).toBe(null);
   });
 
-  test("clears a pending Lockdown preview when its tour step ends", () => {
+  test("keeps a pending Lockdown preview after the tour closes until settings confirm the write", () => {
+    setLockdownChoicePendingEnabled(null);
     setActiveTourStepId("dashboard-tour-lockdown-choice");
     setLockdownChoicePendingEnabled(true);
     expect(getLockdownChoicePendingEnabled()).toBe(true);
     setActiveTourStepId(null);
+    expect(getLockdownChoicePendingEnabled()).toBe(true);
+    settleLockdownChoiceIfSaved(false);
+    expect(getLockdownChoicePendingEnabled()).toBe(true);
+    settleLockdownChoiceIfSaved(true);
     expect(getLockdownChoicePendingEnabled()).toBe(null);
   });
 });

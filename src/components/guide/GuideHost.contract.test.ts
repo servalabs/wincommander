@@ -42,6 +42,17 @@ describe("first-run guide completion", () => {
     expect(choice).toContain("checked={enabled}");
   });
 
+  test("keeps the Lockdown save pending across tour close until persisted settings catch up", async () => {
+    const host = await Bun.file("src/components/guide/GuideHost.tsx").text();
+    const tourState = await Bun.file("src/lib/tourActive.ts").text();
+    const choice = await Bun.file("src/components/guide/LockdownTourChoice.tsx").text();
+
+    expect(host).toContain("settleLockdownChoiceIfSaved(lockdownEnabled)");
+    expect(tourState).not.toContain("shouldClearPending");
+    expect(tourState).toContain("lockdownChoicePendingEnabled === persistedEnabled");
+    expect(choice).toContain("closing the tour does not cancel the backend save");
+  });
+
   test("the final choice points to a temporary footer preview and highlights the full rail", async () => {
     const topics = await Bun.file("src/content/guide/topics.ts").text();
     const sidebar = await Bun.file("src/components/RightSidebar.tsx").text();
@@ -63,7 +74,7 @@ describe("first-run guide completion", () => {
     expect(sidebar).toContain('data-tour="right-sidebar-lockdown-impression"');
     expect(choice).toContain("setLockdownChoicePendingEnabled(nextEnabled)");
     expect(choice).toContain("setLockdownChoicePendingEnabled(null)");
-    expect(tourStore).toContain("if (shouldClearPending) lockdownChoicePendingEnabled = null");
+    expect(tourStore).toContain("export function settleLockdownChoiceIfSaved(persistedEnabled: boolean): void");
     expect(spotlight).toContain("setActiveTourStepId(step?.topicId ?? null)");
     expect(spotlight).toContain("spotlight-hero-modal--lockdown-choice");
     expect(spotlightCss).toContain("spotlight-root--lockdown-choice .spotlight-ring--lockdown-choice-rail");
