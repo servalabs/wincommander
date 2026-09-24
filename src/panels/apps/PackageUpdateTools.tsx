@@ -10,6 +10,7 @@ import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/p
 import { useAppState } from "../../context/AppContext";
 import AppIcon from "./components/AppIcon";
 import { collectUnifiedPackageUpdates, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
+import { summarizeOptionalManagerInstall } from "./packageManagerInstallStatus";
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, subscribeToPackageUpdateInventory } from "../../lib/packageUpdateInventoryStore";
 
 // Display labels for the manager ids the backend reports (package_updates.rs
@@ -140,22 +141,14 @@ export function PackageUpdateTools() {
     try {
       const result = await backendRef.current.packageUpdatesInstallOptionalManagers();
       setInstallingOptionalManagers(false);
-      const displayNames = (ids: string[]) => ids.map((id) => MANAGER_LABELS[id.toLowerCase()] ?? id);
-      const installedNames = displayNames(result.installed);
-      const alreadyInstalledNames = displayNames(result.alreadyInstalled);
-      const summaryParts = [
-        installedNames.length ? `Installed ${installedNames.join(" and ")}.` : "",
-        alreadyInstalledNames.length ? `${alreadyInstalledNames.join(" and ")} already installed.` : "",
-        result.errors.length ? `Could not install: ${result.errors.join("; ")}.` : "",
-      ].filter(Boolean);
-      const summary = summaryParts.join(" ") || "Package manager installation completed.";
+      const outcome = summarizeOptionalManagerInstall(result);
       setPackageIds(new Set());
-      setMessage(`${summary} Refreshing updates…`);
+      setMessage(`${outcome.text} Refreshing updates…`);
       try {
         await runPackageUpdateInventoryCheck(() => backendRef.current.packageUpdatesInventory());
-        setMessage(`${summary} Update list refreshed.`);
+        setMessage(`${outcome.text} Update list refreshed.`);
       } catch (cause) {
-        setMessage(`${summary} The update list could not be refreshed: ${String(cause)}`);
+        setMessage(`${outcome.text} The update list could not be refreshed: ${String(cause)}`);
       }
     } catch (cause) {
       setMessage(`Package manager installation failed: ${String(cause)}`);
@@ -203,7 +196,11 @@ export function PackageUpdateTools() {
       />)}
     </div> : packages && <Notice tone="success" text="No updates are available from app inventory, Winget, Chocolatey, Scoop, or npm." />}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={isBusy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
-    {message && <Notice tone={/failed|could not|couldn't|error/i.test(message) ? "warning" : "success"} text={message} />}
+    {message && <Notice
+      tone={/failed|could not|couldn't|error|not confirmed/i.test(message) ? "warning" : isBusy ? "info" : "success"}
+      text={message}
+      busy={installingOptionalManagers || (busy && message.includes("Refreshing updates…"))}
+    />}
   </section>;
 }
 
@@ -258,5 +255,11 @@ function PackageUpdateRow({ manager, packageName, currentVersion, availableVersi
     </Button>
   </div>;
 }
-function Notice({ tone, text }: { tone: "success" | "warning"; text: string }) { return <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }
+function Notice({ tone, text, busy = false }: { tone: "success" | "warning" | "info"; text: string; busy?: boolean }) {
+  return <Card><CardContent className="flex items-center gap-3 py-4">
+    {busy && <Spinner size={15} aria-label="Package manager operation in progress" />}
+    <Badge tone={tone}>{tone === "info" ? "working" : tone}</Badge>
+    <p className="text-sm text-[var(--text-dim)]">{text}</p>
+  </CardContent></Card>;
+}
 function toggle(current: Set<string>, id: string) { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }

@@ -353,19 +353,16 @@ async fn install_scoop() -> Result<(), String> {
         return Err("downloaded file did not match the expected Scoop installer".into());
     }
 
-    let mut script = tempfile::Builder::new()
-        .prefix("wincommander-scoop-install-")
-        .suffix(".ps1")
-        .tempfile()
-        .map_err(|error| format!("could not create a temporary Scoop installer: {error}"))?;
-    use std::io::Write;
-    script
-        .write_all(script_text.as_bytes())
-        .and_then(|_| script.flush())
-        .map_err(|error| format!("could not save the official Scoop installer: {error}"))?;
-
-    let script_path = script.path().to_string_lossy().into_owned();
+    // Keep the path alive until PowerShell exits, but close Rust's file handle
+    // before launching it. On Windows a NamedTempFile handle can deny the
+    // sharing mode PowerShell needs to open the script, which makes -File fail
+    // with "the process cannot access the file ... because it is being used by
+    // another process" even though this is the only installation in flight.
+    let script = create_scoop_installer_file(&script_text)?;
+    let script_path = script.to_path_buf().to_string_lossy().into_owned();
     tokio::task::spawn_blocking(move || {
+        // TempPath removes this invocation's uniquely named script on drop,
+        // after process::run has waited for the installer to finish.
         let _temporary_script = script;
         let powershell = powershell_executable()?;
         let args = scoop_installer_args(&script_path, elevated);
@@ -373,6 +370,24 @@ async fn install_scoop() -> Result<(), String> {
     })
     .await
     .map_err(|error| format!("Scoop install task failed: {error}"))?
+}
+
+fn create_scoop_installer_file(script_text: &str) -> Result<tempfile::TempPath, String> {
+    use std::io::Write;
+
+    let mut script = tempfile::Builder::new()
+        .prefix("wincommander-scoop-install-")
+        .suffix(".ps1")
+        .tempfile()
+        .map_err(|error| format!("could not create a temporary Scoop installer: {error}"))?;
+    script
+        .write_all(script_text.as_bytes())
+        .and_then(|_| script.flush())
+        .map_err(|error| format!("could not save the official Scoop installer: {error}"))?;
+
+    // into_temp_path drops the open File while retaining automatic deletion.
+    // Each call gets a distinct path from tempfile's exclusive-create logic.
+    Ok(script.into_temp_path())
 }
 
 fn scoop_installer_args(script_path: &str, elevated: bool) -> Vec<&str> {
@@ -617,6 +632,21 @@ mod tests {
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("raw.githubusercontent.com"));
         assert_eq!(url.path(), "/ScoopInstaller/Install/master/install.ps1");
+    }
+
+    #[test]
+    fn scoop_install_script_is_readable_after_handoff_and_removed_after_completion() {
+        let contents = "# Scoop installer fixture";
+        let first = create_scoop_installer_file(contents).unwrap();
+        let second = create_scoop_installer_file(contents).unwrap();
+        let first_path = first.to_path_buf();
+
+        assert_ne!(first_path, second.to_path_buf());
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), contents);
+
+        drop(first);
+        assert!(!first_path.exists());
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), contents);
     }
 
     #[test]
