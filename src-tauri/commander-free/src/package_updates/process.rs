@@ -66,11 +66,21 @@ pub(super) fn run(executable: &str, args: &[&str]) -> Result<String, String> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        Err(format!(
-            "{executable} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let details = process_error_details(&stderr, &stdout);
+        Err(format!("{executable} failed: {details}"))
     }
+}
+
+fn process_error_details(stderr: &str, stdout: &str) -> String {
+    let details = match (stderr.trim(), stdout.trim()) {
+        ("", "") => "no diagnostic output".to_string(),
+        ("", output) => output.to_string(),
+        (error, "") => error.to_string(),
+        (error, output) => format!("{error}\n{output}"),
+    };
+    details.chars().take(1200).collect::<String>()
 }
 
 fn machine_npm_prefix() -> String {
@@ -92,5 +102,24 @@ pub(super) fn run_npm_outdated() -> Result<String, String> {
             "npm.cmd failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process_error_details;
+
+    #[test]
+    fn process_failure_includes_stdout_when_stderr_is_empty() {
+        assert_eq!(
+            process_error_details("", "Scoop requires PowerShell 5.1"),
+            "Scoop requires PowerShell 5.1"
+        );
+    }
+
+    #[test]
+    fn process_failure_bounds_combined_diagnostics() {
+        let detail = process_error_details(&"e".repeat(900), &"o".repeat(900));
+        assert_eq!(detail.chars().count(), 1200);
     }
 }

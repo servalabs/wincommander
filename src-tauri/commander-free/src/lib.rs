@@ -2908,6 +2908,7 @@ pub fn run() {
             driver_maintenance::driver_update_seam,
             // ── Package-manager and firewall maintenance ──
             package_updates::package_updates_inventory,
+            package_updates::package_updates_install_optional_managers,
             package_updates::package_updates_apply,
             package_updates::package_updates_cancel,
             firewall_audit::firewall_audit_preview,
