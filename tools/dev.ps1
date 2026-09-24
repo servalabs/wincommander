@@ -83,7 +83,9 @@ try {
         & $bun run dev:server
     } else {
         # Release an old debug executable before Tauri starts its build. The
-        # beforeDevCommand also handles stale processes for direct CLI starts.
+        # beforeDevCommand repeats this as its first step for direct CLI starts;
+        # its later dev-server phase is marked pre-cleaned to avoid killing the
+        # new desktop after Cargo has launched it.
         & (Join-Path $PSScriptRoot "kill-dev.ps1")
         # Use the repository's installed, pinned Tauri CLI. `bun x` uses a
         # disposable cache under %TEMP%, which can disappear between runs and

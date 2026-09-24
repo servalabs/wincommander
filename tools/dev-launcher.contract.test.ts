@@ -77,10 +77,18 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(packageJson.scripts.tauri).toContain('@tauri-apps/cli@2.11.4');
   });
 
-  test("releases a stale Pro sidecar before rebuilding it", () => {
-    // A second active desktop session is rejected before this point. A fresh
-    // launch must not preserve a stale wincommander-pro.exe because Cargo has
-    // to replace that exact debug binary before Vite is exposed.
+  test("clears the old desktop before setup and avoids killing the new one", () => {
+    // Tauri starts Cargo while beforeDevCommand is still running. Cleanup must
+    // happen before slow setup, and dev-server must not repeat it later.
+    const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
+    expect(tauri.build.beforeDevCommand.indexOf("kill:dev")).toBeLessThan(
+      tauri.build.beforeDevCommand.indexOf("setup:dev"),
+    );
+    expect(tauri.build.beforeDevCommand).toContain("dev:server --precleaned");
+    expect(devServer).toContain('const PRE_CLEANED = process.argv.includes("--precleaned")');
+    expect(devServer).toContain("...(!PRE_CLEANED ? [{");
+    // A fresh launch must not preserve a stale wincommander-pro.exe because
+    // Cargo has to replace that exact debug binary before Vite is exposed.
     expect(devServer).toContain("desktopDevWindowIsRunning()");
     expect(devServer).toContain('"tools/build-pro.ts"');
     expect(devServer).not.toContain('PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"]');

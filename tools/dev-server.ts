@@ -43,10 +43,12 @@ const WINDOWS_POWERSHELL = process.platform === "win32"
   : "powershell";
 const FREE_ONLY = process.argv.includes("--free") || process.env.WINCOMMANDER_DEV_FREE_ONLY === "1";
 const MULTI_USER = process.argv.includes("--multi-user");
-// Tauri runs this script as its beforeDevCommand. A genuine second desktop
-// session is refused below before it changes shared state; otherwise this is a
-// fresh launch and any WinCommander process is stale and must release the Pro
-// executable before Cargo replaces it.
+// Tauri starts its Rust dev command alongside beforeDevCommand. The Tauri
+// config therefore runs kill:dev before its slower setup steps, then passes
+// this flag so this later server bootstrap does not kill the newly built app.
+const PRE_CLEANED = process.argv.includes("--precleaned");
+// Multi-user development intentionally shares a Vite server; refuse a second
+// multi-user bootstrap if a desktop already owns that server.
 const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wincommander");
 
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
@@ -103,10 +105,9 @@ function desktopDevWindowIsRunning(): boolean {
 }
 
 async function main(): Promise<void> {
-  // A second `tauri dev` starts another beforeDevCommand.  Previously that
-  // command killed the Vite server used by the first desktop window, leaving
-  // its WebView with stale React modules and orphaned IPC calls.  Refuse the
-  // second launch before it changes any shared process.
+  // Keep this guard for the shared multi-user server. Normal Tauri startup
+  // clears stale processes synchronously at the start of beforeDevCommand and
+  // must not classify its own newly launched app as an existing session here.
   const existingViteOwner = activeVitePortOwner();
   if (PRESERVE_WINCOMMANDER && existingViteOwner && desktopDevWindowIsRunning()) {
     throw new Error(
@@ -115,15 +116,17 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log("[dev-server] kill:dev and bun install running in parallel...");
+  console.log(PRE_CLEANED
+    ? "[dev-server] prior dev processes already cleared; installing dependencies..."
+    : "[dev-server] kill:dev and bun install running in parallel...");
 
   const steps: Array<{ name: string; promise: Promise<number> }> = [
-    {
+    ...(!PRE_CLEANED ? [{
       name: "kill:dev",
       promise: run("[kill]", WINDOWS_POWERSHELL, [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
       ]),
-    },
+    }] : []),
     { name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) },
   ];
 
