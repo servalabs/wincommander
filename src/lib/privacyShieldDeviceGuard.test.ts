@@ -173,14 +173,40 @@ describe("privacy shield device guardrails", () => {
     expect(card).toContain("sessionOwned: fleetShieldSessionOwned");
   });
 
-  test("Fleet attention alerts require the enabled signed Fleet policy", async () => {
+  test("a Fleet Stop releases the tray start action after fresh state read-back", async () => {
+    const pollers = await read("src/components/BackgroundPollers.tsx");
+    const trayStart = pollers.slice(
+      pollers.indexOf('const unlistenTrayShield = listen("tray-shield-toggle-requested"'),
+      pollers.indexOf('const unlistenFleetShieldDenied = listen')
+    );
+
+    expect(trayStart).toContain('invoke<typeof desiredState>("fleet_sync_shield_state")');
+    expect(trayStart).toContain("resolveFleetPrivacyShieldControl({");
+    expect(trayStart).toContain("resolveLocalFleetPrivacyShieldControl({");
+    expect(trayStart).toContain("if (localControl.startLocked)");
+    expect(trayStart).not.toContain("if (appSettingsRef.current?.ideal?.privacy?.privacyShield?.fleetManaged === true)");
+  });
+
+  test("Fleet attention alerts require the selected signed Fleet monitor", async () => {
     const backend = await read("src-tauri/commander-free/src/backend.rs");
 
     expect(backend).toContain("fn fleet_privacy_event_gate(");
-    expect(backend).toContain("shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true)");
-    expect(backend).toContain("!fleet_session_owned && !org_policy_active");
+    expect(backend).toContain("let fleet_monitoring_selected = shield.fleet_monitoring_enabled == Some(true)");
+    expect(backend).toContain("!fleet_session_owned && !fleet_monitoring_selected");
+    expect(backend).toContain("selected_fleet_monitor_reports_a_locally_started_shield");
     expect(backend).toContain('"look_away" | "presence_lost" | "phone_detected"');
     expect(backend).toContain("match fleet_privacy_alert_mode(event_class).await {");
+  });
+
+  test("Fleet attention alerts wake the heartbeat owner even when detector IPC uses another Pro worker", async () => {
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+    const proTransport = await read("../wincommander-pro/commander-pro/src/fleet_agent/legacy_transport.rs");
+
+    expect(backend).toContain('"record_privacy_shield_event"');
+    expect(proTransport).toContain("const CHECKIN_REQUEST_EVENT_NAME");
+    expect(proTransport).toContain("signal_cross_process_checkin_request();");
+    expect(proTransport).toContain("take_cross_process_checkin_request()");
+    expect(proTransport).toContain("wait_for_next_checkin().await;");
   });
 
   test("the event reader retains an initial look-away emitted during startup", async () => {

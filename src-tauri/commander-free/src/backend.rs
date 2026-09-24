@@ -5802,9 +5802,16 @@ fn fleet_privacy_event_gate(
     // when the organisation-wide default is off. It is distinct from a local
     // session: `privacy_shield_session_owned` is set only after the signed
     // device command has reached the local app and started the Shield.
-    let org_policy_active =
-        shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true);
-    if !fleet_session_owned && !org_policy_active {
+    // Monitoring and remote start/stop ownership are deliberately separate.
+    // An administrator can select Fleet reporting while leaving the local
+    // user in control of starting and stopping the Shield. Requiring
+    // `fleet_managed` here made that valid selected-monitor configuration
+    // look like a local-only session: the Windows notification appeared,
+    // but the event was silently discarded before it reached Pro's durable
+    // outbox. Only the signed monitoring selection (or a session Fleet
+    // itself started) authorizes this bounded reporting path.
+    let fleet_monitoring_selected = shield.fleet_monitoring_enabled == Some(true);
+    if !fleet_session_owned && !fleet_monitoring_selected {
         return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
     // Blur switches are local enforcement preferences, not alert opt-outs.
@@ -5861,8 +5868,10 @@ async fn fleet_privacy_alert_mode(
     if gate != FleetPrivacyAlertGate::Allowed {
         return Err(gate);
     }
-    let mode =
-        fleet_privacy_alert_mode_from_state(settings.app.fleet.shield_desired_state.as_ref())?;
+    let mode = fleet_privacy_alert_mode_from_state(
+        settings.app.fleet.shield_desired_state.as_ref(),
+        settings.ideal.privacy.privacy_shield.notify_mode,
+    )?;
     let limit = shield.fleet_notification_limit.unwrap_or(0).min(1000);
     if limit == 0 {
         return Ok(mode);
@@ -5890,11 +5899,20 @@ async fn fleet_privacy_alert_mode(
 
 fn fleet_privacy_alert_mode_from_state(
     state: Option<&crate::settings::FleetShieldDesiredState>,
+    local_mode: Option<crate::settings::PrivacyShieldNotifyMode>,
 ) -> Result<&'static str, FleetPrivacyAlertGate> {
     match state.map(|state| state.mode.as_str()) {
         Some("notify_only") => Ok("notify_only"),
         Some("blur_notify") => Ok("blur_notify"),
-        _ => Err(FleetPrivacyAlertGate::UnknownMode),
+        // A selected Fleet monitor does not have to own local start/stop.
+        // In that case there is no server desired-state entry, so describe
+        // the detector's actual local mode. The default mirrors the local
+        // Shield's default rather than inventing an unknown server mode.
+        None => match local_mode {
+            Some(crate::settings::PrivacyShieldNotifyMode::NotifyOnly) => Ok("notify_only"),
+            Some(crate::settings::PrivacyShieldNotifyMode::BlurNotify) | None => Ok("blur_notify"),
+        },
+        Some(_) => Err(FleetPrivacyAlertGate::UnknownMode),
     }
 }
 
@@ -5942,7 +5960,7 @@ mod fleet_privacy_alert_tests {
     }
 
     #[test]
-    fn local_shield_sessions_do_not_upload_attention_events() {
+    fn unselected_local_shield_sessions_do_not_upload_attention_events() {
         let policy = enabled_policy();
         assert_eq!(
             fleet_privacy_event_gate(false, false, &policy, "look_away"),
@@ -5972,6 +5990,19 @@ mod fleet_privacy_alert_tests {
     }
 
     #[test]
+    fn selected_fleet_monitor_reports_a_locally_started_shield() {
+        let policy = PrivacyShieldSettings {
+            fleet_monitoring_enabled: Some(true),
+            fleet_managed: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "phone_detected"),
+            FleetPrivacyAlertGate::Allowed
+        );
+    }
+
+    #[test]
     fn detector_transitions_use_only_the_bounded_fleet_event_vocabulary() {
         assert_eq!(
             privacy_shield_event_classes_from_reason("PHONE DETECTED & LOOK AWAY"),
@@ -5989,7 +6020,7 @@ mod fleet_privacy_alert_tests {
     }
 
     #[test]
-    fn fleet_alert_metadata_uses_only_the_server_selected_mode() {
+    fn fleet_alert_metadata_prefers_server_mode_and_uses_local_mode_for_monitor_only() {
         let state = FleetShieldDesiredState {
             enabled: true,
             mode: "notify_only".to_string(),
@@ -5998,12 +6029,22 @@ mod fleet_privacy_alert_tests {
             command_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
         };
         assert_eq!(
-            fleet_privacy_alert_mode_from_state(Some(&state)),
+            fleet_privacy_alert_mode_from_state(
+                Some(&state),
+                Some(crate::settings::PrivacyShieldNotifyMode::BlurNotify),
+            ),
             Ok("notify_only")
         );
         assert_eq!(
-            fleet_privacy_alert_mode_from_state(None),
-            Err(FleetPrivacyAlertGate::UnknownMode)
+            fleet_privacy_alert_mode_from_state(
+                None,
+                Some(crate::settings::PrivacyShieldNotifyMode::NotifyOnly),
+            ),
+            Ok("notify_only")
+        );
+        assert_eq!(
+            fleet_privacy_alert_mode_from_state(None, None),
+            Ok("blur_notify")
         );
     }
 }

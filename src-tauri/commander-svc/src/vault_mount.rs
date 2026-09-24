@@ -93,6 +93,18 @@ trait AuthenticatedVaultBroker: Send + Sync {
     fn recover_dismount(&self, internal_drive: u8) -> Result<(), VaultMountReason>;
 }
 
+type CallerMountAttestor =
+    fn(windows_sys::Win32::Foundation::HANDLE, &str, u8, bool) -> CallerPresentationAttestation;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CallerPresentationAttestation {
+    Available,
+    MappingUnavailable,
+    RootAccessDenied,
+    RootWriteAccessDenied,
+    RootReadFailed,
+}
+
 struct ProEnvelopeBroker;
 
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
@@ -209,6 +221,10 @@ struct InternalMountRequest {
     /// Service-derived only; this private request cannot be supplied by UI or
     /// named-pipe callers.
     personal: bool,
+    /// A service-derived caller SID to add only after opt-in. This never comes
+    /// from renderer JSON and is passed to the trusted broker only for
+    /// personal mounts.
+    personal_acl_repair_sid: Option<String>,
     pim: Option<u32>,
     keyfiles: Vec<String>,
     hidden_keyfiles: Vec<String>,
@@ -242,6 +258,7 @@ fn broker_mount_args(
         preferred_letter: request.preferred_letter.clone(),
         read_only: request.read_only,
         personal: request.personal,
+        personal_acl_repair_sid: request.personal_acl_repair_sid.clone(),
         volume_kind: match request.volume_kind {
             "standard" => VaultContainerKind::Standard,
             "dual" => VaultContainerKind::Dual,
@@ -277,6 +294,10 @@ impl InternalMountRequest {
             hidden_protection_password.zeroize();
         }
         self.hidden_protection_password = None;
+        if let Some(sid) = &mut self.personal_acl_repair_sid {
+            sid.zeroize();
+        }
+        self.personal_acl_repair_sid = None;
         self.keyfiles.iter_mut().for_each(Zeroize::zeroize);
         self.keyfiles.clear();
         self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
@@ -302,6 +323,7 @@ pub struct VaultMountBroker {
     // old policy in the gap between cleanup and the new-policy install.
     operation: Mutex<()>,
     broker: Box<dyn AuthenticatedVaultBroker>,
+    caller_mount_attestor: CallerMountAttestor,
     recovery: Mutex<RecoveryState>,
 }
 
@@ -327,6 +349,8 @@ impl VaultMountBroker {
             VaultMountReason::EngineMountFailed => "vault_engine_mount_failed",
             VaultMountReason::AclApplyFailed => "vault_acl_apply_failed",
             VaultMountReason::AclReadbackFailed => "vault_acl_readback_failed",
+            VaultMountReason::CallerAccessDenied => "vault_caller_access_denied",
+            VaultMountReason::CallerAclRepairFailed => "vault_caller_acl_repair_failed",
             VaultMountReason::InvalidRequest => "vault_validation_failed",
             VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
@@ -345,10 +369,18 @@ impl VaultMountBroker {
     }
 
     fn with_broker(broker: Box<dyn AuthenticatedVaultBroker>) -> Self {
+        Self::with_broker_and_attestor(broker, machine_presentation_attestation)
+    }
+
+    fn with_broker_and_attestor(
+        broker: Box<dyn AuthenticatedVaultBroker>,
+        caller_mount_attestor: CallerMountAttestor,
+    ) -> Self {
         Self {
             active: Mutex::new(HashMap::new()),
             operation: Mutex::new(()),
             broker,
+            caller_mount_attestor,
             recovery: Mutex::new(RecoveryState::default()),
         }
     }
@@ -569,6 +601,9 @@ impl VaultMountBroker {
             volume_role: profile.volume_role,
             read_only: request.read_only,
             personal: true,
+            personal_acl_repair_sid: request
+                .repair_current_account_access
+                .then(|| caller_sid.to_owned()),
             pim: request.pim,
             keyfiles: std::mem::take(&mut request.keyfiles),
             hidden_keyfiles: std::mem::take(&mut request.hidden_keyfiles),
@@ -605,6 +640,67 @@ impl VaultMountBroker {
             } else {
                 VaultMountReason::DismountFailed
             });
+        }
+        // A machine-wide drive can exist in the SYSTEM namespace yet remain
+        // unusable to the signed-in account, for example when an encrypted
+        // filesystem carries ACLs from another PC. Verify the exact slot and
+        // root listing as the caller before reporting the mount as successful.
+        if record.scope == VaultPresentation::Machine {
+            let attestation = (self.caller_mount_attestor)(
+                caller_token,
+                &reply.drive_letter,
+                reply.internal_drive,
+                access == wincmd_shared::vault_access::VaultAccess::Write,
+            );
+            if attestation != CallerPresentationAttestation::Available {
+                let cleanup = self.broker.dismount(BrokerDismountRequest {
+                    operation_id,
+                    internal_drive: reply.internal_drive,
+                    presented_drive_letter: per_user_presented_drive_letter(
+                        record.scope,
+                        reply.drive_letter.as_str(),
+                    ),
+                    presentation: record.scope,
+                    target_session_id: session_id,
+                    caller_sid,
+                    caller_token: Some(caller_token),
+                });
+                if cleanup.is_err() {
+                    let mounted_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|value| value.as_secs())
+                        .unwrap_or(0);
+                    let mount = ActiveMount {
+                        drive_letter: reply.drive_letter.clone(),
+                        internal_drive: reply.internal_drive,
+                        presentation: record.scope,
+                        session_id,
+                        caller_sid: caller_sid.to_owned(),
+                        policy_id: "personal".into(),
+                        policy_version: 1,
+                        personal: true,
+                        container_identity: record.container_identity.clone(),
+                        access,
+                        mounted_at,
+                        cleanup_required: true,
+                    };
+                    if !self.retain_cleanup_mount(store, &entry_id, mount) {
+                        self.mark_registry_untrusted();
+                    }
+                    return Err(VaultMountReason::DismountFailed);
+                }
+                return Err(
+                    if matches!(
+                        attestation,
+                        CallerPresentationAttestation::RootAccessDenied
+                            | CallerPresentationAttestation::RootWriteAccessDenied
+                    ) {
+                        VaultMountReason::CallerAccessDenied
+                    } else {
+                        VaultMountReason::PresentationRejected
+                    },
+                );
+            }
         }
         let mounted_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -757,6 +853,7 @@ impl VaultMountBroker {
             volume_role: profile.volume_role,
             read_only: false,
             personal: false,
+            personal_acl_repair_sid: None,
             pim: None,
             keyfiles: Vec::new(),
             hidden_keyfiles: Vec::new(),
@@ -810,11 +907,12 @@ impl VaultMountBroker {
         // shared Vaults fail-closed without requiring session-zero to discover
         // an Explorer window it cannot see.
         if presentation == VaultPresentation::Machine
-            && !machine_presentation_is_visible_to_caller(
+            && machine_presentation_attestation(
                 caller_token,
                 &reply.drive_letter,
                 reply.internal_drive,
-            )
+                false,
+            ) != CallerPresentationAttestation::Available
         {
             let cleanup = self.broker.dismount(BrokerDismountRequest {
                 operation_id,
@@ -1503,13 +1601,20 @@ fn valid_drive_letter(value: &str) -> bool {
 /// root.  The broker runs in session zero, so it cannot truthfully perform
 /// this check by looking for Explorer itself.  The service already owns the
 /// caller token; impersonate that token for this narrow, read-only attestation.
-fn machine_presentation_is_visible_to_caller(
+fn machine_presentation_attestation(
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     drive_letter: &str,
     internal_drive: u8,
-) -> bool {
+    require_write_access: bool,
+) -> CallerPresentationAttestation {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
-    use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, QueryDosDeviceW, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
 
     struct RevertGuard;
     impl Drop for RevertGuard {
@@ -1531,13 +1636,13 @@ fn machine_presentation_is_visible_to_caller(
         .filter(|letter| normalized.len() == 1 && letter.is_ascii_alphabetic())
         .map(|letter| letter.to_ascii_uppercase() as char)
     else {
-        return false;
+        return CallerPresentationAttestation::MappingUnavailable;
     };
     if internal_drive > 25 || caller_token.is_null() {
-        return false;
+        return CallerPresentationAttestation::MappingUnavailable;
     }
     if unsafe { ImpersonateLoggedOnUser(caller_token) } == 0 {
-        return false;
+        return CallerPresentationAttestation::MappingUnavailable;
     }
     let guard = RevertGuard;
     let result = (|| {
@@ -1547,26 +1652,65 @@ fn machine_presentation_is_visible_to_caller(
             unsafe { QueryDosDeviceW(dos_name.as_ptr(), target.as_mut_ptr(), target.len() as u32) }
                 as usize;
         if target_len == 0 || target_len >= target.len() {
-            return false;
+            return CallerPresentationAttestation::MappingUnavailable;
         }
         let Some(first_target_len) = target[..=target_len].iter().position(|unit| *unit == 0)
         else {
-            return false;
+            return CallerPresentationAttestation::MappingUnavailable;
         };
         let Ok(target) = String::from_utf16(&target[..first_target_len]) else {
-            return false;
+            return CallerPresentationAttestation::MappingUnavailable;
         };
         let expected = format!(
             r"\Device\VeraCryptVolume{}",
             char::from(b'A' + internal_drive)
         );
         if !target.eq_ignore_ascii_case(&expected) {
-            return false;
+            return CallerPresentationAttestation::MappingUnavailable;
         }
         let root = format!("{letter}:\\");
-        std::fs::read_dir(root)
-            .and_then(|mut entries| entries.next().transpose().map(|_| ()))
-            .is_ok()
+        let read_failure = |error: std::io::Error| {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                CallerPresentationAttestation::RootAccessDenied
+            } else {
+                CallerPresentationAttestation::RootReadFailed
+            }
+        };
+        match std::fs::read_dir(&root) {
+            Ok(mut entries) => match entries.next() {
+                Some(Ok(_)) | None => {}
+                Some(Err(error)) => return read_failure(error),
+            },
+            Err(error) => return read_failure(error),
+        }
+        if !require_write_access {
+            return CallerPresentationAttestation::Available;
+        }
+        // Opening the directory with its create-child rights is a read-only
+        // access check: it verifies the selected mount mode without creating
+        // a probe file in user data.
+        let mut root_wide = std::ffi::OsStr::new(&root).encode_wide().collect::<Vec<_>>();
+        root_wide.push(0);
+        let handle = unsafe {
+            CreateFileW(
+                root_wide.as_ptr(),
+                FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return if unsafe { GetLastError() } == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED {
+                CallerPresentationAttestation::RootWriteAccessDenied
+            } else {
+                CallerPresentationAttestation::RootReadFailed
+            };
+        }
+        unsafe { CloseHandle(handle) };
+        CallerPresentationAttestation::Available
     })();
     drop(guard);
     result
@@ -1732,6 +1876,7 @@ mod tests {
     struct BrokerEvents {
         mounted: usize,
         mount_options: Vec<(VaultPresentation, bool, bool)>,
+        personal_acl_repair_sids: Vec<Option<String>>,
         dismounted: Vec<u8>,
         recovered: Vec<u8>,
     }
@@ -1746,6 +1891,13 @@ mod tests {
             events
                 .mount_options
                 .push((request.presentation, request.read_only, request.personal));
+            let broker_plan = broker_mount_args(request)?;
+            events.personal_acl_repair_sids.push(
+                broker_plan
+                    .get("personal_acl_repair_sid")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            );
             Ok(InternalMountReply {
                 drive_letter: "P:".into(),
                 internal_drive: 12,
@@ -1767,6 +1919,55 @@ mod tests {
             self.0.lock().unwrap().recovered.push(internal_drive);
             Ok(())
         }
+    }
+
+    fn caller_can_list_root(
+        _: windows_sys::Win32::Foundation::HANDLE,
+        _: &str,
+        _: u8,
+        _: bool,
+    ) -> CallerPresentationAttestation {
+        CallerPresentationAttestation::Available
+    }
+
+    fn caller_cannot_list_root(
+        _: windows_sys::Win32::Foundation::HANDLE,
+        _: &str,
+        _: u8,
+        _: bool,
+    ) -> CallerPresentationAttestation {
+        CallerPresentationAttestation::RootAccessDenied
+    }
+
+    fn caller_has_read_only_access(
+        _: windows_sys::Win32::Foundation::HANDLE,
+        _: &str,
+        _: u8,
+        require_write_access: bool,
+    ) -> CallerPresentationAttestation {
+        if require_write_access {
+            CallerPresentationAttestation::RootWriteAccessDenied
+        } else {
+            CallerPresentationAttestation::Available
+        }
+    }
+
+    fn caller_cannot_resolve_drive(
+        _: windows_sys::Win32::Foundation::HANDLE,
+        _: &str,
+        _: u8,
+        _: bool,
+    ) -> CallerPresentationAttestation {
+        CallerPresentationAttestation::MappingUnavailable
+    }
+
+    fn caller_root_read_has_other_error(
+        _: windows_sys::Win32::Foundation::HANDLE,
+        _: &str,
+        _: u8,
+        _: bool,
+    ) -> CallerPresentationAttestation {
+        CallerPresentationAttestation::RootReadFailed
     }
 
     struct FailingCleanupBroker {
@@ -1834,6 +2035,7 @@ mod tests {
             hidden_keyfiles: vec![],
             hidden_pim: None,
             removable: false,
+            repair_current_account_access: false,
         }
     }
 
@@ -1914,6 +2116,14 @@ mod tests {
             (
                 VaultMountReason::EngineMountFailed,
                 "vault_engine_mount_failed",
+            ),
+            (
+                VaultMountReason::CallerAccessDenied,
+                "vault_caller_access_denied",
+            ),
+            (
+                VaultMountReason::CallerAclRepairFailed,
+                "vault_caller_acl_repair_failed",
             ),
             (
                 VaultMountReason::BrokerUnavailable,
@@ -2022,7 +2232,10 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
             );
             let events = Arc::new(Mutex::new(BrokerEvents::default()));
-            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+            let broker = VaultMountBroker::with_broker_and_attestor(
+                Box::new(MountBroker(events.clone())),
+                caller_can_list_root,
+            );
             let mut record = personal_record();
             record.scope = VaultPresentation::Machine;
             let mut request = personal_request();
@@ -2058,6 +2271,272 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_succeeds_only_after_authenticated_caller_root_readback() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+
+        assert_eq!(result, Ok(("P:".into(), 12, true)));
+        assert!(events.lock().unwrap().dismounted.is_empty());
+        assert_eq!(
+            events.lock().unwrap().personal_acl_repair_sids,
+            vec![None],
+            "repair is absent unless the caller explicitly opted in"
+        );
+        assert_eq!(
+            broker.projection(&unmanaged_mount_entry_id(&record)).0,
+            VaultMountState::Mounted
+        );
+    }
+
+    #[test]
+    fn unmanaged_mount_repair_sid_is_derived_from_authenticated_caller_only_after_opt_in() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        record.owner_sid = "S-1-5-21-1111-2222".into();
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+        request.repair_current_account_access = true;
+
+        broker
+            .mount_unmanaged_authorized_locked(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-1111-2222",
+                (0, 0),
+            )
+            .expect("an explicitly approved account repair should be forwarded");
+
+        assert_eq!(
+            events.lock().unwrap().personal_acl_repair_sids,
+            vec![Some("S-1-5-21-1111-2222".into())],
+            "the broker plan uses the authenticated service caller SID, not request data"
+        );
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_rolls_back_the_exact_slot_when_caller_root_is_denied() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_cannot_list_root,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let entry_id = unmanaged_mount_entry_id(&record);
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+
+        assert_eq!(result, Err(VaultMountReason::CallerAccessDenied));
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+        assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_checks_the_selected_read_write_mode_without_writing_probe_data() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_has_read_only_access,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let mut writable = personal_request();
+        writable.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut writable,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+        assert_eq!(result, Err(VaultMountReason::CallerAccessDenied));
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_has_read_only_access,
+        );
+        let mut read_only = personal_request();
+        read_only.presentation = VaultPresentation::Machine;
+        read_only.read_only = true;
+        let result = broker.mount_unmanaged_authorized_locked(
+            42,
+            &store,
+            &record,
+            &mut read_only,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+        assert_eq!(result, Ok(("P:".into(), 12, true)));
+        assert!(events.lock().unwrap().dismounted.is_empty());
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_reports_mapping_failure_separately_and_rolls_back() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_cannot_resolve_drive,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+
+        assert_eq!(result, Err(VaultMountReason::PresentationRejected));
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_does_not_call_other_root_errors_acl_denials() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_root_read_has_other_error,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+
+        assert_eq!(result, Err(VaultMountReason::PresentationRejected));
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn unmanaged_machine_mount_retains_cleanup_record_if_denied_readback_cannot_dismount() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(FailingCleanupBroker {
+                acl_attested: false,
+            }),
+            caller_cannot_list_root,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        let entry_id = unmanaged_mount_entry_id(&record);
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+            (0, 0),
+        );
+
+        assert_eq!(result, Err(VaultMountReason::DismountFailed));
+        let active = broker.active.lock().unwrap();
+        let mount = active.get(&entry_id).expect("failed cleanup is tracked");
+        assert_eq!(mount.internal_drive, 12);
+        assert!(mount.cleanup_required);
+        drop(active);
+        let durable: DurableMountRegistry =
+            serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+        let mount = durable.mounts.get(&entry_id).expect("slot is recoverable");
+        assert_eq!(mount.internal_drive, 12);
+        assert!(mount.cleanup_required);
     }
 
     #[test]
@@ -2106,7 +2585,10 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         let events = Arc::new(Mutex::new(BrokerEvents::default()));
-        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
         let mut record = personal_record();
         record.scope = VaultPresentation::Machine;
         let entry_id = unmanaged_mount_entry_id(&record);
@@ -2468,6 +2950,7 @@ mod tests {
                 volume_role,
                 read_only: false,
                 personal: false,
+                personal_acl_repair_sid: None,
                 pim: None,
                 keyfiles: Vec::new(),
                 hidden_keyfiles: Vec::new(),

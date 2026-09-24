@@ -43,6 +43,16 @@ describe("secure storage deep-state contracts", () => {
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
     expect(vaultSource).toContain("vault_engine_unlock_failed");
     expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
+    expect(vaultSource).toContain("vault_caller_access_denied");
+    expect(vaultSource).toContain("VLT.ACL.CALLER_ACCESS_DENIED");
+    expect(vaultSource).toContain("vault_caller_acl_repair_failed");
+    expect(vaultSource).toContain("VLT.ACL.CALLER_REPAIR_FAILED");
+    expect(vaultSource).toContain("existing permissions were preserved");
+    expect(vaultSource).toContain("accounts with the same name can have different permissions");
+    expect(vaultSource).toContain("dismounted the incomplete mount without changing the encrypted data");
+    expect(vaultSource).toContain("Make this recovered volume accessible on this PC?");
+    expect(vaultSource).toContain("add only this signed-in Windows account");
+    expect(vaultSource).toContain("repairCurrentAccountAccess: true");
     expect(vaultSource).toContain("vault_broker_unavailable");
     expect(vaultSource).toContain("secure mount helper could not be reached");
     expect(vaultSource).toContain("vault_broker_rejected");

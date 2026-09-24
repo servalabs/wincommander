@@ -55,14 +55,33 @@ describe("Deception & Tripwires presentation boundaries", () => {
     expect(decoy).toContain("This removes only the recent decoy-file event history.");
   });
 
-  test("states the Fleet-safe metadata boundary", async () => {
+  test("persists a remove or delete before refreshing and handles Windows path spelling", async () => {
+    const decoy = await Bun.file("src/panels/privacy/DecoyMonitorSection.tsx").text();
+
+    expect(decoy).toContain('await onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => !sameDecoyPath(p, path)) })');
+    expect(decoy).toContain('left.replaceAll("/", "\\\\").toLocaleLowerCase()');
+    expect(decoy).not.toContain("enrolledPaths.filter(p => p !== path)");
+  });
+
+  test("removes externally deleted files from the card and limits disk deletion to standard decoys", async () => {
+    const decoy = await Bun.file("src/panels/privacy/DecoyMonitorSection.tsx").text();
+
+    expect(decoy).toContain("const visibleDecoys = decoys.filter((decoy) => decoy.exists)");
+    expect(decoy).toContain("setInterval(refreshDecoys, expanded ? 5_000 : 30_000)");
+    expect(decoy).toContain("Only WinCommander’s standard decoys can be deleted here");
+    expect(decoy).toContain("{d.standard && (");
+    expect(decoy).toContain("standard?: boolean;");
+  });
+
+  test("states the Fleet decoy-incident attribution boundary", async () => {
     const [decoy, intro] = await Promise.all([
       Bun.file("src/panels/privacy/DecoyMonitorSection.tsx").text(),
       Bun.file("src/panels/privacy/MonitorIntros.tsx").text(),
     ]);
 
-    expect(decoy).toContain("Local path and user details stay on this PC.");
-    expect(intro).toContain("paths, usernames, domains, SIDs, and process details stay local");
+    expect(decoy).toContain("The SID stays on this PC.");
+    expect(intro).toContain("Fleet receives the decoy path plus the Windows account, domain, and app");
+    expect(intro).toContain("The SID stays on this PC.");
   });
 
   test("preserves paid gates for both deception mechanisms", async () => {

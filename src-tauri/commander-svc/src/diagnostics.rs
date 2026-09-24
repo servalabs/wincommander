@@ -713,6 +713,18 @@ fn reason_fields(
             false,
             "check_drive_visibility",
         ),
+        Some(VaultMountReason::CallerAccessDenied) => (
+            "VLT.CALLER.ACCESS_DENIED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_vault_permissions",
+        ),
+        Some(VaultMountReason::CallerAclRepairFailed) => (
+            "VLT.CALLER.ACL_REPAIR_FAILED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_vault_permissions",
+        ),
         Some(VaultMountReason::EntitlementDenied) => (
             "VLT.ENTITLEMENT.DENIED",
             DiagnosticSeverity::Error,
@@ -811,6 +823,12 @@ mod tests {
         for reason in VaultMountReason::ALL {
             assert!(reason_fields(Some(reason), "mount").1.starts_with("VLT."));
         }
+    }
+    #[test]
+    fn caller_acl_repair_failure_is_not_the_initial_access_denial() {
+        let fields = reason_fields(Some(VaultMountReason::CallerAclRepairFailed), "mount");
+        assert_eq!(fields.1, "VLT.CALLER.ACL_REPAIR_FAILED");
+        assert!(!fields.3);
     }
     #[test]
     fn envelope_does_not_leak_vault_identity() {

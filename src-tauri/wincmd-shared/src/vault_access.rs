@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Shared, untrusted request and bounded response shapes for vault access.
 //!
-//! These types deliberately contain no Windows SID, ACL, credential, or
-//! mounted-path fields.  The SYSTEM service resolves and persists those facts.
+//! Renderer-facing types keep authority-bearing Windows SID and ACL data out.
+//! The service-produced broker plan is the explicit exception: it carries
+//! authenticated, service-derived mount facts to the signed helper.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -190,6 +191,11 @@ pub struct PersonalVaultMountRequest {
     pub hidden_pim: Option<u32>,
     #[serde(default)]
     pub removable: bool,
+    /// Explicit consent to add the authenticated current Windows account to
+    /// this personal container's existing ACL. The service supplies the SID;
+    /// callers must never provide one directly.
+    #[serde(default)]
+    pub repair_current_account_access: bool,
 }
 
 impl std::fmt::Debug for PersonalVaultMountRequest {
@@ -201,6 +207,10 @@ impl std::fmt::Debug for PersonalVaultMountRequest {
             .field("presentation", &self.presentation)
             .field("preferred_letter", &self.preferred_letter)
             .field("read_only", &self.read_only)
+            .field(
+                "repair_current_account_access",
+                &self.repair_current_account_access,
+            )
             .field("container_path", &"[redacted]")
             .field("credentials", &"[redacted]")
             .field("hidden_protection_password", &"[REDACTED]")
@@ -258,6 +268,10 @@ pub struct VaultMountPlan {
     /// Absence defaults to `false` so older plans remain fail-closed.
     #[serde(default)]
     pub personal: bool,
+    /// Present only after explicit consent on a personal mount. The service
+    /// derives this SID from the authenticated pipe peer, never renderer data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_acl_repair_sid: Option<String>,
     pub volume_kind: VaultContainerKind,
     pub volume_role: VaultBrokerVolumeRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -313,6 +327,13 @@ impl VaultMountPlan {
         }) {
             return Err("vault_mount_plan_invalid");
         }
+        if self.personal_acl_repair_sid.as_deref().is_some_and(|sid| {
+            !self.personal
+                || self.presentation != VaultPresentation::Machine
+                || !is_valid_windows_sid(sid)
+        }) {
+            return Err("vault_mount_plan_invalid");
+        }
         if self.keyfiles.len() > 32
             || self.hidden_keyfiles.len() > 32
             || self
@@ -354,7 +375,22 @@ impl VaultMountPlan {
         self.keyfiles.clear();
         self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
         self.hidden_keyfiles.clear();
+        if let Some(sid) = &mut self.personal_acl_repair_sid {
+            sid.zeroize();
+        }
+        self.personal_acl_repair_sid = None;
     }
+}
+
+fn is_valid_windows_sid(value: &str) -> bool {
+    let components = value.split('-').collect::<Vec<_>>();
+    value.len() <= 184
+        && (3..=18).contains(&components.len())
+        && components.first() == Some(&"S")
+        && components.get(1) == Some(&"1")
+        && components[2..]
+            .iter()
+            .all(|component| !component.is_empty() && component.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// VeraCrypt accepts native NT partition paths such as
@@ -401,6 +437,10 @@ impl std::fmt::Debug for VaultMountPlan {
             .field("volume_role", &self.volume_role)
             .field("read_only", &self.read_only)
             .field("target_session_id", &self.target_session_id)
+            .field(
+                "personal_acl_repair_sid_present",
+                &self.personal_acl_repair_sid.is_some(),
+            )
             .field("container_path", &"[redacted]")
             .field("credentials", &"[redacted]")
             .field("mounted_root_acl_sddl", &"[redacted]")
@@ -473,6 +513,8 @@ pub enum VaultMountReason {
     BrokerReplyRejected,
     BrokerPlanRejected,
     PresentationRejected,
+    CallerAccessDenied,
+    CallerAclRepairFailed,
     EntitlementDenied,
     SessionUnavailable,
     EngineUnlockFailed,
@@ -484,7 +526,7 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::NotAuthorized,
         Self::InvalidRequest,
         Self::BrokerUnavailable,
@@ -494,6 +536,8 @@ impl VaultMountReason {
         Self::BrokerReplyRejected,
         Self::BrokerPlanRejected,
         Self::PresentationRejected,
+        Self::CallerAccessDenied,
+        Self::CallerAclRepairFailed,
         Self::EntitlementDenied,
         Self::SessionUnavailable,
         Self::EngineUnlockFailed,
@@ -504,7 +548,7 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 17] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 19] = [
         "not_authorized",
         "invalid_request",
         "broker_unavailable",
@@ -514,6 +558,8 @@ impl VaultMountReason {
         "broker_reply_rejected",
         "broker_plan_rejected",
         "presentation_rejected",
+        "caller_access_denied",
+        "caller_acl_repair_failed",
         "entitlement_denied",
         "session_unavailable",
         "engine_unlock_failed",
@@ -535,6 +581,8 @@ impl VaultMountReason {
             Self::BrokerReplyRejected => "broker_reply_rejected",
             Self::BrokerPlanRejected => "broker_plan_rejected",
             Self::PresentationRejected => "presentation_rejected",
+            Self::CallerAccessDenied => "caller_access_denied",
+            Self::CallerAclRepairFailed => "caller_acl_repair_failed",
             Self::EntitlementDenied => "entitlement_denied",
             Self::SessionUnavailable => "session_unavailable",
             Self::EngineUnlockFailed => "engine_unlock_failed",
@@ -557,6 +605,8 @@ impl VaultMountReason {
             "broker_reply_rejected" => Some(Self::BrokerReplyRejected),
             "broker_plan_rejected" => Some(Self::BrokerPlanRejected),
             "presentation_rejected" => Some(Self::PresentationRejected),
+            "caller_access_denied" => Some(Self::CallerAccessDenied),
+            "caller_acl_repair_failed" => Some(Self::CallerAclRepairFailed),
             "entitlement_denied" => Some(Self::EntitlementDenied),
             "session_unavailable" => Some(Self::SessionUnavailable),
             "engine_unlock_failed" => Some(Self::EngineUnlockFailed),
@@ -813,6 +863,7 @@ mod tests {
             preferred_letter: Some("V:".into()),
             read_only: false,
             personal: false,
+            personal_acl_repair_sid: None,
             volume_kind: VaultContainerKind::Dual,
             volume_role: VaultBrokerVolumeRole::Outer,
             hidden_protection_password: Some("hidden-canary-password".into()),
@@ -861,6 +912,28 @@ mod tests {
         let mut invalid = sample_mount_plan();
         invalid.mount_mode = VaultMountMode::Hidden;
         assert_eq!(invalid.validate(), Err("vault_mount_plan_invalid"));
+    }
+
+    #[test]
+    fn personal_acl_repair_plan_requires_personal_machine_and_valid_sid() {
+        let mut plan = sample_mount_plan();
+        plan.personal = true;
+        plan.presentation = VaultPresentation::Machine;
+        plan.personal_acl_repair_sid = Some("S-1-5-21-123-456".into());
+        assert_eq!(plan.validate(), Ok(()));
+        assert_eq!(
+            serde_json::to_value(&plan).unwrap()["personal_acl_repair_sid"],
+            "S-1-5-21-123-456"
+        );
+
+        plan.personal = false;
+        assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
+        plan.personal = true;
+        plan.presentation = VaultPresentation::PerUser;
+        assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
+        plan.presentation = VaultPresentation::Machine;
+        plan.personal_acl_repair_sid = Some("S-1--forged".into());
+        assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
     }
 
     #[test]
@@ -974,6 +1047,16 @@ mod tests {
         let request: PersonalVaultMountRequest = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(request.presentation, VaultPresentation::PerUser);
         assert!(!request.read_only);
+        assert!(!request.repair_current_account_access);
+
+        let mut opted_in = legacy.clone();
+        opted_in["repair_current_account_access"] = serde_json::json!(true);
+        let request: PersonalVaultMountRequest = serde_json::from_value(opted_in).unwrap();
+        assert!(request.repair_current_account_access);
+
+        let mut renderer_sid = legacy.clone();
+        renderer_sid["personal_acl_repair_sid"] = serde_json::json!("S-1-5-21-forged");
+        assert!(serde_json::from_value::<PersonalVaultMountRequest>(renderer_sid).is_err());
 
         for presentation in ["machine", "per-user"] {
             let mut explicit = legacy.clone();
@@ -1013,14 +1096,18 @@ mod tests {
             "canary.key",
             "hidden-canary.key",
             "A;;FA",
+            "S-1-5-21-123-456",
         ] {
             assert!(!debug.contains(secret));
         }
+        plan.personal_acl_repair_sid = Some("S-1-5-21-123-456".into());
+        assert!(!format!("{plan:?}").contains("S-1-5-21-123-456"));
         plan.zeroize_secrets();
         assert!(plan.password.chars().all(|value| value == '\0'));
         assert!(plan.hidden_protection_password.is_none());
         assert!(plan.keyfiles.is_empty());
         assert!(plan.hidden_keyfiles.is_empty());
+        assert!(plan.personal_acl_repair_sid.is_none());
 
         let mut personal = PersonalVaultMountRequest {
             container_path: r"C:\Vaults\private.hc".into(),
@@ -1036,6 +1123,7 @@ mod tests {
             hidden_keyfiles: vec![r"C:\Keys\hidden-canary.key".into()],
             hidden_pim: Some(2),
             removable: false,
+            repair_current_account_access: false,
         };
         let debug = format!("{personal:?}");
         assert!(!debug.contains("private.hc"));

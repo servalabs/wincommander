@@ -17,6 +17,8 @@ describe("Vault Access service intent", () => {
       "broker_identity_rejected", "broker_handshake_rejected", "broker_reply_rejected",
       "broker_plan_rejected",
       "presentation_rejected",
+      "caller_access_denied",
+      "caller_acl_repair_failed",
       "entitlement_denied",
       "session_unavailable", "engine_unlock_failed", "engine_drive_letter_unavailable",
       "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",

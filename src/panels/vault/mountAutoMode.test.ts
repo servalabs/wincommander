@@ -53,3 +53,22 @@ test("normal mount does not retry hidden mode for a non-credential failure", asy
     { volumeKind: "standard", volumeRole: "standard" },
   ]);
 });
+
+test("explicit current-account ACL repair consent survives standard-to-hidden detection", async () => {
+  const calls: Array<{ volumeKind?: string; volumeRole?: string; repairCurrentAccountAccess?: boolean }> = [];
+  await mountPasswordSelectedVolume(async (request) => {
+    calls.push(request);
+    return calls.length === 1
+      ? { success: false, error: "vault_engine_unlock_failed" }
+      : { success: false, error: "vault_caller_access_denied" };
+  }, { ...baseRequest, repairCurrentAccountAccess: true });
+
+  expect(calls.map(({ volumeKind, volumeRole, repairCurrentAccountAccess }) => ({
+    volumeKind,
+    volumeRole,
+    repairCurrentAccountAccess,
+  }))).toEqual([
+    { volumeKind: "standard", volumeRole: "standard", repairCurrentAccountAccess: true },
+    { volumeKind: "dual", volumeRole: "hidden", repairCurrentAccountAccess: true },
+  ]);
+});

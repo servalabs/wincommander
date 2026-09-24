@@ -689,7 +689,12 @@ function AppContent({ splashDone, onSplashComplete }: {
   // start/stop + per-path enroll/remove.
   const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
   const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
-  const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
+  // A filesystem watcher cannot observe a read-only open on Windows. New or
+  // pre-existing configurations that have never chosen this setting therefore
+  // default to the Security-log read audit. A saved explicit `false` remains
+  // respected, but the monitor will surface its Administrator requirement
+  // instead of silently claiming that open detection is armed.
+  const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? true;
   const decoyFleetAlertEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.fleetAlertEnabled ?? false;
   // Filesystem decoys are an organisation-facing tripwire. Do not leave a
   // persisted trial setting armed after the licence expires.

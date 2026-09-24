@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import useBackend from "../../hooks/useBackend";
-import type { EncryptionStatus, MountVolumeResult } from "../../hooks/useBackend";
+import type { EncryptionStatus, MountVolumeParams, MountVolumeResult } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
@@ -23,6 +23,7 @@ import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostic
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -35,6 +36,12 @@ const boundedMountError = (error: unknown) => {
   }
   if (normalized.includes("vault_engine_drive_letter_unavailable")) {
     return "That drive letter is already in use. Choose a free drive letter, then try again.";
+  }
+  if (normalized.includes("vault_caller_acl_repair_failed")) {
+    return "Windows could not add and verify this account's access. The volume was dismounted, and its existing permissions were preserved. Ask an administrator to review the volume's permissions before retrying.";
+  }
+  if (normalized.includes("vault_caller_access_denied")) {
+    return "Windows mounted the encrypted container but denied this account access to its contents. This can happen after recovering it on another PC because Windows accounts with the same name can have different permissions. WinCommander dismounted the incomplete mount without changing the encrypted data or its saved permissions. Do not reformat the container.";
   }
   if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
     return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";
@@ -93,6 +100,8 @@ const vaultMountErrorCode = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
   if (message.includes("vault_engine_unlock_failed")) return "VLT.UNLOCK.FAILED";
   if (message.includes("vault_engine_drive_letter_unavailable")) return "VLT.DRIVE_LETTER.UNAVAILABLE";
+  if (message.includes("vault_caller_acl_repair_failed")) return "VLT.ACL.CALLER_REPAIR_FAILED";
+  if (message.includes("vault_caller_access_denied")) return "VLT.ACL.CALLER_ACCESS_DENIED";
   if (message.includes("vault_acl_")) return "VLT.ACL.FAILED";
   if (message.includes("vault_policy_managed")) return "VLT.POLICY.MANAGED";
   if (message.includes("vault_policy_identity_changed")) return "VLT.POLICY.IDENTITY_CHANGED";
@@ -147,6 +156,7 @@ interface EncryptedVolumesTabProps {
 // owns them.
 function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
+  const confirmAction = useAppConfirm();
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
   const [mountLetter, setMountLetter] = useState("Y");
@@ -298,7 +308,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
         throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
       }
-      const result = await mountPasswordSelectedVolume(mountVolume, {
+      const mountRequest: Omit<MountVolumeParams, "volumeKind" | "volumeRole"> = {
         volumePath: mountPath,
         driveLetter: mountLetter,
         password: mountPassword,
@@ -312,7 +322,23 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         hiddenKeyfiles: [],
         scope: "machine",
         hardenAcl: true,
-      });
+      };
+      let result = await mountPasswordSelectedVolume(mountVolume, mountRequest);
+      if (!result.success && result.error?.toLowerCase().includes("vault_caller_access_denied")) {
+        const approved = await confirmAction({
+          title: "Make this recovered volume accessible on this PC?",
+          description: "Windows mounted the encrypted volume, but this account cannot use it with the selected access. This can happen when a container is recovered from a video made on another PC. If you approve, WinCommander will add only this signed-in Windows account to the volume’s existing permissions, preserve the existing permission entries, verify access, and retry. The original PC’s creator is not involved, and Fleet-managed Vault permissions are not changed.",
+          confirmLabel: "Add This Account and Retry",
+          cancelLabel: "Leave Unchanged",
+          destructive: false,
+        });
+        if (approved) {
+          result = await mountPasswordSelectedVolume(mountVolume, {
+            ...mountRequest,
+            repairCurrentAccountAccess: true,
+          });
+        }
+      }
       setMountPassword("");
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
       if (result.data.scope !== "machine") {
@@ -345,7 +371,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountPassword("");
       setMounting(false);
     }
-  }, [getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [confirmAction, getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;

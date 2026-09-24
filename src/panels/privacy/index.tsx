@@ -103,10 +103,19 @@ export default function PrivacyPanel() {
 
     const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
     const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
-    const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
+    // File-change watching does not report a read-only open. Default an
+    // unconfigured decoy monitor to Windows read auditing; an explicitly
+    // saved off choice remains off.
+    const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? true;
     const decoyFleetAlertEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.fleetAlertEnabled ?? false;
-    const patchDecoy = (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) =>
-        patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
+    const patchDecoy = async (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) => {
+        try {
+            await patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any);
+        } catch (error) {
+            reportSettingsWriteFailure(error);
+            throw error;
+        }
+    };
 
     const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
     const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];

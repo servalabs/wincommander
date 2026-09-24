@@ -34,6 +34,29 @@ pub(crate) fn enrolled_decoy_paths() -> Vec<PathBuf> {
 pub struct DecoyInfo {
     pub path: String,
     pub exists: bool,
+    /// The Pro registry supplies this provenance so the UI can offer a disk
+    /// delete only for the safe, WinCommander-created placeholders. Older Pro
+    /// sidecars omit it and therefore safely decode as a custom decoy.
+    #[serde(default)]
+    pub standard: bool,
+}
+
+/// The Pro sidecar persists this small, machine-shared registration record
+/// before it replies. Free uses it only to recover a completed Drop action
+/// whose reply pipe disappeared; it never treats the record as monitor health.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableDecoyState {
+    #[serde(default)]
+    registrations: Vec<DurableDecoyRegistration>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableDecoyRegistration {
+    path: String,
+    #[serde(default)]
+    standard: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +141,41 @@ fn replace_registry_paths(items: &[String]) {
     paths.extend(items.iter().map(PathBuf::from));
 }
 
+fn is_transport_error(error: &str) -> bool {
+    error.starts_with("agent transport error:")
+        || error.starts_with("Pro transport error:")
+        || error.starts_with("Pro reader exited")
+        || error.starts_with("write request:")
+}
+
+fn standard_decoys_from_state(state: &str) -> Result<Vec<String>, String> {
+    let state: DurableDecoyState = serde_json::from_str(state)
+        .map_err(|error| format!("parse durable decoy registry: {error}"))?;
+    Ok(state
+        .registrations
+        .into_iter()
+        .filter(|registration| registration.standard && Path::new(&registration.path).is_file())
+        .map(|registration| registration.path)
+        .collect())
+}
+
+/// A Drop request creates and registers files durably before the Pro process
+/// writes its response. If that final response is lost, recover only the
+/// already-registered standard files rather than telling the user nothing
+/// happened or replaying a file-creation command blindly.
+fn recover_completed_standard_drop() -> Result<Vec<String>, String> {
+    let base = std::env::var_os("ProgramData")
+        .or_else(|| std::env::var_os("ALLUSERSPROFILE"))
+        .ok_or_else(|| "ProgramData is unavailable for the Decoy File Monitor".to_string())?;
+    let state_path = PathBuf::from(base)
+        .join("WinCommander")
+        .join("decoy-monitor")
+        .join("decoy-monitor.json");
+    let state = std::fs::read_to_string(&state_path)
+        .map_err(|error| format!("read durable decoy registry: {error}"))?;
+    standard_decoys_from_state(&state)
+}
+
 async fn pro(feature: &str, args: Value) -> Result<Value, String> {
     crate::license::require_paid("Decoy File Monitor")?;
     crate::sidecar::dispatch_paid_command(feature, args).await
@@ -199,17 +257,39 @@ pub async fn remove_decoy(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn list_decoys() -> Result<Vec<DecoyInfo>, String> {
-    let items: Vec<DecoyInfo> = decode(pro("list_decoys", Value::Null).await?, "decoy list")?;
+    let items: Vec<DecoyInfo> = match pro("list_decoys", Value::Null).await {
+        Ok(value) => decode(value, "decoy list")?,
+        Err(error) if is_transport_error(&error) => recover_completed_standard_drop()?
+            .into_iter()
+            .map(|path| DecoyInfo {
+                exists: Path::new(&path).is_file(),
+                path,
+                standard: true,
+            })
+            .collect(),
+        Err(error) => return Err(error),
+    };
     replace_registry(&items);
     Ok(items)
 }
 
 #[tauri::command]
 pub async fn drop_standard_decoys() -> Result<Vec<String>, String> {
-    let paths: Vec<String> = decode(
-        pro("drop_standard_decoys", Value::Null).await?,
-        "standard decoys",
-    )?;
+    let paths: Vec<String> = match pro("drop_standard_decoys", Value::Null).await {
+        Ok(value) => decode(value, "standard decoys")?,
+        Err(error) if is_transport_error(&error) => {
+            let recovered = recover_completed_standard_drop()?;
+            if recovered.is_empty() {
+                return Err(error);
+            }
+            crate::log_message(
+                "warn",
+                "[Decoy] recovered a completed standard-decoy drop after the Pro reply pipe closed",
+            );
+            recovered
+        }
+        Err(error) => return Err(error),
+    };
     for path in &paths {
         remember(PathBuf::from(path));
     }
@@ -283,6 +363,34 @@ pub async fn enable_last_access_tracking() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_drop_recovery_keeps_only_standard_registered_files() {
+        let existing = tempfile::NamedTempFile::new().unwrap();
+        let missing = existing.path().with_extension("missing");
+        let escaped = existing.path().to_string_lossy().replace('\\', "\\\\");
+        let missing = missing.to_string_lossy().replace('\\', "\\\\");
+        let state = format!(
+            r#"{{"registrations":[{{"path":"{escaped}","standard":true}},{{"path":"{missing}","standard":true}},{{"path":"{escaped}","standard":false}}]}}"#
+        );
+
+        assert_eq!(
+            standard_decoys_from_state(&state).unwrap(),
+            vec![existing.path().to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn old_pro_decoy_lists_decode_as_non_deletable_custom_rows() {
+        let rows: Vec<DecoyInfo> = decode(
+            serde_json::json!([{ "path": r"C:\\Users\\Alex\\Desktop\\custom.txt", "exists": true }]),
+            "decoy list",
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].standard);
+    }
 
     #[test]
     fn neutral_registry_does_not_treat_case_variants_as_distinct_on_windows() {

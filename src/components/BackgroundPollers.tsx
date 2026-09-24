@@ -30,8 +30,12 @@ import { savedRamDiskMountRequest } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
-import { resolveFleetPrivacyShieldControl } from "../lib/fleetPrivacyShieldControl";
+import {
+  resolveFleetPrivacyShieldControl,
+  resolveLocalFleetPrivacyShieldControl,
+} from "../lib/fleetPrivacyShieldControl";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
+import { decoyEventLabel, decoyEventToast } from "../lib/decoyEventPresentation";
 import type { PanelId } from "../types/panels";
 
 interface PasteMonitorDetected {
@@ -51,7 +55,7 @@ function formatPasteDangerMessage(pattern: string): string {
 
 interface DecoyAccessed {
   path: string;
-  /** "modified" | "removed" | "renamed" — basename for the toast. */
+  /** "opened" is audited access; all other values are filesystem changes. */
   kind: string;
   detected_at: string;
 }
@@ -444,12 +448,39 @@ export default function BackgroundPollers({
     // Gate: only act if the privacyShield module is enabled.
     const unlistenTrayShield = listen("tray-shield-toggle-requested", async () => {
       const operationId = newDiagnosticOperationId("privacy_shield");
-      if (appSettingsRef.current?.ideal?.privacy?.privacyShield?.fleetManaged === true) {
+      // Do not use the legacy `fleetManaged` policy flag as a permanent tray
+      // lock. Fleet Stop deliberately leaves that compatibility flag in place,
+      // but its explicit `enabled: false` desired state releases the Shield
+      // back to this device. Refresh the dedicated state before deciding so a
+      // just-delivered Fleet Start still cannot be bypassed through the tray.
+      const settings = appSettingsRef.current;
+      const shieldSettings = settings?.ideal?.privacy?.privacyShield;
+      let desiredState = settings?.app?.fleet?.shieldDesiredState ?? null;
+      if (settings?.app?.fleet?.enabled === true) {
+        try {
+          desiredState = await invoke<typeof desiredState>("fleet_sync_shield_state");
+        } catch {
+          // Preserve the last authenticated read-back when the refresh is
+          // temporarily unavailable; the regular Fleet supervisor retries it.
+        }
+      }
+      const fleetControl = resolveFleetPrivacyShieldControl({
+        fleetEnabled: settings?.app?.fleet?.enabled === true,
+        legacyManaged: shieldSettings?.fleetManaged === true,
+        legacyMonitoringEnabled: shieldSettings?.fleetMonitoringEnabled === true,
+        desiredState,
+      });
+      const localControl = resolveLocalFleetPrivacyShieldControl({
+        running: false,
+        sessionOwned: false,
+        fleetControl,
+      });
+      if (localControl.startLocked) {
         recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "authorization",
           lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn",
           retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "restricted",
-          context: { state: "fleet_managed" } });
-        showWarning("Privacy Shield is managed by Fleet.");
+          context: { state: "fleet_start_active" } });
+        showWarning("Privacy Shield was started by Fleet and cannot be changed locally.");
         return;
       }
       if (!isModuleEnabled(modulesRef.current, 'privacyShield')) return;
@@ -547,14 +578,15 @@ export default function BackgroundPollers({
     );
 
     // ── Tauri event: F-2 decoy file accessed ─────────────────────────────
-    // Filesystem honeypot fired — someone just modified / renamed /
-    // removed an enrolled decoy file. Always danger severity (no
-    // legitimate workflow touches files the user said they never use).
+    // An audited "opened" proves a file open/access. Filesystem watcher events
+    // prove only a change, rename, or removal. Keep that distinction visible:
+    // a change must never be presented as evidence of an open.
     const unlistenDecoy = listen<DecoyAccessed>(
       "decoy-accessed",
       (event) => {
         const fullPath = event.payload?.path ?? "decoy";
-        const kind = event.payload?.kind ?? "accessed";
+        const kind = event.payload?.kind;
+        const label = decoyEventLabel(kind);
         // Strip to basename for toast brevity; full path lives in the
         // Privacy panel's recent log.
         const baseName = fullPath.split(/[/\\]/).filter(Boolean).pop() ?? fullPath;
@@ -562,9 +594,9 @@ export default function BackgroundPollers({
           lifecycle: "verified", outcome: "succeeded", severity: "critical", retryability: "never",
           suggestedNextAction: "review_status", privacyClass: "local_sensitive",
           context: { reason_category: "decoy_access", state: "detected" } });
-        recordEvidence("monitor", "danger", `Decoy file ${kind}: ${baseName}`, fullPath);
+        recordEvidence("monitor", "danger", `Decoy file ${label}: ${baseName}`, fullPath);
         showError(
-          `⚠ Decoy file ${kind}: ${baseName}. Investigate — possible malware or someone scanning for sensitive files.`,
+          `⚠ ${decoyEventToast(kind, baseName)}`,
           15_000,
         );
       },

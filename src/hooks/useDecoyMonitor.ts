@@ -41,7 +41,22 @@ export default function useDecoyMonitor(
     let attempt = 0;
     const operationId = newDiagnosticOperationId("decoy");
     const fingerprint = `${enabled}|${readAuditEnabled}|${fleetAlertEnabled}|${[...enrolledPaths].sort().join("\n")}`;
-    if (fingerprint === lastReconciled.current) return;
+
+    const checkHealth = async () => {
+      if (cancelled) return;
+      try {
+        const running = await invoke<boolean>("decoy_monitor_status");
+        if (cancelled) return;
+        if (running) {
+          retryTimer = setTimeout(() => { void checkHealth(); }, 30_000);
+          return;
+        }
+      } catch {
+        if (cancelled) return;
+      }
+      attempt = 0;
+      await reconcile();
+    };
 
     const reconcile = async () => {
       try {
@@ -78,7 +93,10 @@ export default function useDecoyMonitor(
           lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
           suggestedNextAction: "none", privacyClass: "local_sensitive",
           context: { state: enabled ? "armed" : "stopped" } });
-        if (enabled) onStartupRearm?.("decoy-monitor", true);
+        if (enabled) {
+          onStartupRearm?.("decoy-monitor", true);
+          retryTimer = setTimeout(() => { void checkHealth(); }, 30_000);
+        }
       } catch (error) {
         if (cancelled) return;
         recordDiagnostic({ operationId, feature: "decoy", action: "monitor_reconcile", stage: "runtime",
@@ -97,11 +115,16 @@ export default function useDecoyMonitor(
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
         } else if (enabled) {
           onStartupRearm?.("decoy-monitor", false);
+          retryTimer = setTimeout(() => { void checkHealth(); }, 30_000);
         }
       }
     };
 
-    void reconcile();
+    if (fingerprint !== lastReconciled.current) {
+      void reconcile();
+    } else if (enabled) {
+      retryTimer = setTimeout(() => { void checkHealth(); }, 30_000);
+    }
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);

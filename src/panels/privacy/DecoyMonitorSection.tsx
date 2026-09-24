@@ -27,10 +27,13 @@ import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import PrivacyEventTable from './PrivacyEventTable';
 import TierGate from "../../components/shared/TierGate";
 import useEntitlements from "../../hooks/useEntitlements";
+import { decoyEventLabel } from "../../lib/decoyEventPresentation";
 
 interface DecoyInfoRow {
   path: string;
   exists: boolean;
+  /** Only a WinCommander-created standard decoy may be deleted from disk. */
+  standard?: boolean;
 }
 
 interface DecoyAccessRow {
@@ -54,7 +57,7 @@ interface Props {
   /** The signed Fleet reporting policy owns this one switch, not the decoy
    * detector's local arm/configuration controls. */
   fleetAlertLocked?: boolean;
-  onPatchDecoy: (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) => void;
+  onPatchDecoy: (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) => Promise<void>;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
@@ -84,14 +87,26 @@ export default function DecoyMonitorSection({
   const [showIntro, setShowIntro] = useState(false);
   const [decoys, setDecoys] = useState<DecoyInfoRow[]>([]);
   const [recent, setRecent] = useState<DecoyAccessRow[]>([]);
+  const [monitorRunning, setMonitorRunning] = useState<boolean | null>(null);
+  const [monitorError, setMonitorError] = useState(false);
+  const [openDetectionRunning, setOpenDetectionRunning] = useState<boolean | null>(null);
 
   const refreshDecoys = useCallback(async () => {
     if (!hasPaid) return;
     try {
-      const list = await invoke<DecoyInfoRow[]>("list_decoys");
+      const [list, running, audit] = await Promise.all([
+        invoke<DecoyInfoRow[]>("list_decoys"),
+        invoke<boolean>("decoy_monitor_status"),
+        invoke<{ running: boolean }>("decoy_read_audit_status"),
+      ]);
       setDecoys(list);
+      setMonitorRunning(running);
+      setMonitorError(false);
+      setOpenDetectionRunning(audit.running);
     } catch {
-      setDecoys([]);
+      setMonitorRunning(null);
+      setMonitorError(true);
+      setOpenDetectionRunning(null);
     }
   }, [hasPaid]);
 
@@ -115,6 +130,15 @@ export default function DecoyMonitorSection({
     }
     refreshDecoys();
   }, [hasPaid, refreshDecoys, enrolledPaths.length]);
+
+  // A file can be removed outside WinCommander. Poll the authoritative
+  // registry while this detail view is open so a missing file does not remain
+  // as a stale card row until the user leaves and returns to Privacy Settings.
+  useEffect(() => {
+    if (!hasPaid || !enabled) return;
+    const id = setInterval(refreshDecoys, expanded ? 5_000 : 30_000);
+    return () => clearInterval(id);
+  }, [enabled, expanded, hasPaid, refreshDecoys]);
 
   // Recent log: poll-while-expanded so the "Recent (3)" mini-list
   // stays current. When collapsed only refresh on settings changes
@@ -164,7 +188,7 @@ export default function DecoyMonitorSection({
       // survive a restart. Merge with existing enrolledPaths to avoid
       // erasing any previously-added custom paths.
       const merged = Array.from(new Set([...enrolledPaths, ...created]));
-      onPatchDecoy({ enrolledPaths: merged });
+      await onPatchDecoy({ enrolledPaths: merged });
       await refreshDecoys();
       showSuccess(`Dropped ${created.length} decoy${created.length === 1 ? '' : 's'} into Documents + Desktop.`);
     } catch (err) {
@@ -180,7 +204,7 @@ export default function DecoyMonitorSection({
         title: "Pick a file to enroll as a decoy",
       });
       if (typeof picked !== "string") return;
-      if (enrolledPaths.includes(picked)) {
+      if (enrolledPaths.some((path) => sameDecoyPath(path, picked))) {
         showError("Already enrolled.");
         return;
       }
@@ -190,7 +214,7 @@ export default function DecoyMonitorSection({
       // before that, the new file is absent. Calling it here first ensures
       // refreshDecoys() sees the enrolled file right away.
       await invoke("enroll_decoy", { path: picked });
-      onPatchDecoy({ enrolledPaths: [...enrolledPaths, picked] });
+      await onPatchDecoy({ enrolledPaths: [...enrolledPaths, picked] });
       await refreshDecoys();
       showSuccess("Decoy enrolled.");
     } catch (err) {
@@ -209,7 +233,7 @@ export default function DecoyMonitorSection({
       // Remove the runtime watch first. Persisting alone used to leave the
       // active watcher armed until an unrelated settings render happened.
       await invoke("remove_decoy", { path });
-      onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => p !== path) });
+      await onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => !sameDecoyPath(p, path)) });
       await refreshDecoys();
       showSuccess("Decoy monitoring record removed. The file remains on disk.");
     } catch (err) {
@@ -218,6 +242,11 @@ export default function DecoyMonitorSection({
   };
 
   const onDeleteFile = async (path: string) => {
+    const decoy = decoys.find((candidate) => sameDecoyPath(candidate.path, path));
+    if (!decoy?.standard) {
+      showError("Only WinCommander’s standard decoys can be deleted here. Stop watching a custom file instead.");
+      return;
+    }
     const accepted = await requestConfirm({
       title: "Delete decoy file?",
       description: `${path}\n\nThis removes the actual file from disk, not only the watch entry. This cannot be undone.`,
@@ -229,7 +258,7 @@ export default function DecoyMonitorSection({
         { command: "delete_decoy", path },
       );
       await invoke("delete_decoy", { path, capabilityToken });
-      onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => p !== path) });
+      await onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => !sameDecoyPath(p, path)) });
       await refreshDecoys();
       showSuccess("Decoy file deleted.");
     } catch (err) {
@@ -253,9 +282,19 @@ export default function DecoyMonitorSection({
   };
 
   // Status pill states: idle / watching / triggered (any recent events).
+  // Missing files are intentionally absent from the card. Their deletion
+  // remains visible in Recent events, but a card row must describe a file the
+  // user can still manage rather than a stale registration.
+  const visibleDecoys = decoys.filter((decoy) => decoy.exists);
   const hasRecentTrip = recent.length > 0;
   let statusPill: React.ReactNode = null;
-  if (enabled && hasRecentTrip) {
+  if (enabled && monitorRunning !== true) {
+    statusPill = (
+      <span className="text-[10px] px-2 py-0.5 rounded text-[var(--color-warning)] flex-shrink-0 font-mono" role="status">
+        {monitorError ? "Monitor unavailable" : monitorRunning === false ? "Not watching" : "Checking monitor…"}
+      </span>
+    );
+  } else if (enabled && hasRecentTrip) {
     statusPill = (
       <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-danger,#f87171)]/15 text-[var(--color-danger,#f87171)] border border-[var(--color-danger,#f87171)]/40 flex-shrink-0 font-mono">
         Triggered · {recent.length}
@@ -264,7 +303,7 @@ export default function DecoyMonitorSection({
   } else if (enabled) {
     statusPill = (
       <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0 font-mono">
-        Watching {decoys.length}
+        Watching {visibleDecoys.length}
       </span>
     );
   } else {
@@ -285,12 +324,12 @@ export default function DecoyMonitorSection({
             {statusPill}
           </div>
         )}
-        armed={enabled || hasRecentTrip}
+        armed={(enabled && monitorRunning === true) || hasRecentTrip}
       >
         <div className="flex flex-col gap-3 min-w-0">
           <div className="flex items-start justify-between gap-3">
             <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[420px]">
-              Watches enrolled local files for changes, renames, deletion/removal, and optional reads or opens.
+              Watches enrolled local files for changes, renames, deletion/removal, reads, and opens.
             </p>
             <button
               type="button"
@@ -315,7 +354,7 @@ export default function DecoyMonitorSection({
               </span>
             </span>
           </label>
-          {enabled && decoys.length === 0 && (
+          {enabled && visibleDecoys.length === 0 && (
             <p className="text-[11px] text-[var(--color-warning)]">
               No decoys enrolled yet — click Configure to drop the standard set.
             </p>
@@ -333,8 +372,15 @@ export default function DecoyMonitorSection({
                 <span>
                   Detect reads and opens
                   <span className="block text-[10px] text-[var(--shield-text-muted)]">
-                    Adds Windows file auditing for enrolled decoys. Requires Administrator approval; changes, renames, and deletes are detected without it.
+                    Uses Windows Security auditing to detect a read-only open and, when Windows provides it, the opening account and app. Requires Administrator approval.
                   </span>
+                  {readAuditEnabled && openDetectionRunning !== true && (
+                    <span className="block text-[10px] text-[var(--color-warning)]" role="status">
+                      {openDetectionRunning === false
+                        ? "Open detection is not running. Run WinCommander as Administrator and re-enable this option."
+                        : "Open detection has not been confirmed."}
+                    </span>
+                  )}
                 </span>
               </label>
               <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetAlertLocked ? "opacity-70" : "cursor-pointer"}`}>
@@ -350,8 +396,8 @@ export default function DecoyMonitorSection({
                   Notify Fleet admins
                   <span className="block text-[10px] text-[var(--shield-text-muted)]">
                     {fleetAlertLocked
-                      ? "Required by your Fleet policy. Local path and user details stay on this PC."
-                      : "Sends a redacted tripwire signal to Fleet. Local path and user details stay on this PC."}
+                      ? "Required by your Fleet policy. Fleet receives the file path and Windows account/app when Windows records them."
+                      : "Sends this decoy incident to Fleet with the file path and Windows account/app when available. The SID stays on this PC."}
                   </span>
                 </span>
               </label>
@@ -399,23 +445,23 @@ export default function DecoyMonitorSection({
                 </div>
 
                 {/* Enrolled list */}
-                {decoys.length > 0 && (
+                {visibleDecoys.length > 0 && (
                   <div className="flex flex-col gap-2">
                     <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
-                      Enrolled ({decoys.length})
+                      Enrolled ({visibleDecoys.length})
                     </span>
                     <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
-                      {decoys.map((d) => (
+                      {visibleDecoys.map((d) => (
                         <div
                           key={d.path}
                           className="flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-[var(--color-bg-secondary)] border border-[var(--shield-inner-border)]"
                         >
                           <span className="flex items-center gap-2 min-w-0">
                             <Icon
-                              icon={d.exists ? "document" : "warning-sign"}
+                              icon="document"
                               size={11}
-                              color={d.exists ? "var(--shield-text-muted)" : "var(--color-warning)"}
-                              title={d.exists ? "File present" : "File missing — will fire if recreated"}
+                              color="var(--shield-text-muted)"
+                              title="File present"
                             />
                             <span
                               className="text-[11px] text-[var(--shield-text-subtle)] font-mono truncate"
@@ -433,15 +479,17 @@ export default function DecoyMonitorSection({
                               title="Stop watching (file stays on disk)"
                               aria-label={`Stop watching ${shortPath(d.path)}; keep file on disk`}
                             />
-                            <Button
-                              small
-                              minimal
-                              icon="trash"
-                              intent="danger"
-                              onClick={() => onDeleteFile(d.path)}
-                              title="Delete file from disk"
-                              aria-label={`Delete ${shortPath(d.path)} from disk`}
-                            />
+                            {d.standard && (
+                              <Button
+                                small
+                                minimal
+                                icon="trash"
+                                intent="danger"
+                                onClick={() => { void onDeleteFile(d.path); }}
+                                title="Delete WinCommander standard decoy from disk"
+                                aria-label={`Delete ${shortPath(d.path)} from disk`}
+                              />
+                            )}
                           </span>
                         </div>
                       ))}
@@ -460,7 +508,7 @@ export default function DecoyMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <PrivacyEventTable title="Decoy file access events" columns={["Time", "Kind", "User", "Process", "Decoy path"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.kind} ${r.path} ${r.user_name ?? ""} ${r.process_name ?? ""}`, sort: [r.detected_at, r.kind, r.user_name ?? "", r.process_name ?? "", r.path], cells: [formatRelative(r.detected_at), r.kind, r.user_name ? <span title={`${r.domain ?? ""}\\${r.user_name}${r.sid ? ` · ${r.sid}` : ""}`}>{r.domain ? `${r.domain}\\${r.user_name}` : r.user_name}{r.is_administrator ? " · Admin" : ""}</span> : "—", r.process_name ? <span className="font-mono" title={r.process_name}>{shortPath(r.process_name)}</span> : "—", <span className="font-mono" title={r.path}>{shortPath(r.path)}</span>] }))} />
+                    <PrivacyEventTable title="Decoy file events" columns={["Time", "Event", "User", "Process", "Decoy path"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.kind} ${r.path} ${r.user_name ?? ""} ${r.process_name ?? ""}`, sort: [r.detected_at, r.kind, r.user_name ?? "", r.process_name ?? "", r.path], cells: [formatRelative(r.detected_at), decoyEventLabel(r.kind), r.user_name ? <span title={`${r.domain ?? ""}\\${r.user_name}${r.sid ? ` · ${r.sid}` : ""}`}>{r.domain ? `${r.domain}\\${r.user_name}` : r.user_name}{r.is_administrator ? " · Admin" : ""}</span> : "—", r.process_name ? <span className="font-mono" title={r.process_name}>{shortPath(r.process_name)}</span> : "—", <span className="font-mono" title={r.path}>{shortPath(r.path)}</span>] }))} />
                   </div>
                 )}
               </div>
@@ -479,6 +527,12 @@ function shortPath(p: string): string {
   const parts = norm.split('/').filter(Boolean);
   if (parts.length <= 2) return p;
   return `…/${parts.slice(-2).join('/')}`;
+}
+
+/** Windows paths are case-insensitive and may arrive with slash variants. */
+function sameDecoyPath(left: string, right: string): boolean {
+  return left.replaceAll("/", "\\").toLocaleLowerCase()
+    === right.replaceAll("/", "\\").toLocaleLowerCase();
 }
 
 function formatRelative(iso: string): string {
