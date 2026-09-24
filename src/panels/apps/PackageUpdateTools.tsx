@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Checkbox } from "../../components/ui/bp";
 import { Spinner } from "../../components/ui/spinner";
@@ -37,6 +37,7 @@ export function PackageUpdateTools() {
   const [packageIds, setPackageIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [checkingManagers, setCheckingManagers] = useState(false);
+  const [installingOptionalManagers, setInstallingOptionalManagers] = useState(false);
   const [applyingUpdateId, setApplyingUpdateId] = useState<string>();
   const [message, setMessage] = useState<string>();
   const updateRows = useMemo(
@@ -48,6 +49,13 @@ export function PackageUpdateTools() {
     [updateRows],
   );
   const isBusy = busy || packageSnapshot.status === "checking";
+  const unavailableOptionalManagers = packages?.managers?.filter((manager) => (manager.manager === "chocolatey" || manager.manager === "scoop") && !manager.available)
+    .map((manager) => MANAGER_LABELS[manager.manager] ?? manager.manager) ?? [];
+  const refreshTitle = unavailableOptionalManagers.length
+    ? `Refresh app and package updates. ${unavailableOptionalManagers.map((manager) => `${manager} is not installed`).join(". ")}.`
+    : "Refresh app and package updates";
+  const managerCheckErrors = packages?.managers?.filter((manager) => manager.available && manager.error)
+    .map((manager) => `${MANAGER_LABELS[manager.manager] ?? manager.manager}: ${manager.error}`) ?? [];
 
   const refreshAppInventoryFully = async () => {
     await runAppInventoryScan(true);
@@ -123,24 +131,63 @@ export function PackageUpdateTools() {
     } catch (cause) { setMessage(`Update operation failed: ${String(cause)}`); }
     finally { setCheckingManagers(false); setApplyingUpdateId(undefined); setBusy(false); releasePackageOperation(); }
   };
+  const installMissingOptionalManagers = async () => {
+    if (!unavailableOptionalManagers.length) return;
+    if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
+    setBusy(true);
+    setInstallingOptionalManagers(true);
+    setMessage(`Installing missing package managers: ${unavailableOptionalManagers.join(" and ")}…`);
+    try {
+      const result = await backendRef.current.packageUpdatesInstallOptionalManagers();
+      setInstallingOptionalManagers(false);
+      const displayNames = (ids: string[]) => ids.map((id) => MANAGER_LABELS[id.toLowerCase()] ?? id);
+      const installedNames = displayNames(result.installed);
+      const alreadyInstalledNames = displayNames(result.alreadyInstalled);
+      const summaryParts = [
+        installedNames.length ? `Installed ${installedNames.join(" and ")}.` : "",
+        alreadyInstalledNames.length ? `${alreadyInstalledNames.join(" and ")} already installed.` : "",
+        result.errors.length ? `Could not install: ${result.errors.join("; ")}.` : "",
+      ].filter(Boolean);
+      const summary = summaryParts.join(" ") || "Package manager installation completed.";
+      setPackageIds(new Set());
+      setMessage(`${summary} Refreshing updates…`);
+      try {
+        await runPackageUpdateInventoryCheck(() => backendRef.current.packageUpdatesInventory());
+        setMessage(`${summary} Update list refreshed.`);
+      } catch (cause) {
+        setMessage(`${summary} The update list could not be refreshed: ${String(cause)}`);
+      }
+    } catch (cause) {
+      setMessage(`Package manager installation failed: ${String(cause)}`);
+    } finally {
+      setInstallingOptionalManagers(false);
+      setBusy(false);
+      releasePackageOperation();
+    }
+  };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
 
   const displayedUpdateCount = updateRows.length;
-  const managerErrors = packages?.managers.filter((manager) => !manager.available || manager.error) ?? [];
 
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
-    <Card>
-      <CardHeader><CardTitle>App and package updates</CardTitle><CardDescription>WinGet inventory updates and updates found by Winget, Chocolatey, Scoop, and npm appear together below.</CardDescription></CardHeader>
-      <CardContent className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" disabled={isBusy} onClick={() => void inspectPackages()} aria-label="Refresh app and package updates" title="Refresh app and package updates"><Icon icon="refresh" />Refresh</Button>
-        {isBusy && <span className="flex items-center gap-2 text-sm text-[var(--text-dim)]"><Spinner size={14} />Checking package updates…</span>}
-        {isBusy && checkingManagers && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" />Cancel check</Button>}
-        {packageSnapshot.lastCheckedAt && <span className="text-xs text-[var(--text-mute)]">Last checked {new Date(packageSnapshot.lastCheckedAt).toLocaleTimeString()}</span>}
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5">
+      <h3 className="text-sm font-semibold" title="App inventory and package manager updates are shown together.">App and package updates</h3>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-mute)]">
+        {isBusy
+          ? <span className="flex items-center gap-2 text-[var(--text-dim)]"><Spinner size={14} />{installingOptionalManagers ? "Installing missing managers…" : "Checking package updates…"}</span>
+          : packageSnapshot.lastCheckedAt
+            ? <span>Last checked {new Date(packageSnapshot.lastCheckedAt).toLocaleTimeString()}</span>
+            : <span>Checks automatically after WinCommander starts</span>}
         {displayedUpdateCount > 0 && <Badge tone="accent">{displayedUpdateCount} update{displayedUpdateCount === 1 ? "" : "s"}</Badge>}
-      </CardContent>
-    </Card>
+      </div>
+      <div className="ml-auto flex items-center gap-2">
+        {unavailableOptionalManagers.length > 0 && <Button variant="outline" size="sm" disabled={isBusy} onClick={() => void installMissingOptionalManagers()} aria-label={`Install missing package managers: ${unavailableOptionalManagers.join(" and ")}`} title={`Installs only the missing manager(s): ${unavailableOptionalManagers.map((manager) => `${manager} is not installed`).join("; ")}.`}><Icon icon="download" />Install missing managers</Button>}
+        {isBusy && checkingManagers && !installingOptionalManagers && <Button variant="outline" size="sm" onClick={() => void cancel()}><Icon icon="stop" />Cancel</Button>}
+        <Button variant="outline" size="sm" disabled={isBusy} onClick={() => void inspectPackages()} aria-label="Refresh app and package updates" title={refreshTitle}><Icon icon="refresh" />Refresh</Button>
+      </div>
+    </div>
     {packageSnapshot.error && <Notice tone="warning" text={`Package update check failed: ${packageSnapshot.error}`} />}
-    {managerErrors.length > 0 && <Card><CardContent className="flex flex-wrap gap-x-4 gap-y-1 py-3 text-xs text-[var(--text-mute)]">{managerErrors.map((manager) => <span key={manager.manager}>{MANAGER_LABELS[manager.manager] ?? manager.manager}: {manager.error || "Unavailable"}</span>)}</CardContent></Card>}
+    {managerCheckErrors.length > 0 && <Notice tone="warning" text={`Some package-manager checks failed: ${managerCheckErrors.join("; ")}`} />}
     {updateRows.length > 0 ? <div className="app-group-grid app-group-grid--updates">
       {updateRows.map((row) => <PackageUpdateRow
         key={row.key}
@@ -155,9 +202,8 @@ export function PackageUpdateTools() {
         onApply={() => void applyPackages([row.key])}
       />)}
     </div> : packages && <Notice tone="success" text="No updates are available from app inventory, Winget, Chocolatey, Scoop, or npm." />}
-    {!packages && packageSnapshot.status === "idle" && !updateRows.length && <Card><CardContent className="py-4 text-sm text-[var(--text-dim)]">The update check runs automatically after WinCommander starts.</CardContent></Card>}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={isBusy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
-    {message && <Notice tone={message.includes("failed") || message.includes("could not") ? "warning" : "success"} text={message} />}
+    {message && <Notice tone={/failed|could not|couldn't|error/i.test(message) ? "warning" : "success"} text={message} />}
   </section>;
 }
 

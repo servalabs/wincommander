@@ -217,6 +217,7 @@ export interface PackageUpdate { id: string; manager: string; package: string; c
 export interface ManagerInventory { manager: string; available: boolean; updates: PackageUpdate[]; error: string | null }
 export interface PackageUpdateInventory { managers: ManagerInventory[]; cancelled: boolean }
 export interface PackageUpdateResult { updated: number; cancelled: boolean; errors: string[] }
+export interface PackageOptionalManagerInstallResult { installed: string[]; alreadyInstalled: string[]; errors: string[] }
 export interface FirewallRule { id: string; name: string; enabled: boolean; action: string; program: string; signed: boolean | null }
 export interface FirewallAudit { rules: FirewallRule[]; cancelled: boolean; error: string | null }
 export interface FirewallRemediation { changed: number; cancelled: boolean; errors: string[]; backupPath: string | null }
@@ -2334,6 +2335,7 @@ export function useBackend() {
     packageUpdatesInventory: () => invoke<PackageUpdateInventory>("package_updates_inventory"),
     packageUpdatesApply: (updateIds: string[]) => invoke<PackageUpdateResult>("package_updates_apply", { updateIds }),
     packageUpdatesCancel: () => invoke<void>("package_updates_cancel"),
+    packageUpdatesInstallOptionalManagers: () => invoke<PackageOptionalManagerInstallResult>("package_updates_install_optional_managers"),
     firewallAuditPreview: () => invoke<FirewallAudit>("firewall_audit_preview"),
     firewallAuditRemediate: (ruleIds: string[], action: "enable" | "disable" | "remove") =>
       invoke<FirewallRemediation>("firewall_audit_remediate", { ruleIds, action }),

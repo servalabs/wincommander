@@ -47,6 +47,22 @@ describe("Packages and Apps layout", () => {
     expect(dependencies).not.toContain("Install-Scoop");
   });
 
+  test("uses a compact update toolbar and offers one install action for missing optional managers", async () => {
+    const updates = await read("src/panels/apps/PackageUpdateTools.tsx");
+    const backend = await read("src/hooks/useBackend.ts");
+
+    expect(updates).toContain('id="package-updates" className="flex scroll-mt-4 flex-col gap-4"');
+    expect(updates).toContain("rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5");
+    expect(updates).toContain("unavailableOptionalManagers.length > 0");
+    expect(updates.match(/packages\?\.managers\?\.filter/g)).toHaveLength(2);
+    expect(updates).toContain("Install missing");
+    expect(updates).toContain("packageUpdatesInstallOptionalManagers()");
+    expect(updates).not.toContain("managerErrors");
+    expect(updates).toContain("manager.available && manager.error");
+    expect(updates).not.toContain("!manager.available || manager.error");
+    expect(backend).toContain('invoke<PackageOptionalManagerInstallResult>("package_updates_install_optional_managers")');
+  });
+
   test("moves successful installs to Installed without waiting for the inventory refresh", async () => {
     const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
     const engines = await read("src/panels/apps/components/EnginesSection.tsx");
