@@ -21,7 +21,7 @@ const entry: VaultAccessEntry = {
 };
 const authorized: VaultAuthorizedEntry = {
   entry_id: entry.id, label: entry.label, access: "read", presentation: "machine",
-  container_kind: "standard", mount_state: "unmounted", drive_letter: null,
+  container_kind: "standard", mount_state: "unmounted", drive_letter: null, can_dismount: false,
 };
 const status: VaultPolicyStatus = {
   policy_id: "example-policy", version: 1, validation_state: "current", applied_at: 1,

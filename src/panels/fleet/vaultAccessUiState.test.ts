@@ -18,6 +18,7 @@ const entries = [
     container_kind: "standard" as const,
     mount_state: "unmounted" as const,
     drive_letter: null,
+    can_dismount: false,
   },
   {
     entry_id: "private",
@@ -27,6 +28,7 @@ const entries = [
     container_kind: "standard" as const,
     mount_state: "mounted" as const,
     drive_letter: "V:",
+    can_dismount: true,
   },
 ];
 
@@ -131,6 +133,7 @@ function authorizedEntry(overrides: Partial<VaultAuthorizedEntry> = {}): VaultAu
     container_kind: "standard",
     mount_state: "unmounted",
     drive_letter: null,
+    can_dismount: false,
     ...overrides,
   };
 }
