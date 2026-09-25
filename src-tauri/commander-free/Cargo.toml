@@ -176,6 +176,8 @@ windows = { version = "=0.61.3", features = [
 windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # TaskDialogIndirect provides the native Safe Copy progress window.
+  "Win32_UI_Controls",
   "Win32_UI_Input_KeyboardAndMouse",
   # GetTickCount — paired with GetLastInputInfo for the native idle probe
   # (get_system_idle_seconds) the RDP-idle hook polls once per second.

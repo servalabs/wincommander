@@ -70,6 +70,8 @@ mod monitoring_catalog;
 mod monitoring_local;
 mod monitoring_rows;
 mod native_notify;
+#[cfg(windows)]
+mod native_progress_dialog;
 mod net;
 mod net_traffic_alert;
 mod network_guard;

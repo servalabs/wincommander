@@ -1211,7 +1211,30 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // alert window on Pro's behalf. Other notification events flow to the
     // frontend via app.emit() unchanged.
     let on_notification: NotificationSink = Box::new(|event, payload| {
+        // Safe Copy runs headlessly, so its scrub progress must reach the
+        // path-free observer even when this process has no Tauri AppHandle.
+        // Only forward numeric counters here; the Pro payload's `file` field
+        // and any other path-bearing data are intentionally not passed on.
+        if event == "scrub-progress" {
+            let current = payload
+                .get("current")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            let total = payload
+                .get("total")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            if let (Some(current), Some(total)) = (current, total) {
+                if total > 0 {
+                    crate::safe_clip::report_safe_copy_scrub_progress(current, total);
+                }
+            }
+        }
+
         let Some(app) = APP_HANDLE.get() else {
+            if event == "scrub-progress" {
+                return;
+            }
             crate::log_message(
                 "warn",
                 &format!(

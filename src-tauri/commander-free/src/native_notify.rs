@@ -119,50 +119,6 @@ pub fn show_native_notification(app: &AppHandle, title: &str, body: &str) -> Res
     show_notification(app, title, body, false)
 }
 
-/// Safe Copy status uses the same floating WinCommander alert window as the
-/// other app notifications. The message contains counts and elapsed time only;
-/// selected paths and file names never cross the process boundary.
-pub(crate) fn show_safe_copy_status(
-    app: &AppHandle,
-    phase: &str,
-    item_count: usize,
-    elapsed_ms: u128,
-) -> Result<(), String> {
-    if crate::settings::is_native_notifications_disabled() || crate::settings::is_decoy_mode() {
-        return Ok(());
-    }
-
-    let elapsed = if elapsed_ms < 1_000 {
-        format!("{elapsed_ms} ms")
-    } else {
-        format!("{:.1} seconds", elapsed_ms as f64 / 1_000.0)
-    };
-    let (body, severity) = match phase {
-        "started" => (
-            format!(
-                "Scrubbing {} selected item{} before the cleaned clipboard is ready.",
-                item_count,
-                if item_count == 1 { "" } else { "s" }
-            ),
-            "info",
-        ),
-        "ready" => (
-            format!(
-                "Safe Copy ready: {} cleaned item{} available to paste in {}.",
-                item_count,
-                if item_count == 1 { "" } else { "s" },
-                elapsed
-            ),
-            "info",
-        ),
-        _ => (
-            format!("Safe Copy could not finish after {}. Try again.", elapsed),
-            "warning",
-        ),
-    };
-    show_custom_notification(app, "Safe Copy", &body, severity, "Safe Copy")
-}
-
 /// Display a security-critical local alert. Unlike ordinary convenience
 /// notifications, this remains visible when the user has disabled the
 /// floating alert surface: a detected Privacy Shield event must tell the

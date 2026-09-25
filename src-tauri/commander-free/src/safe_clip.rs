@@ -13,11 +13,12 @@
 // not suffixed), then independently re-scrubs and verifies it before commit.
 // Raw input never becomes a clipboard or destination copy.
 //
-// Safe Copy runs headless (no window) directly off the CLI flag so it works
-// whether or not the app is already running; it starts the Pro scrub sidecar
-// only long enough to create the cleaned cache. Safe Paste's Explorer entry is
-// headless, while the in-app command calls the same engine. Both verify the
-// cache again before committing it.
+// Explorer invokes Safe Copy through a headless CLI process so it works
+// whether or not the app is already running. When enabled, a native Windows
+// progress dialog reports the Pro scrubber's real file counts without relying
+// on WinCommander's floating notification window. Safe Paste's Explorer entry
+// is also headless, while the in-app command calls the same engine. Both
+// verify the cache again before committing it.
 //
 // The pure logic (cache promotion, resolve_targets) is platform-agnostic and
 // unit-tested; only the named-mutex serialisation is Windows-gated.
@@ -25,6 +26,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::{Arc, Mutex, OnceLock};
 
 // Explorer only recognises a file copy as a `CF_HDROP` file-list on the
 // Windows clipboard. The paths supplied below are always scrubbed cache paths,
@@ -746,6 +749,29 @@ async fn cache_scrubbed_source(
 /// scrubs into a private staging batch, then briefly locks while publishing a
 /// complete, immutable selection to the clipboard.
 pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
+    let mut progress = if paths.iter().any(|path| !path.trim().is_empty()) {
+        SafeCopyProgressSession::begin(paths.len())
+    } else {
+        None
+    };
+    let result = record_sources_inner(paths, progress.as_ref()).await;
+    if let Some(session) = progress.take() {
+        session.finish(
+            result.is_ok(),
+            if result.is_ok() {
+                "Safe Copy is ready to paste."
+            } else {
+                "Safe Copy could not complete. Please try again."
+            },
+        );
+    }
+    result
+}
+
+async fn record_sources_inner(
+    paths: &[String],
+    progress: Option<&SafeCopyProgressSession>,
+) -> Result<usize, String> {
     let decoys: HashSet<PathBuf> = crate::file_monitor::enrolled_decoy_paths()
         .into_iter()
         .collect();
@@ -779,12 +805,18 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     // The licence and scrub complete before `write_clip_atomic` or CF_HDROP.
     // Thus an error leaves the prior clean clipboard selection intact.
     let mut cached_sources = Vec::with_capacity(filtered.len());
-    for raw in &filtered {
+    for (index, raw) in filtered.iter().enumerate() {
+        if let Some(progress) = progress {
+            progress.set_selection(index + 1, filtered.len());
+        }
         cached_sources
             .extend(cache_scrubbed_source(Path::new(raw), staged_batch.path(), &decoys).await?);
     }
     if cached_sources.is_empty() {
         return Err("Safe Copy found no items inside the selected folder(s).".into());
+    }
+    if let Some(progress) = progress {
+        progress.set_phase("Finalizing the clean clipboard…");
     }
     let relative_sources: Vec<PathBuf> = cached_sources
         .iter()
@@ -826,34 +858,148 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     Ok(count)
 }
 
+#[cfg(windows)]
+struct ActiveSafeCopyProgress {
+    dialog: Arc<crate::native_progress_dialog::SafeCopyProgressDialog>,
+    selected_index: usize,
+    selected_total: usize,
+}
+
+#[cfg(windows)]
+fn active_safe_copy_progress() -> &'static Mutex<Option<ActiveSafeCopyProgress>> {
+    static ACTIVE: OnceLock<Mutex<Option<ActiveSafeCopyProgress>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(windows)]
+fn lock_safe_copy_progress() -> std::sync::MutexGuard<'static, Option<ActiveSafeCopyProgress>> {
+    active_safe_copy_progress()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(windows)]
+struct SafeCopyProgressSession {
+    dialog: Arc<crate::native_progress_dialog::SafeCopyProgressDialog>,
+}
+
+#[cfg(windows)]
+impl SafeCopyProgressSession {
+    fn begin(item_count: usize) -> Option<Self> {
+        if item_count == 0 || !safe_copy_notifications_enabled() {
+            return None;
+        }
+        if lock_safe_copy_progress().is_some() {
+            return None;
+        }
+
+        let dialog = match crate::native_progress_dialog::SafeCopyProgressDialog::start() {
+            Ok(dialog) => Arc::new(dialog),
+            Err(error) => {
+                crate::log_message(
+                    "info",
+                    &format!("[SafeCopy] could not show progress window: {error}"),
+                );
+                return None;
+            }
+        };
+        let mut active = lock_safe_copy_progress();
+        if active.is_some() {
+            dialog.finish(false, "Another Safe Copy is already running.");
+            return None;
+        }
+        *active = Some(ActiveSafeCopyProgress {
+            dialog: dialog.clone(),
+            selected_index: 1,
+            selected_total: item_count,
+        });
+        dialog.set_phase("Preparing Safe Copy…");
+        Some(Self { dialog })
+    }
+
+    fn set_selection(&self, selected_index: usize, selected_total: usize) {
+        let mut active = lock_safe_copy_progress();
+        let Some(current) = active.as_mut() else {
+            return;
+        };
+        if !Arc::ptr_eq(&current.dialog, &self.dialog) {
+            return;
+        }
+        current.selected_index = selected_index;
+        current.selected_total = selected_total;
+        self.dialog.set_phase(format!(
+            "Preparing selected item {selected_index} of {selected_total}…"
+        ));
+    }
+
+    fn set_phase(&self, status: impl Into<String>) {
+        self.dialog.set_phase(status);
+    }
+
+    fn finish(self, succeeded: bool, status: &str) {
+        self.dialog.finish(succeeded, status);
+        drop(self);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SafeCopyProgressSession {
+    fn drop(&mut self) {
+        let mut active = lock_safe_copy_progress();
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.dialog, &self.dialog))
+        {
+            active.take();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct SafeCopyProgressSession;
+
+#[cfg(not(windows))]
+impl SafeCopyProgressSession {
+    fn begin(_item_count: usize) -> Option<Self> {
+        None
+    }
+
+    fn set_selection(&self, _selected_index: usize, _selected_total: usize) {}
+    fn set_phase(&self, _status: impl Into<String>) {}
+    fn finish(self, _succeeded: bool, _status: &str) {}
+}
+
+/// The Pro metadata scrubber reports true completed-file counts. Only those
+/// counters reach the native progress window; its path-bearing payload fields
+/// are never retained or displayed.
+pub(crate) fn report_safe_copy_scrub_progress(current: usize, total: usize) {
+    #[cfg(windows)]
+    {
+        if total == 0 {
+            return;
+        }
+        let (dialog, selected_index, selected_total) = {
+            let active = lock_safe_copy_progress();
+            let Some(progress) = active.as_ref() else {
+                return;
+            };
+            (
+                progress.dialog.clone(),
+                progress.selected_index,
+                progress.selected_total,
+            )
+        };
+        dialog.set_scrub_progress(current, total, selected_index, selected_total);
+    }
+
+    #[cfg(not(windows))]
+    let _ = (current, total);
+}
+
 fn safe_copy_notifications_enabled() -> bool {
     crate::settings::read_settings()
         .map(|settings| settings.app.safe_copy_notifications_enabled)
         .unwrap_or(true)
-}
-
-fn safe_copy_notification(phase: &str, item_count: usize, elapsed_ms: u128) {
-    #[cfg(windows)]
-    crate::session_instance::notify_safe_copy(phase, item_count, elapsed_ms);
-
-    #[cfg(not(windows))]
-    let _ = (phase, item_count, elapsed_ms);
-}
-
-fn show_safe_copy_app_notification(
-    app: &tauri::AppHandle,
-    phase: &str,
-    item_count: usize,
-    elapsed_ms: u128,
-) {
-    if let Err(error) =
-        crate::native_notify::show_safe_copy_status(app, phase, item_count, elapsed_ms)
-    {
-        crate::log_message(
-            "info",
-            &format!("[SafeCopy] notification was not shown: {error}"),
-        );
-    }
 }
 
 /// Collect one burst of Explorer's per-item static-verb launches, then let a
@@ -865,24 +1011,10 @@ async fn record_shell_selection(paths: &[String]) -> Result<Option<usize>, Strin
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let elapsed_ms = now_ms().saturating_sub(started_at_ms);
-        if let Some((selection, selection_started_at_ms)) =
+        if let Some((selection, _selection_started_at_ms)) =
             take_settled_shell_selection(elapsed_ms >= SHELL_SELECTION_TIMEOUT_MS)?
         {
-            let notifications_enabled = safe_copy_notifications_enabled();
-            let selected_count = selection.len();
-            if notifications_enabled {
-                safe_copy_notification("started", selected_count, 0);
-            }
-
             let result = record_sources(&selection).await;
-            let duration_ms = now_ms().saturating_sub(selection_started_at_ms);
-            if notifications_enabled {
-                safe_copy_notification(
-                    if result.is_ok() { "ready" } else { "failed" },
-                    result.as_ref().copied().unwrap_or(selected_count),
-                    duration_ms,
-                );
-            }
             return result.map(Some);
         }
         // Another headless process claimed and is handling this selection.
@@ -892,10 +1024,10 @@ async fn record_shell_selection(paths: &[String]) -> Result<Option<usize>, Strin
     }
 }
 
-/// Headless CLI entry for `--safe-copy <path> [<path>…]`. Extracts non-flag
-/// args, groups concurrent Explorer launches, and never touches a window.
-/// Called from `run()` BEFORE the single-instance guard so it always acts
-/// locally.
+/// CLI entry for `--safe-copy <path> [<path>…]`. Extracts non-flag args,
+/// groups concurrent Explorer launches, and shows a native progress window
+/// when the user's Safe Copy progress preference is enabled. Called from
+/// `run()` BEFORE the single-instance guard so it always acts locally.
 pub fn handle_safe_copy_cli(args: &[String]) {
     let paths: Vec<String> = args
         .iter()
@@ -1007,25 +1139,8 @@ fn show_safe_paste_error(message: &str) {
 /// Record a selection onto the safe clipboard from inside the app (parity with
 /// the headless CLI path; handy for an in-app "Safe Copy" action and tests).
 #[tauri::command]
-pub async fn safe_copy_record(app: tauri::AppHandle, paths: Vec<String>) -> Result<usize, String> {
-    let notifications_enabled = safe_copy_notifications_enabled();
-    let selected_count = paths.len();
-    let started_at_ms = now_ms();
-    if notifications_enabled {
-        show_safe_copy_app_notification(&app, "started", selected_count, 0);
-    }
-
-    let result = record_sources(&paths).await;
-    let elapsed_ms = now_ms().saturating_sub(started_at_ms);
-    if notifications_enabled {
-        show_safe_copy_app_notification(
-            &app,
-            if result.is_ok() { "ready" } else { "failed" },
-            result.as_ref().copied().unwrap_or(selected_count),
-            elapsed_ms,
-        );
-    }
-    result
+pub async fn safe_copy_record(_app: tauri::AppHandle, paths: Vec<String>) -> Result<usize, String> {
+    record_sources(&paths).await
 }
 
 /// Current safe-clipboard status for callers that need to inspect the clean
