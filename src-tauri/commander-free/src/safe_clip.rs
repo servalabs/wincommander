@@ -37,8 +37,14 @@ use clipboard_win::{formats::FileList, Clipboard, Setter};
 // Older records are intentionally not eligible for system-clipboard publish.
 const CLIP_VERSION: u32 = 3;
 const CLIP_FILE: &str = "safe-clip.json";
+const SHELL_PENDING_FILE: &str = ".safe-copy-selection.json";
 const CACHE_DIR: &str = "safe-clip-cache";
 const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
+// Explorer can invoke a legacy static verb separately for each selected item.
+// Wait for the short burst of launches before scrubbing so the clipboard gets
+// one complete selection rather than the last individual item.
+const SHELL_SELECTION_SETTLE_MS: u128 = 900;
+const SHELL_SELECTION_TIMEOUT_MS: u128 = 15_000;
 
 /// The persisted "safe clipboard".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +53,15 @@ pub struct SafeClip {
     pub sources: Vec<String>,
     /// UNIX-epoch millis when this complete Safe Copy selection was published.
     pub stamped_at_ms: u128,
+}
+
+/// Short-lived, private handoff used only to combine Explorer's per-item
+/// legacy verb launches. It is deleted before any metadata scrub begins and
+/// is never published to the Windows clipboard.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PendingShellSelection {
+    sources: Vec<String>,
+    last_queued_at_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,15 +447,65 @@ fn read_clip() -> Option<SafeClip> {
 
 fn write_clip_atomic(clip: &SafeClip) -> Result<(), String> {
     let path = clip_path()?;
+    write_json_atomic(&path, clip, ".safe-clip.json.tmp")
+}
+
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T, tmp_name: &str) -> Result<(), String> {
     let parent = path.parent().ok_or("safe-clip path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
-    let bytes = serde_json::to_vec_pretty(clip).map_err(|e| format!("serialize: {e}"))?;
-    let tmp = parent.join(".safe-clip.json.tmp");
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("serialize: {e}"))?;
+    let tmp = parent.join(tmp_name);
     std::fs::write(&tmp, &bytes).map_err(|e| format!("write temp: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("atomic rename: {e}")
     })
+}
+
+fn shell_pending_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::user_data_dir()?.join(SHELL_PENDING_FILE))
+}
+
+fn queue_shell_selection(paths: &[String]) -> Result<(), String> {
+    let _guard = ClipLock::acquire()?;
+    let path = shell_pending_path()?;
+    let mut pending = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<PendingShellSelection>(&raw).ok())
+        .unwrap_or_default();
+    for path in paths.iter().filter(|path| !path.trim().is_empty()) {
+        if !pending.sources.iter().any(|known| paths_equal(known, path)) {
+            pending.sources.push(path.clone());
+        }
+    }
+    if pending.sources.is_empty() {
+        return Err("Safe Copy requires at least one item".into());
+    }
+    pending.last_queued_at_ms = now_ms();
+    write_json_atomic(&path, &pending, ".safe-copy-selection.tmp")
+}
+
+/// Return a settled selection exactly once. The mutex makes the file removal
+/// the handoff: every other Explorer process sees `None` and exits without
+/// replacing the safe clipboard.
+fn take_settled_shell_selection(force: bool) -> Result<Option<Vec<String>>, String> {
+    let _guard = ClipLock::acquire()?;
+    let path = shell_pending_path()?;
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let pending: PendingShellSelection = serde_json::from_str(&raw)
+        .map_err(|error| format!("Safe Copy could not read its pending selection: {error}"))?;
+    if pending.sources.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(None);
+    }
+    if !force && now_ms().saturating_sub(pending.last_queued_at_ms) < SHELL_SELECTION_SETTLE_MS {
+        return Ok(None);
+    }
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("Safe Copy could not claim its pending selection: {error}"))?;
+    Ok(Some(pending.sources))
 }
 
 /// Mirror the scrubbed cache entries onto the Windows file clipboard. This is
@@ -756,9 +821,31 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     Ok(count)
 }
 
+/// Collect one burst of Explorer's per-item static-verb launches, then let a
+/// single process scrub and publish the complete selection. A direct Player
+/// invocation already arrives as one argv list and follows this same path.
+async fn record_shell_selection(paths: &[String]) -> Result<Option<usize>, String> {
+    queue_shell_selection(paths)?;
+    let started_at_ms = now_ms();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let elapsed_ms = now_ms().saturating_sub(started_at_ms);
+        if let Some(selection) =
+            take_settled_shell_selection(elapsed_ms >= SHELL_SELECTION_TIMEOUT_MS)?
+        {
+            return record_sources(&selection).await.map(Some);
+        }
+        // Another headless process claimed and is handling this selection.
+        if !shell_pending_path()?.exists() {
+            return Ok(None);
+        }
+    }
+}
+
 /// Headless CLI entry for `--safe-copy <path> [<path>…]`. Extracts non-flag
-/// args, records them, and never touches a window. Called from `run()` BEFORE
-/// the single-instance guard so it always acts locally.
+/// args, groups concurrent Explorer launches, and never touches a window.
+/// Called from `run()` BEFORE the single-instance guard so it always acts
+/// locally.
 pub fn handle_safe_copy_cli(args: &[String]) {
     let paths: Vec<String> = args
         .iter()
@@ -766,9 +853,10 @@ pub fn handle_safe_copy_cli(args: &[String]) {
         .filter(|a| !a.starts_with("--"))
         .cloned()
         .collect();
-    let result = run_headless_with_pro_shutdown("Safe Copy", record_sources(&paths));
+    let result = run_headless_with_pro_shutdown("Safe Copy", record_shell_selection(&paths));
     match result {
-        Ok(n) => crate::log_message("info", &format!("[SafeCopy] recorded {n} item(s)")),
+        Ok(Some(n)) => crate::log_message("info", &format!("[SafeCopy] recorded {n} item(s)")),
+        Ok(None) => crate::log_message("info", "[SafeCopy] joined grouped selection"),
         Err(e) => crate::log_message("warn", &format!("[SafeCopy] record failed: {e}")),
     }
 }
