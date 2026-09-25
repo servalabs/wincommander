@@ -232,9 +232,8 @@ export interface AppPreferences {
    *  module + privacyClean model while panels are being ported. */
   capabilities?: CapabilityBundle[];
   /** Threat-model persona ("casual" vs "secure"), chosen at first-run or in
-   *  Settings. Unset (new install, or upgrade from before this field existed)
-   *  resolves to "secure" via `getPersona()` — preserves today's all-modules-on
-   *  behavior and never silently disables a module someone already uses. */
+   *  Settings. Unset resolves to Casual. Existing module choices remain
+   *  independent and are not changed by this display default. */
   persona?: ThreatPersona;
   /** Whether Privacy Clean features are shown */
   privacyCleanEnabled: boolean;
@@ -404,12 +403,11 @@ export interface AppPreferences {
   welcomeTourCompleted?: boolean;
 }
 
-/** Resolve the effective threat persona from settings. Unset `app.persona`
- *  (new install pre-first-run, or an upgrade from before this field existed)
- *  resolves to "secure" — preserves today's all-modules-on default and never
- *  silently disables a module someone already uses. */
+/** Resolve the effective threat persona from settings. Density already falls
+ *  back to Guided for the standard/default experience level. An unset persona
+ *  resolves to Casual without mutating the independently persisted modules. */
 export function getPersona(settings: { app: Pick<AppPreferences, 'persona'> } | null | undefined): ThreatPersona {
-  return settings?.app.persona ?? 'secure';
+  return settings?.app.persona ?? 'casual';
 }
 
 /** Free tier: file-content search index configuration.

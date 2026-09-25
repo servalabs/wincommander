@@ -385,8 +385,8 @@ pub struct AppPreferences {
     /// Threat-model persona axis ("casual" | "secure"), chosen at first-run or
     /// in Settings. None = unset (new install pre-first-run, or an upgrade from
     /// before this field existed) — the frontend's `getPersona()` resolves that
-    /// to "secure", preserving today's all-modules-on behavior. Orthogonal to
-    /// `density`/`capabilities` above.
+    /// to "casual" without changing the separately persisted module map.
+    /// Orthogonal to `density`/`capabilities` above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     /// Whether Privacy Clean features are shown
@@ -3680,6 +3680,8 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.ui.lowDiskCheckDisabled", false) => Some("Enable-LowDiskCheck"),
         ("tweaks.ui.explorerOpensThisPc", true) => Some("Set-ExplorerOpensThisPC"),
         ("tweaks.ui.explorerOpensThisPc", false) => Some("Set-ExplorerOpensQuickAccess"),
+        ("tweaks.performance.enthusiastModeEnabled", true) => Some("Enable-EnthusiastMode"),
+        ("tweaks.performance.enthusiastModeEnabled", false) => Some("Disable-EnthusiastMode"),
         ("tweaks.ui.syncProviderNotificationsHidden", true) => {
             Some("Hide-SyncProviderNotifications")
         }
@@ -3690,6 +3692,12 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.ui.transparencyDisabled", false) => Some("Enable-TransparencyEffects"),
         ("tweaks.ui.fullPathInTitleBar", true) => Some("Enable-FullPathInTitleBar"),
         ("tweaks.ui.fullPathInTitleBar", false) => Some("Disable-FullPathInTitleBar"),
+        ("tweaks.ui.desktopIconThisPc", true) => Some("Show-DesktopIconThisPc"),
+        ("tweaks.ui.desktopIconThisPc", false) => Some("Hide-DesktopIconThisPc"),
+        ("tweaks.ui.desktopIconRecycleBin", true) => Some("Show-DesktopIconRecycleBin"),
+        ("tweaks.ui.desktopIconRecycleBin", false) => Some("Hide-DesktopIconRecycleBin"),
+        ("tweaks.ui.clockSecondsVisible", true) => Some("Show-ClockSeconds"),
+        ("tweaks.ui.clockSecondsVisible", false) => Some("Hide-ClockSeconds"),
         ("tweaks.ui.powerShell7Default", true) => Some("Enable-PowerShell7DefaultShell"),
         ("tweaks.ui.powerShell7Default", false) => Some("Disable-PowerShell7DefaultShell"),
 
@@ -3976,6 +3984,47 @@ pub async fn update_current_state(probe: serde_json::Value) -> Result<serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explorer_setup_defaults_have_reversible_convergence_commands() {
+        let mappings = [
+            (
+                "tweaks.ui.syncProviderNotificationsHidden",
+                "Hide-SyncProviderNotifications",
+                "Show-SyncProviderNotifications",
+            ),
+            (
+                "tweaks.performance.enthusiastModeEnabled",
+                "Enable-EnthusiastMode",
+                "Disable-EnthusiastMode",
+            ),
+            (
+                "tweaks.ui.desktopIconThisPc",
+                "Show-DesktopIconThisPc",
+                "Hide-DesktopIconThisPc",
+            ),
+            (
+                "tweaks.ui.desktopIconRecycleBin",
+                "Show-DesktopIconRecycleBin",
+                "Hide-DesktopIconRecycleBin",
+            ),
+            (
+                "tweaks.ui.clockSecondsVisible",
+                "Show-ClockSeconds",
+                "Hide-ClockSeconds",
+            ),
+            (
+                "tweaks.ui.explorerOpensThisPc",
+                "Set-ExplorerOpensThisPC",
+                "Set-ExplorerOpensQuickAccess",
+            ),
+        ];
+
+        for (path, enable_command, disable_command) in mappings {
+            assert_eq!(get_convergence_command(path, true), Some(enable_command));
+            assert_eq!(get_convergence_command(path, false), Some(disable_command));
+        }
+    }
 
     #[test]
     fn new_settings_follow_system_theme_without_overwriting_saved_preferences() {

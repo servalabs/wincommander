@@ -346,6 +346,7 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     currentPath: "current.tweaks.ui.explorerOpensThisPc",
     enableCmd: "Set-ExplorerOpensThisPC",
     disableCmd: "Set-ExplorerOpensQuickAccess",
+    defaultOn: true,
     minExperience: "standard",
     radar: true,
     radarCategory: "privacy",
@@ -368,7 +369,11 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     currentPath: "current.tweaks.ui.syncProviderNotificationsHidden",
     enableCmd: "Hide-SyncProviderNotifications",
     disableCmd: "Show-SyncProviderNotifications",
+    defaultOn: true,
     minExperience: "standard",
+    radar: true,
+    radarCategory: "annoyance",
+    radarSeverity: "info",
   },
   {
     tier: "free",
@@ -1999,7 +2004,11 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     currentPath: "current.tweaks.performance.enthusiastModeEnabled",
     enableCmd: "Enable-EnthusiastMode",
     disableCmd: "Disable-EnthusiastMode",
+    defaultOn: true,
     minExperience: "advanced",
+    radar: true,
+    radarCategory: "performance",
+    radarSeverity: "info",
   },
   {
     tier: "free", needsAdmin: false, irreversible: false, reducesSecurity: false, defenderFlagged: false,
@@ -2187,7 +2196,9 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     settingsPath: "ideal.tweaks.ui.desktopIconThisPc",
     currentPath:  "current.tweaks.ui.desktopIconThisPc",
     enableCmd: "Show-DesktopIconThisPc", disableCmd: "Hide-DesktopIconThisPc",
+    defaultOn: true,
     minExperience: "simple",
+    radar: true, radarCategory: "annoyance", radarSeverity: "info",
   },
   {
     tier: "free", needsAdmin: false, irreversible: false, reducesSecurity: false, defenderFlagged: false,
@@ -2196,7 +2207,9 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     settingsPath: "ideal.tweaks.ui.desktopIconRecycleBin",
     currentPath:  "current.tweaks.ui.desktopIconRecycleBin",
     enableCmd: "Show-DesktopIconRecycleBin", disableCmd: "Hide-DesktopIconRecycleBin",
+    defaultOn: true,
     minExperience: "simple",
+    radar: true, radarCategory: "annoyance", radarSeverity: "info",
   },
   {
     tier: "free", needsAdmin: false, irreversible: false, reducesSecurity: false, defenderFlagged: false,
@@ -2285,7 +2298,9 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
     currentPath:  "current.tweaks.ui.clockSecondsVisible",
     enableCmd: "Show-ClockSeconds", disableCmd: "Hide-ClockSeconds",
     requiresRestart: true,
+    defaultOn: true,
     minExperience: "standard",
+    radar: true, radarCategory: "annoyance", radarSeverity: "info",
   },
 
   // ── Radar-only entries (no section → not rendered in any panel) ──────
