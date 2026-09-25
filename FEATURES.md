@@ -60,6 +60,11 @@ the backend and private component before execution.
 
 - Fast local filename search through the supported Everything integration.
 - Local keyword search inside supported document and text formats.
+- Selected VeraCrypt folders keep filename/content indexes inside their mounted
+  volume. Existing indexes support read-only access; writable mounts reconcile
+  changes. Private results disappear after locking. See the
+  [search settings](docs/frontend/settings-reference.md#file-content-search-appfilesearch)
+  and [security boundary](SECURITY.md#private-volume-search).
 - Read-only production CLI for catalog and audit workflows. See
   [docs/cli.md](docs/cli.md).
 - Public UI and typed bridges for paid automation without publishing the paid

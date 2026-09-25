@@ -4911,7 +4911,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useDashboardRadar.ts",
-        "src/panels/privacy/index.tsx"
+        "src/lib/onboardingExperience.ts"
       ]
     },
     {
@@ -7843,6 +7843,16 @@
       ]
     },
     {
+      "id": "tauri:content_privacy_status",
+      "name": "content_privacy_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useSearchPrivacy.ts"
+      ]
+    },
+    {
       "id": "tauri:content_reindex",
       "name": "content_reindex",
       "transport": "tauri",
@@ -7906,7 +7916,10 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/hooks/useDecoyMonitor.ts",
+        "src/panels/privacy/DecoyMonitorSection.tsx"
+      ]
     },
     {
       "id": "tauri:decoy_read_audit_status",
@@ -7914,7 +7927,9 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/panels/privacy/DecoyMonitorSection.tsx"
+      ]
     },
     {
       "id": "tauri:delete_canary",
@@ -9946,6 +9961,16 @@
     {
       "id": "tauri:package_updates_cancel",
       "name": "package_updates_cancel",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:package_updates_install_optional_managers",
+      "name": "package_updates_install_optional_managers",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

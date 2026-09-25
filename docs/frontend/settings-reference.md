@@ -788,20 +788,36 @@ optional `customCss`. Commands: `open_server_app`, `hide_server_app`,
 
 ### File content search (`app.fileSearch`)
 
-Keyword content search via tantivy. **Free** tier; the five backend commands are
-`search_content`, `content_index_status`, `content_index_configure`,
-`content_reindex`, `content_get_doc`.
+Keyword content search via Tantivy. **Free** tier; backend commands include
+`search_content`, `content_index_status`, `content_privacy_status`,
+`content_index_configure`, `content_rescan`, `content_reindex`, `content_get_doc`.
 
 | Key                       | Type       | Default                                          | Notes |
 |---------------------------|------------|--------------------------------------------------|-------|
 | `app.fileSearch.roots`    | `string[]` | `[]` (seeded on first Contents-mode use)         | Absolute paths of folders in the tantivy index. On first content-search use, seeded to the current user's Desktop, Downloads, and Documents unless `initialized` is already `true`. |
 | `app.fileSearch.exclusions` | `string[]` | `["node_modules", ".git", "*.tmp", "~$*"]`     | Glob patterns excluded during crawl. |
+| `app.fileSearch.private_roots` | `object[]` | `[]` | Backend-created folder, relative-path and stable-volume bindings. Retained after removing a folder to protect history and reused drive letters. |
 | `app.fileSearch.initialized` | `boolean` | `false`                                        | Set `true` once roots are seeded or explicitly configured; prevents re-seeding after the user clears all folders. |
 
 > The settings record is stored in the machine-wide encrypted store
 > (`FileSearchSettings` on `AppPreferences`). The on-disk index itself is
-> per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` (tantivy on-disk
-> segment store), not machine-wide.
+> per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` for ordinary
+> folders. Private shards live inside the mounted VeraCrypt drive at
+> `.wincommander\search\<device-id hash>\fts`.
+
+Add a folder while its VeraCrypt volume is mounted. The index excludes its own
+storage and records unsupported/oversized files by name without extracting
+content. Removing every folder disables content results; explicit query scope
+cannot restore a removed folder. Remounting the same volume at another letter
+is recognized, and a writable reconciliation updates stored paths. A read-only
+mount requires an existing compatible index from this device and the indexed
+drive letter; it cannot create, repair or rebase an index. Different devices
+build separate indexes inside the volume.
+
+Private results use the local index rather than Everything. Everything totals
+are unavailable because its aggregate count cannot validate every returned
+path. External indexer exclusions are configured separately; see
+[the security boundary](../../SECURITY.md#private-volume-search).
 
 ### Native command catalog
 

@@ -97,6 +97,29 @@ resuming a partially consumed frame. These deadlines do not cancel an already
 executing machine operation or replace Windows peer authorization. They bound
 specific resources; they are not a claim of complete denial-of-service immunity.
 
+## Private-volume search
+
+WinCommander stores indexes for selected VeraCrypt folders in
+`<mounted drive>\.wincommander\search\<device-id hash>\fts`. Filenames,
+extracted text, metadata and index working files stay in that volume. The
+ordinary host index rejects private, redirected and unverified paths. The
+application retains configured folder/volume bindings in settings; it suppresses
+private launch-history entries and keeps search handoff text in memory.
+
+The native volume identity is checked before and after private operations.
+Readers and bounded update jobs release volume handles when finished; the
+WinCommander service coordinates dismount with those operations. External
+forced dismounts do not participate in this gate. Failed or changed mounts deny
+results, and the visible UI clears them after its next status refresh.
+
+VeraCrypt protects these files at rest after dismount. This feature does not
+prevent other software, Everything, Windows Search, shell caches, pagefiles,
+crash dumps, backups, or a privileged process from retaining data read while
+mounted. Exclude private drives from external indexers separately. Rebuilding
+an older host index removes its active records but is not secure erasure of
+previous disk data. Content already returned to another process cannot be
+recalled. Unsupported driver identities fail closed.
+
 ## Privacy and managed monitoring
 
 Free is local-first. Operational state and local search indexes remain on the

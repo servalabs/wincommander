@@ -185,11 +185,12 @@ automations (that's v2, above).
 | Command | Purpose |
 |---------|---------|
 | `search_content` | Full-text search over the tantivy BM25 content index. |
-| `content_index_status` | Index health / progress. |
+| `content_index_status` | Combined ordinary/private index health and progress. |
+| `content_privacy_status` | Current mount generation, remembered private roots and per-volume availability; errors deny private presentation. |
 | `content_index_configure` | Set indexed roots + exclusions. |
 | `content_rescan` | Incremental re-crawl for new/changed/missed files, without wiping the index (search stays live). |
 | `content_reindex` | Rebuild the content index from scratch (wipes first; also clears removed files). |
-| `content_get_doc` | Fetch an indexed document by `doc_id`. |
+| `content_get_doc` | Fetch an indexed document by `doc_id`, restricted to currently configured, verified mounted roots. |
 
 ### System metrics & live monitoring
 
