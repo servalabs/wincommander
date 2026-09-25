@@ -1083,6 +1083,18 @@ fn fleet_shield_requires_reconfiguration(
         .is_some_and(|command_id| applied_command_id != Some(command_id))
 }
 
+fn fleet_shield_should_apply_stop(
+    running: bool,
+    state: &crate::settings::FleetShieldDesiredState,
+    fleet_owns_session: bool,
+    needs_reconfiguration: bool,
+) -> bool {
+    running
+        && !state.enabled
+        && needs_reconfiguration
+        && (state.command_id.is_some() || fleet_owns_session)
+}
+
 async fn privacy_shield_status(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     crate::backend::run_backend_script(
         app.clone(),
@@ -1128,9 +1140,47 @@ async fn apply_fleet_privacy_shield_policy(
 
     let before = privacy_shield_status(app).await?;
     let running = before.get("running").and_then(serde_json::Value::as_bool) == Some(true);
+    let settings = crate::settings::read_settings()?;
+    let needs_reconfiguration = fleet_shield_requires_reconfiguration(
+        settings.app.fleet.privacy_shield_applied_revision,
+        settings
+            .app
+            .fleet
+            .privacy_shield_applied_command_id
+            .as_deref(),
+        &state,
+    );
 
     if !state.enabled {
-        if running {
+        let should_stop = fleet_shield_should_apply_stop(
+            running,
+            &state,
+            settings.app.fleet.privacy_shield_session_owned,
+            needs_reconfiguration,
+        );
+        if !needs_reconfiguration {
+            // Fleet's Off state is an instruction to stop the current session,
+            // not a permanent local lock. Once this exact revision/command
+            // has been applied, observe later local starts instead of stopping
+            // them again on every supervisor tick.
+            if settings.app.fleet.privacy_shield_session_owned {
+                crate::settings::patch_settings(serde_json::json!({
+                    "app": { "fleet": { "privacyShieldSessionOwned": false } }
+                }))?;
+            }
+            crate::set_tray_shield_running(app, running);
+            report_fleet_shield_local_observation(
+                app.clone(),
+                reported_for_command,
+                if running {
+                    "running_local_session"
+                } else {
+                    "stopped"
+                },
+            );
+            return Ok(());
+        }
+        if should_stop {
             report_fleet_shield_once(app.clone(), reported_for_command, command_id, "applying");
             let stopped = crate::backend::run_backend_script(
                 app.clone(),
@@ -1157,13 +1207,25 @@ async fn apply_fleet_privacy_shield_policy(
                 "privacyShieldAppliedCommandId": state.command_id.clone(),
             } }
         }))?;
-        crate::set_tray_shield_running(app, false);
-        report_fleet_shield_once(
-            app.clone(),
-            reported_for_command,
-            command_id,
-            "disabled_by_policy",
-        );
+        crate::set_tray_shield_running(app, running && !should_stop);
+        if command_id.is_some() {
+            report_fleet_shield_once(
+                app.clone(),
+                reported_for_command,
+                command_id,
+                "disabled_by_policy",
+            );
+        } else {
+            report_fleet_shield_local_observation(
+                app.clone(),
+                reported_for_command,
+                if running && !should_stop {
+                    "running_local_session"
+                } else {
+                    "stopped"
+                },
+            );
+        }
         return Ok(());
     }
 
@@ -1171,17 +1233,7 @@ async fn apply_fleet_privacy_shield_policy(
         report_fleet_shield_once(app.clone(), reported_for_command, command_id, issue);
         return Ok(());
     }
-    let settings = crate::settings::read_settings()?;
-    let needs_reconfigure = fleet_shield_requires_reconfiguration(
-        settings.app.fleet.privacy_shield_applied_revision,
-        settings
-            .app
-            .fleet
-            .privacy_shield_applied_command_id
-            .as_deref(),
-        &state,
-    );
-    if running && !needs_reconfigure {
+    if running && !needs_reconfiguration {
         crate::settings::patch_settings(serde_json::json!({
             "app": { "fleet": { "privacyShieldSessionOwned": true } }
         }))?;
@@ -1561,6 +1613,61 @@ mod tests {
             reported,
             std::collections::BTreeSet::from([":stopped".to_string()])
         );
+    }
+
+    #[test]
+    fn applied_fleet_stop_does_not_stop_a_later_local_session() {
+        let state = crate::settings::FleetShieldDesiredState {
+            enabled: false,
+            mode: "notify_only".to_string(),
+            revision: 12,
+            updated_at: "2026-09-25T10:00:00Z".to_string(),
+            command_id: Some("stop-12".to_string()),
+        };
+
+        let first_application = super::fleet_shield_requires_reconfiguration(None, None, &state);
+        assert!(super::fleet_shield_should_apply_stop(
+            true,
+            &state,
+            false,
+            first_application
+        ));
+
+        let repeated_tick = super::fleet_shield_requires_reconfiguration(
+            Some(state.revision),
+            state.command_id.as_deref(),
+            &state,
+        );
+        assert!(!super::fleet_shield_should_apply_stop(
+            true,
+            &state,
+            false,
+            repeated_tick
+        ));
+        assert!(!super::fleet_shield_should_apply_stop(
+            false,
+            &state,
+            false,
+            first_application
+        ));
+    }
+
+    #[test]
+    fn organization_off_default_keeps_a_local_shield_session_running() {
+        let state = crate::settings::FleetShieldDesiredState {
+            enabled: false,
+            mode: "notify_only".to_string(),
+            revision: 13,
+            updated_at: "2026-09-25T10:00:00Z".to_string(),
+            command_id: None,
+        };
+
+        assert!(!super::fleet_shield_should_apply_stop(
+            true, &state, false, true
+        ));
+        assert!(super::fleet_shield_should_apply_stop(
+            true, &state, true, true
+        ));
     }
 
     #[test]
