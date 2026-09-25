@@ -936,6 +936,7 @@ dependencies = [
  "wincmd-search",
  "wincmd-service-auth",
  "wincmd-shared",
+ "wincmd-volume",
  "windows 0.61.3",
  "windows-sys 0.61.2",
  "zeroize",
@@ -953,6 +954,7 @@ dependencies = [
  "tokio",
  "wincmd-clip-rules",
  "wincmd-shared",
+ "wincmd-volume",
  "windows-service",
  "windows-sys 0.61.2",
  "zeroize",
@@ -7371,6 +7373,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "ts-rs",
+ "zeroize",
+]
+
+[[package]]
+name = "wincmd-volume"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
