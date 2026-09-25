@@ -416,7 +416,14 @@ function PrivateMeshPanel() {
                         : "Private Network accepted the request, but its settings could not be verified. Your edits were kept.");
                 }
             } else {
-                setApplyError(sanitizeMeshError(res.error) || "Failed to apply config.");
+                const failedReadback = await refreshStatus(true);
+                const currentDraftMatchesReadback = !!failedReadback?.prefs && meshPrefsMatchConfig(
+                    failedReadback.prefs,
+                    meshConfigPayload(latestStagingRef.current),
+                );
+                if (!currentDraftMatchesReadback) {
+                    setApplyError(sanitizeMeshError(res.error) || "Failed to apply config.");
+                }
             }
         } catch (err) {
             setApplyError(err instanceof Error ? sanitizeMeshError(err.message) : "Failed to apply config.");
