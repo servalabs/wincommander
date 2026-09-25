@@ -21,6 +21,7 @@ use tantivy::{
 
 use crate::error::Result;
 use crate::filters::{self, QueryFilters};
+use crate::read_only::AccessMode;
 use crate::tokenize::{self, CODE_TOKENIZER, RAW_LC_TOKENIZER};
 use crate::types::{ContentHit, ContentQuery, DocId, DocProps, FileMeta, MatchKind};
 
@@ -38,7 +39,8 @@ use crate::types::{ContentHit, ContentQuery, DocId, DocProps, FileMeta, MatchKin
 /// now also indexes its own left-anchored prefixes, so a query for its first
 /// N digits matches. Existing installs re-index once to backfill the new
 /// prefix postings for already-extracted documents.
-const SCHEMA_VERSION: &str = "6";
+// v7: nanosecond modification stamps support bounded incremental reconciliation.
+const SCHEMA_VERSION: &str = "7";
 const SCHEMA_VERSION_FILE: &str = "schema.version";
 
 /// Wraps a tantivy `Index` with typed field handles.
@@ -60,6 +62,7 @@ pub struct ContentIndex {
     pub f_author: tantivy::schema::Field,
     pub f_tags: tantivy::schema::Field,
     pub f_doc_title: tantivy::schema::Field,
+    pub(crate) f_revision_ns: tantivy::schema::Field,
 }
 
 impl ContentIndex {
@@ -69,12 +72,38 @@ impl ContentIndex {
     /// only — the dir itself keeps its hardened ACLs) and recreated empty; the
     /// caller's next crawl repopulates it.
     pub fn open_or_create(dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(dir)?;
+        Self::open_mode(dir, AccessMode::Writable)
+    }
+
+    /// Open without changing files, migrating schema, or acquiring on-disk locks.
+    /// The caller must serialize all readers/writers using an external process guard
+    /// and retain that guard until this object and all cloned readers are dropped.
+    pub fn open_existing(dir: &Path) -> Result<Self> {
+        Self::open_mode(dir, AccessMode::GuardedReader)
+    }
+
+    /// Open an existing ordinary index without creating or migrating it. Reader metadata
+    /// locks coordinate with concurrent Tantivy writers and may create lockfiles.
+    pub fn open_existing_shared(dir: &Path) -> Result<Self> {
+        Self::open_mode(dir, AccessMode::SharedReader)
+    }
+
+    fn open_mode(dir: &Path, mode: AccessMode) -> Result<Self> {
+        let read_only = mode != AccessMode::Writable;
+        crate::read_only::validate_storage(dir)?;
+        if !read_only {
+            std::fs::create_dir_all(dir)?;
+        }
 
         let version_file = dir.join(SCHEMA_VERSION_FILE);
         if dir.join("meta.json").exists() {
             let on_disk = std::fs::read_to_string(&version_file).unwrap_or_default();
             if on_disk.trim() != SCHEMA_VERSION {
+                if read_only {
+                    return Err(crate::error::SearchError::Config(
+                        "index requires a writable rebuild".into(),
+                    ));
+                }
                 wipe_dir_contents(dir)?;
             }
         }
@@ -109,16 +138,23 @@ impl ContentIndex {
         let f_author = sb.add_text_field("author", code_text.clone());
         let f_tags = sb.add_text_field("tags", code_text.clone());
         let f_doc_title = sb.add_text_field("doc_title", code_text);
+        let f_revision_ns = sb.add_u64_field("revision_ns", STORED);
         let schema = sb.build();
 
         // Re-open if the index already exists (meta.json present), create otherwise.
-        let index = if dir.join("meta.json").exists() {
-            Index::open_in_dir(dir)?
+        let directory = crate::read_only::CheckedDirectory::open(dir, mode)?;
+        let index = if read_only || dir.join("meta.json").exists() {
+            Index::open(directory)?
         } else {
-            let index = Index::create_in_dir(dir, schema)?;
+            let index = Index::create(directory, schema.clone(), Default::default())?;
             std::fs::write(&version_file, SCHEMA_VERSION)?;
             index
         };
+        if index.schema() != schema {
+            return Err(crate::error::SearchError::Config(
+                "incompatible index schema".into(),
+            ));
+        }
         // Custom analyzers live in the process, not on disk — required after
         // every open/create, before any indexing or query parsing.
         tokenize::register_tokenizers(&index);
@@ -146,6 +182,7 @@ impl ContentIndex {
             f_author,
             f_tags,
             f_doc_title,
+            f_revision_ns,
         })
     }
 
@@ -166,7 +203,26 @@ impl ContentIndex {
         body: &str,
         props: &DocProps,
     ) -> Result<()> {
-        // Delete any stale version first.
+        self.upsert_at_revision(
+            writer,
+            meta,
+            title,
+            body,
+            props,
+            crate::reconcile::revision_ns(&meta.path).unwrap_or(0),
+        )
+    }
+
+    pub(crate) fn upsert_at_revision(
+        &self,
+        writer: &mut IndexWriter,
+        meta: &FileMeta,
+        title: &str,
+        body: &str,
+        props: &DocProps,
+        revision_ns: u64,
+    ) -> Result<()> {
+        // Persist the extraction's observed stamp, never a newer unextracted revision.
         let term = tantivy::Term::from_field_u64(self.f_doc_id, meta.doc_id);
         writer.delete_term(term);
 
@@ -192,6 +248,7 @@ impl ContentIndex {
             self.f_author    => props.author.as_str(),
             self.f_tags      => props.tags.as_str(),
             self.f_doc_title => props.doc_title.as_str(),
+            self.f_revision_ns => revision_ns,
         ))?;
         Ok(())
     }
