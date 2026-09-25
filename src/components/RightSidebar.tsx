@@ -5,7 +5,7 @@ import { useAppState } from "../context/AppContext";
 import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
 import { getDisplayBranding } from "../lib/branding";
-import useBackend, { type EncryptionPartition } from "../hooks/useBackend";
+import useBackend, { type EncryptionPartition, type SafeCopyProgress } from "../hooks/useBackend";
 import type { QuickMountSlot } from "../types/settings";
 import useVisibility from "../hooks/useVisibility";
 import useEntitlements from "../hooks/useEntitlements";
@@ -122,6 +122,7 @@ export default function RightSidebar() {
         verifyVaultDrive,
         getEncryptionPartitions,
         safePastePrepare,
+        safeCopyProgressStatus,
     } = useBackend();
 
     const visibility = useVisibility();
@@ -173,36 +174,30 @@ export default function RightSidebar() {
     const sdSilentRef = useRef<boolean>(false);
     const [scrubDialogOpen, setScrubDialogOpen] = useState(false);
     const [scrubInitialPaths, setScrubInitialPaths] = useState<string[] | undefined>(undefined);
-    // Keep the staged Safe Copy state visible in the app so an Explorer copy
-    // has a clear, durable acknowledgement before the user chooses a
-    // destination. The native clipboard only receives the cleaned cache, not
-    // the raw sources.
-    const [safeClipCount, setSafeClipCount] = useState<number | null>(null);
-
-    const refreshSafeClipStatus = useCallback(async () => {
-        try {
-            const status = await invoke<{ count: number }>("safe_clip_status");
-            setSafeClipCount(status.count);
-        } catch {
-            // Status is advisory. A failed read must not interfere with the
-            // Safe Paste request listener below, which reports its own error.
-            setSafeClipCount(null);
-        }
-    }, []);
-
-    // Explorer takes focus while its context menu is used. Refresh when the
-    // app regains focus (and after a tab becomes visible) so a headless Safe
-    // Copy made outside the app is immediately reflected in the rail.
+    // Safe Copy is only ready after its private cache has been scrubbed and
+    // published to the Windows file clipboard. Poll the short-lived backend
+    // marker so the app shows an honest blocking progress dialog, then removes
+    // it immediately rather than leaving a durable "N ready" rail indicator.
+    const [safeCopyProgress, setSafeCopyProgress] = useState<SafeCopyProgress | null>(null);
     useEffect(() => {
-        const refresh = () => { void refreshSafeClipStatus(); };
-        refresh();
-        window.addEventListener("focus", refresh);
-        document.addEventListener("visibilitychange", refresh);
-        return () => {
-            window.removeEventListener("focus", refresh);
-            document.removeEventListener("visibilitychange", refresh);
+        let disposed = false;
+        const refresh = async () => {
+            try {
+                const progress = await safeCopyProgressStatus();
+                if (!disposed) setSafeCopyProgress(progress);
+            } catch {
+                // This indicator is advisory. A failed poll must not interfere
+                // with Safe Paste or leave the existing app controls blocked.
+                if (!disposed) setSafeCopyProgress(null);
+            }
         };
-    }, [refreshSafeClipStatus]);
+        void refresh();
+        const interval = window.setInterval(() => { void refresh(); }, 350);
+        return () => {
+            disposed = true;
+            window.clearInterval(interval);
+        };
+    }, [safeCopyProgressStatus]);
 
     // ── Quick Mount ──────────────────────────────────────────────────────────
     const [qmOpen, setQmOpen] = useState(false);
@@ -378,10 +373,6 @@ export default function RightSidebar() {
                 const msg = err instanceof Error ? err.message : String(err);
                 // require_paid surfaces here for Free users — honest upsell.
                 showError(`Safe Paste: ${msg}`, undefined, { kind: "notification" });
-            } finally {
-                // Safe Paste does not consume a Safe Copy, but reading again
-                // covers a newer headless copy made while this request ran.
-                void refreshSafeClipStatus();
             }
         };
 
@@ -414,7 +405,7 @@ export default function RightSidebar() {
         return () => {
             unlisten?.();
         };
-    }, [safePastePrepare, refreshSafeClipStatus]);
+    }, [safePastePrepare]);
 
     // Resolve which steps are enabled per the user's config in
     // privacy.selfDestruct. Sparse override map; missing keys fall
@@ -940,19 +931,6 @@ export default function RightSidebar() {
                         </div>
                     )}
 
-                    {safeClipCount !== null && safeClipCount > 0 && (
-                        <div
-                            className="safe-clip-status"
-                            role="status"
-                            aria-label={`${safeClipCount} item${safeClipCount === 1 ? "" : "s"} ready for Safe Paste`}
-                            data-tip={`${safeClipCount} item${safeClipCount === 1 ? "" : "s"} ready for Safe Paste. Only the scrubbed copies are placed on the Windows clipboard.`}
-                        >
-                            <Icon icon="clipboard" size={16} />
-                            <span>Safe Copy</span>
-                            <strong>{safeClipCount} ready</strong>
-                        </div>
-                    )}
-
                 </div>
 
                 {/* LOCKDOWN — pinned to the bottom-right corner, separated from the
@@ -1023,6 +1001,30 @@ export default function RightSidebar() {
                         initialPaths={scrubInitialPaths}
                     />
                 </Suspense>
+            )}
+
+            {safeCopyProgress && (
+                <div
+                    className="safe-copy-progress-overlay"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="safe-copy-progress-title"
+                    aria-describedby="safe-copy-progress-description"
+                >
+                    <div className="safe-copy-progress-dialog">
+                        <Icon icon="clipboard" size={28} />
+                        <h2 id="safe-copy-progress-title">Preparing Safe Copy</h2>
+                        <p id="safe-copy-progress-description">
+                            {safeCopyProgress.itemCount === 1
+                                ? "Scrubbing 1 selected item before it is placed on the clipboard."
+                                : `Scrubbing ${safeCopyProgress.itemCount} selected items before they are placed on the clipboard.`}
+                        </p>
+                        <div className="safe-copy-progress-track" aria-hidden="true">
+                            <span className="safe-copy-progress-bar" />
+                        </div>
+                        <span className="safe-copy-progress-note">Only cleaned copies are made available to paste.</span>
+                    </div>
+                </div>
             )}
 
 
