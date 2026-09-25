@@ -1,20 +1,19 @@
 import type { CleanupCategory } from "./cleanupCategories";
 
 /**
- * Bulk hygiene is deliberately an allowlist rather than a severity/tier query.
- * Cleanup categories cover everything from disposable caches to credentials and
- * security evidence; metadata alone is not a safe authorization boundary.
+ * This preset contains only cache actions that Maintenance's file-based
+ * Windows cleanup does not already cover. Thumbnail/icon databases, the
+ * LocalService font cache, and Delivery Optimization files stay in that
+ * existing Windows storage scope. The allowlist avoids tier-based selection:
+ * cleanup categories also include credentials and security evidence.
  */
 export const ROUTINE_HYGIENE_CATEGORY_IDS = [
   "dnsCache",
-  "thumbnailDb",
   "spotlightCache",
-  "fontCache",
   "legacyIconCache",
   "photosCache",
   "xboxCache",
   "branchCache",
-  "p2pUpdateCache",
   "geolocationCache",
 ] as const;
 

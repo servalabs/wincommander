@@ -196,9 +196,10 @@ interface CleanupScanOptions {
     schedulesEnabled: boolean;
     entitlementsReady: boolean;
     migrationEnabled: boolean;
+    auxiliaryStateEnabled?: boolean;
 }
 
-export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationEnabled }: CleanupScanOptions) {
+export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationEnabled, auxiliaryStateEnabled = true }: CleanupScanOptions) {
     const requestConfirm = useAppConfirm();
     const backend = useBackend();
     const { data: settings } = useSettingsQuery();
@@ -515,6 +516,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     };
 
     useEffect(() => {
+        if (!auxiliaryStateEnabled) return;
         // Populate the user switcher immediately. Schedule migration/hydration
         // runs beside it so the profile selector is present as soon as the
         // panel opens instead of waiting behind cleanup task probes.
@@ -540,7 +542,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         void refreshSchedules();
         // Stable refs from useBackend's useMemo — safe to omit from deps.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [auxiliaryStateEnabled]);
 
     useEffect(() => {
         if (!entitlementsReady || !schedulesEnabled || !migrationEnabled || migrationStarted.current) return;
