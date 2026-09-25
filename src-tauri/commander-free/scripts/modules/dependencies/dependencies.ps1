@@ -407,16 +407,14 @@ function Test-PowerShell7Installed {
     #   1. Traditional MSI installer -> Program Files\PowerShell\7\pwsh.exe
     #   2. winget/user PATH install -> resolvable via Get-Command
     #   3. Microsoft Store (MSIX) install -> registers an App Execution Alias in
-    #      %LOCALAPPDATA%\Microsoft\WindowsApps, which Windows does NOT resolve
-    #      from an elevated process (this app runs requireAdministrator), so
-    #      Get-Command/PATH lookups silently miss it even though it's installed.
-    #      Get-AppxPackage queries the package repository directly and is
-    #      unaffected by elevation or PATH.
+    #      the installing user's WindowsApps directory. A long-running app can
+    #      retain an old PATH after package registration, so query AppX directly
+    #      when executable/path discovery doesn't find the runtime.
     $installed = $false
     $version = $null
-    # A GUI process elevated through UAC can inherit an older PATH and misses
-    # user- or machine-scope pwsh installs. Prefer known executable locations,
-    # then PATH, then the MSIX package registration.
+    # A long-running GUI process can inherit an older PATH and miss a newly
+    # installed runtime. Prefer known executable locations, then PATH, then the
+    # current-user or all-users MSIX registration.
     $installRoots = @($env:ProgramFiles, $env:ProgramW6432, ${env:ProgramFiles(x86)}) |
         Where-Object { $_ } |
         Select-Object -Unique
@@ -897,20 +895,121 @@ function Install-WingetDependency {
     return @{ success = $true; message = "Winget installed." }
 }
 
-function Install-PowerShell7 {
-    Assert-IsAdmin
-    $status = Test-PowerShell7Installed
-    if ($status.installed) { return @{ success = $true; message = "PowerShell 7 already installed." } }
-
-    $wingetCmd = Resolve-WingetPath
-    if (-not $wingetCmd) { throw "Winget is required to install PowerShell 7." }
-
-    & $wingetCmd install --id Microsoft.PowerShell --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
-        throw "Failed to install PowerShell 7 (exit code $LASTEXITCODE)"
+function Get-PowerShell7MsiArchitecture {
+    $nativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) {
+        $env:PROCESSOR_ARCHITEW6432
+    } else {
+        $env:PROCESSOR_ARCHITECTURE
     }
 
-    return @{ success = $true; message = "PowerShell 7 installed." }
+    if ($nativeArchitecture -match '^(ARM64)$') { return 'arm64' }
+    if ($nativeArchitecture -match '^(AMD64|X64)$') { return 'x64' }
+    throw "PowerShell 7's signed MSI installer is available only for Windows x64 and ARM64; detected '$nativeArchitecture'."
+}
+
+function Install-PowerShell7FromOfficialRelease {
+    $architecture = Get-PowerShell7MsiArchitecture
+    $releaseUri = 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest'
+    $headers = @{
+        'Accept' = 'application/vnd.github+json'
+        'User-Agent' = 'WinCommander-PowerShell-Dependency'
+    }
+    $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+    if (-not $release -or $release.prerelease -or $release.tag_name -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+        throw 'The official PowerShell release endpoint did not return a stable version.'
+    }
+
+    $version = $Matches.version
+    $assetName = "PowerShell-$version-win-$architecture.msi"
+    $asset = @($release.assets | Where-Object { $_.name -ceq $assetName } | Select-Object -First 1)
+    if ($asset.Count -ne 1 -or $asset[0].size -le 0) {
+        throw "The official PowerShell release does not publish the expected $architecture MSI ($assetName)."
+    }
+
+    $downloadUri = "https://github.com/PowerShell/PowerShell/releases/download/$($release.tag_name)/$assetName"
+    if ($asset[0].browser_download_url -cne $downloadUri) {
+        throw 'The official PowerShell release returned an unexpected installer URL.'
+    }
+
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("WinCommander-PowerShell-$version-$architecture-" + [guid]::NewGuid().ToString('N') + '.msi')
+    $oldProgressPreference = $ProgressPreference
+    $oldSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        # Windows PowerShell 5.1 can default to TLS versions rejected by GitHub.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $downloadUri -OutFile $installerPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+
+        $downloadedFile = Get-Item -LiteralPath $installerPath -ErrorAction Stop
+        if ($downloadedFile.Length -ne [long]$asset[0].size) {
+            throw 'The downloaded PowerShell 7 installer size does not match the official release metadata.'
+        }
+
+        $signature = Get-AuthenticodeSignature -FilePath $installerPath -ErrorAction Stop
+        $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+        if ($signature.Status -ne 'Valid' -or $signer -notmatch '(?:^|,\s*)CN=Microsoft Corporation(?:,|$)') {
+            throw 'The downloaded PowerShell 7 installer does not have a valid Microsoft Corporation signature.'
+        }
+
+        $msiexecPath = Join-Path $env:WINDIR 'System32\msiexec.exe'
+        if (-not (Test-Path -LiteralPath $msiexecPath -PathType Leaf)) { $msiexecPath = 'msiexec.exe' }
+        $arguments = '/i "{0}" /qn /norestart ADD_PATH=1' -f $installerPath
+        $process = Start-Process -FilePath $msiexecPath -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+        if ($process.ExitCode -notin @(0, 3010)) {
+            throw "The PowerShell 7 MSI installer failed (exit code $($process.ExitCode))."
+        }
+
+        return @{ exitCode = $process.ExitCode; version = $version }
+    }
+    finally {
+        $ProgressPreference = $oldProgressPreference
+        [Net.ServicePointManager]::SecurityProtocol = $oldSecurityProtocol
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-PowerShell7 {
+    $status = Test-PowerShell7Installed
+    if ($status.installed) { return @{ success = $true; message = "PowerShell 7 already installed." } }
+    if (-not (Test-IsAdmin)) {
+        throw 'Installing PowerShell 7 machine-wide requires Administrator approval. Reopen WinCommander as an administrator and retry.'
+    }
+
+    $wingetCmd = Resolve-WingetPath
+    $installOutput = @()
+    if ($wingetCmd) {
+        # PowerShell 7.6+ defaults to a per-user MSIX, which is unreliable for
+        # this machine-wide dependency. Microsoft's supported MSI is selected
+        # explicitly so elevated installs register pwsh for all users.
+        $installOutput = @(& $wingetCmd install --id Microsoft.PowerShell --exact --source winget --installer-type wix --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0 -and $exitCode -ne -1978335212) {
+            $detail = @($installOutput | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Select-Object -Last 3) -join ' '
+            $suffix = if ($detail) { ": $detail" } else { '' }
+            throw "Failed to install PowerShell 7 (exit code $exitCode)$suffix"
+        }
+    }
+    else {
+        # Winget is not included with Windows Server 2019/2022. Use the
+        # official stable release MSI directly, checking its size and signer.
+        $releaseInstall = Install-PowerShell7FromOfficialRelease
+        $exitCode = $releaseInstall.exitCode
+    }
+
+    # Confirm pwsh.exe is discoverable before reporting success. MSI installs
+    # use Program Files, so this works when the process still has its old PATH.
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        $status = Test-PowerShell7Installed
+        if ($status.installed) {
+            $versionSuffix = if ($status.version) { " (v$($status.version))" } else { '' }
+            return @{ success = $true; message = "PowerShell 7 installed$versionSuffix." }
+        }
+        if ($attempt -lt 29) { Start-Sleep -Milliseconds 500 }
+    }
+
+    $detail = @($installOutput | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Select-Object -Last 3) -join ' '
+    $suffix = if ($detail) { " Installer output: $detail" } else { '' }
+    throw "The installer finished, but PowerShell 7 is still not detected.$suffix"
 }
 
 function Install-VCRedist {
@@ -1639,6 +1738,15 @@ function Install-Dependency {
     # check so callers do not imply that administrator rights make them needed.
     if ($Id -eq 'chocolatey' -or $Id -eq 'scoop') {
         return @{ error = $true; id = $Id; message = "$Id is optional. WinCommander does not install package managers. Install it through your organization-approved process, then refresh Packages & Apps." }
+    }
+
+    if ($Id -eq 'powershell7') {
+        if ((Test-PowerShell7Installed).installed) {
+            return @{ success = $true; id = $Id; message = 'PowerShell 7 already installed.' }
+        }
+        if (-not (Test-IsAdmin)) {
+            throw 'Installing PowerShell 7 machine-wide requires Administrator approval. Reopen WinCommander as an administrator and retry.'
+        }
     }
 
     Assert-IsAdmin
