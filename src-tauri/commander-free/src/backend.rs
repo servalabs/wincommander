@@ -5916,6 +5916,14 @@ const SAFE_COPY_KEYS: &[&str] = &[
     r"HKCU\Software\Classes\Directory\shell\WinCommanderSafeCopy",
     r"HKCU\Software\Classes\AllFilesystemObjects\shell\WinCommanderSafeCopy",
 ];
+/// One Safe Copy invocation receives the complete Explorer selection rather
+/// than launching once per selected file.
+const SAFE_COPY_SELECTION_MODEL: &str = "Player";
+
+fn safe_copy_command(exe_path: &str) -> String {
+    format!("\"{}\" \"--safe-copy\" \"%1\"", exe_path)
+}
+
 /// Safe Paste verb key roots (a folder, and a folder's empty background).
 const SAFE_PASTE_KEYS: &[&str] = &[
     r"HKCU\Software\Classes\Directory\shell\WinCommanderSafePaste",
@@ -5932,7 +5940,7 @@ pub async fn toggle_safe_copy_context_menu(enable: bool) -> Result<(), String> {
             .ok_or("Failed to convert exe path to string")?;
         // %1 = the selected item for Safe Copy. Safe Paste uses its
         // destination placeholder per registry location below.
-        let copy_cmd = format!("\"{}\" \"--safe-copy\" \"%1\"", exe_str);
+        let copy_cmd = safe_copy_command(exe_str);
 
         // Same broom glyph as Scrub so the two privacy verbs read as a family.
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
@@ -5946,6 +5954,15 @@ pub async fn toggle_safe_copy_context_menu(enable: bool) -> Result<(), String> {
         for key in SAFE_COPY_KEYS {
             run_reg(&["add", key, "/ve", "/d", "Safe Copy", "/f"])?;
             run_reg(&["add", key, "/v", "Icon", "/d", &icon_value, "/f"])?;
+            run_reg(&[
+                "add",
+                key,
+                "/v",
+                "MultiSelectModel",
+                "/d",
+                SAFE_COPY_SELECTION_MODEL,
+                "/f",
+            ])?;
             let cmd_key = format!("{}\\command", key);
             run_reg(&["add", &cmd_key, "/ve", "/d", &copy_cmd, "/f"])?;
         }
@@ -5971,6 +5988,21 @@ pub async fn toggle_safe_copy_context_menu(enable: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod safe_copy_verb_tests {
+    use super::*;
+
+    #[test]
+    fn safe_copy_uses_one_player_invocation_for_all_selected_items() {
+        assert_eq!(SAFE_COPY_SELECTION_MODEL, "Player");
+        assert_eq!(
+            safe_copy_command(r"C:\Program Files\WinCommander\WinCommander.exe"),
+            r#""C:\Program Files\WinCommander\WinCommander.exe" "--safe-copy" "%1""#
+        );
+        assert_eq!(SAFE_COPY_KEYS.len(), 3);
+    }
 }
 
 #[tauri::command]

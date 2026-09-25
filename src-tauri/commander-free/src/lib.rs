@@ -1484,8 +1484,8 @@ pub fn run() {
     // Safe Copy (right-click → "Safe Copy") is a HEADLESS task: it records the
     // selection to the safe clipboard and exits, never opening a window. Handle
     // it BEFORE the single-instance guard so it always acts locally instead of
-    // being forwarded to (and ignored by) a running instance. Multi-select
-    // launches this once per item; safe_clip coalesces them under a mutex.
+    // being forwarded to (and ignored by) a running instance. The registered
+    // Player model launches once with the complete multi-selection.
     // Skipped in CLI mode: `run` has already committed to one specific command,
     // and this scan looks at the whole argv. A `--safe-copy` token that reached
     // argv as some option's value would otherwise hijack the requested command

@@ -19,8 +19,8 @@
 // headless, while the in-app command calls the same engine. Both verify the
 // cache again before committing it.
 //
-// The pure logic (coalesce, resolve_targets) is platform-agnostic and unit-
-// tested; only the named-mutex serialisation is Windows-gated.
+// The pure logic (cache promotion, resolve_targets) is platform-agnostic and
+// unit-tested; only the named-mutex serialisation is Windows-gated.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -32,23 +32,20 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use clipboard_win::{formats::FileList, Clipboard, Setter};
 
-/// Multi-select launches the verb once per item, near-simultaneously. A Safe
-/// Copy within this window of the previous one APPENDS (same batch); a later
-/// one REPLACES (a fresh copy). Clipboard-like otherwise: persists until the
-/// next Safe Copy — Safe Paste does not consume it.
-const COALESCE_WINDOW_MS: u128 = 4_000;
-// Version 2 stores paths below the scrubbed cache rather than raw selections.
-// Legacy records are intentionally not eligible for system-clipboard publish.
-const CLIP_VERSION: u32 = 2;
+// Version 3 stores paths below the scrubbed cache rather than raw selections,
+// and expands selected-folder roots into their scrubbed immediate children.
+// Older records are intentionally not eligible for system-clipboard publish.
+const CLIP_VERSION: u32 = 3;
 const CLIP_FILE: &str = "safe-clip.json";
 const CACHE_DIR: &str = "safe-clip-cache";
+const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
 
 /// The persisted "safe clipboard".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafeClip {
     pub version: u32,
     pub sources: Vec<String>,
-    /// UNIX-epoch millis of the last write (drives the coalescing window).
+    /// UNIX-epoch millis when this complete Safe Copy selection was published.
     pub stamped_at_ms: u128,
 }
 
@@ -84,26 +81,6 @@ fn now_ms() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
-}
-
-/// Merge `new_paths` into any `existing` clip, honouring the coalescing window.
-/// Within the window the paths append (dedup, order-preserving); outside it they
-/// replace. Pure — `now` is injected so it's deterministic in tests.
-pub fn coalesce(existing: Option<SafeClip>, new_paths: &[String], now: u128) -> SafeClip {
-    let mut sources: Vec<String> = match existing {
-        Some(prev) if now.saturating_sub(prev.stamped_at_ms) <= COALESCE_WINDOW_MS => prev.sources,
-        _ => Vec::new(),
-    };
-    for p in new_paths {
-        if !p.trim().is_empty() && !sources.iter().any(|s| paths_equal(s, p)) {
-            sources.push(p.clone());
-        }
-    }
-    SafeClip {
-        version: CLIP_VERSION,
-        sources,
-        stamped_at_ms: now,
-    }
 }
 
 /// Case-insensitive path comparison (Windows filesystems are case-preserving,
@@ -243,6 +220,178 @@ fn staged_files(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
         files.push(path.to_path_buf());
     }
     Ok(())
+}
+
+/// The Pro scrubber's default output location is a sibling `_scrubbed`
+/// directory. With `replace_originals`, the clean file is moved back into the
+/// staged tree but that helper directory can remain. Remove only those
+/// directories that did not exist before this scrub; a user's own `_scrubbed`
+/// folder is still part of the selected content and must be preserved.
+fn cleanup_new_scrub_output_dirs(
+    files: &[PathBuf],
+    preexisting: &HashSet<PathBuf>,
+) -> Result<(), String> {
+    let mut output_dirs: Vec<PathBuf> = files
+        .iter()
+        .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    output_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+
+    for output_dir in output_dirs {
+        if preexisting.contains(&output_dir) || !output_dir.exists() {
+            continue;
+        }
+        if !output_dir.is_dir() {
+            return Err(format!(
+                "Safe Copy found an unexpected scrub output at {}",
+                output_dir.display()
+            ));
+        }
+        std::fs::remove_dir(&output_dir).map_err(|error| {
+            format!(
+                "Safe Copy could not discard temporary scrub output {}: {error}",
+                output_dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Keep the in-progress paste batch out of the destination's visible item
+/// list. Explorer displays dot-prefixed directories on Windows, so a normal
+/// TempDir inside `dest` appears as a spurious folder while the scrub runs.
+/// Prefer a hidden sibling (same volume for the final rename); if the sibling
+/// is not writable, use the destination itself but still hide the staging
+/// directory before copying anything into it.
+fn safe_paste_staging_dir(dest: &Path) -> Result<tempfile::TempDir, String> {
+    let parent = dest
+        .parent()
+        .filter(|parent| parent.is_dir() && same_filesystem_volume(parent, dest));
+    let staging_parent = parent.unwrap_or(dest);
+    let staging = tempfile::Builder::new()
+        .prefix(".wincommander-safe-paste-")
+        .tempdir_in(staging_parent)
+        .or_else(|_| {
+            if staging_parent == dest {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "destination staging directory is not writable",
+                ))
+            } else {
+                tempfile::Builder::new()
+                    .prefix(".wincommander-safe-paste-")
+                    .tempdir_in(dest)
+            }
+        })
+        .map_err(|error| format!("Safe Paste couldn't create its staging area: {error}"))?;
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+        };
+        let wide: Vec<u16> = staging
+            .path()
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let hidden = unsafe {
+            SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
+        };
+        if hidden == 0 {
+            return Err(format!(
+                "Safe Paste couldn't hide its staging area: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+
+    Ok(staging)
+}
+
+#[cfg(windows)]
+fn same_filesystem_volume(left: &Path, right: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+
+    fn volume_root(path: &Path) -> Option<Vec<u16>> {
+        let input: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut output = vec![0u16; 1024];
+        let ok =
+            unsafe { GetVolumePathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) };
+        if ok == 0 {
+            return None;
+        }
+        output.truncate(output.iter().position(|unit| *unit == 0)?);
+        Some(output)
+    }
+
+    match (volume_root(left), volume_root(right)) {
+        (Some(left), Some(right)) => {
+            String::from_utf16_lossy(&left).eq_ignore_ascii_case(&String::from_utf16_lossy(&right))
+        }
+        _ => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn same_filesystem_volume(_left: &Path, _right: &Path) -> bool {
+    true
+}
+
+/// Commit a fully scrubbed batch without leaving a partial paste when one of
+/// the final renames fails. Name collisions remain individual safe skips; an
+/// actual I/O error rolls prior commits back into the private staging area.
+fn commit_staged_batch(
+    staged: Vec<(PathBuf, PathBuf)>,
+    skipped: &mut Vec<SafeSkip>,
+) -> Result<Vec<String>, String> {
+    let mut committed: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (stage_target, target) in staged {
+        if target.exists() {
+            skipped.push(SafeSkip {
+                name: target
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                reason: "a file with that name already exists".into(),
+            });
+            continue;
+        }
+        if let Err(error) = std::fs::rename(&stage_target, &target) {
+            let mut rollback_errors = Vec::new();
+            for (staged_back, published) in committed.iter().rev() {
+                if let Err(rollback) = std::fs::rename(published, staged_back) {
+                    rollback_errors.push(format!("{}: {rollback}", published.to_string_lossy()));
+                }
+            }
+            let rollback_detail = if rollback_errors.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; rollback was incomplete for {}",
+                    rollback_errors.join(", ")
+                )
+            };
+            return Err(format!(
+                "Safe Paste couldn't commit cleaned {}: {error}{rollback_detail}",
+                target.to_string_lossy()
+            ));
+        }
+        committed.push((stage_target, target));
+    }
+    Ok(committed
+        .into_iter()
+        .map(|(_, target)| target.to_string_lossy().to_string())
+        .collect())
 }
 
 /// Reject every scrub outcome that could leave an identifying or unprocessed
@@ -395,6 +544,15 @@ fn remove_old_cache_batches(root: &Path, keep: &Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // Concurrent Safe Copy requests scrub into hidden staging folders
+        // outside the published-batch lock. Never remove another request's
+        // in-flight clean cache while committing this one.
+        let is_active_staging = path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(CACHE_STAGING_PREFIX));
+        if is_active_staging {
+            continue;
+        }
         if path != keep && path.is_dir() {
             if let Err(error) = std::fs::remove_dir_all(&path) {
                 crate::log_message(
@@ -409,14 +567,52 @@ fn remove_old_cache_batches(root: &Path, keep: &Path) {
     }
 }
 
+/// Promote a tree that has already been copied, scrubbed, and verified.
+/// Direct children of a selected folder become individual cache entries, so
+/// paste places them in the destination without an unwanted wrapper folder.
+/// Descendant folders are left intact. The returned paths are cache leaves
+/// safe for CF_HDROP.
+fn promote_scrubbed_source(staged: &Path, batch: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut entries = if staged.is_dir() {
+        std::fs::read_dir(staged)
+            .map_err(|error| format!("Safe Copy could not list the scrubbed folder: {error}"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Safe Copy could not read a scrubbed folder entry: {error}"))?
+    } else {
+        vec![staged.to_path_buf()]
+    };
+    entries.sort_by_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+
+    let mut cached = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .ok_or_else(|| "Safe Copy scrubbed item has no file name".to_string())?;
+        let item_dir = batch.join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&item_dir)
+            .map_err(|error| format!("Safe Copy could not prepare its scrub cache: {error}"))?;
+        let cached_path = item_dir.join(name);
+        std::fs::rename(&entry, &cached_path)
+            .map_err(|error| format!("Safe Copy could not commit its scrubbed cache: {error}"))?;
+        cached.push(cached_path);
+    }
+    Ok(cached)
+}
+
 /// Copy one raw source into an unpublished staging directory, scrub every
-/// file, validate the report, and atomically promote only the cleaned tree
-/// into the cache batch. Its returned path is safe for CF_HDROP.
+/// file, validate the report, and atomically promote only cleaned entries into
+/// the cache batch. A selected folder is flattened by one level only after
+/// the entire staged tree has passed scrub validation.
 async fn cache_scrubbed_source(
     source: &Path,
     batch: &Path,
     decoys: &HashSet<PathBuf>,
-) -> Result<PathBuf, String> {
+) -> Result<Vec<PathBuf>, String> {
     let name = source
         .file_name()
         .ok_or_else(|| "Safe Copy source has no file name".to_string())?;
@@ -447,6 +643,11 @@ async fn cache_scrubbed_source(
     staged_files(&staged, &mut files)
         .map_err(|error| format!("Safe Copy could not inspect its staged selection: {error}"))?;
     if !files.is_empty() {
+        let scrub_output_dirs: HashSet<PathBuf> = files
+            .iter()
+            .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
+            .filter(|path| path.is_dir())
+            .collect();
         let report = crate::file_metadata::scrub_metadata_paths_headless(
             files
                 .iter()
@@ -464,21 +665,16 @@ async fn cache_scrubbed_source(
         validate_scrub_report(&report, files.len()).map_err(|detail| {
             format!("Safe Copy scrub failed; originals were not placed on the clipboard: {detail}")
         })?;
+        cleanup_new_scrub_output_dirs(&files, &scrub_output_dirs)?;
     }
 
-    let item_dir = batch.join(uuid::Uuid::new_v4().to_string());
-    std::fs::create_dir_all(&item_dir)
-        .map_err(|error| format!("Safe Copy could prepare its scrub cache: {error}"))?;
-    let cached = item_dir.join(name);
-    std::fs::rename(&staged, &cached)
-        .map_err(|error| format!("Safe Copy could commit its scrubbed cache: {error}"))?;
-    Ok(cached)
+    promote_scrubbed_source(&staged, batch)
 }
 
 /// Scrub `paths` into the Safe Copy cache and record those cache paths. The
-/// named mutex serialises Explorer's one-launch-per-selected-item behaviour,
-/// so a multi-select stays one batch without ever racing raw files onto the
-/// system clipboard.
+/// shell verb uses one Player-mode launch for a multi-selection. Each request
+/// scrubs into a private staging batch, then briefly locks while publishing a
+/// complete, immutable selection to the clipboard.
 pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     let decoys: HashSet<PathBuf> = crate::file_monitor::enrolled_decoy_paths()
         .into_iter()
@@ -500,54 +696,63 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     if !filtered.is_empty() {
         crate::license::require_paid("Safe Copy")?;
     }
-    let _guard = ClipLock::acquire();
     let root = cache_root()?;
-    let existing = read_clip();
     if filtered.is_empty() {
-        return existing
-            .as_ref()
-            .filter(|clip| cache_batch_for_clip(clip, &root).is_some())
-            .map(|clip| clip.sources.len())
-            .ok_or_else(|| "Safe Copy requires at least one non-protected item".to_string());
+        return Err("Safe Copy requires at least one non-protected item".into());
     }
 
-    let now = now_ms();
-    let append_to_existing = existing.as_ref().is_some_and(|clip| {
-        cache_batch_for_clip(clip, &root).is_some()
-            && now.saturating_sub(clip.stamped_at_ms) <= COALESCE_WINDOW_MS
-    });
-    let batch = if append_to_existing {
-        cache_batch_for_clip(existing.as_ref().expect("checked above"), &root)
-            .expect("checked above")
-    } else {
-        root.join(uuid::Uuid::new_v4().to_string())
-    };
-    std::fs::create_dir_all(&batch)
-        .map_err(|error| format!("Safe Copy could create its scrub cache: {error}"))?;
+    let staged_batch = tempfile::Builder::new()
+        .prefix(CACHE_STAGING_PREFIX)
+        .tempdir_in(&root)
+        .map_err(|error| format!("Safe Copy could create its scrub staging area: {error}"))?;
 
     // The licence and scrub complete before `write_clip_atomic` or CF_HDROP.
     // Thus an error leaves the prior clean clipboard selection intact.
     let mut cached_sources = Vec::with_capacity(filtered.len());
     for raw in &filtered {
-        cached_sources.push(cache_scrubbed_source(Path::new(raw), &batch, &decoys).await?);
+        cached_sources
+            .extend(cache_scrubbed_source(Path::new(raw), staged_batch.path(), &decoys).await?);
     }
-    let cached_strings: Vec<String> = cached_sources
+    if cached_sources.is_empty() {
+        return Err("Safe Copy found no items inside the selected folder(s).".into());
+    }
+    let relative_sources: Vec<PathBuf> = cached_sources
         .iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect();
-    let merged = coalesce(
-        if append_to_existing { existing } else { None },
-        &cached_strings,
-        now,
-    );
-    let count = merged.sources.len();
-    write_clip_atomic(&merged)?;
-    // `merged.sources` passed validation in `cache_batch_for_clip` above and
-    // consists only of scrubbed cache copies, never the original selection.
-    publish_windows_file_clipboard(&merged.sources)?;
-    if !append_to_existing {
-        remove_old_cache_batches(&root, &batch);
+        .map(|path| {
+            path.strip_prefix(staged_batch.path())
+                .map(Path::to_path_buf)
+                .map_err(|_| {
+                    "Safe Copy staging produced a path outside its private batch".to_string()
+                })
+        })
+        .collect::<Result<_, _>>()?;
+
+    // Scrubbing can take much longer than a registry/clipboard update. Keep
+    // the cross-process mutex only around publishing and cleanup so concurrent
+    // requests cannot delete one another's active staging directories.
+    let _guard = ClipLock::acquire()?;
+    let staging_path = staged_batch.keep();
+    let batch = root.join(uuid::Uuid::new_v4().to_string());
+    if let Err(error) = std::fs::rename(&staging_path, &batch) {
+        let _ = std::fs::remove_dir_all(&staging_path);
+        return Err(format!(
+            "Safe Copy could not publish its clean cache: {error}"
+        ));
     }
+
+    let clip = SafeClip {
+        version: CLIP_VERSION,
+        sources: relative_sources
+            .iter()
+            .map(|path| batch.join(path).to_string_lossy().to_string())
+            .collect(),
+        stamped_at_ms: now_ms(),
+    };
+    let count = clip.sources.len();
+    write_clip_atomic(&clip)?;
+    // `clip.sources` is a complete, scrubbed batch, never the original paths.
+    publish_windows_file_clipboard(&clip.sources)?;
+    remove_old_cache_batches(&root, &batch);
     Ok(count)
 }
 
@@ -721,11 +926,12 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
             source_count: 0,
         });
     }
-    // Version-1 clips stored raw selection paths. Refuse them rather than
-    // making an old Safe Copy silently bypass the scrubbed-cache invariant.
+    // Older clips either stored raw selection paths or preserved the selected
+    // folder root. Require a fresh Safe Copy so Safe Paste cannot reintroduce
+    // the old wrapper-folder behavior.
     let cache = cache_root()?;
     if cache_batch_for_clip(&clip, &cache).is_none() {
-        return Err("This Safe Copy selection predates the scrubbed clipboard cache. Use Safe Copy again before pasting.".into());
+        return Err("This Safe Copy selection uses an outdated cache layout. Use Safe Copy again before pasting.".into());
     }
     let sources: Vec<PathBuf> = clip.sources.iter().map(PathBuf::from).collect();
     let decoys: HashSet<PathBuf> = crate::file_monitor::enrolled_decoy_paths()
@@ -742,12 +948,10 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
             .any(|d| paths_equal(&d.to_string_lossy(), &p.to_string_lossy()))
     };
 
-    // Staging beside the destination keeps the final commit a same-volume
-    // rename rather than a second, raw cross-volume copy.
-    let staging = tempfile::Builder::new()
-        .prefix(".wincommander-safe-paste-")
-        .tempdir_in(&dest)
-        .map_err(|e| format!("Safe Paste couldn't create its staging area: {e}"))?;
+    // Stage outside the visible destination, on the same volume, so Explorer
+    // never shows a temporary wrapper folder while scrubbed files are being
+    // prepared. Only clean sources are ever renamed into `dest`.
+    let staging = safe_paste_staging_dir(&dest)?;
 
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut nested_decoys_skipped = 0u32;
@@ -797,6 +1001,11 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
     }
 
     if !files_to_scrub.is_empty() {
+        let scrub_output_dirs: HashSet<PathBuf> = files_to_scrub
+            .iter()
+            .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
+            .filter(|path| path.is_dir())
+            .collect();
         let report = crate::file_metadata::scrub_metadata_paths_headless(
             files_to_scrub
                 .iter()
@@ -816,30 +1025,14 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
         // publish. TempDir removes the complete staging area on return.
         validate_scrub_report(&report, files_to_scrub.len())
             .map_err(|detail| format!("Safe Paste scrub failed; no files were pasted: {detail}"))?;
+        // If the source is a directory, a scrubber output folder can otherwise
+        // travel with that directory when it is renamed into the destination.
+        cleanup_new_scrub_output_dirs(&files_to_scrub, &scrub_output_dirs)?;
     }
 
-    // A folder can change while the scrubber runs. Re-check collisions before
-    // the commit so Safe Paste never overwrites a newly-created target.
-    let mut copied: Vec<String> = Vec::new();
-    for (stage_target, target) in staged {
-        if target.exists() {
-            skipped.push(SafeSkip {
-                name: target
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                reason: "a file with that name already exists".into(),
-            });
-            continue;
-        }
-        std::fs::rename(&stage_target, &target).map_err(|e| {
-            format!(
-                "Safe Paste couldn't commit cleaned {}: {e}",
-                target.to_string_lossy()
-            )
-        })?;
-        copied.push(target.to_string_lossy().to_string());
-    }
+    // A folder can change while the scrubber runs. The commit re-checks every
+    // name and rolls the complete group back if a later rename fails.
+    let copied = commit_staged_batch(staged, &mut skipped)?;
 
     crate::log_message(
         "info",
@@ -858,9 +1051,9 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
 
 // ── Cross-process serialisation ─────────────────────────────────────────────
 
-/// RAII guard around a named mutex so concurrent Safe Copy launches (one per
-/// selected item) serialise their read-modify-write of the clip file. On
-/// non-Windows it is a no-op (Safe Copy is a Windows Explorer feature).
+/// RAII guard around a named mutex so concurrent Safe Copy requests serialize
+/// publication of the active cache batch and clipboard. On non-Windows it is
+/// a no-op (Safe Copy is a Windows Explorer feature).
 struct ClipLock {
     #[cfg(windows)]
     handle: isize,
@@ -868,31 +1061,34 @@ struct ClipLock {
 
 impl ClipLock {
     #[cfg(windows)]
-    fn acquire() -> Self {
+    fn acquire() -> Result<Self, String> {
         use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
         let name: Vec<u16> = "WinCommander_SafeClip_lock\0".encode_utf16().collect();
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-        if !handle.is_null() {
-            // Bounded wait so a crashed holder can't hang a headless launch
-            // forever; 5 s is far beyond a legitimate read-modify-write.
-            unsafe { WaitForSingleObject(handle, 5_000) };
-        } else {
-            // True OS failure (handle exhaustion). We proceed unlocked rather
-            // than block the copy, but log it so the (rare) fail-open — under
-            // which a concurrent multi-select could drop an entry — is visible.
-            crate::log_message(
-                "warn",
-                "[SafeCopy] clip mutex unavailable; recording without cross-process lock",
-            );
+        if handle.is_null() {
+            return Err("Safe Copy could not coordinate clipboard publishing".into());
         }
-        ClipLock {
-            handle: handle as isize,
+        // This protects only the short final cache/clipboard commit, not the
+        // metadata scrub. Never continue unlocked after a timeout: concurrent
+        // publishers could otherwise delete or replace one another's batch.
+        match unsafe { WaitForSingleObject(handle, 10_000) } {
+            0 | 0x80 => Ok(ClipLock {
+                handle: handle as isize,
+            }),
+            0x102 => {
+                unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+                Err("Safe Copy timed out waiting to publish the clipboard".into())
+            }
+            _ => {
+                unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+                Err("Safe Copy could not acquire the clipboard publishing lock".into())
+            }
         }
     }
 
     #[cfg(not(windows))]
-    fn acquire() -> Self {
-        ClipLock {}
+    fn acquire() -> Result<Self, String> {
+        Ok(ClipLock {})
     }
 }
 
@@ -919,53 +1115,85 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|x| x.to_string()).collect()
+    #[test]
+    fn promoting_a_file_keeps_its_name_as_one_clip_item() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staged = root.path().join("staged-photo.jpg");
+        let batch = root.path().join("batch");
+        std::fs::create_dir(&batch).unwrap();
+        std::fs::write(&staged, b"clean").unwrap();
+
+        let promoted = promote_scrubbed_source(&staged, &batch).unwrap();
+
+        assert_eq!(promoted.len(), 1);
+        assert_eq!(promoted[0].file_name().unwrap(), "staged-photo.jpg");
+        assert_eq!(std::fs::read(&promoted[0]).unwrap(), b"clean");
     }
 
     #[test]
-    fn coalesce_replaces_outside_window() {
-        let prev = SafeClip {
-            version: 1,
-            sources: s(&["a"]),
-            stamped_at_ms: 0,
-        };
-        // now far past the window → replace.
-        let out = coalesce(Some(prev), &s(&["b"]), COALESCE_WINDOW_MS + 1);
-        assert_eq!(out.sources, s(&["b"]));
-    }
+    fn promoting_a_folder_flattens_only_its_outer_level() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staged = root.path().join("selected-folder");
+        let batch = root.path().join("batch");
+        std::fs::create_dir_all(staged.join("nested")).unwrap();
+        std::fs::create_dir(&batch).unwrap();
+        std::fs::write(staged.join("image.jpg"), b"clean image").unwrap();
+        std::fs::write(
+            staged.join("nested").join("inside.png"),
+            b"clean nested image",
+        )
+        .unwrap();
 
-    #[test]
-    fn coalesce_appends_within_window() {
-        let prev = SafeClip {
-            version: 1,
-            sources: s(&["a"]),
-            stamped_at_ms: 100,
-        };
-        let out = coalesce(Some(prev), &s(&["b", "c"]), 100 + COALESCE_WINDOW_MS);
-        assert_eq!(out.sources, s(&["a", "b", "c"]));
-    }
+        let promoted = promote_scrubbed_source(&staged, &batch).unwrap();
 
-    #[test]
-    fn coalesce_dedups_case_insensitively() {
-        let prev = SafeClip {
-            version: 1,
-            sources: s(&["C:\\A\\x.txt"]),
-            stamped_at_ms: 10,
-        };
-        let out = coalesce(Some(prev), &s(&["c:\\a\\x.txt"]), 20);
+        assert_eq!(promoted.len(), 2);
         assert_eq!(
-            out.sources.len(),
-            1,
-            "same path different case must not duplicate"
+            promoted
+                .iter()
+                .filter_map(|path| path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string()))
+                .collect::<HashSet<_>>(),
+            ["image.jpg".to_string(), "nested".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let nested = promoted
+            .iter()
+            .find(|path| path.file_name().is_some_and(|name| name == "nested"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(nested.join("inside.png")).unwrap(),
+            b"clean nested image"
+        );
+        assert!(
+            staged.exists(),
+            "the selected folder is not itself promoted"
         );
     }
 
     #[test]
-    fn coalesce_fresh_when_no_existing() {
-        let out = coalesce(None, &s(&["a"]), 999);
-        assert_eq!(out.sources, s(&["a"]));
-        assert_eq!(out.stamped_at_ms, 999);
+    fn scrub_cleanup_removes_only_new_empty_output_folders() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staged = root.path().join("selected-folder");
+        let user_scrubbed = staged.join("nested").join("_scrubbed");
+        let generated_scrubbed = staged.join("_scrubbed");
+        std::fs::create_dir_all(&user_scrubbed).unwrap();
+        std::fs::create_dir_all(&generated_scrubbed).unwrap();
+        std::fs::write(user_scrubbed.join("keep.txt"), b"user content").unwrap();
+        let files = vec![
+            staged.join("image.jpg"),
+            staged.join("nested").join("inside.jpg"),
+        ];
+        let preexisting = HashSet::from([user_scrubbed.clone()]);
+
+        cleanup_new_scrub_output_dirs(&files, &preexisting).unwrap();
+
+        assert!(!generated_scrubbed.exists());
+        assert_eq!(
+            std::fs::read(user_scrubbed.join("keep.txt")).unwrap(),
+            b"user content"
+        );
     }
 
     #[test]
@@ -992,6 +1220,15 @@ mod tests {
             stamped_at_ms: 1,
         };
         assert!(cache_batch_for_clip(&legacy_raw, &root).is_none());
+
+        let old_folder_root = root.join("old-batch").join("old-item").join("Photos");
+        std::fs::create_dir_all(&old_folder_root).unwrap();
+        let legacy_folder = SafeClip {
+            version: 2,
+            sources: vec![old_folder_root.to_string_lossy().to_string()],
+            stamped_at_ms: 1,
+        };
+        assert!(cache_batch_for_clip(&legacy_folder, &root).is_none());
 
         let outside_cache = SafeClip {
             version: CLIP_VERSION,
@@ -1143,6 +1380,46 @@ mod tests {
             !dst.join("Clients").join("honey.docx").exists(),
             "decoy must NOT be copied"
         );
+    }
+
+    #[test]
+    fn safe_paste_staging_is_not_a_visible_child_of_the_destination() {
+        let root = tempfile::TempDir::new().unwrap();
+        let dest = root.path().join("destination");
+        std::fs::create_dir(&dest).unwrap();
+
+        let staging = safe_paste_staging_dir(&dest).unwrap();
+
+        assert_eq!(staging.path().parent(), Some(root.path()));
+        assert!(!dest.join(staging.path().file_name().unwrap()).exists());
+    }
+
+    #[test]
+    fn commit_staged_batch_publishes_all_group_items() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staging = root.path().join("staging");
+        let dest = root.path().join("destination");
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        let staged_a = staging.join("one.jpg");
+        let staged_b = staging.join("two.jpg");
+        std::fs::write(&staged_a, b"one").unwrap();
+        std::fs::write(&staged_b, b"two").unwrap();
+        let mut skipped = Vec::new();
+
+        let copied = commit_staged_batch(
+            vec![
+                (staged_a, dest.join("one.jpg")),
+                (staged_b, dest.join("two.jpg")),
+            ],
+            &mut skipped,
+        )
+        .unwrap();
+
+        assert_eq!(copied.len(), 2);
+        assert!(skipped.is_empty());
+        assert_eq!(std::fs::read(dest.join("one.jpg")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dest.join("two.jpg")).unwrap(), b"two");
     }
 
     #[test]
