@@ -41,6 +41,10 @@ function eventKey(event: BridgeEvent): string {
   return `${event.eventId}:${event.outcome}`.slice(0, 160);
 }
 
+export function asEventList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function isBridgeEvent(value: unknown): value is BridgeEvent {
   if (!value || typeof value !== "object") return false;
   const event = value as Partial<BridgeEvent>;
@@ -80,7 +84,11 @@ export default function DiagnosticEventBridge() {
         getServiceDiagnosticSummaries().catch(() => []),
         getProDiagnosticSummaries().catch(() => []),
       ]);
-      if (active) projectPersistedDiagnostics([...desktop, ...service, ...pro]);
+      if (active) projectPersistedDiagnostics([
+        ...asEventList(desktop),
+        ...asEventList(service),
+        ...asEventList(pro),
+      ]);
     };
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, POLL_MS);

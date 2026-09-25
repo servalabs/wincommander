@@ -54,6 +54,7 @@ $Script:AppPrivacyValueNames = @{
     'webcam'     = 'LetAppsAccessCamera'
     'microphone' = 'LetAppsAccessMicrophone'
     'location'   = 'LetAppsAccessLocation'
+    'appDiagnostics' = 'LetAppsGetDiagnosticInfo'
 }
 
 function Set-AppCapabilityAccess {
@@ -148,6 +149,16 @@ public class WC_PolicyRefresh {
         # even from an elevated process. Read Windows' effective decision back
         # before reporting success so the UI never claims a failed Allow worked.
         $effective = Get-AppCapabilityAccessStatus -Capability $Capability
+        if ($effective.error) {
+            return @{
+                error          = $true
+                message        = "Unable to verify the Windows access state for $Capability. $($effective.message)"
+                capability     = $Capability
+                requestedValue = $Access
+                value          = $null
+                entriesTouched = $touched
+            }
+        }
         $effectiveAccess = if ($effective.disabled) { 'Deny' } else { 'Allow' }
         if ($effectiveAccess -ne $Access) {
             return @{
@@ -188,6 +199,13 @@ function Get-AppCapabilityAccessStatus {
             $value = (Get-ItemProperty -Path (Join-Path $root $Capability) -Name "Value" -ErrorAction SilentlyContinue).Value
             if ($value -eq "Deny") { $consentDenied = $true }
         }
+        if ($Script:AppPrivacyValueNames.ContainsKey($Capability)) {
+            $policyName = $Script:AppPrivacyValueNames[$Capability]
+            foreach ($hive in @('HKCU:', 'HKLM:')) {
+                $policyValue = (Get-ItemProperty -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name $policyName -ErrorAction SilentlyContinue).$policyName
+                if ($policyValue -eq 2) { $hardDenied = $true }
+            }
+        }
         if ($Capability -eq 'webcam') {
             # ConsentStore roots are defaults. A child app entry can explicitly
             # allow camera use, so surface that mixed state rather than calling
@@ -195,7 +213,7 @@ function Get-AppCapabilityAccessStatus {
             $desktopAppsValue = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -ErrorAction SilentlyContinue).Value
             $appValues = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty -Path $_.PSPath -Name 'Value' -ErrorAction SilentlyContinue).Value } | Where-Object { $_ -in @('Allow', 'Deny') })
             $mixedAppAccess = $consentDenied -and ($appValues -contains 'Allow')
-            $hardDenied = ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
+            $hardDenied = $hardDenied -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
         }
         $denied = $hardDenied -or ($consentDenied -and -not $mixedAppAccess)
         $value = if ($denied) { "Deny" } else { "Allow" }
@@ -208,6 +226,6 @@ function Get-AppCapabilityAccessStatus {
         }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message; capability = $Capability; value = "Allow"; disabled = $false }
+        @{ error = $true; message = $_.Exception.Message; capability = $Capability; value = $null; disabled = $null }
     }
 }

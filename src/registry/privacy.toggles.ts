@@ -589,10 +589,10 @@ const PRIVACY_TOGGLES_RAW: ToggleDef[] = [
     defenderFlagged: false,
     id: "diagTracing",
     label: "Disable Diagnostic Tracing",
-    description: "Stop Windows background diagnostic recording",
+    description: "Stop Windows ETW diagnostic traces. App Diagnostics access is controlled separately.",
     modeText: {
-      simple: { label: "Disable System Traces", description: "Stops detailed Windows diagnostic event traces from being stored." },
-      advanced: { label: "Disable Diagnostic Tracing", description: "Stop Windows background diagnostic recording" },
+      simple: { label: "Disable System Traces", description: "Stops Windows system traces. App Diagnostics permissions are separate." },
+      advanced: { label: "Disable Diagnostic Tracing", description: "Stop Windows ETW diagnostic sessions; App Diagnostics permissions are separate." },
     },
     impact: "Windows background diagnostics log detailed system activity",
     icon: "diagnosis",

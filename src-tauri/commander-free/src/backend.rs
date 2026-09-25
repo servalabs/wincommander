@@ -3015,12 +3015,13 @@ fn get_settings_sync_patch(
         "Enable-OfficeLogging" => {
             Some(json!({"privacy":{"tracking":{"officeLoggingDisabled": false}}}))
         }
-        "Disable-DiagnosticEventTracing" => {
+        "Disable-DiagnosticEventTracing" if diagnostic_tracing_result_succeeded(result, true) => {
             Some(json!({"privacy":{"tracking":{"diagnosticEventTracingDisabled": true}}}))
         }
-        "Enable-DiagnosticEventTracing" => {
+        "Enable-DiagnosticEventTracing" if diagnostic_tracing_result_succeeded(result, false) => {
             Some(json!({"privacy":{"tracking":{"diagnosticEventTracingDisabled": false}}}))
         }
+        "Disable-DiagnosticEventTracing" | "Enable-DiagnosticEventTracing" => None,
 
         // ── Privacy: Protection & Shield ─────────────────────────────
         "Enable-PrivacyProtection" => Some(json!({"privacy":{"privacyProtectionEnabled": true}})),
@@ -3538,10 +3539,13 @@ fn get_settings_sync_patch(
         }
 
         // ── Tweaks: UI granular ──────────────────────────────────────
-        // EnthusiastMode + WallpaperQuality were re-sectioned to "ui" so
-        // their patch goes under tweaks.ui too.
-        "Enable-EnthusiastMode" => Some(json!({"tweaks":{"ui":{"enthusiastModeEnabled": true}}})),
-        "Disable-EnthusiastMode" => Some(json!({"tweaks":{"ui":{"enthusiastModeEnabled": false}}})),
+        // Enthusiast Mode is shown in UI, but its persisted field stays in performance.
+        "Enable-EnthusiastMode" => {
+            Some(json!({"tweaks":{"performance":{"enthusiastModeEnabled": true}}}))
+        }
+        "Disable-EnthusiastMode" => {
+            Some(json!({"tweaks":{"performance":{"enthusiastModeEnabled": false}}}))
+        }
         "Enable-WallpaperQuality" => Some(json!({"tweaks":{"ui":{"wallpaperFullQuality": true}}})),
         "Disable-WallpaperQuality" => {
             Some(json!({"tweaks":{"ui":{"wallpaperFullQuality": false}}}))
@@ -3657,6 +3661,144 @@ fn get_settings_sync_patch(
         // settings field still lives on tweaks.security.gameDvrDisabled
         // (already in the map above as Disable-GameDVR / Enable-GameDVR).
         _ => None,
+    }
+}
+
+fn diagnostic_tracing_result_succeeded(
+    result: Option<&serde_json::Value>,
+    expected_disabled: bool,
+) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+
+    let expected_status = if expected_disabled {
+        "disabled"
+    } else {
+        "enabled"
+    };
+    let operation_status = result
+        .get("operationStatus")
+        .or_else(|| result.get("status"))
+        .and_then(serde_json::Value::as_str);
+    let effective_disabled = result
+        .get("effectiveState")
+        .and_then(|state| state.get("disabled"))
+        .and_then(serde_json::Value::as_bool);
+
+    result.get("error").and_then(serde_json::Value::as_bool) != Some(true)
+        && operation_status == Some(expected_status)
+        && effective_disabled == Some(expected_disabled)
+}
+
+#[cfg(test)]
+mod settings_sync_patch_tests {
+    use super::*;
+
+    #[test]
+    fn enthusiast_mode_syncs_to_its_performance_setting_path() {
+        for (command, expected) in [
+            ("Enable-EnthusiastMode", true),
+            ("Disable-EnthusiastMode", false),
+        ] {
+            let patch = get_settings_sync_patch(command, &std::collections::HashMap::new(), None)
+                .expect("Enthusiast Mode command must update settings");
+
+            assert_eq!(
+                patch.pointer("/tweaks/performance/enthusiastModeEnabled"),
+                Some(&serde_json::json!(expected)),
+                "{command} must patch the field read by the toggle and probe"
+            );
+            assert!(
+                patch.pointer("/tweaks/ui/enthusiastModeEnabled").is_none(),
+                "the obsolete UI path must not be written"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_tracing_state_is_not_persisted_after_partial_or_failed_apply() {
+        for result in [
+            serde_json::json!({"status": "partial", "error": true, "effectiveState": {"disabled": true}}),
+            serde_json::json!({"status": "disabled", "error": true, "effectiveState": {"disabled": true}}),
+        ] {
+            for command in [
+                "Disable-DiagnosticEventTracing",
+                "Enable-DiagnosticEventTracing",
+            ] {
+                assert_eq!(
+                    get_settings_sync_patch(
+                        command,
+                        &std::collections::HashMap::new(),
+                        Some(&result)
+                    ),
+                    None,
+                    "{command} must not persist an unsuccessful ETW apply"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_tracing_state_is_persisted_after_verified_apply() {
+        for (command, expected) in [
+            ("Disable-DiagnosticEventTracing", true),
+            ("Enable-DiagnosticEventTracing", false),
+        ] {
+            let result = serde_json::json!({
+                "status": if expected { "disabled" } else { "enabled" },
+                "error": false,
+                "effectiveState": {"disabled": expected}
+            });
+            let patch =
+                get_settings_sync_patch(command, &std::collections::HashMap::new(), Some(&result))
+                    .expect("a verified tracing operation must sync settings");
+            assert_eq!(
+                patch.pointer("/privacy/tracking/diagnosticEventTracingDisabled"),
+                Some(&serde_json::json!(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_tracing_sync_requires_matching_status_and_effective_state() {
+        for (command, status, effective_disabled) in [
+            ("Disable-DiagnosticEventTracing", "enabled", true),
+            ("Disable-DiagnosticEventTracing", "disabled", false),
+            ("Enable-DiagnosticEventTracing", "disabled", false),
+            ("Enable-DiagnosticEventTracing", "enabled", true),
+        ] {
+            let result = serde_json::json!({
+                "status": status,
+                "error": false,
+                "effectiveState": {"disabled": effective_disabled}
+            });
+            assert_eq!(
+                get_settings_sync_patch(command, &std::collections::HashMap::new(), Some(&result)),
+                None,
+                "{command} must reject mismatched status or effective state"
+            );
+        }
+    }
+
+    #[test]
+    fn machine_wide_tracing_response_preserves_the_operation_status_for_sync() {
+        let wrapped = with_machine_wide_status(
+            "Disable-DiagnosticEventTracing",
+            serde_json::json!({
+                "status": "disabled",
+                "error": false,
+                "effectiveState": {"disabled": true}
+            }),
+        );
+        assert_eq!(wrapped["status"], "applied");
+        assert_eq!(wrapped["operationStatus"], "disabled");
+        assert!(get_settings_sync_patch(
+            "Disable-DiagnosticEventTracing",
+            &std::collections::HashMap::new(),
+            Some(&wrapped)
+        )
+        .is_some());
     }
 }
 
@@ -4051,6 +4193,14 @@ fn with_machine_wide_status(command: &str, result: serde_json::Value) -> serde_j
 
     match result {
         serde_json::Value::Object(mut object) => {
+            if matches!(
+                command,
+                "Disable-DiagnosticEventTracing" | "Enable-DiagnosticEventTracing"
+            ) {
+                if let Some(operation_status) = object.get("status").cloned() {
+                    object.insert("operationStatus".to_string(), operation_status);
+                }
+            }
             object.insert("scope".to_string(), serde_json::json!("machine"));
             object.insert("status".to_string(), serde_json::json!(status));
             serde_json::Value::Object(object)
@@ -7316,8 +7466,8 @@ async fn full_lockdown_with_plan(
     let shutdown_system = cfg.shutdown_system.unwrap_or(true);
 
     // Resolve a step's enabled state: user override → step's default.
-    // Sparse map means an untouched user gets the documented defaults
-    // (most steps on; the slow Privacy Clean deep erasers off).
+    // Sparse map means an untouched user gets the conservative documented
+    // defaults: forensic history steps on, broad/data-destructive steps off.
     let user_steps = cfg.steps.as_ref();
     let is_step_enabled = |def: &DestructStepDef| -> bool {
         match user_steps.and_then(|m| m.get(def.id).copied()) {

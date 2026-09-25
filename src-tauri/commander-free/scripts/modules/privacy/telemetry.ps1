@@ -373,6 +373,7 @@ $Script:AppPrivacyValueNames = @{
     'webcam'     = 'LetAppsAccessCamera'
     'microphone' = 'LetAppsAccessMicrophone'
     'location'   = 'LetAppsAccessLocation'
+    'appDiagnostics' = 'LetAppsGetDiagnosticInfo'
 }
 
 function Set-AppCapabilityAccess {
@@ -504,6 +505,16 @@ public class WC_PolicyRefresh {
         # even from an elevated process. Read Windows' effective decision back
         # before reporting success so the UI never claims a failed Allow worked.
         $effective = Get-AppCapabilityAccessStatus -Capability $Capability
+        if ($effective.error) {
+            return @{
+                error          = $true
+                message        = "Unable to verify the Windows access state for $Capability. $($effective.message)"
+                capability     = $Capability
+                requestedValue = $Access
+                value          = $null
+                entriesTouched = $touched
+            }
+        }
         $effectiveAccess = if ($effective.disabled) { 'Deny' } else { 'Allow' }
         if ($effectiveAccess -ne $Access) {
             return @{
@@ -543,6 +554,13 @@ function Get-AppCapabilityAccessStatus {
             $value = (Get-ItemProperty -Path (Join-Path $root $Capability) -Name "Value" -ErrorAction SilentlyContinue).Value
             if ($value -eq "Deny") { $consentDenied = $true }
         }
+        if ($Script:AppPrivacyValueNames.ContainsKey($Capability)) {
+            $policyName = $Script:AppPrivacyValueNames[$Capability]
+            foreach ($hive in @('HKCU:', 'HKLM:')) {
+                $policyValue = (Get-ItemProperty -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name $policyName -ErrorAction SilentlyContinue).$policyName
+                if ($policyValue -eq 2) { $hardDenied = $true }
+            }
+        }
         if ($Capability -eq 'webcam') {
             # ConsentStore roots are defaults. A child app entry can explicitly
             # allow camera use, so surface that mixed state rather than calling
@@ -550,7 +568,7 @@ function Get-AppCapabilityAccessStatus {
             $desktopAppsValue = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -ErrorAction SilentlyContinue).Value
             $appValues = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty -Path $_.PSPath -Name 'Value' -ErrorAction SilentlyContinue).Value } | Where-Object { $_ -in @('Allow', 'Deny') })
             $mixedAppAccess = $consentDenied -and ($appValues -contains 'Allow')
-            $hardDenied = ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
+            $hardDenied = $hardDenied -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
         }
         $denied = $hardDenied -or ($consentDenied -and -not $mixedAppAccess)
         $value = if ($denied) { "Deny" } else { "Allow" }
@@ -563,7 +581,7 @@ function Get-AppCapabilityAccessStatus {
         }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message; capability = $Capability; value = "Allow"; disabled = $false }
+        @{ error = $true; message = $_.Exception.Message; capability = $Capability; value = $null; disabled = $null }
     }
 }
 
@@ -591,7 +609,7 @@ function Get-AppPrivacyCapabilitiesStatus {
         $results = @{}
         foreach ($cap in $capabilities) {
             $state = Get-AppCapabilityAccessStatus -Capability $cap
-            $results[$cap] = [bool]$state.disabled
+            $results[$cap] = if ($state.error) { $null } else { [bool]$state.disabled }
         }
 
         $results
@@ -1634,6 +1652,10 @@ function _WC-SetAutologgerStart {
     # Fast path: many keys allow admin writes outright; skip the ACL dance.
     try {
         Set-ItemProperty -Path $Path -Name 'Start' -Value $Value -Type DWord -Force -ErrorAction Stop
+        $writtenValue = (Get-ItemProperty -Path $Path -ErrorAction Stop).PSObject.Properties['Start'].Value
+        if ($null -eq $writtenValue -or [int]$writtenValue -ne $Value) {
+            return @{ ok = $false; reason = 'write-verification-failed'; error = "Expected Start=$Value, read back $writtenValue." }
+        }
         return @{ ok = $true; method = 'direct' }
     } catch {
         # Access denied — fall through to ownership takeover.
@@ -1662,6 +1684,10 @@ function _WC-SetAutologgerStart {
 
         # 3. Write the value.
         Set-ItemProperty -Path $Path -Name 'Start' -Value $Value -Type DWord -Force -ErrorAction Stop
+        $writtenValue = (Get-ItemProperty -Path $Path -ErrorAction Stop).PSObject.Properties['Start'].Value
+        if ($null -eq $writtenValue -or [int]$writtenValue -ne $Value) {
+            throw "Expected Start=$Value, read back $writtenValue."
+        }
 
         # 4. Restore original ACL — this puts the owner back to TrustedInstaller
         #    and removes our temporary FullControl rule. Needs SeRestorePrivilege.
@@ -1683,37 +1709,64 @@ function Disable-DiagnosticEventTracing {
         $touched = 0
         $failed  = 0
         $missing = 0
-        $errors  = New-Object System.Collections.Generic.List[hashtable]
+        $errors  = [System.Collections.Generic.List[hashtable]]::new()
+
+        try {
+            $sessionResult = _WC-StopDiagnosticEtwSessions
+        } catch {
+            $sessionResult = @{ ok = $false; remaining = @(); error = $_.Exception.Message }
+        }
+        if (-not $sessionResult.ok) {
+            $failed++
+            if ($sessionResult.error) {
+                $errors.Add(@{ operation = 'query-sessions'; error = $sessionResult.error })
+            } else {
+                foreach ($name in $sessionResult.remaining) {
+                    $errors.Add(@{ logger = $name; operation = 'stop-session'; error = 'The ETW session remains active after the stop request.' })
+                }
+            }
+        }
 
         foreach ($logger in $Script:WC_DIAG_ETW_LOGGERS) {
-            # 1. Stop the currently running ETW session. Without -ets the
-            #    autologger Start=0 only takes effect at next boot, so traces
-            #    keep accumulating until reboot. The 2>$null swallows the
-            #    "session not found" noise for sessions that aren't active.
-            & logman stop $logger -ets 2>$null | Out-Null
-
-            # 2. Disable autologger so it doesn't restart at next boot.
+            # Disable the autologger so it doesn't restart at next boot.
             $path = "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$logger"
             $r = _WC-SetAutologgerStart -Path $path -Value 0
             if     ($r.ok)                       { $touched++ }
             elseif ($r.reason -eq 'missing-key') { $missing++ }
             else                                 {
                 $failed++
-                $errors.Add(@{ logger = $logger; reason = $r.reason; error = $r.error })
+                $errors.Add(@{ logger = $logger; operation = 'disable-autologger'; reason = $r.reason; error = $r.error })
             }
         }
 
         foreach ($t in $Script:WC_DIAG_ETW_TASKS) {
-            Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue | Out-Null
+            try {
+                $task = @(Get-ScheduledTask -ErrorAction Stop) | Where-Object { $_.TaskPath -eq ($t.Path + '\') -and $_.TaskName -eq $t.Name } | Select-Object -First 1
+                if ($task -and "$($task.State)" -ne 'Disabled') {
+                    Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop | Out-Null
+                }
+            } catch {
+                $failed++
+                $errors.Add(@{ task = "$($t.Path)$($t.Name)"; operation = 'disable-task'; error = $_.Exception.Message })
+            }
+        }
+
+        $effective = Get-DiagnosticEventTracingStatus
+        if ($effective.error -or -not $effective.disabled) {
+            $failed++
+            $errors.Add(@{ operation = 'verify-disabled'; error = if ($effective.error) { $effective.message } else { 'Windows still reports diagnostic tracing enabled.' } })
         }
 
         @{
             status         = if ($failed -gt 0) { 'partial' } else { 'disabled' }
+            error          = ($failed -gt 0)
             loggersTouched = $touched
             loggersFailed  = $failed
             loggersMissing = $missing
             loggersTotal   = $Script:WC_DIAG_ETW_LOGGERS.Count
             errors         = @($errors)
+            effectiveState = if ($effective.error) { $null } else { $effective }
+            sessionsStopped = $sessionResult.ok
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -1724,22 +1777,72 @@ function Enable-DiagnosticEventTracing {
     try {
         $touched = 0
         $failed  = 0
+        $missing = 0
+        $errors  = [System.Collections.Generic.List[hashtable]]::new()
         foreach ($logger in $Script:WC_DIAG_ETW_LOGGERS) {
             $path = "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$logger"
             $r = _WC-SetAutologgerStart -Path $path -Value 1
             if     ($r.ok)                       { $touched++ }
-            elseif ($r.reason -ne 'missing-key') { $failed++  }
+            elseif ($r.reason -eq 'missing-key') { $missing++ }
+            else {
+                $failed++
+                $errors.Add(@{ logger = $logger; operation = 'enable-autologger'; reason = $r.reason; error = $r.error })
+            }
         }
         foreach ($t in $Script:WC_DIAG_ETW_TASKS) {
-            Enable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue | Out-Null
+            try {
+                $task = @(Get-ScheduledTask -ErrorAction Stop) | Where-Object { $_.TaskPath -eq ($t.Path + '\') -and $_.TaskName -eq $t.Name } | Select-Object -First 1
+                if ($task -and "$($task.State)" -eq 'Disabled') {
+                    Enable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop | Out-Null
+                }
+            } catch {
+                $failed++
+                $errors.Add(@{ task = "$($t.Path)$($t.Name)"; operation = 'enable-task'; error = $_.Exception.Message })
+            }
+        }
+
+        $effective = Get-DiagnosticEventTracingStatus
+        if ($effective.error -or $effective.disabled) {
+            $failed++
+            $errors.Add(@{ operation = 'verify-enabled'; error = if ($effective.error) { $effective.message } else { 'No configured diagnostic tracing source became enabled.' } })
         }
         @{
             status         = if ($failed -gt 0) { 'partial' } else { 'enabled' }
+            error          = ($failed -gt 0)
             loggersTouched = $touched
             loggersFailed  = $failed
+            loggersMissing = $missing
+            errors         = @($errors)
+            effectiveState = if ($effective.error) { $null } else { $effective }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function _WC-GetActiveDiagnosticEtwSessions {
+    $output = @(& logman query -ets 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read active ETW sessions with logman query -ets (exit code $LASTEXITCODE)."
+    }
+
+    $lines = $output -join "`n"
+    @($Script:WC_DIAG_ETW_LOGGERS | Where-Object {
+        $pattern = '(?m)^\s*' + [regex]::Escape($_) + '\s+'
+        [regex]::IsMatch($lines, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    })
+}
+
+function _WC-StopDiagnosticEtwSessions {
+    $activeBefore = _WC-GetActiveDiagnosticEtwSessions
+    foreach ($name in $activeBefore) {
+        $null = & logman stop $name -ets 2>$null
+    }
+    $remaining = _WC-GetActiveDiagnosticEtwSessions
+    @{
+        ok        = ($remaining.Count -eq 0)
+        active    = @($activeBefore)
+        remaining = @($remaining)
+    }
 }
 
 # Read-only: returns the same boolean shape the Get-HardeningStatus probe
@@ -1748,21 +1851,69 @@ function Enable-DiagnosticEventTracing {
 function Get-DiagnosticEventTracingStatus {
     $offCount = 0
     $present = 0
-    foreach ($logger in $Script:WC_DIAG_ETW_LOGGERS) {
-        $path = "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$logger"
-        if (Test-Path $path) {
-            $present++
-            $start = (Get-ItemProperty -Path $path -Name 'Start' -ErrorAction SilentlyContinue).Start
-            if ($null -eq $start -or $start -eq 0) { $offCount++ }
-        } else {
-            # Missing key == effectively disabled.
-            $offCount++
+    $taskOffCount = 0
+    $tasksPresent = 0
+    $activeSessions = @()
+    try {
+        foreach ($logger in $Script:WC_DIAG_ETW_LOGGERS) {
+            $path = "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\$logger"
+            if (Test-Path -LiteralPath $path -ErrorAction Stop) {
+                $present++
+                $properties = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
+                $startProperty = $properties.PSObject.Properties['Start']
+                $start = if ($startProperty) { $startProperty.Value } else { $null }
+                if ($null -eq $start -or [int]$start -eq 0) { $offCount++ }
+            } else {
+                # A logger that is not configured cannot record events.
+                $offCount++
+            }
+        }
+
+        $installedTasks = @(Get-ScheduledTask -ErrorAction Stop)
+        foreach ($taskSpec in $Script:WC_DIAG_ETW_TASKS) {
+            $taskPath = $taskSpec.Path + '\'
+            $task = $installedTasks | Where-Object { $_.TaskPath -eq $taskPath -and $_.TaskName -eq $taskSpec.Name } | Select-Object -First 1
+            if ($task) {
+                $tasksPresent++
+                if ("$($task.State)" -eq 'Disabled') { $taskOffCount++ }
+            } else {
+                # A task absent on this Windows edition cannot create a trace.
+                $taskOffCount++
+            }
+        }
+
+        $activeSessions = @(_WC-GetActiveDiagnosticEtwSessions)
+
+        $disabled = (
+            $offCount -eq $Script:WC_DIAG_ETW_LOGGERS.Count -and
+            $taskOffCount -eq $Script:WC_DIAG_ETW_TASKS.Count -and
+            $activeSessions.Count -eq 0
+        )
+        @{
+            disabled       = $disabled
+            loggersOff     = $offCount
+            loggersPresent = $present
+            loggersTotal   = $Script:WC_DIAG_ETW_LOGGERS.Count
+            tasksOff       = $taskOffCount
+            tasksPresent   = $tasksPresent
+            tasksTotal     = $Script:WC_DIAG_ETW_TASKS.Count
+            sessionsActive = $activeSessions.Count
+            activeSessions = $activeSessions
         }
     }
-    @{
-        disabled       = ($offCount -eq $Script:WC_DIAG_ETW_LOGGERS.Count)
-        loggersOff     = $offCount
-        loggersPresent = $present
-        loggersTotal   = $Script:WC_DIAG_ETW_LOGGERS.Count
+    catch {
+        @{
+            error          = $true
+            message        = $_.Exception.Message
+            disabled       = $null
+            loggersOff     = $offCount
+            loggersPresent = $present
+            loggersTotal   = $Script:WC_DIAG_ETW_LOGGERS.Count
+            tasksOff       = $taskOffCount
+            tasksPresent   = $tasksPresent
+            tasksTotal     = $Script:WC_DIAG_ETW_TASKS.Count
+            sessionsActive = $activeSessions.Count
+            activeSessions = $activeSessions
+        }
     }
 }

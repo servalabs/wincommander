@@ -461,10 +461,10 @@ const CAPABILITY_TOGGLES_RAW: ToggleDef[] = [
   {
     id: "cap-appDiagnostics",
     label: "Disable App Diagnostics",
-    description: "Block diagnostics access",
+    description: "Block apps from reading diagnostic information from other apps. This is separate from Windows ETW tracing.",
     modeText: {
-      simple: { label: "Disable App Diagnostics", description: "Stops apps from reading diagnostics from other apps." },
-      advanced: { label: "Disable App Diagnostics", description: "Block diagnostics access" },
+      simple: { label: "Disable App Diagnostics", description: "Stops apps from reading diagnostics from other apps; system tracing is controlled separately." },
+      advanced: { label: "Disable App Diagnostics", description: "Block app permission to read other apps' diagnostic information; does not change Windows ETW tracing." },
     },
     impact: "Apps can read diagnostic data from other apps",
     section: "capabilities",
@@ -476,7 +476,7 @@ const CAPABILITY_TOGGLES_RAW: ToggleDef[] = [
     enableCmd: "Set-AppCapabilityAccess",
     disableCmd: "Set-AppCapabilityAccess",
     tier: "free",
-    needsAdmin: false,
+    needsAdmin: true,
     irreversible: false,
     reducesSecurity: false,
     defenderFlagged: false,

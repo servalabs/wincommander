@@ -994,22 +994,22 @@ export interface PrivacyStatus {
 }
 
 export interface AppPrivacyCapabilitiesStatus {
-  webcam: boolean;
-  microphone: boolean;
-  contacts: boolean;
-  appointments: boolean;
-  phoneCall: boolean;
-  phoneCallHistory: boolean;
-  chat: boolean;
-  userNotificationListener: boolean;
-  documentsLibrary: boolean;
-  picturesLibrary: boolean;
-  videosLibrary: boolean;
-  broadFileSystemAccess: boolean;
-  gazeInput: boolean;
-  appDiagnostics: boolean;
-  userAccountInformation: boolean;
-  bluetoothSync: boolean;
+  webcam: boolean | null;
+  microphone: boolean | null;
+  contacts: boolean | null;
+  appointments: boolean | null;
+  phoneCall: boolean | null;
+  phoneCallHistory: boolean | null;
+  chat: boolean | null;
+  userNotificationListener: boolean | null;
+  documentsLibrary: boolean | null;
+  picturesLibrary: boolean | null;
+  videosLibrary: boolean | null;
+  broadFileSystemAccess: boolean | null;
+  gazeInput: boolean | null;
+  appDiagnostics: boolean | null;
+  userAccountInformation: boolean | null;
+  bluetoothSync: boolean | null;
 }
 
 export interface DNSStatus {

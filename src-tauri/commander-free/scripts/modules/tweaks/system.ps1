@@ -472,7 +472,8 @@ function Get-HardeningStatus {
     # after Windows re-enabled it), and (b) a missing `Start` value counts as
     # "off" — Windows treats absent autologger Start as "do not auto-start",
     # so `$null -ne 0` (which is $true in PowerShell) is the wrong test.
-    $diagEventTracingDisabled = [bool](Get-DiagnosticEventTracingStatus).disabled
+    $diagEventTracingState = Get-DiagnosticEventTracingStatus
+    $diagEventTracingDisabled = if ($diagEventTracingState.error) { $null } else { [bool]$diagEventTracingState.disabled }
     # KT: Delegate to the canonical probe in privacy/telemetry.ps1 (same file
     # that owns Disable-InternetCommunication) so Apply and the radar finding
     # can never disagree about which keys count as "restricted".
