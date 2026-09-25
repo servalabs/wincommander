@@ -315,7 +315,10 @@ export default function UsbDevicesSection() {
   const [error, setError] = useState<string | null>(null);
   const [volumes, setVolumes] = useState<UsbVolume[]>([]);
   const [trustScores, setTrustScores] = useState<Record<string, UsbTrustScore>>({});
-  const [blockedKeys, setBlockedKeys] = useState<Set<string>>(new Set());
+  // A command acknowledgement is not proof that Windows disabled a device.
+  // Keep only an explicitly non-authoritative requested state until the
+  // service exposes a verified policy receipt.
+  const [pendingBlockKeys, setPendingBlockKeys] = useState<Set<string>>(new Set());
   const [proInstalled, setProInstalled] = useState(true);
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -333,6 +336,9 @@ export default function UsbDevicesSection() {
   const [hidApprovalBusy, setHidApprovalBusy] = useState(false);
 
   const hidApprovalGateEnabled = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalGateEnabled === true;
+  const masterEnabled = appSettings?.ideal?.privacy?.usbSecurity?.monitorEnabled === true;
+  const protectionActive = masterEnabled && status.running;
+  const childControlsDisabled = busy || !protectionActive;
   const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
     ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
 
@@ -566,7 +572,20 @@ export default function UsbDevicesSection() {
     setBusy(true);
     setError(null);
     try {
-      await invoke(on ? 'start_usb_monitor' : 'stop_usb_monitor');
+      if (on) {
+        await invoke('start_usb_monitor');
+      } else {
+        // Stop every child collector in the same interaction. App-level
+        // reconciliation repeats this defensively after persisted settings
+        // change, but the UI must not briefly report Off while they run.
+        await Promise.allSettled([
+          invoke('stop_usb_monitor'),
+          invoke('stop_usb_metering'),
+          invoke('stop_usb_hid_guard'),
+          invoke('stop_usb_autosandbox'),
+          invoke('stop_usb_hid_approval_gate'),
+        ]);
+      }
       await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(reportSettingsWriteFailure);
       await refresh();
     } catch (reason) {
@@ -610,10 +629,10 @@ export default function UsbDevicesSection() {
   }, [refresh, requestConfirm]);
 
   const toggleMetering = useCallback(async (on: boolean) => {
+    if (!protectionActive) return;
     setBusy(true);
     setError(null);
     try {
-      if (on) await invoke('start_usb_monitor');
       await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
       await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(reportSettingsWriteFailure);
       setMetering(on);
@@ -624,13 +643,13 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, [patchAppSettings, recordUsbFailure, refresh]);
+  }, [patchAppSettings, protectionActive, recordUsbFailure, refresh]);
 
   const toggleHidGuard = useCallback(async (on: boolean) => {
+    if (!protectionActive) return;
     setBusy(true);
     setError(null);
     try {
-      if (on) await invoke('start_usb_monitor');
       await invoke(on ? 'start_usb_hid_guard' : 'stop_usb_hid_guard');
       await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(reportSettingsWriteFailure);
       setHidGuardRunning(on);
@@ -641,7 +660,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, [patchAppSettings, recordUsbFailure, refresh]);
+  }, [patchAppSettings, protectionActive, recordUsbFailure, refresh]);
 
   const clearHidAlerts = useCallback(async () => {
     const accepted = await requestConfirm({
@@ -662,6 +681,7 @@ export default function UsbDevicesSection() {
   }, [requestConfirm]);
 
   const setHidSensitivityCmd = useCallback(async (sensitivity: 'lenient' | 'balanced' | 'strict') => {
+    if (!protectionActive) return;
     setBusy(true);
     try {
       const next = await invoke<{ humanFloorMs: number; minBurstKeys: number }>('set_usb_hid_guard_sensitivity', { sensitivity });
@@ -672,7 +692,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [protectionActive]);
 
   const blockDevice = useCallback(async (entry: UsbTimelineEntry) => {
     const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
@@ -685,8 +705,9 @@ export default function UsbDevicesSection() {
     setBusy(true);
     try {
       await invoke('block_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
-      setBlockedKeys((current) => new Set(current).add(entry.key));
-      void showSuccess(`Blocked "${name}" — now disabled in Windows.`);
+      setPendingBlockKeys((current) => new Set(current).add(entry.key));
+      await refresh();
+      void showSuccess(`Block requested for "${name}". Windows verification will appear when the policy service reports it.`);
     } catch (reason) {
       recordUsbFailure('block', 'USB.BLOCK.FAILED');
       const message = humanizeUsbError(reason);
@@ -695,7 +716,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, [recordUsbFailure, requestConfirm, volumes]);
+  }, [recordUsbFailure, refresh, requestConfirm, volumes]);
 
   const allowDevice = useCallback(async (entry: UsbTimelineEntry) => {
     const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
@@ -707,12 +728,13 @@ export default function UsbDevicesSection() {
     setBusy(true);
     try {
       await invoke('allow_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
-      setBlockedKeys((current) => {
+      setPendingBlockKeys((current) => {
         const next = new Set(current);
         next.delete(entry.key);
         return next;
       });
-      void showSuccess(`Allowed "${name}" — re-enabled in Windows.`);
+      await refresh();
+      void showSuccess(`Allow requested for "${name}". Windows verification will appear when the policy service reports it.`);
     } catch (reason) {
       recordUsbFailure('allow', 'USB.ALLOW.FAILED');
       const message = humanizeUsbError(reason);
@@ -721,7 +743,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, [recordUsbFailure, hidApprovalGateEnabled, volumes]);
+  }, [recordUsbFailure, hidApprovalGateEnabled, refresh, volumes]);
 
   const setVolumeReadonly = useCallback(async (letter: string, readOnly: boolean) => {
     const displayLetter = letter.replace(/:$/, '');
@@ -745,6 +767,7 @@ export default function UsbDevicesSection() {
   }, [refresh, requestConfirm]);
 
   const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
+    if (!protectionActive) return;
     setHidApprovalBusy(true);
     try {
       if (enabled) await startHidApprovalGate(hidApprovalTtlSecs);
@@ -755,9 +778,10 @@ export default function UsbDevicesSection() {
     } finally {
       setHidApprovalBusy(false);
     }
-  }, [hidApprovalTtlSecs, patchAppSettings, startHidApprovalGate, stopHidApprovalGate]);
+  }, [hidApprovalTtlSecs, patchAppSettings, protectionActive, startHidApprovalGate, stopHidApprovalGate]);
 
   const setHidApprovalTtlSecs = useCallback(async (approvalTtlSecs: number) => {
+    if (!protectionActive) return;
     setHidApprovalBusy(true);
     try {
       await startHidApprovalGate(approvalTtlSecs);
@@ -767,12 +791,12 @@ export default function UsbDevicesSection() {
     } finally {
       setHidApprovalBusy(false);
     }
-  }, [patchAppSettings, startHidApprovalGate]);
+  }, [patchAppSettings, protectionActive, startHidApprovalGate]);
 
   const toggleAutoSandbox = useCallback(async (on: boolean) => {
+    if (!protectionActive) return;
     setAutoSandboxBusy(true);
     try {
-      if (on) await invoke('start_usb_monitor');
       await invoke(on ? 'start_usb_autosandbox' : 'stop_usb_autosandbox');
       await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(reportSettingsWriteFailure);
       setAutoSandboxRunning(on);
@@ -782,9 +806,10 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [patchAppSettings, refresh]);
+  }, [patchAppSettings, protectionActive, refresh]);
 
   const setAutoSandboxModeCmd = useCallback(async (mode: AutoSandboxMode) => {
+    if (!protectionActive) return;
     setAutoSandboxBusy(true);
     try {
       const current = await invoke<AutoSandboxStatus>('usb_autosandbox_status').catch(() => null);
@@ -815,9 +840,10 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [requestConfirm]);
+  }, [protectionActive, requestConfirm]);
 
   const setAutoSandboxHidScope = useCallback(async (actOnHid: boolean) => {
+    if (!protectionActive) return;
     if (actOnHid && autoSandboxMode === 'enforce') {
       const accepted = await requestConfirm({
         title: 'Also auto-quarantine newly attached keyboards?',
@@ -853,7 +879,7 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [requestConfirm]);
+  }, [protectionActive, requestConfirm]);
 
   const connectedCount = entries.filter((entry) => entry.attached).length;
   const alertsToday = advancedAvailable
@@ -864,8 +890,8 @@ export default function UsbDevicesSection() {
   const monitorFailure = status.lastError ?? null;
 
   const headerRight = (
-    <Tag minimal intent={status.running ? (monitorFailure ? 'warning' : 'success') : 'none'} className="font-mono">
-      {status.running ? 'ARMED' : 'OFF'}
+    <Tag minimal intent={protectionActive ? (monitorFailure ? 'warning' : 'success') : 'none'} className="font-mono">
+      {protectionActive ? 'ARMED' : masterEnabled ? 'STARTING' : 'OFF'}
     </Tag>
   );
 
@@ -875,11 +901,11 @@ export default function UsbDevicesSection() {
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">State</div>
-            <div className="mt-1 font-mono text-sm font-semibold">{status.running ? 'Armed' : 'Off'}</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{protectionActive ? 'Armed' : masterEnabled ? 'Starting' : 'Off'}</div>
           </div>
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">Devices currently connected</div>
-            <div className="mt-1 font-mono text-sm font-semibold">{status.running ? (monitorFailure ? 'Unknown' : connectedCount) : '—'}</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{protectionActive ? (monitorFailure ? 'Unknown' : connectedCount) : '—'}</div>
           </div>
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">Alerts today</div>
@@ -924,13 +950,13 @@ export default function UsbDevicesSection() {
             </div>
           </div>
 
-          {!status.running && (
+          {!protectionActive && (
             <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
               Monitoring is off. Stored records can be reviewed, but WinCommander cannot say what USB activity occurred while protection was off.
             </div>
           )}
 
-          {status.running && !monitorFailure && timelineEvents.length === 0 && (
+          {protectionActive && !monitorFailure && timelineEvents.length === 0 && (
             <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
               No USB events have been observed since monitoring started. This does not prove that no USB devices were used before it was armed.
             </div>
@@ -1004,14 +1030,14 @@ export default function UsbDevicesSection() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Switch
-              checked={status.running}
+              checked={masterEnabled}
               disabled={busy}
               onChange={(event) => void toggleMonitor((event.target as HTMLInputElement).checked)}
               label="Arm USB Protection"
             />
             <Switch
               checked={status.notify}
-              disabled={busy || !status.running}
+              disabled={busy || !protectionActive}
               onChange={(event) => void toggleNotify((event.target as HTMLInputElement).checked)}
               label="Notify on USB changes"
             />
@@ -1026,6 +1052,11 @@ export default function UsbDevicesSection() {
           <div className="text-xs opacity-65">
             Clearing records is permanent for WinCommander’s local USB timeline. It does not erase Windows artefacts and must not be used as evidence that a device was never connected.
           </div>
+          {!protectionActive && (
+            <div className="rounded-md border border-white/10 p-3 text-xs opacity-75">
+              Advanced USB settings below are saved configuration, not running. Arm USB Protection before enabling transfer metering, HID alerts, approval gates, or auto-isolate.
+            </div>
+          )}
         </section>
 
         <details className="rounded-md border border-white/10 p-3">
@@ -1034,7 +1065,7 @@ export default function UsbDevicesSection() {
             <TierGate tier="paid" featureLabel="USB transfer metering" fallback={<div className="text-xs opacity-60">WinCommander Pro is required for aggregate transfer metering.</div>}>
               <Switch
                 checked={metering}
-                disabled={busy || !status.running}
+                disabled={childControlsDisabled}
                 onChange={(event) => void toggleMetering((event.target as HTMLInputElement).checked)}
                 label="Meter aggregate USB transfer volume"
               />
@@ -1063,7 +1094,7 @@ export default function UsbDevicesSection() {
               <div className="mt-3 flex flex-col gap-3">
                 <Switch
                   checked={hidGuardRunning}
-                  disabled={busy}
+                  disabled={childControlsDisabled}
                   onChange={(event) => void toggleHidGuard((event.target as HTMLInputElement).checked)}
                   label="Alert on abnormal USB keyboard timing"
                 />
@@ -1072,7 +1103,7 @@ export default function UsbDevicesSection() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="USB HID timing sensitivity">
                   {(['lenient', 'balanced', 'strict'] as const).map((preset) => (
-                    <Button key={preset} small minimal={hidSensitivity !== preset} aria-pressed={hidSensitivity === preset} disabled={busy} onClick={() => void setHidSensitivityCmd(preset)}>
+                    <Button key={preset} small minimal={hidSensitivity !== preset} aria-pressed={hidSensitivity === preset} disabled={childControlsDisabled} onClick={() => void setHidSensitivityCmd(preset)}>
                       {preset.charAt(0).toUpperCase() + preset.slice(1)}
                     </Button>
                   ))}
@@ -1087,7 +1118,7 @@ export default function UsbDevicesSection() {
                   enabled={hidApprovalGateEnabled}
                   ttlSecs={hidApprovalTtlSecs}
                   status={hidApprovalStatus}
-                  busy={hidApprovalBusy || !advancedAvailable || !proInstalled}
+                  busy={hidApprovalBusy || !advancedAvailable || !proInstalled || !protectionActive}
                   onEnabledChange={(enabled) => void setHidApprovalGateEnabled(enabled)}
                   onTtlChange={(ttlSecs) => void setHidApprovalTtlSecs(ttlSecs)}
                 />
@@ -1099,7 +1130,7 @@ export default function UsbDevicesSection() {
               <div className="mt-3 flex flex-col gap-3">
                 <Switch
                   checked={autoSandboxRunning}
-                  disabled={autoSandboxBusy}
+                  disabled={autoSandboxBusy || !protectionActive}
                   onChange={(event) => void toggleAutoSandbox((event.target as HTMLInputElement).checked)}
                   label="Enable auto-isolate"
                 />
@@ -1114,7 +1145,7 @@ export default function UsbDevicesSection() {
                       minimal={autoSandboxMode !== m}
                       intent={m === 'enforce' && autoSandboxMode === m ? 'danger' : undefined}
                       aria-pressed={autoSandboxMode === m}
-                      disabled={autoSandboxBusy}
+                      disabled={autoSandboxBusy || !protectionActive}
                       onClick={() => void setAutoSandboxModeCmd(m)}
                     >
                       {m.charAt(0).toUpperCase() + m.slice(1)}
@@ -1123,7 +1154,7 @@ export default function UsbDevicesSection() {
                 </div>
                 <Switch
                   checked={autoSandboxConfig.actOnHid}
-                  disabled={autoSandboxBusy}
+                  disabled={autoSandboxBusy || !protectionActive}
                   onChange={(event) => void setAutoSandboxHidScope((event.target as HTMLInputElement).checked)}
                   label="Include newly attached HID keyboards"
                 />
@@ -1145,18 +1176,21 @@ export default function UsbDevicesSection() {
                   const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
                   const volume = volumeForEntry(entry, volumes);
                   const resolvedLetter = volume?.driveLetter ?? entry.driveLetter;
-                  const isBlocked = blockedKeys.has(entry.key);
+                  const blockRequested = pendingBlockKeys.has(entry.key);
                   const approvalControlledHid = hidApprovalGateEnabled && entry.category === 'Keyboard / HID';
                   return (
                     <div key={`policy-${entry.key}`} className="rounded-md border border-white/10 p-3">
                       <div className="text-sm font-medium">{name}</div>
+                      {blockRequested && (
+                        <div className="mt-1 text-xs text-[var(--color-warning)]">Block requested; Windows verification is pending.</div>
+                      )}
                       <div className="mt-2 flex flex-wrap gap-1">
                         <Button
                           intent="danger"
                           minimal
                           small
                           aria-label={`Block ${name}`}
-                          disabled={busy || isBlocked || !proInstalled || !advancedAvailable}
+                          disabled={busy || blockRequested || !proInstalled || !advancedAvailable || !protectionActive}
                           onClick={() => void blockDevice(entry)}
                         >
                           Block
@@ -1166,7 +1200,7 @@ export default function UsbDevicesSection() {
                           minimal
                           small
                           aria-label={`Allow ${name}`}
-                          disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid}
+                          disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid || !protectionActive}
                           onClick={() => void allowDevice(entry)}
                           title={approvalControlledHid ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.' : undefined}
                         >
@@ -1178,7 +1212,7 @@ export default function UsbDevicesSection() {
                             minimal
                             small
                             aria-label={`Make ${name} read-only`}
-                            disabled={busy || !resolvedLetter || !advancedAvailable}
+                            disabled={busy || !resolvedLetter || !advancedAvailable || !protectionActive}
                             onClick={() => resolvedLetter && void setVolumeReadonly(resolvedLetter, true)}
                           >
                             Read-only
