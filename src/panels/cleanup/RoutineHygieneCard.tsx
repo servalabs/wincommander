@@ -113,7 +113,7 @@ export default function RoutineHygieneCard({
           className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Routine Hygiene
+          Cache-only cleanup
         </h3>
         <div className="h-px flex-1 bg-[var(--color-border)] opacity-50" />
         <span
@@ -134,6 +134,9 @@ export default function RoutineHygieneCard({
             </div>
             <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]" aria-live="polite">
               {summary}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
+              Covers Windows and app caches outside the Windows Storage and App &amp; browser cache cleaners. Temporary files and shared Windows cache folders stay in those Maintenance tools.
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">

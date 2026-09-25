@@ -6,7 +6,7 @@ import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { SystemHygieneTools } from "./SystemHygieneTools";
 import { StartupDriverTools } from "./StartupDriverTools";
-import { AppBrowserCacheCard, WindowsStorageCard } from "./ReclaimSpaceCard";
+import { AppBrowserCacheCard, RoutineCacheCleanupCard, WindowsStorageCard } from "./ReclaimSpaceCard";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
 import FileStatsPanel from "./FileStatsPanel";
@@ -117,6 +117,7 @@ function useMaintenanceReviewPreload() {
 function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.RefObject<HTMLDivElement | null>; analyzerRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div className="flex flex-col gap-4">
+      <RoutineCacheCleanupCard />
       <div className="maintenance-storage-workspace">
         <div ref={cleanupRef} className="min-w-0"><WindowsStorageCard /></div>
         <AppBrowserCacheCard />
