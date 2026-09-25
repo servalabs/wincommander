@@ -268,11 +268,8 @@ export default function SystemCleanupPanel() {
                                     />
                                 </TabsContent>
                                 <TabsContent value="actions-monitoring">
-                                    {/* One-Time Actions + System Monitoring, plus Windows repair
-                                        (OsRepairCard) -- relocated here from Maintenance's now-removed
-                                        "Repair & hygiene" tab (2026-07), so every one-shot action button
-                                        lives in exactly one place app-wide. The divider below keeps these
-                                        as two distinct action groups rather than one merged list. */}
+                                    {/* Disk maintenance shares the one-time actions grid; Windows repair
+                                        stays grouped below it. */}
                                     <div className="flex flex-col gap-4">
                                         <CleanupActionsMonitoring
                                             cardDataMap={cardDataMap}
@@ -281,7 +278,8 @@ export default function SystemCleanupPanel() {
                                             handleCardLoad={handleCardLoad}
                                             handleCardClear={handleCardClear}
                                             onDriveWipe={() => setDriveWipeOpen(true)}
-                                            repairActions={<OsRepairCard embedded />}
+                                            diskActions={<OsRepairCard embedded group="disk" />}
+                                            repairActions={<OsRepairCard embedded group="repair" />}
                                         />
                                     </div>
                                 </TabsContent>

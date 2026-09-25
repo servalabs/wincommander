@@ -138,22 +138,28 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(overlayIndex).toBeGreaterThan(tabsIndex);
   });
 
-  // Force SSD TRIM is not one of ACTION_CATEGORIES/useCleanupScan's dispatch
-  // map — it lives in OsRepairCard and is embedded in the unified one-time
-  // action card, so the seven actions remain available without duplication.
-  test("Force SSD TRIM is not duplicated in System Cleanup's one-time actions", async () => {
+  // Drive optimization is a one-time action and shares the main actions grid;
+  // Windows repair remains in its own subsection below that grid.
+  test("Defrag and both SSD TRIM actions share the System Cleanup one-time action grid", async () => {
     const categories = await read("src/panels/cleanup/cleanupCategories.ts");
     const actionsMonitoring = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
     const scan = await read("src/panels/cleanup/useCleanupScan.ts");
     const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+    const repair = await read("src/panels/maintenance/OsRepairCard.tsx");
 
     expect(categories).not.toContain("id: 'ssdTrim'");
     expect(categories).not.toContain("invokeSSDTrim");
-    expect(actionsMonitoring).toContain("Force SSD TRIM lives in OsRepairCard");
     expect(scan).not.toContain("ssdTrim: invokeSSDTrim");
     expect(scan).not.toContain("invokeSSDTrim,");
+    expect(actionsMonitoring).toContain("{diskActions}");
+    expect(actionsMonitoring.indexOf("{diskActions}")).toBeLessThan(actionsMonitoring.indexOf('<h4 className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: \'var(--color-text-muted)\' }}>Windows repair</h4>'));
     expect(panel).toContain('from "../maintenance/OsRepairCard"');
-    expect(panel).toContain("<OsRepairCard embedded />");
+    expect(panel).toContain('<OsRepairCard embedded group="disk" />');
+    expect(panel).toContain('<OsRepairCard embedded group="repair" />');
+    expect(repair).toContain('key === "defrag" || key === "ssdTrim"');
+    expect(repair).toContain('group === "disk" ? isDiskAction : !isDiskAction');
+    expect(repair).toContain('label: "Defrag / TRIM"');
+    expect(repair).toContain('label: "Force SSD TRIM"');
   });
 
   // Each of the four usability tiers renders through the same component,

@@ -18,6 +18,7 @@ interface Props {
     handleCardLoad: (cat: CleanupCategory) => void;
     handleCardClear: (cat: CleanupCategory, onDriveWipe?: () => void) => void;
     onDriveWipe: () => void;
+    diskActions: ReactNode;
     repairActions: ReactNode;
 }
 
@@ -28,6 +29,7 @@ export default function CleanupActionsMonitoring({
     handleCardLoad,
     handleCardClear,
     onDriveWipe,
+    diskActions,
     repairActions,
 }: Props) {
     return (
@@ -48,9 +50,6 @@ export default function CleanupActionsMonitoring({
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
                     <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-2 md:grid-cols-2 xl:grid-cols-3">
-                        {/* Force SSD TRIM lives in OsRepairCard, rendered by SystemCleanupPanel
-                            just below this section (Maintenance's old "Repair & hygiene" tab that
-                            used to host it is gone, 2026-07) — ACTION_CATEGORIES no longer carries it. */}
                         {ACTION_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             return (
@@ -82,6 +81,7 @@ export default function CleanupActionsMonitoring({
                                 </div>
                             );
                         })}
+                        {diskActions}
                     </div>
                     <div className="flex items-center gap-3 mb-4 mt-6 py-2">
                         <h4 className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>Windows repair</h4>

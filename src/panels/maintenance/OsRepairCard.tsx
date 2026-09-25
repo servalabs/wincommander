@@ -38,9 +38,10 @@ const FRESH_DAYS = 15;
 
 interface OsRepairCardProps {
   embedded?: boolean;
+  group?: "all" | "disk" | "repair";
 }
 
-export default function OsRepairCard({ embedded = false }: OsRepairCardProps) {
+export default function OsRepairCard({ embedded = false, group = "all" }: OsRepairCardProps) {
   const { appSettings, patchAppSettings } = useAppState();
   const { invokeSystemRepair, invokeWindowsUpdateRepair, invokeDefrag, invokeSSDTrim } = useBackend();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -94,62 +95,67 @@ export default function OsRepairCard({ embedded = false }: OsRepairCardProps) {
     ssdTrim: invokeSSDTrim,
   };
 
-  const actions = (
-    <>
-      {!embedded && <CardHeader>
+  const visibleActions = REPAIR_ACTIONS.filter(({ key }) => {
+    const isDiskAction = key === "defrag" || key === "ssdTrim";
+    return group === "all" || (group === "disk" ? isDiskAction : !isDiskAction);
+  });
+
+  const actionCards = visibleActions.map((action) => {
+    const history = getHistory(action.key);
+    const isBusy = !!busy[action.key];
+    const runButton = (
+      embedded ? (
+        <RunOnceButton
+          isRunning={isBusy}
+          onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}
+          className="shrink-0"
+          actionLabel={action.label}
+        />
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={isBusy ? `${action.label} is running` : `Run ${action.label}`}
+          disabled={isBusy}
+          onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}
+        >
+          <Icon icon={isBusy ? "refresh" : "play"} className={isBusy ? "animate-spin" : undefined} />{isBusy ? "Running…" : "Run"}
+        </Button>
+      )
+    );
+    return (
+      <div key={action.key} className={embedded
+        ? "flex min-h-[104px] items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2.5"
+        : "flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3"}
+      >
+        {embedded ? (
+          <div className="flex size-[30px] shrink-0 items-center justify-center rounded-md bg-[var(--color-accent)]/10">
+            <Icon icon={action.icon} size={15} className="text-[var(--color-accent)]" />
+          </div>
+        ) : <Icon icon={action.icon} className="mt-0.5 shrink-0 text-[var(--accent)]" />}
+        <div className="min-w-0 flex-1">
+          <div className={embedded ? "flex min-w-0 items-center gap-2" : "flex flex-wrap items-center gap-2"}>
+            <span className={embedded ? "truncate text-[11px] font-bold uppercase tracking-[0.4px] text-[var(--color-text-primary)]" : "text-sm font-medium text-[var(--text)]"}>{action.label}</span>
+            {!embedded && <Badge tone={history.tone}>{history.label}</Badge>}
+            {!embedded && history.runCount > 0 && <span className="font-mono text-[10.5px] text-[var(--text-mute)]">{history.runCount} run{history.runCount === 1 ? "" : "s"}</span>}
+          </div>
+          <p className={embedded ? "truncate text-[10.5px] text-[var(--color-text-muted)]" : "mt-1 text-xs text-[var(--text-dim)]"}>{action.description}</p>
+          {embedded && <span className="block truncate text-[9px] text-[var(--color-text-muted)] opacity-70">{history.label}{history.runCount > 0 ? ` · ${history.runCount} run${history.runCount === 1 ? "" : "s"}` : ""}</span>}
+        </div>
+        {action.tier === "paid" ? <TierGate tier="paid" featureLabel={action.label}>{runButton}</TierGate> : runButton}
+      </div>
+    );
+  });
+
+  if (embedded) return <>{actionCards}</>;
+
+  return (
+    <Card>
+      <CardHeader>
         <CardTitle>Windows repair</CardTitle>
         <CardDescription>Microsoft's own repair tooling. Each run is long, needs Administrator, and reports its result in the status bar. Nothing here removes your files.</CardDescription>
-      </CardHeader>}
-      <CardContent className={embedded ? "grid grid-cols-1 gap-2 p-0 md:grid-cols-2 xl:grid-cols-3" : "flex flex-col gap-2"}>
-        {REPAIR_ACTIONS.map((action) => {
-          const history = getHistory(action.key);
-          const isBusy = !!busy[action.key];
-          const runButton = (
-            embedded ? (
-              <RunOnceButton
-                isRunning={isBusy}
-                onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}
-                className="shrink-0"
-                actionLabel={action.label}
-              />
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={isBusy ? `${action.label} is running` : `Run ${action.label}`}
-                disabled={isBusy}
-                onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}
-              >
-                <Icon icon={isBusy ? "refresh" : "play"} className={isBusy ? "animate-spin" : undefined} />{isBusy ? "Running…" : "Run"}
-              </Button>
-            )
-          );
-          return (
-            <div key={action.key} className={embedded
-              ? "flex min-h-[104px] items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2.5"
-              : "flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3"}
-            >
-              {embedded ? (
-                <div className="flex size-[30px] shrink-0 items-center justify-center rounded-md bg-[var(--color-accent)]/10">
-                  <Icon icon={action.icon} size={15} className="text-[var(--color-accent)]" />
-                </div>
-              ) : <Icon icon={action.icon} className="mt-0.5 shrink-0 text-[var(--accent)]" />}
-              <div className="min-w-0 flex-1">
-                <div className={embedded ? "flex min-w-0 items-center gap-2" : "flex flex-wrap items-center gap-2"}>
-                  <span className={embedded ? "truncate text-[11px] font-bold uppercase tracking-[0.4px] text-[var(--color-text-primary)]" : "text-sm font-medium text-[var(--text)]"}>{action.label}</span>
-                  {!embedded && <Badge tone={history.tone}>{history.label}</Badge>}
-                  {!embedded && history.runCount > 0 && <span className="font-mono text-[10.5px] text-[var(--text-mute)]">{history.runCount} run{history.runCount === 1 ? "" : "s"}</span>}
-                </div>
-                <p className={embedded ? "truncate text-[10.5px] text-[var(--color-text-muted)]" : "mt-1 text-xs text-[var(--text-dim)]"}>{action.description}</p>
-                {embedded && <span className="block truncate text-[9px] text-[var(--color-text-muted)] opacity-70">{history.label}{history.runCount > 0 ? ` · ${history.runCount} run${history.runCount === 1 ? "" : "s"}` : ""}</span>}
-              </div>
-              {action.tier === "paid" ? <TierGate tier="paid" featureLabel={action.label}>{runButton}</TierGate> : runButton}
-            </div>
-          );
-        })}
-      </CardContent>
-    </>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">{actionCards}</CardContent>
+    </Card>
   );
-
-  return embedded ? actions : <Card>{actions}</Card>;
 }

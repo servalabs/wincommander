@@ -370,9 +370,9 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   {
     id: "cleanup-tour-one-time-actions",
     title: "One-Time Actions",
-    summary: "Two background jobs you kick off once: Free Space Cleanup overwrites unallocated space per drive (SSD gets cipher + TRIM, HDD gets a DoD 3-pass overwrite) so deleted files can't be recovered, and Virtual Memory Purge disables hibernation and forces the pagefile to clear on shutdown. Both run in the background and can take 30+ minutes. (Force SSD TRIM runs from the Windows repair section further down this tab.)",
+    summary: "Run one-time maintenance from this tab: Free Space Cleanup overwrites unallocated space per drive (SSD gets cipher + TRIM, HDD gets a DoD 3-pass overwrite), Virtual Memory Purge disables hibernation and forces pagefile clearing on shutdown, and Defrag / TRIM lets Windows optimize each drive. Force SSD TRIM is beside Defrag / TRIM in the same actions grid.",
     keywords: ["one-time actions", "free space cleanup", "wipe free space", "virtual memory", "pagefile", "hibernation", "cleanup tour"],
-    body: "One-Time Actions runs background maintenance you don't need to repeat: overwrite free space or purge virtual memory.",
+    body: "One-Time Actions runs disk maintenance, lets Windows choose defrag or TRIM for each drive, and can force a TRIM pass on SSDs.",
     tour: {
       anchor: '[data-tour="cleanup-one-time-actions"]',
       navigateTo: "cleanup",
