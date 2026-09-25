@@ -13,16 +13,24 @@ mod platform {
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, S_FALSE, S_OK, WPARAM};
     use windows_sys::Win32::UI::Controls::{
-        TaskDialogIndirect, TASKDIALOGCONFIG, TDCBF_OK_BUTTON, TDE_CONTENT, TDF_CALLBACK_TIMER,
-        TDF_SHOW_MARQUEE_PROGRESS_BAR, TDF_SHOW_PROGRESS_BAR, TDM_CLICK_BUTTON, TDM_ENABLE_BUTTON,
-        TDM_SET_MARQUEE_PROGRESS_BAR, TDM_SET_PROGRESS_BAR_MARQUEE, TDM_SET_PROGRESS_BAR_POS,
-        TDM_UPDATE_ELEMENT_TEXT, TDN_BUTTON_CLICKED, TDN_CREATED, TDN_DESTROYED, TDN_TIMER,
+        TaskDialogIndirect, TASKDIALOGCONFIG, TDCBF_CANCEL_BUTTON, TDCBF_OK_BUTTON, TDE_CONTENT,
+        TDF_CALLBACK_TIMER, TDF_SHOW_MARQUEE_PROGRESS_BAR, TDF_SHOW_PROGRESS_BAR, TDM_CLICK_BUTTON,
+        TDM_ENABLE_BUTTON, TDM_SET_MARQUEE_PROGRESS_BAR, TDM_SET_PROGRESS_BAR_MARQUEE,
+        TDM_SET_PROGRESS_BAR_POS, TDM_UPDATE_ELEMENT_TEXT, TDN_BUTTON_CLICKED, TDN_CREATED,
+        TDN_DESTROYED, TDN_TIMER,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, IDOK};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageW, SetWindowPos, HWND_TOPMOST, IDCANCEL, IDOK, SWP_NOMOVE, SWP_NOSIZE,
+    };
 
     const AUTO_CLOSE_AFTER: Duration = Duration::from_millis(1_600);
     const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
     const MARQUEE_INTERVAL_MS: isize = 30;
+    const OPERATION_RUNNING: usize = 0;
+    const OPERATION_CANCEL_REQUESTED: usize = 1;
+    const OPERATION_COMMITTING: usize = 2;
+    const CANCEL_PENDING_STATUS: &str =
+        "Cancel requested. Finishing the current metadata scrub before stopping…";
 
     #[derive(Debug)]
     enum StartupState {
@@ -54,6 +62,8 @@ mod platform {
         rendered_version: AtomicU64,
         finished: AtomicBool,
         button_enabled: AtomicBool,
+        cancel_button_disabled: AtomicBool,
+        operation_state: AtomicUsize,
         finish_close_at_ms: AtomicU64,
         close_sent: AtomicBool,
         /// Counts public handles only; the UI thread owns a separate Arc.
@@ -92,6 +102,8 @@ mod platform {
                 rendered_version: AtomicU64::new(0),
                 finished: AtomicBool::new(false),
                 button_enabled: AtomicBool::new(false),
+                cancel_button_disabled: AtomicBool::new(false),
+                operation_state: AtomicUsize::new(OPERATION_RUNNING),
                 finish_close_at_ms: AtomicU64::new(0),
                 close_sent: AtomicBool::new(false),
                 public_handles: AtomicUsize::new(1),
@@ -154,7 +166,11 @@ mod platform {
             if self.shared.finished.load(Ordering::Acquire) {
                 return;
             }
-            progress.content = status;
+            progress.content = if self.is_cancelled() {
+                CANCEL_PENDING_STATUS.to_string()
+            } else {
+                status
+            };
             progress.mode = ProgressMode::Marquee;
             self.shared.progress_version.fetch_add(1, Ordering::Release);
         }
@@ -193,12 +209,33 @@ mod platform {
             } else {
                 progress.mode = ProgressMode::Determinate { current, total };
             }
-            progress.content = status;
+            progress.content = if self.is_cancelled() {
+                CANCEL_PENDING_STATUS.to_string()
+            } else {
+                status
+            };
             self.shared.progress_version.fetch_add(1, Ordering::Release);
         }
 
+        /// Returns true after the user requests cancellation. A running
+        /// metadata scrub request cannot be interrupted, so its caller checks
+        /// this immediately after the request returns.
+        pub fn is_cancelled(&self) -> bool {
+            self.shared.operation_state.load(Ordering::Acquire) == OPERATION_CANCEL_REQUESTED
+        }
+
+        /// Atomically prevent new cancellation requests before the clipboard
+        /// commit begins. Cancellation wins if it was requested first.
+        pub fn begin_commit(&self) -> bool {
+            if begin_commit_operation(&self.shared.operation_state) {
+                self.set_phase("Finalizing the clean clipboard…");
+                true
+            } else {
+                false
+            }
+        }
+
         /// Show the terminal result briefly, then close the native dialog.
-        /// Closing the window cannot cancel Safe Copy while it is running.
         pub fn finish(&self, succeeded: bool, status: impl Into<String>) {
             let fallback = if succeeded {
                 "Safe Copy is ready. You can paste the cleaned files now."
@@ -251,7 +288,7 @@ mod platform {
         config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
         config.hwndParent = std::ptr::null_mut();
         config.dwFlags = TDF_SHOW_PROGRESS_BAR | TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER;
-        config.dwCommonButtons = TDCBF_OK_BUTTON;
+        config.dwCommonButtons = TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON;
         config.pszWindowTitle = title.as_ptr();
         config.pszMainInstruction = instruction.as_ptr();
         config.pszContent = content.as_ptr();
@@ -284,7 +321,7 @@ mod platform {
     unsafe extern "system" fn task_dialog_callback(
         hwnd: HWND,
         notification: u32,
-        _wparam: WPARAM,
+        wparam: WPARAM,
         _lparam: LPARAM,
         callback_data: isize,
     ) -> windows_sys::core::HRESULT {
@@ -295,6 +332,9 @@ mod platform {
 
         match notification {
             value if value == TDN_CREATED as u32 => {
+                unsafe {
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                }
                 set_progress_mode(hwnd, true);
                 unsafe {
                     SendMessageW(hwnd, TDM_ENABLE_BUTTON as u32, IDOK as WPARAM, 0);
@@ -314,6 +354,23 @@ mod platform {
                 shared.startup_changed.notify_all();
             }
             value if value == TDN_BUTTON_CLICKED as u32 => {
+                if wparam == IDCANCEL as WPARAM && !shared.finished.load(Ordering::Acquire) {
+                    let _ = request_cancel(&shared.operation_state);
+                    let operation = shared.operation_state.load(Ordering::Acquire);
+                    if operation == OPERATION_CANCEL_REQUESTED {
+                        if let Ok(mut progress) = shared.progress.lock() {
+                            progress.content = CANCEL_PENDING_STATUS.to_string();
+                            shared.progress_version.fetch_add(1, Ordering::Release);
+                        }
+                    }
+                    if operation != OPERATION_RUNNING {
+                        unsafe {
+                            SendMessageW(hwnd, TDM_ENABLE_BUTTON as u32, IDCANCEL as WPARAM, 0);
+                        }
+                        shared.cancel_button_disabled.store(true, Ordering::Release);
+                    }
+                    return S_FALSE;
+                }
                 if !shared.finished.load(Ordering::Acquire) {
                     return S_FALSE;
                 }
@@ -332,6 +389,14 @@ mod platform {
                 {
                     unsafe {
                         SendMessageW(hwnd, TDM_ENABLE_BUTTON as u32, IDOK as WPARAM, 1);
+                    }
+                }
+
+                if shared.operation_state.load(Ordering::Acquire) != OPERATION_RUNNING
+                    && !shared.cancel_button_disabled.swap(true, Ordering::AcqRel)
+                {
+                    unsafe {
+                        SendMessageW(hwnd, TDM_ENABLE_BUTTON as u32, IDCANCEL as WPARAM, 0);
                     }
                 }
 
@@ -437,6 +502,61 @@ mod platform {
             .unwrap_or(0)
     }
 
+    fn request_cancel(operation_state: &AtomicUsize) -> bool {
+        operation_state
+            .compare_exchange(
+                OPERATION_RUNNING,
+                OPERATION_CANCEL_REQUESTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn begin_commit_operation(operation_state: &AtomicUsize) -> bool {
+        match operation_state.compare_exchange(
+            OPERATION_RUNNING,
+            OPERATION_COMMITTING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) | Err(OPERATION_COMMITTING) => true,
+            Err(OPERATION_CANCEL_REQUESTED) => false,
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(test)]
+    mod operation_state_tests {
+        use super::{
+            begin_commit_operation, request_cancel, OPERATION_CANCEL_REQUESTED,
+            OPERATION_COMMITTING, OPERATION_RUNNING,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        #[test]
+        fn a_cancel_request_prevents_clipboard_commit() {
+            let state = AtomicUsize::new(OPERATION_RUNNING);
+            assert!(request_cancel(&state));
+            assert!(!begin_commit_operation(&state));
+            assert_eq!(
+                state.load(std::sync::atomic::Ordering::Acquire),
+                OPERATION_CANCEL_REQUESTED
+            );
+        }
+
+        #[test]
+        fn clipboard_commit_rejects_late_cancellation() {
+            let state = AtomicUsize::new(OPERATION_RUNNING);
+            assert!(begin_commit_operation(&state));
+            assert!(!request_cancel(&state));
+            assert_eq!(
+                state.load(std::sync::atomic::Ordering::Acquire),
+                OPERATION_COMMITTING
+            );
+        }
+    }
+
     pub use SafeCopyProgressDialog as Dialog;
 }
 
@@ -454,6 +574,14 @@ impl SafeCopyProgressDialog {
     }
 
     pub fn set_phase(&self, _status: impl Into<String>) {}
+
+    pub fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    pub fn begin_commit(&self) -> bool {
+        true
+    }
 
     pub fn set_scrub_progress(
         &self,
