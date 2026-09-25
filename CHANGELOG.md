@@ -5,6 +5,12 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Selected VeraCrypt folders now use an index inside the mounted volume.
+  Search checks the native volume identity, updates incrementally while mounted,
+  and reads existing indexes without writing on read-only mounts. Private
+  results and previews are cleared after mount changes; private paths are
+  excluded from persistent launch history and the ordinary search provider.
+
 - Secure Storage and Quick Mount now request machine-wide writable drives,
   preserve existing file permissions, and retain explicit read-only mounting.
   The service checks the caller's access to containers and keyfiles before
