@@ -5,7 +5,12 @@ import {
 } from "./visibilityDefaults";
 
 describe("visibility defaults", () => {
-  test("conceals the requested surfaces in Borrowed Mode", () => {
+  test("hides license controls and the tour in Borrowed Mode by default", () => {
+    expect(DEFAULT_BORROWED_EXTRAS).toContain("license-panel");
+    expect(DEFAULT_BORROWED_EXTRAS).toContain("tour");
+  });
+
+  test("conceals the other requested surfaces in Borrowed Mode", () => {
     for (const surface of [
       "risk-matrix",
       "more-products",
@@ -13,6 +18,8 @@ describe("visibility defaults", () => {
       "popup-alerts",
       "desktop-alerts",
       "sidebar-preferences",
+      "license-panel",
+      "tour",
     ]) {
       expect(DEFAULT_BORROWED_EXTRAS).toContain(surface);
     }

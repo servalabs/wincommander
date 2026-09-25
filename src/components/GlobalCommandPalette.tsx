@@ -21,8 +21,18 @@ import { useTheme } from "../context/ThemeContext";
 import { useAppState } from "../context/AppContext";
 import { useAuthMode } from "../context/AuthModeContext";
 import { cn } from "../lib/utils";
-import { DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
+import {
+  DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS,
+  DEFAULT_ALWAYS_PANELS,
+  DEFAULT_BORROWED_EXTRAS,
+  DEFAULT_BORROWED_PANELS,
+} from "../lib/visibilityDefaults";
 import { canOpenFleetNavigation } from "../lib/fleetNavigationAccess";
+import {
+  isCommandPaletteActionVisible,
+  isCommandPaletteFeatureVisible,
+  isCommandPalettePanelVisible,
+} from "../lib/commandPaletteVisibility";
 
 const PANEL_LABEL: Partial<Record<string, string>> = Object.fromEntries(
   PANEL_MANIFESTS.map((p) => [p.id, p.label])
@@ -169,28 +179,51 @@ export default function GlobalCommandPalette() {
     )),
     [panelsUnlocked, borrowedActive, appSettings?.app?.lockedPanelIds]
   );
+  const paletteVisibility = useMemo(() => ({
+    alwaysHiddenPanels: appSettings?.app?.permanentlyHiddenPanels ?? DEFAULT_ALWAYS_PANELS,
+    // `lockedIds` already accounts for unlock mode and the borrowed-mode
+    // first-run defaults, so it is the effective panel lock set for this view.
+    lockedPanels: [...lockedIds],
+    alwaysHiddenActions: appSettings?.app?.hiddenSidebarActions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS,
+    borrowedHidden: appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS,
+    borrowedActive,
+  }), [
+    appSettings?.app?.permanentlyHiddenPanels,
+    appSettings?.app?.hiddenSidebarActions,
+    appSettings?.app?.borrowedHidden,
+    borrowedActive,
+    lockedIds,
+  ]);
 
-  // Visible nav destinations — exclude locked panels.
+  // The command palette must apply the same always-hidden and borrowed rules
+  // as the sidebar; otherwise hidden panels remain discoverable by search.
   // Secret Settings is reveal-gated only (same rule as Sidebar) so Borrowed
   // Mode never strands the user without a way back into the panel.
   const panels = useMemo(
     () =>
       getSidebarManifests(visibility).filter((p) => {
         if (p.id === "fleet" && !canOpenFleetNavigation(systemInfo?.isAdmin)) return false;
-        return p.id === "secret" ? secretSettingsRevealed : !lockedIds.has(p.id);
+        if (!isCommandPalettePanelVisible(p.id, paletteVisibility)) return false;
+        return p.id === "secret" ? secretSettingsRevealed : true;
       }),
-    [visibility, lockedIds, secretSettingsRevealed, systemInfo?.isAdmin],
+    [visibility, paletteVisibility, secretSettingsRevealed, systemInfo?.isAdmin],
   );
   const canShowPanel = useCallback(
-    (id: PanelId) => (id === "secret" ? secretSettingsRevealed : !lockedIds.has(id)),
-    [lockedIds, secretSettingsRevealed],
+    (id: PanelId) => {
+      if (!isCommandPalettePanelVisible(id, paletteVisibility)) return false;
+      if (id === "secret") return secretSettingsRevealed;
+      if (id === "advisor") return isCommandPaletteActionVisible("ai-advisor", paletteVisibility);
+      if (id === "search-files") return isCommandPaletteActionVisible("search", paletteVisibility);
+      return true;
+    },
+    [paletteVisibility, secretSettingsRevealed],
   );
 
-  // Settings/toggles — exclude those belonging to a locked panel.
+  // Settings/toggles are also undiscoverable when their parent panel is hidden.
   const settings = useMemo(() => {
     return ALL_TOGGLES
       .filter((t) => visibility.isVisible(getToggleVisibility(t, visibility.profiles)))
-      .filter((t) => !lockedIds.has(DOMAIN_PANEL[t.domain]))
+      .filter((t) => isCommandPalettePanelVisible(DOMAIN_PANEL[t.domain], paletteVisibility))
       .map((t) => {
         const wording = resolveToggleText(t, level);
         return {
@@ -201,7 +234,7 @@ export default function GlobalCommandPalette() {
           keywords: [...(t.keywords ?? []), t.domain, wording.label],
         };
       });
-  }, [visibility, level, lockedIds]);
+  }, [visibility, level, paletteVisibility]);
 
   const goSetting = useCallback((s: { label: string; panel: PanelId }) => {
     setOpen(false);
@@ -271,21 +304,26 @@ export default function GlobalCommandPalette() {
             </div>
             <span>Switch to {theme === "dark" ? "Daylight (light)" : "Anduril (dark)"}</span>
           </CommandItem>
-          <CommandItem value="notifications alerts processes tasks" onSelect={() => fire("toggle-notifications")}>
-            <div className={ICON_TILE}>
-              <Icon icon="notifications" size={13} className={ICON_CLS} />
-            </div>
-            <span>Notifications</span>
-          </CommandItem>
-          <CommandItem value="secure delete shred file folder" onSelect={() => fire("open-shred-dialog")}>
-            <div className={ICON_TILE}>
-              <Icon icon="trash" size={13} className={ICON_CLS} />
-            </div>
-            <span>Secure delete…</span>
-            <span className="ml-auto shrink-0 rounded border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 text-[10px] font-[family-name:var(--font-mono)] text-[var(--text-mute)]">
-              shred
-            </span>
-          </CommandItem>
+          {appSettings?.app?.hideNotificationBell !== true
+            && isCommandPaletteFeatureVisible("notif-bell", paletteVisibility) && (
+              <CommandItem value="notifications alerts processes tasks" onSelect={() => fire("toggle-notifications")}>
+                <div className={ICON_TILE}>
+                  <Icon icon="notifications" size={13} className={ICON_CLS} />
+                </div>
+                <span>Notifications</span>
+              </CommandItem>
+            )}
+          {isCommandPaletteActionVisible("delete", paletteVisibility) && (
+            <CommandItem value="secure delete shred file folder" onSelect={() => fire("open-shred-dialog")}>
+              <div className={ICON_TILE}>
+                <Icon icon="trash" size={13} className={ICON_CLS} />
+              </div>
+              <span>Secure delete…</span>
+              <span className="ml-auto shrink-0 rounded border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 text-[10px] font-[family-name:var(--font-mono)] text-[var(--text-mute)]">
+                shred
+              </span>
+            </CommandItem>
+          )}
         </CommandGroup>
       </CommandList>
 

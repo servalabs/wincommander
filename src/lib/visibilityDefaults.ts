@@ -50,6 +50,8 @@ export const DEFAULT_BORROWED_EXTRAS: string[] = [
   "popup-alerts",
   "desktop-alerts",
   "sidebar-preferences",
+  "license-panel",
+  "tour",
   "action:ai-advisor",
   "action:dismount",
   "action:delete",

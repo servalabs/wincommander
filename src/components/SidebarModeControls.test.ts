@@ -30,4 +30,20 @@ describe("Sidebar mode controls", () => {
     expect(table).toContain("Tour &amp; guide");
     expect(table).toContain("hideTour: vis === \"always\"");
   });
+
+  test("defaults license and tour to hidden while borrowed and wires their visibility choices", () => {
+    const defaults = readFileSync("src/lib/visibilityDefaults.ts", "utf8");
+    const table = readFileSync("src/panels/secret/VisibilityTable.tsx", "utf8");
+    const sidebar = readFileSync("src/components/Sidebar.tsx", "utf8");
+    const titleBar = readFileSync("src/components/TitleBar.tsx", "utf8");
+    const guide = readFileSync("src/components/guide/GuideHost.tsx", "utf8");
+
+    expect(defaults).toContain('"license-panel"');
+    expect(defaults).toContain('"tour"');
+    expect(table).toContain('"license-panel"');
+    expect(table).toContain('"tour"');
+    expect(sidebar).toContain('includes("license-panel")');
+    expect(titleBar).toContain('borrowedHidden.includes("tour")');
+    expect(guide).toContain('borrowedHidden.includes("tour")');
+  });
 });
