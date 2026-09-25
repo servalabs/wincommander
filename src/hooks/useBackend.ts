@@ -287,11 +287,6 @@ export interface SafeClipStatus {
   count: number;
   stampedAtMs: number;
 }
-/** Temporary Safe Copy scrub state. It disappears as soon as clipboard publish completes. */
-export interface SafeCopyProgress {
-  startedAtMs: number;
-  itemCount: number;
-}
 export interface SafeSkip {
   name: string;
   reason: string;
@@ -2307,7 +2302,6 @@ export function useBackend() {
     toggleSafeCopyContextMenu: (enable: boolean) => invoke("toggle_safe_copy_context_menu", { enable }),
     getSafeCopyContextMenuStatus: () => invoke<boolean>("get_safe_copy_context_menu_status"),
     safeCopyRecord: (paths: string[]) => invoke<number>("safe_copy_record", { paths }),
-    safeCopyProgressStatus: () => invoke<SafeCopyProgress | null>("safe_copy_progress_status"),
     safeClipStatus: () => invoke<SafeClipStatus>("safe_clip_status"),
     safePastePrepare: (destDir: string) => invoke<SafePasteResult>("safe_paste_prepare", { destDir }),
     scrubMetadataPaths: (paths: string[], options: ScrubMetadataOptions) =>

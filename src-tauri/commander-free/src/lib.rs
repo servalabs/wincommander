@@ -2527,7 +2527,6 @@ pub fn run() {
             backend::toggle_safe_copy_context_menu,
             backend::get_safe_copy_context_menu_status,
             safe_clip::safe_copy_record,
-            safe_clip::safe_copy_progress_status,
             safe_clip::safe_clip_status,
             safe_clip::safe_paste_prepare,
             session_instance::take_safe_paste_requests,

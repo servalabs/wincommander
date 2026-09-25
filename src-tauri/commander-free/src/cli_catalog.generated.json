@@ -10446,16 +10446,6 @@
       ]
     },
     {
-      "id": "tauri:safe_copy_progress_status",
-      "name": "safe_copy_progress_status",
-      "transport": "tauri",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useBackend.ts"
-      ]
-    },
-    {
       "id": "tauri:safe_copy_record",
       "name": "safe_copy_record",
       "transport": "tauri",

@@ -154,6 +154,30 @@ pub fn pipe_path(sid: u32) -> String {
     format!(r"\\.\pipe\{}", instance_object_name(sid, "args"))
 }
 
+/// Best-effort delivery to the already-running WinCommander instance. Safe
+/// Copy remains a headless Explorer operation; only fixed status tokens and
+/// numeric values cross this pipe, never file names or paths.
+pub(crate) fn notify_safe_copy(phase: &str, item_count: usize, elapsed_ms: u128) {
+    if !matches!(phase, "started" | "ready" | "failed") {
+        return;
+    }
+    let args = [
+        "--safe-copy-notification".to_string(),
+        phase.to_string(),
+        item_count.to_string(),
+        elapsed_ms.to_string(),
+    ];
+    let sid = current_session_id();
+    for attempt in 0..4 {
+        if forward_args_once(sid, &args) {
+            return;
+        }
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Attempt to become the primary instance for this Windows logon session.
@@ -616,6 +640,16 @@ fn forward_args_with_liveness(sid: u32, args: &[String]) -> (bool, Option<u32>) 
     (false, stored_pid)
 }
 
+/// Single non-blocking-ish attempt used by optional Safe Copy notices. Unlike
+/// the takeover path, a missing or busy app pipe must never delay file scrubbing.
+fn forward_args_once(sid: u32, args: &[String]) -> bool {
+    use std::io::Write as _;
+    match std::fs::OpenOptions::new().write(true).open(pipe_path(sid)) {
+        Ok(mut pipe) => pipe.write_all(args.join("|").as_bytes()).is_ok(),
+        Err(_) => false,
+    }
+}
+
 /// Single source of truth for context-menu verb → Tauri event resolution.
 /// BOTH the warm-forward path (`handle_forwarded_args` below, parsed from the
 /// pipe payload) and the cold-start path (`lib.rs`'s `setup()`, parsed from
@@ -675,6 +709,34 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
             "core",
             "[SessionInstance] elevation handoff ignored because this instance is already elevated",
         );
+        return;
+    }
+    if parts.first().copied() == Some("--safe-copy-notification") {
+        let notifications_enabled = crate::settings::read_settings()
+            .map(|settings| settings.app.safe_copy_notifications_enabled)
+            .unwrap_or(true);
+        if !notifications_enabled {
+            return;
+        }
+        let (Some(phase), Some(item_count), Some(elapsed_ms)) = (
+            parts.get(1).copied(),
+            parts.get(2).and_then(|value| value.parse::<usize>().ok()),
+            parts.get(3).and_then(|value| value.parse::<u128>().ok()),
+        ) else {
+            return;
+        };
+        if !matches!(phase, "started" | "ready" | "failed") {
+            return;
+        }
+        if let Err(error) =
+            crate::native_notify::show_safe_copy_status(app, phase, item_count, elapsed_ms)
+        {
+            crate::log_message_src(
+                "info",
+                "core",
+                &format!("[SafeCopy] could not show status notification: {error}"),
+            );
+        }
         return;
     }
     // Win32 ShowWindow (which desynced Tauri's window state and crashed on

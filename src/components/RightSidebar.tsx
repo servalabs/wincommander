@@ -5,7 +5,7 @@ import { useAppState } from "../context/AppContext";
 import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
 import { getDisplayBranding } from "../lib/branding";
-import useBackend, { type EncryptionPartition, type SafeCopyProgress } from "../hooks/useBackend";
+import useBackend, { type EncryptionPartition } from "../hooks/useBackend";
 import type { QuickMountSlot } from "../types/settings";
 import useVisibility from "../hooks/useVisibility";
 import useEntitlements from "../hooks/useEntitlements";
@@ -122,7 +122,6 @@ export default function RightSidebar() {
         verifyVaultDrive,
         getEncryptionPartitions,
         safePastePrepare,
-        safeCopyProgressStatus,
     } = useBackend();
 
     const visibility = useVisibility();
@@ -174,31 +173,6 @@ export default function RightSidebar() {
     const sdSilentRef = useRef<boolean>(false);
     const [scrubDialogOpen, setScrubDialogOpen] = useState(false);
     const [scrubInitialPaths, setScrubInitialPaths] = useState<string[] | undefined>(undefined);
-    // Safe Copy is only ready after its private cache has been scrubbed and
-    // published to the Windows file clipboard. Poll the short-lived backend
-    // marker so the app shows an honest blocking progress dialog, then removes
-    // it immediately rather than leaving a durable "N ready" rail indicator.
-    const [safeCopyProgress, setSafeCopyProgress] = useState<SafeCopyProgress | null>(null);
-    useEffect(() => {
-        let disposed = false;
-        const refresh = async () => {
-            try {
-                const progress = await safeCopyProgressStatus();
-                if (!disposed) setSafeCopyProgress(progress);
-            } catch {
-                // This indicator is advisory. A failed poll must not interfere
-                // with Safe Paste or leave the existing app controls blocked.
-                if (!disposed) setSafeCopyProgress(null);
-            }
-        };
-        void refresh();
-        const interval = window.setInterval(() => { void refresh(); }, 350);
-        return () => {
-            disposed = true;
-            window.clearInterval(interval);
-        };
-    }, [safeCopyProgressStatus]);
-
     // ── Quick Mount ──────────────────────────────────────────────────────────
     const [qmOpen, setQmOpen] = useState(false);
     const [qmSelectedIdx, setQmSelectedIdx] = useState(0);
@@ -1002,31 +976,6 @@ export default function RightSidebar() {
                     />
                 </Suspense>
             )}
-
-            {safeCopyProgress && (
-                <div
-                    className="safe-copy-progress-overlay"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="safe-copy-progress-title"
-                    aria-describedby="safe-copy-progress-description"
-                >
-                    <div className="safe-copy-progress-dialog">
-                        <Icon icon="clipboard" size={28} />
-                        <h2 id="safe-copy-progress-title">Preparing Safe Copy</h2>
-                        <p id="safe-copy-progress-description">
-                            {safeCopyProgress.itemCount === 1
-                                ? "Scrubbing 1 selected item before it is placed on the clipboard."
-                                : `Scrubbing ${safeCopyProgress.itemCount} selected items before they are placed on the clipboard.`}
-                        </p>
-                        <div className="safe-copy-progress-track" aria-hidden="true">
-                            <span className="safe-copy-progress-bar" />
-                        </div>
-                        <span className="safe-copy-progress-note">Only cleaned copies are made available to paste.</span>
-                    </div>
-                </div>
-            )}
-
 
             {/* Quick Mount overlay */}
             {qmOpen && (
