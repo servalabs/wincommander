@@ -150,6 +150,7 @@ export const DECOY_APP_SETTINGS: AppSettings = {
     contextMenuEnabled: false,
     scrubContextMenuEnabled: false,
     safeCopyContextMenuEnabled: false,
+    safeCopyNotificationsEnabled: false,
     sidebarCollapsed: false,
     lastPanel: "dashboard",
     dashboardViewMode: "default",

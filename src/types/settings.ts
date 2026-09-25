@@ -195,6 +195,8 @@ export interface AppPreferences {
   contextMenuEnabled: boolean;
   scrubContextMenuEnabled: boolean;
   safeCopyContextMenuEnabled: boolean;
+  /** Show Safe Copy start/ready notifications in the WinCommander alert window. Defaults on. */
+  safeCopyNotificationsEnabled: boolean;
   sidebarCollapsed: boolean;
   /** Categories this Windows user has excluded from Cleanup's bulk-clear
    *  action. Stored in the per-user settings file, so it survives relaunches

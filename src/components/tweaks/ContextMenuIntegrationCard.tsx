@@ -36,9 +36,11 @@ export default function ContextMenuIntegrationCard({
     const [contextMenuEnabled, setContextMenuEnabled] = useState(false);
     const [scrubContextMenuEnabled, setScrubContextMenuEnabled] = useState(false);
     const [safeCopyContextMenuEnabled, setSafeCopyContextMenuEnabled] = useState(false);
+    const [safeCopyNotificationsEnabled, setSafeCopyNotificationsEnabled] = useState(true);
     const [loadingShred, setLoadingShred] = useState(false);
     const [loadingScrub, setLoadingScrub] = useState(false);
     const [loadingSafeCopy, setLoadingSafeCopy] = useState(false);
+    const [savingSafeCopyNotifications, setSavingSafeCopyNotifications] = useState(false);
 
     useEffect(() => {
         if (appSettings?.app?.contextMenuEnabled != null) {
@@ -61,6 +63,12 @@ export default function ContextMenuIntegrationCard({
             .catch(e => console.error("Failed to check safe copy context menu status", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    useEffect(() => {
+        if (appSettings?.app?.safeCopyNotificationsEnabled != null) {
+            setSafeCopyNotificationsEnabled(appSettings.app.safeCopyNotificationsEnabled);
+        }
+    }, [appSettings?.app?.safeCopyNotificationsEnabled]);
 
     const handleShredToggle = async (checked: boolean) => {
         setContextMenuEnabled(checked);
@@ -116,12 +124,29 @@ export default function ContextMenuIntegrationCard({
         }
     };
 
+    const handleSafeCopyNotificationsToggle = async (checked: boolean) => {
+        const previous = appSettings?.app?.safeCopyNotificationsEnabled ?? true;
+        setSafeCopyNotificationsEnabled(checked);
+        setSavingSafeCopyNotifications(true);
+        try {
+            await patchAppSettings({ app: { safeCopyNotificationsEnabled: checked } });
+        } catch (e) {
+            setSafeCopyNotificationsEnabled(previous);
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg) showError(`Safe Copy notification setting failed: ${msg}`);
+            console.error(e);
+        } finally {
+            setSavingSafeCopyNotifications(false);
+        }
+    };
+
     // Search-aware self-hiding: only render the rows that match the
     // panel's global search query.
     const q = searchQuery.toLowerCase().trim();
     const matchesShred = "context menu delete".includes(q) || "right-click delete".includes(q) || "delete".includes(q);
     const matchesScrub = "scrub".includes(q) || "scrub metadata".includes(q);
-    const matchesSafeCopy = "safe copy".includes(q) || "safe paste".includes(q) || "clean copy".includes(q);
+    const matchesSafeCopy = "safe copy".includes(q) || "safe paste".includes(q) || "clean copy".includes(q)
+        || "safe copy notifications".includes(q) || "copy notifications".includes(q);
     const matchesSection = "context menu".includes(q) || "right-click".includes(q) || "explorer integration".includes(q);
     const showShred = !q || matchesShred || matchesSection;
     const showScrub = !q || matchesScrub || matchesSection;
@@ -167,14 +192,24 @@ export default function ContextMenuIntegrationCard({
                     />
                 )}
                 {showSafeCopy && (
-                    <UniversalToggle
-                        label="Safe Copy / Safe Paste"
-                        description="Add 'Safe Copy' + 'Safe Paste' to right-click. Safe Copy scrubs a private cache, then places only clean copies on the Windows clipboard; normal Paste and Safe Paste retain the original filenames. (Metadata scrub is a Pro feature.)"
-                        icon="clipboard"
-                        checked={safeCopyContextMenuEnabled}
-                        onChange={handleSafeCopyToggle}
-                        disabled={loadingSafeCopy}
-                    />
+                    <>
+                        <UniversalToggle
+                            label="Safe Copy / Safe Paste"
+                            description="Add 'Safe Copy' + 'Safe Paste' to right-click. Safe Copy scrubs a private cache, then places only clean copies on the Windows clipboard; normal Paste and Safe Paste retain the original filenames. (Metadata scrub is a Pro feature.)"
+                            icon="clipboard"
+                            checked={safeCopyContextMenuEnabled}
+                            onChange={handleSafeCopyToggle}
+                            disabled={loadingSafeCopy}
+                        />
+                        <UniversalToggle
+                            label="Safe Copy notifications"
+                            description="Show a WinCommander notification while Safe Copy scrubs and when the cleaned clipboard is ready, including elapsed time. Turn off to copy silently."
+                            icon="notifications"
+                            checked={safeCopyNotificationsEnabled}
+                            onChange={handleSafeCopyNotificationsToggle}
+                            disabled={savingSafeCopyNotifications}
+                        />
+                    </>
                 )}
             </div>
         </SectionCard>

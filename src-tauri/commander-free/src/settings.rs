@@ -345,6 +345,10 @@ pub struct AppPreferences {
     pub scrub_context_menu_enabled: bool,
     #[serde(default)]
     pub safe_copy_context_menu_enabled: bool,
+    /// Show Safe Copy progress and completion in the WinCommander alert window.
+    /// Existing installations default on so the scrub duration is visible.
+    #[serde(default = "default_true")]
+    pub safe_copy_notifications_enabled: bool,
     #[serde(default)]
     pub sidebar_collapsed: bool,
     /// Categories the current Windows user has excluded from Cleanup's
@@ -854,6 +858,7 @@ impl Default for AppPreferences {
             context_menu_enabled: false,
             scrub_context_menu_enabled: false,
             safe_copy_context_menu_enabled: false,
+            safe_copy_notifications_enabled: true,
             sidebar_collapsed: false,
             bulk_clear_excludes: default_bulk_clear_excludes(),
             cleanup_excludes_customized: false,
