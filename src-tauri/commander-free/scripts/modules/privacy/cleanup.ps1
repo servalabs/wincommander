@@ -355,17 +355,29 @@ function Get-ConnectivityHistory {
 function Get-USBDeviceHistory {
     try {
         $devices = @()
+        $presentStorageIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $presentPnpDevices = @(Get-PnpDevice -PresentOnly:$true -ErrorAction Stop)
+        if ($presentPnpDevices.Count -eq 0) { throw 'PnP returned no present devices.' }
+        foreach ($pnpDevice in $presentPnpDevices) {
+            $instanceId = [string]$pnpDevice.InstanceId
+            if ($instanceId.StartsWith('USBSTOR\', [StringComparison]::OrdinalIgnoreCase)) {
+                [void]$presentStorageIds.Add($instanceId)
+            }
+        }
         $root = 'HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR'
         if (Test-Path $root) {
             Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
                 $deviceClass = $_
                 Get-ChildItem $deviceClass.PSPath -ErrorAction SilentlyContinue | ForEach-Object {
-                    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-                    $devices += @{
-                        deviceId     = $_.PSChildName
-                        friendlyName = $props.FriendlyName
-                        manufacturer = $props.Mfg
-                        className    = $props.Class
+                    $instanceId = "USBSTOR\$($deviceClass.PSChildName)\$($_.PSChildName)"
+                    if (-not $presentStorageIds.Contains($instanceId)) {
+                        $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                        $devices += @{
+                            deviceId     = $_.PSChildName
+                            friendlyName = $props.FriendlyName
+                            manufacturer = $props.Mfg
+                            className    = $props.Class
+                        }
                     }
                 }
             }

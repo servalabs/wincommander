@@ -171,11 +171,12 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'usbHistory',
     label: 'USB History',
-    description: 'Connected devices',
+    description: 'Disconnected USB storage history',
     icon: 'drive-time',
     color: '#3b82f6',
     severity: 'warning',
     group: 'standard',
+    confirmMessage: 'Clear history for disconnected USB storage devices? Connected hardware, including keyboards, mice, and USB receivers, stays online.',
     systemWide: true,
     getDataKey: 'getUsbHistory',
     clearDataKey: 'clearUsbHistory',
