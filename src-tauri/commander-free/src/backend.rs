@@ -5906,8 +5906,8 @@ pub async fn get_scrub_context_menu_status() -> Result<bool, String> {
 //
 // A paired set of verbs (see safe_clip.rs): "Safe Copy" records the selection
 // (--safe-copy, handled headless before the single-instance guard); "Safe
-// Paste" (--safe-paste, %V = the destination folder) copies the recorded
-// sources into that folder keeping exact names, then the app scrubs the copies.
+// Paste" (--safe-paste) copies the recorded sources into the selected folder,
+// then scrubs the copies. The item verb gets %1; the background verb gets %V.
 // Both verbs register/unregister together — they're one feature.
 
 /// Safe Copy verb key roots (files, folders, mixed selection).
@@ -5930,9 +5930,9 @@ pub async fn toggle_safe_copy_context_menu(enable: bool) -> Result<(), String> {
         let exe_str = exe_path
             .to_str()
             .ok_or("Failed to convert exe path to string")?;
-        // %1 = the selected item (Safe Copy); %V = the folder (Safe Paste).
+        // %1 = the selected item for Safe Copy. Safe Paste uses its
+        // destination placeholder per registry location below.
         let copy_cmd = format!("\"{}\" \"--safe-copy\" \"%1\"", exe_str);
-        let paste_cmd = format!("\"{}\" \"--safe-paste\" \"%V\"", exe_str);
 
         // Same broom glyph as Scrub so the two privacy verbs read as a family.
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
@@ -5953,6 +5953,16 @@ pub async fn toggle_safe_copy_context_menu(enable: bool) -> Result<(), String> {
             run_reg(&["add", key, "/ve", "/d", "Safe Paste", "/f"])?;
             run_reg(&["add", key, "/v", "Icon", "/d", &icon_value, "/f"])?;
             let cmd_key = format!("{}\\command", key);
+            // A Directory\\shell verb targets the selected folder item (%1).
+            // A Directory\\Background\\shell verb targets the open folder
+            // (%V). Using %V for both can send an empty or parent-folder path
+            // when Safe Paste is invoked on a folder item.
+            let destination = if key.ends_with(r"\Background\shell\WinCommanderSafePaste") {
+                "%V"
+            } else {
+                "%1"
+            };
+            let paste_cmd = format!("\"{}\" \"--safe-paste\" \"{}\"", exe_str, destination);
             run_reg(&["add", &cmd_key, "/ve", "/d", &paste_cmd, "/f"])?;
         }
     } else {

@@ -95,6 +95,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// (deadlock, blocked PowerShell child, OS swap-storm) as an error
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// Pro shares a 3-minute deadline across a scrub request's external metadata
+/// tools; leave 30 seconds for report/IPC completion. Scrub failures never use
+/// the generic retry path because Pro may already have changed staged files.
+const METADATA_SCRUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(210);
 /// Stego operations copy the complete encrypted container byte-for-byte. An
 /// NTFS volume can be many gigabytes, so the normal interactive timeout would
 /// kill a healthy copy mid-transfer and may cause a duplicate retry.
@@ -111,6 +115,7 @@ fn request_timeout_for(feature_id: &str) -> Option<Duration> {
         | "Attach-StegoContainer"
         | "Restore-StegoContainer"
         | "Refresh-StegoContainer" => Some(STEGO_TRANSFER_TIMEOUT),
+        "scrub_metadata_paths" => Some(METADATA_SCRUB_REQUEST_TIMEOUT),
         "fleet_lab_join" => Some(FLEET_LAB_JOIN_TIMEOUT),
         _ => Some(SESSION_REQUEST_TIMEOUT),
     }
@@ -1820,6 +1825,24 @@ pub async fn dispatch_paid_command(
                 return_pro_session_to_pool(session).await;
                 return Err(e);
             }
+            Err(transport_err) if feature_id == "scrub_metadata_paths" => {
+                // A scrub can rewrite its input or output before Pro sends its
+                // response. Replaying it after a broken/slow IPC response can
+                // run a second scrub concurrently against those same files.
+                // Drop this session (which kills its child) and let the caller
+                // decide whether to retry after the original operation stops.
+                crate::log_message(
+                    "error",
+                    &format!(
+                        "[Sidecar] '{}' failed without retry to avoid replaying file mutations: {}",
+                        feature_id, transport_err
+                    ),
+                );
+                return Err(format!(
+                    "Metadata scrub could not finish safely and was not retried: {}",
+                    transport_err
+                ));
+            }
             Err(transport_err) => {
                 // Transport-level failure — drop the broken session.
                 if attempt == 0 {
@@ -1962,6 +1985,14 @@ mod tests {
         assert_eq!(
             request_timeout_for("fleet_lab_join"),
             Some(Duration::from_secs(45))
+        );
+    }
+
+    #[test]
+    fn metadata_scrub_has_room_for_its_bounded_pro_batch() {
+        assert_eq!(
+            request_timeout_for("scrub_metadata_paths"),
+            Some(Duration::from_secs(210))
         );
     }
 

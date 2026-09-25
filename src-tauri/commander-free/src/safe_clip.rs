@@ -15,13 +15,13 @@
 //
 // Safe Copy runs headless (no window) directly off the CLI flag so it works
 // whether or not the app is already running; it starts the Pro scrub sidecar
-// only long enough to create the cleaned cache. Safe Paste routes through the
-// app and verifies the cache again before committing it.
+// only long enough to create the cleaned cache. Safe Paste's Explorer entry is
+// headless, while the in-app command calls the same engine. Both verify the
+// cache again before committing it.
 //
 // The pure logic (coalesce, resolve_targets) is platform-agnostic and unit-
 // tested; only the named-mutex serialisation is Windows-gated.
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,10 +30,7 @@ use std::path::{Path, PathBuf};
 // Windows clipboard. The paths supplied below are always scrubbed cache paths,
 // never the user-selected originals.
 #[cfg(windows)]
-use clipboard_win::{
-    formats::{FileList, RawData},
-    Clipboard, Setter,
-};
+use clipboard_win::{formats::FileList, Clipboard, Setter};
 
 /// Multi-select launches the verb once per item, near-simultaneously. A Safe
 /// Copy within this window of the previous one APPENDS (same batch); a later
@@ -308,7 +305,8 @@ fn publish_windows_file_clipboard(paths: &[String]) -> Result<(), String> {
     let native_result: Result<(), String> = (|| {
         let clipboard = Clipboard::new_attempts(10)
             .map_err(|error| format!("could not open the clipboard: {error}"))?;
-        clipboard_win::empty().map_err(|error| format!("could not clear the clipboard: {error}"))?;
+        clipboard_win::empty()
+            .map_err(|error| format!("could not clear the clipboard: {error}"))?;
 
         let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
         FileList
@@ -316,8 +314,7 @@ fn publish_windows_file_clipboard(paths: &[String]) -> Result<(), String> {
             .map_err(|error| format!("could not place files on the clipboard: {error}"))?;
         let drop_effect = clipboard_win::register_format("Preferred DropEffect")
             .ok_or_else(|| "could not register the Explorer copy format".to_string())?;
-        RawData(drop_effect.get())
-            .write_clipboard(&1_u32.to_le_bytes())
+        clipboard_win::raw::set_without_clear(drop_effect.get(), &1_u32.to_le_bytes())
             .map_err(|error| format!("could not set the clipboard copy operation: {error}"))?;
         // Explicitly close before returning from this headless process. This
         // matters for Explorer verbs, which have no Tauri window/message loop.
@@ -335,36 +332,12 @@ fn publish_windows_file_clipboard(paths: &[String]) -> Result<(), String> {
         Ok(())
     })();
 
-    // A headless Explorer verb is short-lived. Even when the direct Win32
-    // write reads back correctly, Windows can discard its file-list when that
-    // process exits. Publish through a short-lived STA owner as the final step
-    // so regular Explorer Paste keeps the cleaned selection after Safe Copy
-    // has exited. Paths are passed as base64 JSON, never interpolated into a
-    // shell command.
-    let json = serde_json::to_vec(paths)
-        .map_err(|error| format!("Safe Copy could encode clipboard paths: {error}"))?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(json);
-    let script = format!(
-        concat!(
-            "Add-Type -AssemblyName PresentationCore;",
-            "$paths=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}'))|ConvertFrom-Json;",
-            "$files=New-Object System.Collections.Specialized.StringCollection;",
-            "foreach($path in @($paths)){{[void]$files.Add([string]$path)}};",
-            "[Windows.Clipboard]::SetFileDropList($files)"
-        ),
-        encoded = encoded
-    );
-    let status = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", &script])
-        .status()
-        .map_err(|error| format!("Safe Copy could start its STA clipboard helper: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Safe Copy could publish the cleaned files to the Windows clipboard ({native_result:?}; STA helper exited {status})"
-        ))
-    }
+    // `FileList::write_clipboard` uses SetClipboardData(CF_HDROP) with a
+    // movable HGLOBAL, transferring ownership to Windows. That data remains
+    // available after this short-lived Explorer process exits. Do not replace
+    // it with an OLE/WPF clipboard owner: if that helper exits before Explorer
+    // requests delayed-rendered data, the file list disappears from clipboard.
+    native_result
 }
 
 #[cfg(not(windows))]
@@ -588,16 +561,102 @@ pub fn handle_safe_copy_cli(args: &[String]) {
         .filter(|a| !a.starts_with("--"))
         .cloned()
         .collect();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build();
-    let result = runtime
-        .map_err(|error| format!("Safe Copy could start its scrub runtime: {error}"))
-        .and_then(|runtime| runtime.block_on(record_sources(&paths)));
+    let result = run_headless_with_pro_shutdown("Safe Copy", record_sources(&paths));
     match result {
         Ok(n) => crate::log_message("info", &format!("[SafeCopy] recorded {n} item(s)")),
         Err(e) => crate::log_message("warn", &format!("[SafeCopy] record failed: {e}")),
     }
+}
+
+/// Headless CLI entry for `--safe-paste <destination>`. Explorer context-menu
+/// paste must not wait for the Tauri window, React sidebar, or a queued UI
+/// event to become ready. It uses the same scrubbed cache and commit path as
+/// the in-app command, then exits when the operation has a definitive result.
+pub fn handle_safe_paste_cli(args: &[String]) -> i32 {
+    let dest = args
+        .iter()
+        .skip(1)
+        .filter(|arg| !arg.starts_with("--"))
+        .next()
+        .cloned();
+    let Some(dest) = dest else {
+        let error = "Safe Paste did not receive a destination folder. Refresh the context-menu integration and try again.";
+        crate::log_message("warn", &format!("[SafePaste] failed: {error}"));
+        show_safe_paste_error(error);
+        return 1;
+    };
+
+    crate::log_message("info", "[SafePaste] headless operation started");
+    let result = run_headless_with_pro_shutdown("Safe Paste", safe_paste_prepare_headless(dest));
+    match result {
+        Ok(result) if !result.copied.is_empty() => {
+            crate::log_message(
+                "info",
+                &format!(
+                    "[SafePaste] completed: copied {} item(s), skipped {}",
+                    result.copied.len(),
+                    result.skipped.len()
+                ),
+            );
+            0
+        }
+        Ok(result) => {
+            let reason = result
+                .skipped
+                .first()
+                .map(|skip| format!("{} ({})", skip.name, skip.reason))
+                .unwrap_or_else(|| "Nothing is ready to paste. Use Safe Copy first.".into());
+            let message = format!("Safe Paste did not add any files. {reason}");
+            crate::log_message("warn", &format!("[SafePaste] failed: {message}"));
+            show_safe_paste_error(&message);
+            1
+        }
+        Err(error) => {
+            crate::log_message("warn", &format!("[SafePaste] failed: {error}"));
+            show_safe_paste_error(&error);
+            1
+        }
+    }
+}
+
+/// Run a one-shot Explorer verb on its own current-thread runtime, then close
+/// any Pro sidecar it opened before the runtime and process are torn down.
+/// The long-lived GUI pools workers for reuse; a headless copy/paste process
+/// has no later request, so returning the worker to that pool can leave both
+/// helper processes alive after the files have already been committed.
+fn run_headless_with_pro_shutdown<T, F>(operation: &str, task: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("{operation} could start its scrub runtime: {error}"))?;
+
+    runtime.block_on(async move {
+        let result = task.await;
+        crate::sidecar::close_pro_session().await;
+        result
+    })
+}
+
+fn show_safe_paste_error(message: &str) {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text: Vec<u16> = format!("Safe Paste could not complete.\r\n\r\n{message}\0")
+            .encode_utf16()
+            .collect();
+        let title: Vec<u16> = "WinCommander Safe Paste\0".encode_utf16().collect();
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = message;
 }
 
 // ── Tauri commands ──────────────────────────────────────────────────────────
@@ -633,9 +692,16 @@ pub async fn safe_clip_status() -> Result<SafeClipStatus, String> {
 /// operation — a free user gets a clean upsell with zero files touched.
 #[tauri::command]
 pub async fn safe_paste_prepare(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     dest_dir: String,
 ) -> Result<SafePasteResult, String> {
+    safe_paste_prepare_headless(dest_dir).await
+}
+
+/// Application-independent Safe Paste operation shared by Explorer's
+/// headless verb and the Tauri command. All staged copies are scrubbed and
+/// validated before any file is committed to the requested destination.
+pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteResult, String> {
     crate::license::require_paid("Safe Paste")?;
 
     let dest = PathBuf::from(&dest_dir);
@@ -731,8 +797,7 @@ pub async fn safe_paste_prepare(
     }
 
     if !files_to_scrub.is_empty() {
-        let report = crate::file_metadata::scrub_metadata_paths(
-            app,
+        let report = crate::file_metadata::scrub_metadata_paths_headless(
             files_to_scrub
                 .iter()
                 .map(|path| path.to_string_lossy().to_string())

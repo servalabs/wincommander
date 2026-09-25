@@ -1500,6 +1500,14 @@ pub fn run() {
             // instead of retaining the Pro scrub worker in the background.
             std::process::exit(0);
         }
+        // Safe Paste is also a headless Explorer operation. Running it before
+        // the single-instance guard means it cannot be stranded behind a
+        // loading webview or a frontend event listener that has not mounted.
+        // The shared Safe Paste engine stages, scrubs, validates, then commits
+        // the files before this short-lived verb exits.
+        if cli_args.iter().any(|a| a == "--safe-paste") {
+            std::process::exit(safe_clip::handle_safe_paste_cli(&cli_args));
+        }
         // Explorer secure-delete is another GUI-free operation, but unlike
         // Safe Copy it is destructive and must report a non-zero process exit
         // code when no verified erase occurred. Execute it before the
