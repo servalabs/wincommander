@@ -175,3 +175,4 @@ src-tauri/target-rdp-redirection-check
 .codex-target-file-scope-tests/
 .target-fleet-policy/
 .target-fleet-policy-lock
+src-tauri/target-volume-check

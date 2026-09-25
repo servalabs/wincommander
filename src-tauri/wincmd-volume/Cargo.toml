@@ -1,0 +1,13 @@
+[package]
+name = "wincmd-volume"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Native mounted-volume identity and bounded operation coordination"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO",
+    "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading",
+] }
+zeroize = "1"

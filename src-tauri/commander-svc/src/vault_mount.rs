@@ -146,6 +146,10 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     }
     fn dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
         let result = tokio::task::block_in_place(|| {
+            let _volume_operation = wincmd_volume::VolumeOperationGuard::acquire_slot(
+                request.internal_drive,
+            )
+            .map_err(|_| VaultMountReason::DismountFailed)?;
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                 crate::pro_broker::VaultCall {
                     request_id: request.operation_id,
@@ -171,6 +175,8 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     }
     fn recover_dismount(&self, internal_drive: u8) -> Result<(), VaultMountReason> {
         let result = tokio::task::block_in_place(|| {
+            let _volume_operation = wincmd_volume::VolumeOperationGuard::acquire_slot(internal_drive)
+                .map_err(|_| VaultMountReason::DismountFailed)?;
             tokio::runtime::Handle::current()
                 .block_on(crate::pro_broker::vault_recovery_dismount(internal_drive))
         });
