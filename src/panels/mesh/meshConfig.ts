@@ -48,16 +48,27 @@ export function meshPrefsMatchConfig(
     prefs: MeshVPNStatus["prefs"] | null | undefined,
     config: MeshConfigPayload,
 ): boolean {
-    if (!prefs) return false;
-    return (
-        !!prefs.AdvertiseExitNode === config.AdvertiseExitNode &&
-        !!prefs.ExitNodeAllowLANAccess === config.AllowLanAccess &&
-        !!prefs.Unattended === config.Unattended &&
-        !!prefs.AcceptRoutes === config.AcceptRoutes &&
-        !!prefs.AcceptDNS === config.AcceptDNS &&
-        !!prefs.ShieldsUp === config.ShieldsUp &&
-        (prefs.ExitNodeIP || "").trim().toLowerCase() === config.ExitNodeIP.trim().toLowerCase()
-    );
+    return !!prefs && meshConfigMismatches(prefs, config).length === 0;
+}
+
+/** Return the human-readable controls whose live settings differ from a draft. */
+export function meshConfigMismatches(
+    prefs: MeshVPNStatus["prefs"] | null | undefined,
+    config: MeshConfigPayload,
+): string[] {
+    if (!prefs) return [];
+
+    const mismatches: string[] = [];
+    if (!!prefs.AdvertiseExitNode !== config.AdvertiseExitNode) mismatches.push("Share Gateway");
+    if (!!prefs.ExitNodeAllowLANAccess !== config.AllowLanAccess) mismatches.push("Local Network Access");
+    if (!!prefs.Unattended !== config.Unattended) mismatches.push("Stay Connected");
+    if (!!prefs.AcceptRoutes !== config.AcceptRoutes) mismatches.push("Share Local Network");
+    if (!!prefs.AcceptDNS !== config.AcceptDNS) mismatches.push("Private DNS");
+    if (!!prefs.ShieldsUp !== config.ShieldsUp) mismatches.push("Block Incoming");
+    if ((prefs.ExitNodeIP || "").trim().toLowerCase() !== config.ExitNodeIP.trim().toLowerCase()) {
+        mismatches.push("Tunnel Gateway");
+    }
+    return mismatches;
 }
 
 function meshConfigsEqual(left: MeshConfigPayload, right: MeshConfigPayload): boolean {

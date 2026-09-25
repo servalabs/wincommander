@@ -18,6 +18,7 @@ import { panelVariants, panelTransition, DURATION_S, EASE } from "../../componen
 import useBackend, { MeshVPNStatus, MeshVPNPeer, executeBackendCommand } from "../../hooks/useBackend";
 import {
     meshConfigPayload,
+    meshConfigMismatches,
     meshDraftFromPrefs,
     meshPrefsMatchConfig,
     shouldSyncMeshDraftFromStatus,
@@ -290,11 +291,18 @@ function PrivateMeshPanel() {
                 pendingApply: pendingApplyRef.current,
                 currentDraft: latestStagingRef.current,
             });
-            if (decision.clearPendingApply) {
+            // A readback that matches the current draft also proves there is
+            // nothing pending, even if the user edited the draft while an
+            // earlier Apply request was in flight.
+            const statusMatchesCurrentDraft = !!status.prefs && meshPrefsMatchConfig(
+                status.prefs,
+                meshConfigPayload(latestStagingRef.current),
+            );
+            if (decision.clearPendingApply || statusMatchesCurrentDraft) {
                 pendingApplyRef.current = null;
                 setApplyError(null);
             }
-            if (decision.syncDraft && status.prefs) {
+            if ((decision.syncDraft || statusMatchesCurrentDraft) && status.prefs) {
                 setStaging(meshDraftFromPrefs(status.prefs));
             }
             return status;
@@ -381,10 +389,30 @@ function PrivateMeshPanel() {
             const res = await setMeshVPNConfig(submittedConfig);
             if (res.success) {
                 pendingApplyRef.current = submittedConfig;
-                const readback = await refreshStatus(true);
-                if (!meshPrefsMatchConfig(readback?.prefs, submittedConfig)) {
+                // Tailscale may accept a preference update before its status
+                // endpoint reflects it. Poll briefly so a successful apply
+                // does not leave the draft looking unapplied after one stale
+                // readback.
+                const verifyUntil = Date.now() + 5000;
+                let readback: MeshVPNStatus | null = null;
+                do {
+                    readback = await refreshStatus(true);
+                    const currentDraftMatchesReadback = !!readback?.prefs && meshPrefsMatchConfig(
+                        readback.prefs,
+                        meshConfigPayload(latestStagingRef.current),
+                    );
+                    if (meshPrefsMatchConfig(readback?.prefs, submittedConfig) || currentDraftMatchesReadback) break;
+                    if (Date.now() >= verifyUntil) break;
+                    await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+                } while (Date.now() < verifyUntil);
+
+                const currentDraftMatchesReadback = !!readback?.prefs && meshPrefsMatchConfig(
+                    readback.prefs,
+                    meshConfigPayload(latestStagingRef.current),
+                );
+                if (!meshPrefsMatchConfig(readback?.prefs, submittedConfig) && !currentDraftMatchesReadback) {
                     setApplyError(readback?.prefs
-                        ? "Private Network accepted the request, but its reported settings do not match yet. Your edits were kept."
+                        ? `Private Network accepted the request, but these settings still differ: ${meshConfigMismatches(readback.prefs, submittedConfig).join(", ")}. Your edits were kept.`
                         : "Private Network accepted the request, but its settings could not be verified. Your edits were kept.");
                 }
             } else {
@@ -968,7 +996,7 @@ function PrivateMeshPanel() {
 
                     <div className="flex flex-col items-end gap-2">
                         <div className="flex gap-3">
-                            {(hasChanges || !!applyError) && (
+                            {hasChanges && (
                                 <Button
                                     intent="primary"
                                     icon="cloud-upload"
