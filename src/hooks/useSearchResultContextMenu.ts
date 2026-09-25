@@ -1,5 +1,7 @@
-import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useSearchPrivacy, refreshSearchPrivacy } from "./useSearchPrivacy";
+import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
 
 export type SearchContextAction =
   | "open"
@@ -28,11 +30,16 @@ interface Options {
 }
 
 export function useSearchResultContextMenu({ openPath, closeSearch, reportError }: Options) {
+  const privacy = useSearchPrivacy();
   const [target, setTarget] = useState<SearchContextTarget | null>(null);
+  const [targetRevision, setTargetRevision] = useState(-1);
+  useEffect(() => { setTarget(null); }, [privacy.revision]);
 
   const openMenu = useCallback((event: ReactMouseEvent, path: string, label: string) => {
     event.preventDefault();
     event.stopPropagation();
+    if (!mayShowSearchPath(path)) return;
+    setTargetRevision(privacy.revision);
     setTarget({
       path,
       label,
@@ -42,12 +49,15 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
       // destructive row visible on short displays before CSS overflow applies.
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - 292)),
     });
-  }, []);
+  }, [privacy.revision]);
 
   const closeMenu = useCallback(() => setTarget(null), []);
 
   const runAction = useCallback(async (action: SearchContextAction, payload?: string) => {
     if (!target) return;
+    const lease = searchPrivacyLease();
+    await refreshSearchPrivacy(true);
+    if (!lease() || !mayShowSearchPath(target.path)) { setTarget(null); return; }
     try {
       switch (action) {
         case "open":
@@ -93,5 +103,5 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
     }
   }, [closeSearch, openPath, reportError, target]);
 
-  return { target, openMenu, closeMenu, runAction };
+  return { target: targetRevision === privacy.revision && target && mayShowSearchPath(target.path) ? target : null, openMenu, closeMenu, runAction };
 }

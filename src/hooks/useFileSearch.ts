@@ -9,6 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildSearchQuery, isSearchTimeoutError, sfAppSortScore } from "@/lib/fileNameSearch";
 import type { DateFilter, SearchResponse, SearchResult, SearchType, SizeFilter } from "@/lib/fileNameSearch";
 import { DEFAULT_RESULT_LIMIT, nextResultLimit, normalizeResultLimit } from "@/lib/searchSelection";
+import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
+import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
 
 export interface FileSearchState {
   query: string;
@@ -38,6 +40,10 @@ export interface FileSearchState {
 }
 
 export function useFileSearch(): FileSearchState {
+  const privacy = useSearchPrivacy();
+  const previousPrivateRoots = useRef(false);
+  const repeatCurrentSearch = useRef<() => void>(() => {});
+  const [rowsRevision, setRowsRevision] = useState(-1);
   const [query, setQueryState] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -68,7 +74,10 @@ export function useFileSearch(): FileSearchState {
     date = dateFilter,
   ) => {
     const runId = ++runIdRef.current;
-    const isCurrent = () => runIdRef.current === runId;
+    await refreshSearchPrivacy(true);
+    const lease = searchPrivacyLease();
+    const isCurrent = () => runIdRef.current === runId && lease();
+    if (!isCurrent()) return;
     const hasActiveFilters = types.size > 0 || size !== "any" || date !== "any";
     const effectiveQuery = q.trim();
     if (!effectiveQuery && !hasActiveFilters) {
@@ -101,12 +110,14 @@ export function useFileSearch(): FileSearchState {
         query: buildSearchQuery(effectiveQuery, types, size, date),
         maxResults: limit,
       });
-      const sorted = resp.results.slice().sort((a, b) => {
+      await refreshSearchPrivacy(true);
+      const sorted = resp.results.filter((row) => mayShowSearchPath(row.full_path)).sort((a, b) => {
         const diff = sfAppSortScore(a) - sfAppSortScore(b);
         return diff !== 0 ? diff : a.name.length - b.name.length;
       });
       if (isCurrent()) {
         setResults(sorted);
+        setRowsRevision(privacy.revision);
         setTotalCount(resp.total);
         setHasSearched(true);
         setResultsQuery(q);
@@ -124,7 +135,13 @@ export function useFileSearch(): FileSearchState {
     } finally {
       if (isCurrent()) setIsSearching(false);
     }
-  }, [dateFilter, searchTypes, sizeFilter]);
+  }, [dateFilter, searchTypes, sizeFilter, privacy.revision]);
+
+  repeatCurrentSearch.current = () => {
+    if (query.trim() || searchTypes.size > 0 || sizeFilter !== "any" || dateFilter !== "any") {
+      void performSearch(query, resultLimit);
+    }
+  };
 
   const setQuery = useCallback((value: string) => {
     // Invalidate in-flight work immediately, not after the debounce delay.
@@ -148,6 +165,21 @@ export function useFileSearch(): FileSearchState {
     setError(null);
     setResultsQuery("");
   }, []);
+
+  useEffect(() => {
+    runIdRef.current += 1;
+    setResults([]);
+    setTotalCount(0);
+    setIsSearching(false);
+    setError(null);
+    setResultsQuery(null);
+    // Clear potentially sensitive query text when a private mount changes.
+    // An initial successful policy check can instead finish a query typed
+    // during startup, without requiring the user to type it again.
+    if (previousPrivateRoots.current) setQueryState("");
+    else repeatCurrentSearch.current();
+    previousPrivateRoots.current = (privacy.status?.privateRoots.length ?? 0) > 0;
+  }, [privacy.revision, privacy.status?.privateRoots.length]);
 
   const showMore = useCallback(() => {
     const next = nextResultLimit(resultLimit);
@@ -205,7 +237,7 @@ export function useFileSearch(): FileSearchState {
 
   return {
     query,
-    results,
+    results: rowsRevision === privacy.revision ? results.filter((row) => mayShowSearchPath(row.full_path)) : [],
     isSearching,
     error,
     hasSearched,

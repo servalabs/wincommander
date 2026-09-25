@@ -15,6 +15,7 @@ import { IndexedFoldersManager, NoFoldersOnboarding } from "./IndexedFolders";
 import { isNameOnlyMatch } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { IndexStatus } from "@/types/wincmd-search";
+import type { ContentPrivacyStatus } from "@/lib/searchPrivacy";
 
 export function contentRowDir(path: string): string {
   const cut = path.lastIndexOf("\\");
@@ -22,6 +23,7 @@ export function contentRowDir(path: string): string {
 }
 
 interface ContentResultsSectionProps {
+  privacyStatus: ContentPrivacyStatus | null;
   rows: ContentDisplayRow[];
   query: string;
   contentLoading: boolean;
@@ -73,7 +75,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     <div className="sfp-section">
       {!headerless && <div className="sfp-section-bar">
         <span className="sfp-section-label">
-          Text inside files
+          Indexed files
           {!contentLoading && rows.length > 0 && (
             <span className="sfp-section-count">{rows.length.toLocaleString()}</span>
           )}
@@ -140,6 +142,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
           setup stays discoverable. */}
       {(showIndexSettings || roots.length === 0) && (
         <IndexedFoldersManager
+          privacyStatus={props.privacyStatus}
           roots={roots}
           reindexing={reindexing}
           rescanning={rescanning}
@@ -152,7 +155,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
 
       {roots.length === 0 && <NoFoldersOnboarding onAddFolders={onAddFolders} />}
 
-      {contentLoading && <div className="sfp-loading">Searching inside files…</div>}
+      {contentLoading && <div className="sfp-loading">Searching indexed files…</div>}
 
       {/* search_content is backend-windowed at 50 rows, leaving the other half
           of the 100-row DOM budget for the virtualized filename group. Keep
@@ -238,7 +241,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                   <div className="sfp-content-snippet">
                     {isNameOnlyMatch(row) && (
                       <span className="sfp-name-match-badge" title="The search text appears in this file's name, not (only) its contents">
-                        name match
+                        filename match
                       </span>
                     )}
                     <span className="sfp-snippet">
@@ -279,7 +282,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
 
       {showNoMatches && (
         <div className="sfp-section-empty">
-          <p>No matches inside indexed files for <strong>"{query}"</strong></p>
+          <p>No indexed-file matches for <strong>"{query}"</strong></p>
           <p className="search-empty-hint">Try different keywords, or add the folders you need via "Indexed folders".</p>
           <p className="search-empty-hint">
             Tip: refine with ext:pdf, size:&gt;10mb, after:2026-01, author:name

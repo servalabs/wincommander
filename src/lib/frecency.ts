@@ -15,6 +15,8 @@
 // access is wrapped, and anything that doesn't match the expected shape is
 // discarded in favour of "no history" rather than re-thrown.
 
+import { getSearchPrivacy, mayRememberSearchPath, pathWithinRoots, subscribeSearchPrivacy } from "./searchPrivacy";
+
 export interface FrecencyEntry {
   path: string;
   opens: number;
@@ -252,7 +254,7 @@ function enforceCap(store: Record<string, FrecencyEntry>, now: number): void {
 
 /** Record that the user opened this path. Call on every activation. */
 export function recordOpen(path: string, now: number = Date.now()): void {
-  if (!path) return;
+  if (!path || !mayRememberSearchPath(path)) return;
 
   const store = readStore();
   const key = normalizeKey(path);
@@ -268,7 +270,7 @@ export function recordOpen(path: string, now: number = Date.now()): void {
 
 /** Score for ranking: 0 when unknown, higher = more relevant. */
 export function frecencyScore(path: string, now: number = Date.now()): number {
-  if (!path) return 0;
+  if (!path || !mayRememberSearchPath(path)) return 0;
   const entry = readStore()[normalizeKey(path)];
   return entry ? computeScore(entry, now) : 0;
 }
@@ -277,11 +279,26 @@ export function frecencyScore(path: string, now: number = Date.now()): number {
 export function topPaths(limit: number, now: number = Date.now()): string[] {
   if (limit <= 0) return [];
   return Object.values(readStore())
+    .filter((entry) => mayRememberSearchPath(entry.path))
     .map((entry) => ({ path: entry.path, score: computeScore(entry, now) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((entry) => entry.path);
 }
+
+// Remove previously persisted private paths as soon as they are recognized.
+// Unrelated history survives; unavailable policy never authorizes new writes.
+subscribeSearchPrivacy(() => {
+  const status = getSearchPrivacy().status;
+  if (!status) return;
+  const roots = [...status.privateRoots, ...status.blockedRoots];
+  const store = readStore();
+  let changed = false;
+  for (const [key, entry] of Object.entries(store)) {
+    if (pathWithinRoots(entry.path, roots)) { delete store[key]; changed = true; }
+  }
+  if (changed) writeStore(store);
+});
 
 /** Stable sort of candidates by descending frecency; ties keep input order. */
 export function sortByFrecency<T>(

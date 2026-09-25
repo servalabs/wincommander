@@ -38,6 +38,7 @@ import type { Chip, ChipKind, QueryState } from "@/lib/searchTokens";
 import { nextAppendType, TAB_TYPE_CYCLE, TYPE_DROPDOWN_ORDER, visibleSelectedTypes } from "@/lib/searchTypeCycle";
 import { useChipSearch, useReducedMotionPref } from "@/hooks/useChipSearch";
 import { useContentPreview } from "@/hooks/useContentPreview";
+import { useSearchPrivacy } from "@/hooks/useSearchPrivacy";
 import type { BrowseResult } from "@/hooks/useChipSearch";
 import SearchResultContextMenu from "./SearchResultContextMenu";
 import FileTypeIcon from "./FileTypeIcon";
@@ -45,7 +46,7 @@ import { useSearchResultContextMenu } from "@/hooks/useSearchResultContextMenu";
 import "./EverythingSearchBar.css";
 
 const esbIconCache = new Map<string, string | null>();
-const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
+import { rememberSearchHandoff } from "@/lib/searchPrivacy";
 const QUICK_RESULT_LIMIT = 300;
 
 const TYPE_FILTER_META: Record<string, { label: string; icon: string }> = {
@@ -220,6 +221,7 @@ function chipAriaLabel(chip: Chip): string {
 }
 
 export default function EverythingSearchBar({ overlayMode = false }: { overlayMode?: boolean }) {
+  const privacy = useSearchPrivacy();
   // In overlay mode the Rust side shows/hides the window — always render.
   // In normal mode we gate rendering via `visible`.
   const [visible, setVisible] = useState(overlayMode);
@@ -489,7 +491,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     let unlistenHandoff: (() => void) | null = null;
     win.listen("handoff-search-query", () => {
       const text = queryTextRef.current.trim();
-      if (text) window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, text);
+      if (text) rememberSearchHandoff(text);
       // Rust registers its one-shot listener *before* requesting this event.
       // Do not rely on a fixed timeout here: on a busy WebView the old 40 ms
       // delay could hide the overlay and change panels before this renderer
@@ -763,7 +765,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const storageLabel = selectedDrivePaths.length > 0
     ? selectedDrivePaths.map(driveRootLabel).join(" + ")
     : (storageChip?.pathLabel ?? "All drives");
-  const recentFolders = useMemo(() => recentSearchFolders(topPaths(24)), []);
+  // Rebuild remembered suggestions after privacy checks, including initial
+  // hydration and removal of paths that are newly recognized as private.
+  const recentFolders = useMemo(() => {
+    if (!privacy.status) return [];
+    return recentSearchFolders(topPaths(24));
+  }, [privacy]);
   const storageFolders = useMemo(() => {
     const paths = new Set<string>();
     return [...knownFolders, ...recentFolders].filter((folder) => {
@@ -1219,6 +1226,10 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         </div>
       )}
 
+      {!privacy.status && (
+        <div className="esb-error" role="status">Checking volume privacy. Search results are hidden until this check completes.</div>
+      )}
+
       {sectionLabel && primary.length > 0 && (
         <div className="esb-section-label">{sectionLabel}</div>
       )}
@@ -1291,7 +1302,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
               // DOM event alone stays inside the dedicated shortcut WebView;
               // the Tauri event reaches the main window that owns the panel.
               const handoff = query.text.trim();
-              if (handoff) window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, handoff);
+              if (handoff) rememberSearchHandoff(handoff);
               void emit("open-search-files-panel", handoff)
                 .catch(() => {
                   // The normal in-window bar has no separate main WebView, so

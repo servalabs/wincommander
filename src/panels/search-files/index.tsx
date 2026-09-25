@@ -21,7 +21,7 @@ import { reportSettingsWriteFailure } from "@/lib/settingsWriteRecovery";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
-import { isNameOnlyMatch } from "@/lib/contentSearch";
+import { showIndexedSearchRow } from "@/lib/contentSearch";
 import { getIndexDisplayError, getTabFilterSuggestion } from "@/lib/searchFilesPanel";
 import { isEngineMissingError } from "@/lib/fileNameSearch";
 import { buildContentFilterTokens } from "@/lib/contentQueryFilters";
@@ -33,7 +33,7 @@ import NameResultsSection from "./NameResultsSection";
 import ContentResultsSection, { contentRowDir } from "./ContentResultsSection";
 import "./index.css";
 
-const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
+import { consumeSearchHandoff } from "@/lib/searchPrivacy";
 
 export default function SearchFilesPanel() {
   const search = useFileSearch();
@@ -82,9 +82,8 @@ export default function SearchFilesPanel() {
   // The compact Ctrl+Space launcher deliberately caps its visible rows. When
   // a query has more matches, it hands its text to this complete results view.
   useEffect(() => {
-    const query = window.localStorage.getItem(SEARCH_FILES_HANDOFF_KEY);
+    const query = consumeSearchHandoff();
     if (query !== null) {
-      window.localStorage.removeItem(SEARCH_FILES_HANDOFF_KEY);
       acceptHandoffQuery(query);
     }
 
@@ -99,12 +98,12 @@ export default function SearchFilesPanel() {
     return () => window.removeEventListener("search-files-query-handoff", onHandoff);
   }, [acceptHandoffQuery]);
 
-  // Name and inside-text results are intentionally independent. Removing a
-  // content hit because its filename also matches made actual text matches
-  // invisible whenever the filename result window was full.
+  // Keep private filename-only hits in their volume index's result tab;
+  // Everything deliberately serves ordinary volumes only. Text matches stay
+  // independent of filename results, including when their result page is full.
   const textContentRows = useMemo(
-    () => content.contentRows.filter((row) => !isNameOnlyMatch(row)),
-    [content.contentRows],
+    () => content.contentRows.filter((row) => showIndexedSearchRow(row, content.privacyStatus?.privateRoots ?? [])),
+    [content.contentRows, content.privacyStatus?.privateRoots],
   );
 
   // Only the visible tab participates in arrow-key navigation. This keeps the
@@ -281,6 +280,9 @@ export default function SearchFilesPanel() {
   return (
     <div className="search-files-panel">
       <SearchHeader hotkey={hotkey} />
+      {!content.privacyStatus && (
+        <p className="sfp-indexing-note" role="status">Checking volume privacy. Search results are hidden until this check completes.</p>
+      )}
 
       {/* Hero search input — one query drives BOTH result groups */}
       <div className="search-files-input-wrap">
@@ -432,7 +434,7 @@ export default function SearchFilesPanel() {
                 }
               }}
             >
-              Text inside files
+              Indexed files
               {!content.contentLoading && textContentRows.length > 0 && <span>{textContentRows.length.toLocaleString()}</span>}
             </button>
           </div>
@@ -443,7 +445,7 @@ export default function SearchFilesPanel() {
             id={activeResultTab === "names" ? "sfp-tabpanel-names" : "sfp-tabpanel-content"}
             aria-labelledby={activeResultTab === "names" ? "sfp-tab-names" : "sfp-tab-content"}
           >
-            <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Text inside files"} search results`}>
+            <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Indexed files"} search results`}>
               {activeResultTab === "names" && showNameSection && (
                 <div>
                 <NameResultsSection
@@ -468,6 +470,7 @@ export default function SearchFilesPanel() {
                 <div>
                 <ContentResultsSection
                 rows={textContentRows}
+                privacyStatus={content.privacyStatus}
                 query={search.query}
                 contentLoading={content.contentLoading}
                 showNoMatches={!content.contentLoading && textContentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
@@ -515,7 +518,7 @@ export default function SearchFilesPanel() {
                   ? `Showing ${search.results.length.toLocaleString()} of ${search.totalCount.toLocaleString()} name matches`
                   : `${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}`}
                 {!content.contentLoading && textContentRows.length > 0 &&
-                  ` · ${textContentRows.length.toLocaleString()} text matches`}
+                  ` · ${textContentRows.length.toLocaleString()} indexed matches`}
               </span>
             )}
             {search.canShowMore && (
