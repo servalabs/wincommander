@@ -3,6 +3,7 @@ import { getToggleDrift, isToggleCheckedValue } from "./toggleDrift";
 import { getPersona, type AppSettings } from "../types/settings";
 import { getByPath, resolveToggleText, type ToggleDef } from "../types/toggles";
 import { isModuleEnabled, type ModuleId } from "../types/modules";
+import { getMissingForensicTraceScheduleCategories, type AutoEraseScheduleSnapshot } from "../panels/cleanup/forensicSchedulePolicy";
 import type { ScanFinding, ScanReport } from "../components/startup/WizardAnimations";
 
 interface RadarSystemInfo {
@@ -25,6 +26,7 @@ interface BuildRadarReportInput {
   systemInfo?: RadarSystemInfo | null;
   networkBlocklistStatus?: RadarBlocklistStatus | null;
   browserHardening?: RadarBrowser[] | null;
+  autoEraseSchedules?: AutoEraseScheduleSnapshot[];
 }
 
 const MAINTENANCE_STALE_DAYS = 15;
@@ -77,6 +79,7 @@ export function buildRadarReport({
   systemInfo,
   networkBlocklistStatus,
   browserHardening,
+  autoEraseSchedules,
 }: BuildRadarReportInput): ScanReport {
   const findings: ScanFinding[] = [];
   const emittedIds = new Set<string>();
@@ -234,6 +237,23 @@ export function buildRadarReport({
       severity: "info",
       safeDefault: true,
     });
+  }
+
+  if (
+    autoEraseSchedules &&
+    isModuleEnabled(appSettings.app.modules, "cleanup") &&
+    getPersona(appSettings) === "secure"
+  ) {
+    const missingTraceSchedules = getMissingForensicTraceScheduleCategories(autoEraseSchedules);
+    if (missingTraceSchedules.length > 0) {
+      findings.push({
+        id: "auto-schedule-wipes",
+        category: "privacy",
+        label: "Schedule forensic trace wipes",
+        impact: `${missingTraceSchedules.length} eligible trace categories have no active recurring wipe schedule`,
+        severity: "info",
+      });
+    }
   }
 
   return {

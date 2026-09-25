@@ -15,20 +15,28 @@ import { useAppState } from '../context/AppContext';
 import type { ScanReport } from '../components/startup/WizardAnimations';
 import { buildRadarReport, shouldProbeBrowserHardening } from '../lib/radarScan';
 import { isModuleEnabled } from '../types/modules';
-import { executeBackendCommand, type BlocklistStatus, type InstalledBrowser } from './useBackend';
+import { getPersona } from '../types/settings';
+import {
+  loadDiskCleanupSchedules,
+  subscribeToDiskCleanupScheduleInvalidation,
+  type DiskCleanupSchedule,
+} from '../panels/maintenance/diskCleanupScheduleState';
+import { executeBackendCommand, type BlocklistStatus, type InstalledBrowser, useBackend } from './useBackend';
 
 export interface DashboardRadar {
   phase: 'idle' | 'scanning' | 'complete';
   report: ScanReport | null;
 }
 
-export function useDashboardRadar(): DashboardRadar {
+export function useDashboardRadar({ scheduledWipesEnabled = false }: { scheduledWipesEnabled?: boolean } = {}): DashboardRadar {
   const {
     systemInfo,
     networkBlocklistStatus: cachedNetworkBlocklistStatus,
     appSettings,
   } = useAppState();
+  const { getAutoEraseSchedules } = useBackend();
   const [browserHardening, setBrowserHardening] = useState<InstalledBrowser[] | null>(null);
+  const [autoEraseSchedules, setAutoEraseSchedules] = useState<DiskCleanupSchedule[] | undefined>();
   const [dashboardBlocklistStatus, setDashboardBlocklistStatus] = useState<BlocklistStatus | null>(
     cachedNetworkBlocklistStatus
   );
@@ -38,6 +46,12 @@ export function useDashboardRadar(): DashboardRadar {
   const hasData = appSettings !== null;
   const probeBrowserHardening = shouldProbeBrowserHardening(appSettings);
   const probeNetworkBlocklist = isModuleEnabled(appSettings?.app?.modules, "network");
+  const probeAutoEraseSchedules = Boolean(
+    scheduledWipesEnabled &&
+    appSettings &&
+    getPersona(appSettings) === "secure" &&
+    isModuleEnabled(appSettings.app.modules, "cleanup"),
+  );
   const browserHardeningFingerprint = [
     appSettings?.current?.tweaks?.security?.firefoxHardeningEnabled,
     appSettings?.current?.tweaks?.security?.braveHardeningEnabled,
@@ -96,6 +110,28 @@ export function useDashboardRadar(): DashboardRadar {
     };
   }, [hasData, probeNetworkBlocklist, networkBlocklistFingerprint]);
 
+  useEffect(() => {
+    if (!probeAutoEraseSchedules) {
+      setAutoEraseSchedules(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshSchedules = () => {
+      void loadDiskCleanupSchedules(getAutoEraseSchedules, true).then((result) => {
+        if (cancelled) return;
+        setAutoEraseSchedules(result.success && result.data ? result.data.schedules : undefined);
+      });
+    };
+    refreshSchedules();
+    const unsubscribe = subscribeToDiskCleanupScheduleInvalidation(refreshSchedules);
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [getAutoEraseSchedules, probeAutoEraseSchedules]);
+
   const report = useMemo<ScanReport | null>(() => {
     if (!hasData) return null;
     return buildRadarReport({
@@ -103,9 +139,10 @@ export function useDashboardRadar(): DashboardRadar {
       networkBlocklistStatus: dashboardBlocklistStatus,
       systemInfo,
       browserHardening,
+      autoEraseSchedules,
     });
   }, [
-    systemInfo, hasData, dashboardBlocklistStatus, appSettings, browserHardening
+    systemInfo, hasData, dashboardBlocklistStatus, appSettings, browserHardening, autoEraseSchedules
   ]);
 
   const phase: DashboardRadar['phase'] = hasData ? 'complete' : 'scanning';

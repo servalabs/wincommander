@@ -22,11 +22,13 @@ interface MaintenancePayload {
     durationMs?: number;
     manual?: MaintenanceBucket;
     disable?: MaintenanceBucket;
+    message?: string;
 }
 
 interface BackendEnvelope<T> {
     data?: T;
     success?: boolean;
+    error?: string;
 }
 
 const NAME_LIST_LIMIT = 6;
@@ -55,6 +57,31 @@ function summariseFailures(failed: Array<FailedEntry> | number | undefined): str
         .filter((n): n is string => Boolean(n));
     if (restNames.length === 0) return `${firstStr} +${rest.length} more`;
     return `${firstStr}, ${summariseNames(restNames)}`;
+}
+
+/** Returns an actionable error when a maintenance operation failed wholly or partially. */
+export function getMaintenanceFailureMessage(label: string, captured: unknown): string | null {
+    if (!captured || typeof captured !== "object") return null;
+
+    const envelope = captured as BackendEnvelope<MaintenancePayload>;
+    if (envelope.success === false) return envelope.error || `${label} failed.`;
+
+    const data = (envelope.data ?? captured) as MaintenancePayload & { success?: boolean; error?: boolean | string };
+    if (data.success === false || data.error) {
+        return (typeof data.error === "string" ? data.error : data.message) || `${label} failed.`;
+    }
+
+    const buckets: Array<{ name: string; bucket: MaintenanceBucket }> = [];
+    if (data.manual) buckets.push({ name: "manual", bucket: data.manual });
+    if (data.disable) buckets.push({ name: "disabled", bucket: data.disable });
+
+    const failures = buckets.flatMap(({ name, bucket }) => {
+        const count = Array.isArray(bucket.failed) ? bucket.failed.length : (bucket.failed ?? 0);
+        if (!count) return [];
+        const detail = summariseFailures(bucket.failed);
+        return [`${count} ${name} change${count === 1 ? "" : "s"} failed${detail ? `: ${detail}` : ""}`];
+    });
+    return failures.length ? `${label} completed with errors: ${failures.join("; ")}` : null;
 }
 
 export function formatMaintenanceSuccess(label: string, captured: unknown): string {

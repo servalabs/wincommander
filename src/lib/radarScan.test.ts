@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildRadarReport, shouldProbeBrowserHardening } from "./radarScan";
+import { getForensicTraceScheduleCategories } from "../panels/cleanup/forensicSchedulePolicy";
 
 function makeSettings(
   modules: Record<string, boolean>,
@@ -118,6 +119,39 @@ describe("radar scan filtering", () => {
     expect(ids).toContain("hideQuickAccessRecent");
     expect(ids).toContain("hideQuickAccessFrequent");
     expect(ids).toContain("disableSearchHistory");
+  });
+
+  test("Secure persona recommends recurring forensic wipes only while eligible schedules are missing", () => {
+    const secureSettings = makeSettings(
+      { privacy: false, network: false, tweaks: false, cleanup: true },
+      {},
+      "secure",
+    );
+    const missingScheduleReport = buildRadarReport({
+      appSettings: secureSettings,
+      autoEraseSchedules: [],
+    });
+    expect(missingScheduleReport.findings.some((finding) => finding.id === "auto-schedule-wipes")).toBe(true);
+
+    const allScheduled = getForensicTraceScheduleCategories().map((category) => ({
+      categoryId: category.schedulerCategoryId ?? category.id,
+      enabled: true,
+      intervalMinutes: 360,
+      targetUser: null,
+    }));
+    const completeScheduleReport = buildRadarReport({
+      appSettings: secureSettings,
+      autoEraseSchedules: allScheduled,
+    });
+    expect(completeScheduleReport.findings.some((finding) => finding.id === "auto-schedule-wipes")).toBe(false);
+
+    const casualSettings = makeSettings(
+      { privacy: false, network: false, tweaks: false, cleanup: true },
+      {},
+      "casual",
+    );
+    const casualReport = buildRadarReport({ appSettings: casualSettings, autoEraseSchedules: [] });
+    expect(casualReport.findings.some((finding) => finding.id === "auto-schedule-wipes")).toBe(false);
   });
 
   test("Windows Server findings only surface when isServerSku is true", () => {

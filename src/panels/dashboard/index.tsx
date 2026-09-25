@@ -27,15 +27,17 @@ import useEntitlements from "../../hooks/useEntitlements";
 import useProInstall from "../../hooks/useProInstall";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
 import { useQueuedAppUpdateIds } from "../../hooks/useQueuedAppUpdateIds";
-import { markAppUpdatesQueued, clearAppUpdatesQueued } from "../../lib/appUpdateQueue";
+import { claimFreeAppUpdates, clearAppUpdatesQueued } from "../../lib/appUpdateQueue";
 import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
-import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
+import { isPackageBackedDependency, runQueuedDependencyInstall, runQueuedPackageOperation } from "../../lib/packageOperationLock";
 import { getRadarDriftToggles, getToggleById } from "../../registry";
 import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/toggles";
 import { getToggleDrift } from "../../lib/toggleDrift";
 import { getDisplayBranding } from "../../lib/branding";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { automaticFixAllCandidates, automaticFixAllFingerprint } from "../../lib/automaticFixAll";
+import { ensureForensicTraceSchedules } from "../cleanup/forensicSchedulePolicy";
+import { invalidateDiskCleanupScheduleStatus } from "../maintenance/diskCleanupScheduleState";
 import {
   addIgnoredFindingId,
   effectiveIgnoredFindingIds,
@@ -43,7 +45,8 @@ import {
 } from "./ignoredFindingIds";
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
-import { showError, showWarning } from "../../utils/toast";
+import { showError, showInfo, showSuccess } from "../../utils/toast";
+import { getMaintenanceFailureMessage } from "../../utils/maintenance";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
@@ -126,11 +129,12 @@ export default function DashboardPanel() {
     getAppInventory,
     upgradeApp,
     invokeDiskCleanup,
+    setAutoEraseSchedule,
   } = useBackend();
 
 
   const visibility = useVisibility();
-  const { hasPaid, canUpdatePro, canUse } = useEntitlements();
+  const { hasPaid, canUpdatePro, canUse, isInvestigator } = useEntitlements();
   const pro = useProInstall({
     status: canUpdatePro,
     manifest: canUpdatePro,
@@ -139,7 +143,9 @@ export default function DashboardPanel() {
   const updater = useUpdater();
   const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
   const score = useSovereigntyScore();
-  const radar = useDashboardRadar();
+  const radar = useDashboardRadar({
+    scheduledWipesEnabled: hasPaid && pro.isInstalled && !isInvestigator,
+  });
   const { tasks: activeTasks } = useTaskStatus();
   const isAppUpdateTaskRunning = activeTasks.some(
     (t) => t.status === "running" && /^Update \d+ Apps?$/.test(t.label)
@@ -288,7 +294,11 @@ export default function DashboardPanel() {
         id: `dependency:${dep.id}`,
         category: "engines",
         label: `${dep.name} not installed`,
-        impact: `Required by ${dep.panelId}. Install this engine to unlock the workflow.`,
+        impact: dep.panelId
+          ? `Required by ${dep.panelId}. Install this engine to unlock the workflow.`
+          : dep.id === "powershell7"
+            ? "Required by WinCommander's PowerShell 7 integrations. Install this runtime to unlock those features."
+            : "Required by WinCommander. Install this engine to unlock its dependent features.",
         severity: "warning",
         safeDefault: true,
       })),
@@ -517,7 +527,7 @@ export default function DashboardPanel() {
   //   contextMenuShred/Scrub → Rust invoke path, needs patchAppSettings after
   //   suggestions          → companion Disable-SetupCompletionNags
   //   paste-monitor        → settings-only (no toggle/command), flips ideal.privacy.clipboard.pasteMonitorEnabled
-  const buildFindingOp = useCallback((f: ScanFinding, machineWide = false): { label: string; fn: () => Promise<any> } | null => {
+  const buildFindingOp = useCallback((f: ScanFinding, machineWide = false, ownsPackageOperation = false): { label: string; fn: () => Promise<any> } | null => {
     const wrap = (fn: () => Promise<any>) => async () => {
       const res = await fn();
       if (res && (res as any).error) throw new Error((res as any).error);
@@ -555,7 +565,10 @@ export default function DashboardPanel() {
     } else if (f.id.startsWith('dependency:')) {
       const depId = f.id.slice('dependency:'.length);
       fn = async () => {
-        const res = await executeBackendCommand('Install-Dependency', { Id: depId, MachineWide: machineWide });
+        const install = () => executeBackendCommand('Install-Dependency', { Id: depId, MachineWide: machineWide });
+        const res = ownsPackageOperation
+          ? await install()
+          : await runQueuedDependencyInstall(depId, install, () => showInfo(`Installing ${depId} after the current package operation finishes.`));
         await refreshDependencies(true);
         return res;
       };
@@ -594,10 +607,28 @@ export default function DashboardPanel() {
     } else if (f.id.startsWith('browser-hardening:')) {
       const browserName = f.id.slice('browser-hardening:'.length);
       fn = () => executeBackendCommand('Enable-HardenBrowserByName', { Name: browserName, MachineWide: machineWide });
+    } else if (f.id === 'auto-schedule-wipes') {
+      fn = async () => {
+        let summary;
+        try {
+          summary = await ensureForensicTraceSchedules(setAutoEraseSchedule);
+        } finally {
+          // The dashboard radar and Cleanup cards share this schedule cache.
+          invalidateDiskCleanupScheduleStatus();
+        }
+        const message = `Scheduled trace wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.${summary.firstFailure ? ` First error: ${summary.firstFailure}` : ''}`;
+        if (summary.failed > 0) {
+          showError(message);
+          throw new Error(message);
+        }
+        showSuccess(message);
+        return { success: true, data: summary };
+      };
     } else if (f.id === 'services-profile') {
       fn = async () => {
         const res = await executeBackendCommand('Set-ServicesManual', { MachineWide: machineWide });
-        if (res && ((res as any).error || res.success === false)) return res;
+        const failureMessage = getMaintenanceFailureMessage("Apply Recommended Service Profile", res);
+        if (failureMessage) throw new Error(failureMessage);
         const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.services;
         await patchAppSettings({
           ideal: { tweaks: { maintenanceRuns: {
@@ -641,7 +672,7 @@ export default function DashboardPanel() {
       }
     }
     return fn ? { label: f.label, fn: wrap(fn) } : null;
-  }, [toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, pro, setUpdateFlowOpen]);
+  }, [toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen]);
 
   // Run a set of findings through the operation overlay, then re-read state so
   // the radar, score, and toggles update. Used by both Fix-all and per-item Fix.
@@ -653,32 +684,36 @@ export default function DashboardPanel() {
       showError(`Apply Fix All to all users is blocked. ${MACHINE_SCOPE_ELEVATION_MESSAGE}`);
       return Promise.resolve();
     }
-    const opSteps = targets
-      .map((finding) => buildFindingOp(finding, machineWide))
-      .filter((s): s is { label: string; fn: () => Promise<any> } => s !== null);
-    if (opSteps.length === 0) return Promise.resolve();
-    const ids = targets.map((t) => t.id);
-    const appUpdateIds = targets
+    const requestedAppUpdateIds = targets
       .filter((t) => t.id.startsWith('app-update:'))
       .map((t) => t.id.slice('app-update:'.length));
-    const shouldRefreshNetwork = ids.includes('telemetry-blocklist');
-    const hasAppUpdates = appUpdateIds.length > 0;
-    // Fix Everything may combine unrelated repairs with one or more Winget
-    // upgrades. Hold the process-wide package lock for the complete batch so
-    // another update or install surface cannot start competing package work.
-    // The operation still runs its own app-update steps in parallel.
-    if (hasAppUpdates && !tryAcquirePackageOperation()) {
-      void showWarning("Another package-manager operation is already running.");
+    const appUpdateIds = claimFreeAppUpdates(requestedAppUpdateIds);
+    const ownedAppUpdateIds = new Set(appUpdateIds);
+    const runnableTargets = targets.filter((finding) =>
+      !finding.id.startsWith('app-update:') || ownedAppUpdateIds.has(finding.id.slice('app-update:'.length))
+    );
+    const hasPackageDependency = runnableTargets.some((finding) =>
+      finding.id.startsWith('dependency:') && isPackageBackedDependency(finding.id.slice('dependency:'.length))
+    );
+    const ownsPackageOperation = appUpdateIds.length > 0 || hasPackageDependency;
+    const opSteps = runnableTargets
+      .map((finding) => buildFindingOp(finding, machineWide, ownsPackageOperation))
+      .filter((s): s is { label: string; fn: () => Promise<any> } => s !== null);
+    if (opSteps.length === 0) {
+      clearAppUpdatesQueued(appUpdateIds);
       return Promise.resolve();
     }
-    // Claim the app-update ids synchronously so Needs Attention / Fix All drop
-    // them immediately, and a concurrent Apps-panel "Update All" skips them.
-    if (hasAppUpdates) markAppUpdatesQueued(appUpdateIds);
+    const ids = targets.map((t) => t.id);
+    const shouldRefreshNetwork = ids.includes('telemetry-blocklist');
+    // Fix Everything may combine repairs with package installs or upgrades.
+    // Hold the shared lock for the whole package-bearing batch and run its
+    // steps sequentially so two dependency installers cannot share WinGet.
+    // Claim IDs synchronously so other update surfaces skip duplicate package
+    // work while this operation waits in the shared FIFO.
     setBusyIds((prev) => { const n = new Set(prev); ids.forEach((i) => n.add(i)); return n; });
-    // Always parallel — privacy toggles are isolated PowerShell processes and
-    // the Apps panel already runs winget upgrades in parallel, so bundled
-    // app-updates no longer force the whole batch to run one-at-a-time.
-    return runOperation(title, opSteps, { mode: 'parallel', accent: 'blue', failFast: false, autoDismissMs: 5000 })
+    // Keep package-bearing batches sequential under their shared lock; fixes
+    // without package-manager work can still run concurrently.
+    const executeFindings = () => runOperation(title, opSteps, { mode: ownsPackageOperation ? 'sequential' : 'parallel', accent: 'blue', failFast: false, autoDismissMs: 5000 })
       .then(async () => {
         await refreshSettings();
         if (shouldRefreshNetwork) {
@@ -689,11 +724,15 @@ export default function DashboardPanel() {
         if (title === "Fix Everything") {
           window.dispatchEvent(new CustomEvent("tour-fix-all-done"));
         }
-      })
-      .finally(() => {
+      });
+    const operation = ownsPackageOperation
+      ? runQueuedPackageOperation(async (wasQueued) => {
+        if (wasQueued) void showInfo(`${title} queued. It will start after the current package-manager operation finishes.`);
+        await executeFindings();
+      }, undefined, () => clearAppUpdatesQueued(appUpdateIds))
+      : executeFindings();
+    return operation.finally(() => {
         setBusyIds((prev) => { const n = new Set(prev); ids.forEach((i) => n.delete(i)); return n; });
-        if (hasAppUpdates) clearAppUpdatesQueued(appUpdateIds);
-        if (hasAppUpdates) releasePackageOperation();
       });
   }, [buildFindingOp, refreshSettings, refreshNetwork, needsElevation]);
 

@@ -5,7 +5,7 @@ import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
 import { runOperation } from "../../../context/OperationContext";
 import { showSuccess, showError } from "../../../utils/toast";
-import { formatMaintenanceSuccess } from "../../../utils/maintenance";
+import { formatMaintenanceSuccess, getMaintenanceFailureMessage } from "../../../utils/maintenance";
 import { enabledRowsFirst } from "./systemManagerSort";
 import "./SystemManagers.css";
 import { AnimatedList, AnimatedTableRow, staggerDelay } from "../../shared/AnimatedList";
@@ -45,17 +45,24 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
     const applyRecommended = useCallback(async () => {
         setApplyingRecommended(true);
         let captured: any = null;
+        let failureMessage: string | null = null;
         const wrapped = async () => {
             const r = await setServicesManual();
             captured = r;
+            failureMessage = getMaintenanceFailureMessage("Apply Recommended Service Profile", r);
+            if (failureMessage) throw new Error(failureMessage);
             return r;
         };
         try {
-            await runOperation(
+            const operation = await runOperation(
                 "Apply Recommended Service Profile",
                 [{ label: "Optimizing services...", fn: wrapped }],
                 { mode: "sequential", accent: "neutral" },
             );
+            if (operation.anyError) {
+                showError(failureMessage || "Apply Recommended Service Profile failed.");
+                return;
+            }
             const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.["services"];
             await patchAppSettings({
                 ideal: { tweaks: { maintenanceRuns: {
@@ -64,8 +71,8 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
             });
             showSuccess(formatMaintenanceSuccess("Apply Recommended Service Profile", captured));
             refresh();
-        } catch {
-            // runOperation already surfaces the error
+        } catch (error) {
+            showError(error instanceof Error ? error.message : "Apply Recommended Service Profile failed.");
         } finally {
             setApplyingRecommended(false);
         }
