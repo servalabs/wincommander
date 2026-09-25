@@ -220,17 +220,72 @@ Get-ChildItem -Path "`$env:SystemRoot\Prefetch" -Filter '*.pf' -File -Force -Err
 }
 "@
     'usbHistory'        = @"
-('HKLM:\SYSTEM\CurrentControlSet\Enum\USB' + 'STOR'),
-'HKLM:\SYSTEM\CurrentControlSet\Enum\USB' | ForEach-Object {
-    if (Test-Path `$_) {
-        Get-ChildItem `$_ -ErrorAction SilentlyContinue | ForEach-Object {
-            Remove-Item -Path `$_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+`$presentUsbStorageIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+`$pnpReady = `$false
+try {
+    `$presentDevices = @(Get-PnpDevice -PresentOnly:`$true -ErrorAction Stop)
+    if (`$presentDevices.Count -eq 0) { throw 'PnP returned no present devices.' }
+    foreach (`$device in `$presentDevices) {
+        `$instanceId = [string]`$device.InstanceId
+        if (`$instanceId.StartsWith('USBSTOR\', [StringComparison]::OrdinalIgnoreCase)) {
+            [void]`$presentUsbStorageIds.Add(`$instanceId)
         }
     }
+    `$pnpReady = `$true
+} catch {
+    `$script:AutoEraseFailed++
 }
-'HKLM:\SOFTWARE\Microsoft\Windows Portable Devices\Devices' | ForEach-Object {
-    if (Test-Path `$_) {
-        Get-ChildItem `$_ -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+if (`$pnpReady) {
+    `$candidates = @()
+    `$registryReady = `$false
+    try {
+        `$regRoot = 'HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR'
+        if (Test-Path -LiteralPath `$regRoot -ErrorAction Stop) {
+            foreach (`$deviceClass in @(Get-ChildItem -LiteralPath `$regRoot -ErrorAction Stop)) {
+                foreach (`$instance in @(Get-ChildItem -LiteralPath `$deviceClass.PSPath -ErrorAction Stop)) {
+                    `$instanceId = "USBSTOR\`$(`$deviceClass.PSChildName)\`$(`$instance.PSChildName)"
+                    if (-not `$presentUsbStorageIds.Contains(`$instanceId)) {
+                        `$candidates += `$instanceId
+                    }
+                }
+            }
+        }
+        `$registryReady = `$true
+    } catch {
+        `$script:AutoEraseFailed++
+    }
+
+    # Windows protects USBSTOR history keys, so PnP removes only stale storage
+    # nodes. Refresh the read-only snapshot before each removal; generic USB,
+    # HID, printer and portable-device IDs are never candidates.
+    if (`$registryReady) {
+        foreach (`$candidate in `$candidates) {
+            `$id = [string]`$candidate
+            if (-not `$id.StartsWith('USBSTOR\', [StringComparison]::OrdinalIgnoreCase)) {
+                `$script:AutoEraseFailed++
+                continue
+            }
+            try {
+                `$presentDevices = @(Get-PnpDevice -PresentOnly:`$true -ErrorAction Stop)
+                if (`$presentDevices.Count -eq 0) { throw 'PnP returned no present devices.' }
+                `$presentUsbStorageIds.Clear()
+                foreach (`$device in `$presentDevices) {
+                    `$instanceId = [string]`$device.InstanceId
+                    if (`$instanceId.StartsWith('USBSTOR\', [StringComparison]::OrdinalIgnoreCase)) {
+                        [void]`$presentUsbStorageIds.Add(`$instanceId)
+                    }
+                }
+            } catch {
+                `$script:AutoEraseFailed++
+                `$pnpReady = `$false
+                break
+            }
+            if (`$presentUsbStorageIds.Contains(`$id)) { continue }
+            `$result = & pnputil.exe /remove-device `$id 2>&1 | Out-String
+            if (`$result -match 'removed successfully') { `$script:AutoEraseRemoved++ }
+            else { `$script:AutoEraseFailed++ }
+        }
     }
 }
 "@
@@ -839,10 +894,18 @@ function Set-AutoEraseSchedule {
         }
 
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-        $description = if ($ManagedByAutoSet) {
-            'WinCommander Auto-set scheduled wipe v2'
+        if ($CategoryId -eq 'usbHistory') {
+            $description = if ($ManagedByAutoSet) {
+                'WinCommander Auto-set scheduled wipe v3'
+            } else {
+                'WinCommander scheduled wipe v3'
+            }
         } else {
-            'WinCommander scheduled wipe v2'
+            $description = if ($ManagedByAutoSet) {
+                'WinCommander Auto-set scheduled wipe v2'
+            } else {
+                'WinCommander scheduled wipe v2'
+            }
         }
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force | Out-Null
@@ -1096,17 +1159,22 @@ function Invoke-AutoEraseMigration {
         Unregister-ScheduledTask -TaskName $m.legacy -Confirm:$false -ErrorAction SilentlyContinue
     }
 
-    # 3. Re-register current-name tasks that still execute a legacy script from
-    # the writable parent directory. New tasks execute only from the ACL-hardened
-    # scripts subdirectory and keep independent per-user catch-up markers.
+    # 3. Re-register legacy scripts and USB-history v2 payloads. The v3 USB
+    # payload removes only disconnected USBSTOR nodes; older task files also
+    # removed generic USB history and must not remain scheduled.
     $currentTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
         Where-Object { $_.TaskName -like "$newPrefix*" })
     foreach ($t in $currentTasks) {
         $actionArgs = [string](@($t.Actions)[0].Arguments)
-        # v2 uses durable due-state markers. Re-register older script-backed
-        # tasks as well so existing schedules receive missed-interval catch-up
-        # without changing their task name, interval, or principal.
-        if ($actionArgs -like '*WinCommander\auto-erase\scripts*' -and $t.Description -like 'WinCommander*scheduled wipe v2') { continue }
+        # Re-register old script-backed tasks and the unsafe USB-history v2
+        # payload, preserving task name, interval, scope and principal.
+        $isUsbHistoryTask = ($t.TaskName -like "${newPrefix}usbHistory" -or $t.TaskName -like "${newPrefix}usbHistory_*")
+        $currentPayload = if ($isUsbHistoryTask) {
+            $t.Description -like 'WinCommander*scheduled wipe v3'
+        } else {
+            $t.Description -like 'WinCommander*scheduled wipe v2'
+        }
+        if ($actionArgs -like '*WinCommander\auto-erase\scripts*' -and $currentPayload) { continue }
 
         $tail = $t.TaskName.Substring($newPrefix.Length)
         $catId = $null
@@ -1134,12 +1202,14 @@ function Invoke-AutoEraseMigration {
             $minutes = [int]$Matches[1] * 1440
         }
         $runAsSystem = [bool]($t.Principal.UserId -eq 'SYSTEM')
+        $managedByAutoSet = [bool]($t.Description -like 'WinCommander Auto-set scheduled wipe*')
         $result = Set-AutoEraseSchedule `
             -CategoryId $catId `
             -IntervalMinutes $minutes `
             -RunAsSystem $runAsSystem `
             -TargetUser $targetUser `
-            -TaskNameOverride $t.TaskName
+            -TaskNameOverride $t.TaskName `
+            -ManagedByAutoSet:$managedByAutoSet
         if (-not $result.error) { $migrated += $t.TaskName }
     }
     @{ status = 'ok'; migrated = $migrated }
