@@ -20,6 +20,7 @@ import {
     meshConfigPayload,
     meshDraftFromPrefs,
     meshPrefsMatchConfig,
+    meshPrefsMismatches,
     shouldSyncMeshDraftFromStatus,
     type MeshConfigDraft,
     type MeshConfigPayload,
@@ -381,11 +382,20 @@ function PrivateMeshPanel() {
             const res = await setMeshVPNConfig(submittedConfig);
             if (res.success) {
                 pendingApplyRef.current = submittedConfig;
-                const readback = await refreshStatus(true);
+                const verifyUntil = Date.now() + 5000;
+                let readback: MeshVPNStatus | null = null;
+                do {
+                    readback = await refreshStatus(true);
+                    if (meshPrefsMatchConfig(readback?.prefs, submittedConfig)) break;
+                    if (Date.now() >= verifyUntil) break;
+                    await new Promise((resolve) => window.setTimeout(resolve, 250));
+                } while (Date.now() < verifyUntil);
+
                 if (!meshPrefsMatchConfig(readback?.prefs, submittedConfig)) {
+                    const mismatches = meshPrefsMismatches(readback?.prefs, submittedConfig);
                     setApplyError(readback?.prefs
-                        ? "Private Network accepted the request, but its reported settings do not match yet. Your edits were kept."
-                        : "Private Network accepted the request, but its settings could not be verified. Your edits were kept.");
+                        ? `Tailscale did not confirm: ${mismatches.join(", ")}. Your edits were kept.`
+                        : "Tailscale settings could not be read after retrying. Your edits were kept.");
                 }
             } else {
                 setApplyError(sanitizeMeshError(res.error) || "Failed to apply config.");

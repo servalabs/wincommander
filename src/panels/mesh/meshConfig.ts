@@ -48,16 +48,26 @@ export function meshPrefsMatchConfig(
     prefs: MeshVPNStatus["prefs"] | null | undefined,
     config: MeshConfigPayload,
 ): boolean {
-    if (!prefs) return false;
-    return (
-        !!prefs.AdvertiseExitNode === config.AdvertiseExitNode &&
-        !!prefs.ExitNodeAllowLANAccess === config.AllowLanAccess &&
-        !!prefs.Unattended === config.Unattended &&
-        !!prefs.AcceptRoutes === config.AcceptRoutes &&
-        !!prefs.AcceptDNS === config.AcceptDNS &&
-        !!prefs.ShieldsUp === config.ShieldsUp &&
-        (prefs.ExitNodeIP || "").trim().toLowerCase() === config.ExitNodeIP.trim().toLowerCase()
-    );
+    return meshPrefsMismatches(prefs, config).length === 0;
+}
+
+export function meshPrefsMismatches(
+    prefs: MeshVPNStatus["prefs"] | null | undefined,
+    config: MeshConfigPayload,
+): string[] {
+    if (!prefs) return ["settings unavailable"];
+
+    const mismatches: string[] = [];
+    if (!!prefs.AdvertiseExitNode !== config.AdvertiseExitNode) mismatches.push("Exit node advertisement");
+    if (!!prefs.ExitNodeAllowLANAccess !== config.AllowLanAccess) mismatches.push("LAN access through exit node");
+    if (!!prefs.Unattended !== config.Unattended) mismatches.push("Run unattended");
+    if (!!prefs.AcceptRoutes !== config.AcceptRoutes) mismatches.push("Accept subnet routes");
+    if (!!prefs.AcceptDNS !== config.AcceptDNS) mismatches.push("Use Tailscale DNS");
+    if (!!prefs.ShieldsUp !== config.ShieldsUp) mismatches.push("Block incoming connections");
+    if ((prefs.ExitNodeIP || "").trim().toLowerCase() !== config.ExitNodeIP.trim().toLowerCase()) {
+        mismatches.push("Exit node selection");
+    }
+    return mismatches;
 }
 
 function meshConfigsEqual(left: MeshConfigPayload, right: MeshConfigPayload): boolean {
