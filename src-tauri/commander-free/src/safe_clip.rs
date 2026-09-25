@@ -38,6 +38,7 @@ use clipboard_win::{formats::FileList, Clipboard, Setter};
 const CLIP_VERSION: u32 = 3;
 const CLIP_FILE: &str = "safe-clip.json";
 const SHELL_PENDING_FILE: &str = ".safe-copy-selection.json";
+const SAFE_COPY_PROGRESS_FILE: &str = ".safe-copy-progress.json";
 const CACHE_DIR: &str = "safe-clip-cache";
 const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
 // Explorer can invoke a legacy static verb separately for each selected item.
@@ -69,6 +70,16 @@ struct PendingShellSelection {
 pub struct SafeClipStatus {
     pub count: usize,
     pub stamped_at_ms: u128,
+}
+
+/// Ephemeral UI state for an active Safe Copy scrub. It intentionally carries
+/// no source paths: the frontend only needs to show progress, never raw names
+/// or locations before the cleaned clipboard has been published.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SafeCopyProgress {
+    pub started_at_ms: u128,
+    pub item_count: usize,
 }
 
 /// One source that was NOT pasted, with a human-readable reason.
@@ -466,6 +477,40 @@ fn shell_pending_path() -> Result<PathBuf, String> {
     Ok(crate::paths::user_data_dir()?.join(SHELL_PENDING_FILE))
 }
 
+fn safe_copy_progress_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::user_data_dir()?.join(SAFE_COPY_PROGRESS_FILE))
+}
+
+fn set_safe_copy_progress(item_count: usize) -> Result<(), String> {
+    let progress = SafeCopyProgress {
+        started_at_ms: now_ms(),
+        item_count,
+    };
+    let path = safe_copy_progress_path()?;
+    write_json_atomic(&path, &progress, ".safe-copy-progress.tmp")
+}
+
+fn clear_safe_copy_progress() {
+    if let Ok(path) = safe_copy_progress_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn active_safe_copy_progress() -> Option<SafeCopyProgress> {
+    let path = safe_copy_progress_path().ok()?;
+    let progress = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<SafeCopyProgress>(&raw).ok())?;
+    // A crash must not leave the application covered by a permanent loading
+    // dialog. Normal scrubs are much shorter; five minutes is deliberately
+    // generous for a large selection on a slow disk.
+    if now_ms().saturating_sub(progress.started_at_ms) > 5 * 60 * 1000 {
+        let _ = std::fs::remove_file(path);
+        return None;
+    }
+    Some(progress)
+}
+
 fn queue_shell_selection(paths: &[String]) -> Result<(), String> {
     let _guard = ClipLock::acquire()?;
     let path = shell_pending_path()?;
@@ -821,6 +866,17 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     Ok(count)
 }
 
+/// Run the private Safe Copy cache/scrub pipeline while exposing only an
+/// ephemeral, path-free progress marker for the already-open application.
+/// The marker is always cleared, including on validation or clipboard errors,
+/// so the UI never claims that a failed copy is ready.
+async fn record_sources_with_progress(paths: &[String]) -> Result<usize, String> {
+    set_safe_copy_progress(paths.iter().filter(|path| !path.trim().is_empty()).count())?;
+    let result = record_sources(paths).await;
+    clear_safe_copy_progress();
+    result
+}
+
 /// Collect one burst of Explorer's per-item static-verb launches, then let a
 /// single process scrub and publish the complete selection. A direct Player
 /// invocation already arrives as one argv list and follows this same path.
@@ -833,7 +889,7 @@ async fn record_shell_selection(paths: &[String]) -> Result<Option<usize>, Strin
         if let Some(selection) =
             take_settled_shell_selection(elapsed_ms >= SHELL_SELECTION_TIMEOUT_MS)?
         {
-            return record_sources(&selection).await.map(Some);
+            return record_sources_with_progress(&selection).await.map(Some);
         }
         // Another headless process claimed and is handling this selection.
         if !shell_pending_path()?.exists() {
@@ -958,10 +1014,19 @@ fn show_safe_paste_error(message: &str) {
 /// the headless CLI path; handy for an in-app "Safe Copy" action and tests).
 #[tauri::command]
 pub async fn safe_copy_record(paths: Vec<String>) -> Result<usize, String> {
-    record_sources(&paths).await
+    record_sources_with_progress(&paths).await
 }
 
-/// Current safe-clipboard status (for a "N items ready to Safe Paste" hint).
+/// A transient marker used by the desktop UI to show that Safe Copy is still
+/// scrubbing. Unlike `safe_clip_status`, it is empty as soon as the clean
+/// clipboard has been published and must never become a durable "ready" hint.
+#[tauri::command]
+pub fn safe_copy_progress_status() -> Option<SafeCopyProgress> {
+    active_safe_copy_progress()
+}
+
+/// Current safe-clipboard status for callers that need to inspect the clean
+/// cache. The main UI intentionally does not present this as a persistent hint.
 #[tauri::command]
 pub async fn safe_clip_status() -> Result<SafeClipStatus, String> {
     let cache = cache_root()?;

@@ -4911,7 +4911,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useDashboardRadar.ts",
-        "src/panels/privacy/index.tsx"
+        "src/lib/onboardingExperience.ts"
       ]
     },
     {
@@ -5900,7 +5900,6 @@
       "frontendReferences": [
         "src/components/DependencyGate.tsx",
         "src/components/Sidebar.tsx",
-        "src/context/AppContext.tsx",
         "src/hooks/useDependencies.ts",
         "src/panels/apps/components/EnginesSection.tsx",
         "src/panels/dashboard/index.tsx",
@@ -6996,7 +6995,9 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/DependencyGate.tsx"
+        "src/components/DependencyGate.tsx",
+        "src/context/AppContext.tsx",
+        "src/panels/apps/components/EnginesSection.tsx"
       ]
     },
     {
@@ -7906,7 +7907,10 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/hooks/useDecoyMonitor.ts",
+        "src/panels/privacy/DecoyMonitorSection.tsx"
+      ]
     },
     {
       "id": "tauri:decoy_read_audit_status",
@@ -7914,7 +7918,9 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/panels/privacy/DecoyMonitorSection.tsx"
+      ]
     },
     {
       "id": "tauri:delete_canary",
@@ -9954,6 +9960,16 @@
       ]
     },
     {
+      "id": "tauri:package_updates_install_optional_managers",
+      "name": "package_updates_install_optional_managers",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:package_updates_inventory",
       "name": "package_updates_inventory",
       "transport": "tauri",
@@ -10422,6 +10438,16 @@
     {
       "id": "tauri:safe_clip_status",
       "name": "safe_clip_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:safe_copy_progress_status",
+      "name": "safe_copy_progress_status",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -11430,6 +11456,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
+      "id": "tauri:take_safe_paste_requests",
+      "name": "take_safe_paste_requests",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/RightSidebar.tsx"
       ]
     },
     {
