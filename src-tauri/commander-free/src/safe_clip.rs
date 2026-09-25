@@ -43,6 +43,7 @@ const CLIP_FILE: &str = "safe-clip.json";
 const SHELL_PENDING_FILE: &str = ".safe-copy-selection.json";
 const CACHE_DIR: &str = "safe-clip-cache";
 const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
+const SAFE_COPY_CANCELLED: &str = "Safe Copy canceled. The clipboard was not updated.";
 // Explorer can invoke a legacy static verb separately for each selected item.
 // Wait for the short burst of launches before scrubbing so the clipboard gets
 // one complete selection rather than the last individual item.
@@ -685,7 +686,9 @@ async fn cache_scrubbed_source(
     source: &Path,
     batch: &Path,
     decoys: &HashSet<PathBuf>,
+    progress: Option<&SafeCopyProgressSession>,
 ) -> Result<Vec<PathBuf>, String> {
+    ensure_safe_copy_not_cancelled(progress)?;
     let name = source
         .file_name()
         .ok_or_else(|| "Safe Copy source has no file name".to_string())?;
@@ -708,6 +711,7 @@ async fn cache_scrubbed_source(
     };
     let skipped_decoys = copy_tree(source, &staged, &decoy_skip)
         .map_err(|error| format!("Safe Copy could not stage {}: {error}", source.display()))?;
+    ensure_safe_copy_not_cancelled(progress)?;
     if skipped_decoys > 0 {
         return Err("Safe Copy refused a protected decoy inside the selection".into());
     }
@@ -721,7 +725,8 @@ async fn cache_scrubbed_source(
             .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
             .filter(|path| path.is_dir())
             .collect();
-        let report = crate::file_metadata::scrub_metadata_paths_headless(
+        ensure_safe_copy_not_cancelled(progress)?;
+        let report_result = crate::file_metadata::scrub_metadata_paths_headless(
             files
                 .iter()
                 .map(|path| path.to_string_lossy().to_string())
@@ -734,13 +739,16 @@ async fn cache_scrubbed_source(
                 replace_originals: true,
             }),
         )
-        .await?;
+        .await;
+        ensure_safe_copy_not_cancelled(progress)?;
+        let report = report_result?;
         validate_scrub_report(&report, files.len()).map_err(|detail| {
             format!("Safe Copy scrub failed; originals were not placed on the clipboard: {detail}")
         })?;
         cleanup_new_scrub_output_dirs(&files, &scrub_output_dirs)?;
     }
 
+    ensure_safe_copy_not_cancelled(progress)?;
     promote_scrubbed_source(&staged, batch)
 }
 
@@ -755,10 +763,15 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
         None
     };
     let result = record_sources_inner(paths, progress.as_ref()).await;
+    let cancellation_requested = progress
+        .as_ref()
+        .is_some_and(SafeCopyProgressSession::is_cancelled);
     if let Some(session) = progress.take() {
         session.finish(
             result.is_ok(),
-            if result.is_ok() {
+            if cancellation_requested {
+                SAFE_COPY_CANCELLED
+            } else if result.is_ok() {
                 "Safe Copy is ready to paste."
             } else {
                 "Safe Copy could not complete. Please try again."
@@ -772,6 +785,7 @@ async fn record_sources_inner(
     paths: &[String],
     progress: Option<&SafeCopyProgressSession>,
 ) -> Result<usize, String> {
+    ensure_safe_copy_not_cancelled(progress)?;
     let decoys: HashSet<PathBuf> = crate::file_monitor::enrolled_decoy_paths()
         .into_iter()
         .collect();
@@ -809,14 +823,16 @@ async fn record_sources_inner(
         if let Some(progress) = progress {
             progress.set_selection(index + 1, filtered.len());
         }
-        cached_sources
-            .extend(cache_scrubbed_source(Path::new(raw), staged_batch.path(), &decoys).await?);
+        ensure_safe_copy_not_cancelled(progress)?;
+        cached_sources.extend(
+            cache_scrubbed_source(Path::new(raw), staged_batch.path(), &decoys, progress).await?,
+        );
     }
     if cached_sources.is_empty() {
         return Err("Safe Copy found no items inside the selected folder(s).".into());
     }
     if let Some(progress) = progress {
-        progress.set_phase("Finalizing the clean clipboard…");
+        progress.set_phase("Waiting to update the clean clipboard…");
     }
     let relative_sources: Vec<PathBuf> = cached_sources
         .iter()
@@ -833,6 +849,12 @@ async fn record_sources_inner(
     // the cross-process mutex only around publishing and cleanup so concurrent
     // requests cannot delete one another's active staging directories.
     let _guard = ClipLock::acquire()?;
+    ensure_safe_copy_not_cancelled(progress)?;
+    if let Some(progress) = progress {
+        if !progress.begin_commit() {
+            return Err(SAFE_COPY_CANCELLED.to_string());
+        }
+    }
     let staging_path = staged_batch.keep();
     let batch = root.join(uuid::Uuid::new_v4().to_string());
     if let Err(error) = std::fs::rename(&staging_path, &batch) {
@@ -856,6 +878,16 @@ async fn record_sources_inner(
     publish_windows_file_clipboard(&clip.sources)?;
     remove_old_cache_batches(&root, &batch);
     Ok(count)
+}
+
+fn ensure_safe_copy_not_cancelled(
+    progress: Option<&SafeCopyProgressSession>,
+) -> Result<(), String> {
+    if progress.is_some_and(SafeCopyProgressSession::is_cancelled) {
+        Err(SAFE_COPY_CANCELLED.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -936,6 +968,14 @@ impl SafeCopyProgressSession {
         self.dialog.set_phase(status);
     }
 
+    fn is_cancelled(&self) -> bool {
+        self.dialog.is_cancelled()
+    }
+
+    fn begin_commit(&self) -> bool {
+        self.dialog.begin_commit()
+    }
+
     fn finish(self, succeeded: bool, status: &str) {
         self.dialog.finish(succeeded, status);
         drop(self);
@@ -966,6 +1006,12 @@ impl SafeCopyProgressSession {
 
     fn set_selection(&self, _selected_index: usize, _selected_total: usize) {}
     fn set_phase(&self, _status: impl Into<String>) {}
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+    fn begin_commit(&self) -> bool {
+        true
+    }
     fn finish(self, _succeeded: bool, _status: &str) {}
 }
 
