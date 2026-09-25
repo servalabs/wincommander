@@ -918,7 +918,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 for (const dep of depsArray) {
                     if (dep.installed && dep.canStart && dep.running === false) {
                         console.log(`[Dependencies] Auto-starting ${dep.name}…`);
-                        executeBackendCommand('Install-Dependency', { Id: dep.id })
+                        executeBackendCommand('Start-DependencyService', { Id: dep.id })
                             .catch(err => console.error(`[Dependencies] Auto-start ${dep.id} failed:`, err));
                     }
                 }

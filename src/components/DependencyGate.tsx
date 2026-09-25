@@ -11,6 +11,8 @@ import { Icon } from '@/components/ui/icon';
 import { useAppState } from '../context/AppContext';
 import { executeBackendCommand } from '../hooks/useBackend';
 import { runOperation } from '../context/OperationContext';
+import { runQueuedDependencyInstall } from '../lib/packageOperationLock';
+import { showInfo } from '../utils/toast';
 import type { PanelId } from '../types/panels';
 import { DURATION_S, EASE } from './shared/motion';
 import './DependencyGate.css';
@@ -101,7 +103,11 @@ export default function DependencyGate({ panelId, children }: DependencyGateProp
                 {
                     label: `Installing ${depName}`,
                     fn: async () => {
-                        const res = await executeBackendCommand('Install-Dependency', { Id: depId });
+                        const res = await runQueuedDependencyInstall(
+                            depId,
+                            () => executeBackendCommand('Install-Dependency', { Id: depId }),
+                            () => showInfo(`Installing ${depName} after the current package operation finishes.`),
+                        );
                         if (!res.success) throw new Error(res.error || 'Installation failed');
                         if (res.data && (res.data as any).error) throw new Error((res.data as any).message || 'Installation failed');
                     },

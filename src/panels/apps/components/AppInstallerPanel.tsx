@@ -7,11 +7,11 @@ import { reportSettingsWriteFailure } from "../../../lib/settingsWriteRecovery";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../../lib/machineScopeElevation";
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
-import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
+import { releasePackageOperation, runQueuedPackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
 import { isAppInventoryRefreshDue } from "../../../lib/appInventoryStartup";
 import { getPackageUpdateInventorySnapshot } from "../../../lib/packageUpdateInventoryStore";
 import { recordPackageActivity, setPackageActivityStatus, usePackageActivities } from "../../../lib/packageActivityStore";
-import { showWarning, showError, showSuccess } from "../../../utils/toast";
+import { showWarning, showError, showSuccess, showInfo } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
 import EnginesSection from "./EnginesSection";
 import { cn } from "../../../lib/utils";
@@ -226,15 +226,13 @@ function AppInstallerPanel({
     //   setLocalLoadingMap(prev => ({ ...prev, "updateAll": false }));
     // }
 
-    if (!tryAcquirePackageOperation()) {
-      showWarning("Another package-manager operation is already running.");
-      return;
-    }
     setLocalLoadingMap(prev => ({ ...prev, "updateAll": true }));
     // Claim the currently-known pending ids synchronously so the dashboard's
     // Fix All / Needs Attention drops them immediately.
     const mine = claimFreeAppUpdates((appInventory?.pendingUpdates ?? []).map((u) => u.id || ""));
     try {
+      await runQueuedPackageOperation(async (wasQueued) => {
+        if (wasQueued) showSuccess("Queued Update All; it will start after the current package operation finishes.");
       // ── Pre-flight (sequential) — package manager must be present
       // and inventory must be enumerated before we can spawn workers.
       const winget = await testWingetInstalled();
@@ -297,12 +295,11 @@ function AppInstallerPanel({
 
       // Single inventory refresh after all parallel upgrades finish.
       await runAppInventoryScan(true);
+      }, undefined, () => clearAppUpdatesQueued(mine));
     } catch {
       // error shown in status bar by runOperation
     } finally {
       setLocalLoadingMap(prev => ({ ...prev, "updateAll": false }));
-      clearAppUpdatesQueued(mine);
-      releasePackageOperation();
     }
   };
 
@@ -312,21 +309,20 @@ function AppInstallerPanel({
     loadingKey: string,
     afterDone?: () => void
   ) => {
-    if (!tryAcquirePackageOperation()) {
-      showWarning("Another package-manager operation is already running.");
-      return;
-    }
     setLocalLoadingMap(prev => ({ ...prev, [loadingKey]: true }));
     const mine = claimFreeAppUpdates(entries.map(([id]) => id));
     // Only upgrade packages this call actually claimed — any id already in
     // flight from another update job (Update All / per-card) is skipped so the
     // same package can't be upgraded twice concurrently.
     const myEntries = entries.filter(([id]) => mine.includes(id));
+    if (myEntries.length === 0) {
+      showWarning("Those packages are already being updated.");
+      setLocalLoadingMap(prev => ({ ...prev, [loadingKey]: false }));
+      return;
+    }
     try {
-      if (myEntries.length === 0) {
-        showWarning("Those packages are already being updated.");
-        return;
-      }
+      await runQueuedPackageOperation(async (wasQueued) => {
+        if (wasQueued) showSuccess(`Queued ${title}; it will start after the current package operation finishes.`);
       // Pre-flight outside the operation panel — package manager must be
       // present before any upgrade workers run.
       const winget = await testWingetInstalled();
@@ -360,12 +356,11 @@ function AppInstallerPanel({
       // Single inventory refresh after all parallel upgrades finish.
       await runAppInventoryScan(true);
       afterDone?.();
+      }, undefined, () => clearAppUpdatesQueued(mine));
     } catch {
       // error shown in status bar by runOperation
     } finally {
       setLocalLoadingMap(prev => ({ ...prev, [loadingKey]: false }));
-      clearAppUpdatesQueued(mine);
-      releasePackageOperation();
     }
   }, [installWinget, runAppInventoryScan, testWingetInstalled, upgradeApp]);
 
@@ -681,6 +676,8 @@ function AppInstallerPanel({
       activityId: recordPackageActivity({ packageId, label: apps.find(app => app.id === packageId)?.name || packageId, kind: "install" }),
       operationStepIndex: null,
     }));
+    const packageName = (packageId: string) => apps.find(app => app.id === packageId)?.name || packageId;
+    const requestedNames = uniqueIds.map(packageName);
     queued.forEach(item => coveredInstallIds.add(item.packageId));
     queued.forEach(item => activeInstallActivityIds.add(item.activityId));
     pendingInstallIds.push(...queued);
@@ -694,7 +691,7 @@ function AppInstallerPanel({
         const base = activeInstallOperation.reserve(queued.map(({ packageId }) => `Installing ${apps.find(app => app.id === packageId)?.name || packageId}`));
         if (base >= 0) queued.forEach((item, index) => { item.operationStepIndex = base + index; });
       }
-      showSuccess(`Added ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"} to the running install.`);
+      void showInfo(`Added ${requestedNames.join(", ")} to the running install queue.`, 4000, { kind: "notification" });
       return;
     }
 
@@ -705,10 +702,13 @@ function AppInstallerPanel({
     const startsImmediately = tryAcquirePackageOperation();
     installWorkerRunning = true;
     if (!startsImmediately) {
-      showSuccess(`Queued ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"}; installation will start after the current package operation.`);
+      void showInfo(`Queued installation for ${requestedNames.join(", ")}. It will start after the current package operation finishes.`, 4000, { kind: "notification" });
       await waitForPackageOperation();
+    } else {
+      void showInfo(`Preparing to install ${requestedNames.join(", ")}…`, 4000, { kind: "notification" });
     }
-    const op = beginOperation("Installing apps", { accent: 'blue' });
+    const operationTitle = uniqueIds.length === 1 ? `Installing ${requestedNames[0]}` : "Installing apps";
+    const op = beginOperation(operationTitle, { accent: 'blue' });
     activeInstallOperation = op;
     // Reserve every app already in the FIFO before package-manager setup. The
     // Processes menu can therefore show the complete queue from the first
@@ -717,6 +717,9 @@ function AppInstallerPanel({
     if (initialBase >= 0) {
       pendingInstallIds.forEach((item, index) => { item.operationStepIndex = initialBase + index; });
     }
+    const installedIds = new Set<string>();
+    const installErrors: Array<{ name: string; message: string }> = [];
+    let installBatchFinished = false;
     try {
       // ── Pre-flight (sequential) — package manager must be present
       // before we can spawn any parallel install workers.
@@ -733,6 +736,11 @@ function AppInstallerPanel({
       // mid-run are installed by this same worker under this same row.
       while (pendingInstallIds.length > 0) {
         const batch = pendingInstallIds.splice(0);
+        if (batch.length === 1) {
+          void showInfo(`Installing ${packageName(batch[0].packageId)}…`, 4000, { kind: "notification" });
+        } else if (installedIds.size === 0) {
+          void showInfo(`Installing ${batch.length} apps…`, 4000, { kind: "notification" });
+        }
         await op.runReserved(batch.map(({ packageId, activityId, operationStepIndex }) => ({
           index: operationStepIndex ?? -1,
           fn: async () => {
@@ -740,12 +748,14 @@ function AppInstallerPanel({
             const response = await installWingetApps([packageId]);
             if (!response.success) {
               const message = response.error || "Install failed.";
+              installErrors.push({ name: packageName(packageId), message });
               setPackageActivityStatus(activityId, "failed", message);
               activeInstallActivityIds.delete(activityId);
               throw new Error(message);
             }
             setPackageActivityStatus(activityId, "completed");
             activeInstallActivityIds.delete(activityId);
+            installedIds.add(packageId);
             // Move a successful install immediately. Waiting for the full
             // inventory refresh made the same app remain in the install grid
             // long enough to invite duplicate clicks and look duplicated.
@@ -779,10 +789,21 @@ function AppInstallerPanel({
           },
         })));
       }
+      installBatchFinished = true;
 
       // Refresh both the packages list and the engine dependency status so the
       // Engines section reflects newly installed CLI tools (e.g. es.exe for search).
       await Promise.all([runAppInventoryScan(true), forceRefreshDeps()]);
+      if (installedIds.size === 1) {
+        void showSuccess(`${packageName([...installedIds][0])} installed successfully.`, 4000, { kind: "notification" });
+      } else if (installedIds.size > 1) {
+        void showSuccess(`${installedIds.size} apps installed successfully.`, 4000, { kind: "notification" });
+      }
+      if (installErrors.length === 1) {
+        void showError(`Could not install ${installErrors[0].name}: ${installErrors[0].message}`);
+      } else if (installErrors.length > 1) {
+        void showError(`${installErrors.length} app installations failed. ${installErrors[0].name}: ${installErrors[0].message}`);
+      }
     } catch (err) {
       // Pre-flight failures happen before a per-package step is entered.
       // Finalize every remaining journal row so it cannot masquerade as a
@@ -790,9 +811,26 @@ function AppInstallerPanel({
       activeInstallActivityIds.forEach(activityId => setPackageActivityStatus(activityId, "failed", "Package operation did not start."));
       activeInstallActivityIds.clear();
       // Pre-flight failures never reached a task row under the old code, so
-      // "winget is missing" failed completely silently. Per-step failures are
-      // still reported by the row itself.
-      showError(err instanceof Error ? err.message : "Install failed.");
+      // "winget is missing" failed completely silently before the operation
+      // had a row. Per-package failures are reported after all reserved steps.
+      const detail = err instanceof Error ? err.message : "Install failed.";
+      if (installBatchFinished) {
+        const installFailure = installErrors.length
+          ? ` ${installErrors.length} install${installErrors.length === 1 ? "" : "s"} failed; ${installErrors[0].name}: ${installErrors[0].message}`
+          : "";
+        const outcome = installedIds.size
+          ? `${installedIds.size} app${installedIds.size === 1 ? " was" : "s were"} installed,`
+          : "No apps were installed;";
+        const message = `${outcome} the follow-up app and engine refresh failed: ${detail}.${installFailure}`;
+        if (installErrors.length || installedIds.size === 0) void showError(message);
+        else void showWarning(message);
+      } else if (installedIds.size > 0) {
+        void showError(`${installedIds.size} app${installedIds.size === 1 ? " was" : "s were"} installed; another install failed: ${detail}`);
+      } else {
+        void showError(uniqueIds.length === 1
+          ? `${requestedNames[0]} installation failed: ${detail}`
+          : `App installation failed: ${detail}`);
+      }
     } finally {
       op.finish();
       activeInstallOperation = null;
@@ -810,10 +848,6 @@ function AppInstallerPanel({
   const handleUpgradeSingle = async (appId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
-    if (!tryAcquirePackageOperation()) {
-      showWarning("Another package-manager operation is already running.");
-      return;
-    }
     const app = apps.find(a => a.id === appId);
     const other = otherUpgrades.find(u => u.id === appId);
     const friendlyName = app?.name || other?.name || appId;
@@ -822,13 +856,14 @@ function AppInstallerPanel({
     // don't enqueue a duplicate upgrade for the same package.
     if (mine.length === 0) {
       showWarning(`${friendlyName} is already being updated.`);
-      releasePackageOperation();
       return;
     }
     const activityId = recordPackageActivity({ packageId: appId, label: friendlyName, kind: "update" });
     setUpgradingApp(appId);
     try {
-      await runOperation(`Upgrade ${friendlyName}`, [
+      await runQueuedPackageOperation(async (wasQueued) => {
+        if (wasQueued) showSuccess(`Queued ${friendlyName}; it will start after the current package operation finishes.`);
+        await runOperation(`Upgrade ${friendlyName}`, [
         {
           label: "Checking package manager...",
           fn: async () => {
@@ -855,13 +890,12 @@ function AppInstallerPanel({
             await runAppInventoryScan(true);
           }
         }
-      ], { mode: 'sequential', failFast: false, accent: 'blue' });
+        ], { mode: 'sequential', failFast: false, accent: 'blue' });
+      }, undefined, () => clearAppUpdatesQueued(mine));
     } catch {
       // error shown in status bar by runOperation
     } finally {
       setUpgradingApp(null);
-      clearAppUpdatesQueued(mine);
-      releasePackageOperation();
     }
   };
 
@@ -925,6 +959,7 @@ function AppInstallerPanel({
 
   const renderApp = (app: AppItem, showCheckbox = true) => {
     const canSelect = showCheckbox && (!installedApps.has(app.id) || updateAvailableApps.has(app.id));
+    const activeInstall = activePackageActivities.find(item => item.kind === "install" && item.packageId === app.id);
     return (
     <div
       key={app.id}
@@ -971,6 +1006,11 @@ function AppInstallerPanel({
           )}
         </span>
         <span className="app-description">{app.description}</span>
+        {activeInstall && (
+          <span className="app-install-status" role="status">
+            {activeInstall.status === "queued" ? "Queued · waiting to start" : "Installing…"}
+          </span>
+        )}
         {updateAvailableApps.has(app.id) && app.version && app.availableVersion && (
           <span className="app-version mono">{app.version} → {app.availableVersion}</span>
         )}
@@ -994,7 +1034,10 @@ function AppInstallerPanel({
           checkbox so users can either multi-select or one-click install.
           Loading/disabled is per-id so other cards don't show spinners. */}
       {!installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (() => {
-        const isThisInstalling = activePackageActivities.some(item => item.kind === "install" && item.packageId === app.id);
+        const isThisInstalling = activeInstall !== undefined;
+        const installLabel = isThisInstalling
+          ? `${app.name} installation ${activeInstall.status === "queued" ? "queued" : "in progress"}`
+          : `Install ${app.name}`;
         return (
           <Button
             icon={isThisInstalling ? undefined : "download"}
@@ -1005,8 +1048,8 @@ function AppInstallerPanel({
             onClick={(e) => { e.stopPropagation(); void installApps([app.id]); }}
           disabled={isThisInstalling || wingetStatus === "failed" || needsElevation}
             loading={isThisInstalling}
-            aria-label={`Install ${app.name}`}
-            title={`Install ${app.name}`}
+            aria-label={installLabel}
+            title={installLabel}
           />
         );
       })()}

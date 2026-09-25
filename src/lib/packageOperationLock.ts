@@ -5,6 +5,23 @@
  */
 let packageOperationInFlight = false;
 const packageOperationWaiters: Array<() => void> = [];
+const PACKAGE_BACKED_DEPENDENCY_IDS = new Set([
+  "meshVpn",
+  "productivityEngine",
+  "winget",
+  "powershell7",
+  "vcredist",
+  "privacyShieldAI",
+  "systemCleaner",
+  "instantSearch",
+  "diskHealthEngine",
+  "metadataScrubber",
+  "localLlm",
+]);
+
+export function isPackageBackedDependency(dependencyId: string): boolean {
+  return PACKAGE_BACKED_DEPENDENCY_IDS.has(dependencyId);
+}
 
 export function tryAcquirePackageOperation(): boolean {
   if (packageOperationInFlight) return false;
@@ -34,4 +51,34 @@ export function releasePackageOperation(): void {
     return;
   }
   packageOperationInFlight = false;
+}
+
+/** Run package-manager work in FIFO order and always hand the lock onward. */
+export async function runQueuedPackageOperation<T>(
+  operation: (wasQueued: boolean) => Promise<T>,
+  onQueued?: () => void,
+  beforeRelease?: () => void,
+): Promise<T> {
+  const wasQueued = packageOperationInFlight;
+  if (wasQueued) onQueued?.();
+  await waitForPackageOperation();
+  try {
+    return await operation(wasQueued);
+  } finally {
+    try {
+      beforeRelease?.();
+    } finally {
+      releasePackageOperation();
+    }
+  }
+}
+
+/** Serialize dependency installers that invoke WinGet with app installs and updates. */
+export function runQueuedDependencyInstall<T>(
+  dependencyId: string,
+  operation: () => Promise<T>,
+  onQueued?: () => void,
+): Promise<T> {
+  if (!isPackageBackedDependency(dependencyId)) return operation();
+  return runQueuedPackageOperation(() => operation(), onQueued);
 }

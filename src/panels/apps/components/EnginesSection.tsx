@@ -3,8 +3,9 @@ import { Button, Icon, Spinner } from "@/components/ui/bp";
 import { cn } from "../../../lib/utils";
 import { executeBackendCommand } from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
-import { showSuccess, showError } from "../../../utils/toast";
+import { showSuccess, showError, showInfo } from "../../../utils/toast";
 import type { DependencyInfo } from "../../../hooks/useDependencies";
+import { runQueuedDependencyInstall } from "../../../lib/packageOperationLock";
 
 const CRITICAL_ENGINES = new Set([
   "ramDiskEngine", "instantSearch",
@@ -130,7 +131,11 @@ export default function EnginesSection() {
   const handleInstall = useCallback(async (dep: DependencyInfo) => {
     setInstallingIds((prev) => new Set([...prev, dep.id]));
     try {
-      const r = await executeBackendCommand<any>("Install-Dependency", { Id: dep.id });
+      const r = await runQueuedDependencyInstall(
+        dep.id,
+        () => executeBackendCommand<any>("Install-Dependency", { Id: dep.id }),
+        () => showInfo(`Installing ${dep.name} after the current package operation finishes.`),
+      );
       if (r.success) {
         showSuccess(`${dep.name} installed.`);
         await Promise.all([forceRefreshDeps(), runAppInventoryScan(true)]);
@@ -159,12 +164,16 @@ export default function EnginesSection() {
       // PowerShell process via Install-AllDependencies, so a single wedged
       // dependency stalled the whole batch, including fast ones queued
       // after it.
-      const outcomes = await Promise.all(targets.map((dep) =>
-        executeBackendCommand<any>(
-          dep.installed ? "Start-DependencyService" : "Install-Dependency",
-          { Id: dep.id }
-        ).then((r) => ({ dep, r }))
-      ));
+      const outcomes = await Promise.all(targets.map((dep) => {
+        const run = dep.installed
+          ? executeBackendCommand<any>("Start-DependencyService", { Id: dep.id })
+          : runQueuedDependencyInstall(
+              dep.id,
+              () => executeBackendCommand<any>("Install-Dependency", { Id: dep.id }),
+              () => showInfo(`Installing ${dep.name} after the current package operation finishes.`),
+            );
+        return run.then((r) => ({ dep, r }));
+      }));
 
       const failures = outcomes.filter((o) => !o.r.success).map((o) => o.r.error || o.dep.name);
       if (failures.length === 0) {

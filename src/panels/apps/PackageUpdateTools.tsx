@@ -6,7 +6,7 @@ import { Icon } from "../../components/ui/icon";
 import { Checkbox } from "../../components/ui/bp";
 import { Spinner } from "../../components/ui/spinner";
 import { useBackend } from "../../hooks/useBackend";
-import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
+import { runQueuedPackageOperation } from "../../lib/packageOperationLock";
 import { useAppState } from "../../context/AppContext";
 import AppIcon from "./components/AppIcon";
 import { collectUnifiedPackageUpdates, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
@@ -37,10 +37,12 @@ export function PackageUpdateTools() {
   const packages = packageSnapshot.inventory;
   const [packageIds, setPackageIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [waitingForPackageOperation, setWaitingForPackageOperation] = useState(false);
   const [checkingManagers, setCheckingManagers] = useState(false);
   const [installingOptionalManagers, setInstallingOptionalManagers] = useState(false);
   const [applyingUpdateId, setApplyingUpdateId] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const packageActionPendingRef = useRef(false);
   const updateRows = useMemo(
     () => collectUnifiedPackageUpdates(packages?.managers ?? [], packageSnapshot.catalogInventoryFresh ? appInventory : null),
     [appInventory, packageSnapshot.catalogInventoryFresh, packages],
@@ -63,6 +65,25 @@ export function PackageUpdateTools() {
     await waitForAppInventoryScan();
   };
 
+  const runPackageAction = async (label: string, action: (wasQueued: boolean) => Promise<void>) => {
+    if (packageActionPendingRef.current) return;
+    packageActionPendingRef.current = true;
+    setBusy(true);
+    try {
+      await runQueuedPackageOperation(async (wasQueued) => {
+        setWaitingForPackageOperation(false);
+        await action(wasQueued);
+      }, () => {
+        setWaitingForPackageOperation(true);
+        setMessage(`${label} queued. It will start after the current package-manager operation finishes.`);
+      });
+    } finally {
+      setWaitingForPackageOperation(false);
+      packageActionPendingRef.current = false;
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     setPackageIds((selected) => {
       const visibleSelections = new Set([...selected].filter((id) => displayedUpdateIds.has(id)));
@@ -71,91 +92,133 @@ export function PackageUpdateTools() {
   }, [displayedUpdateIds]);
 
   const inspectPackages = async () => {
-    if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
-    setBusy(true); setMessage("Refreshing installed apps…");
+    setMessage(undefined);
     try {
-      const result = await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
-        async () => {
-          setMessage("Refreshing installed app inventory…");
-          await refreshAppInventoryFully();
-        },
-        async () => {
-          setMessage("Checking Winget, Chocolatey, Scoop, and npm…");
-          setCheckingManagers(true);
-          try { return await backendRef.current.packageUpdatesInventory(); }
-          finally { setCheckingManagers(false); }
-        },
-      ));
-      setPackageIds(new Set());
-      setMessage(result.cancelled
-        ? "App inventory refreshed; package manager check was cancelled."
-        : "App inventory and package manager updates refreshed.");
+      await runPackageAction("Refresh", async () => {
+        setMessage("Refreshing installed apps…");
+        try {
+          const result = await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
+            async () => {
+              setMessage("Refreshing installed app inventory…");
+              await refreshAppInventoryFully();
+            },
+            async () => {
+              setMessage("Checking Winget, Chocolatey, Scoop, and npm…");
+              setCheckingManagers(true);
+              try { return await backendRef.current.packageUpdatesInventory(); }
+              finally { setCheckingManagers(false); }
+            },
+          ));
+          setPackageIds(new Set());
+          setMessage(result.cancelled
+            ? "App inventory refreshed; package manager check was cancelled."
+            : "App inventory and package manager updates refreshed.");
+        } finally {
+          setCheckingManagers(false);
+        }
+      });
     }
     catch (cause) { setMessage(`Update check failed: ${String(cause)}`); }
-    finally { setCheckingManagers(false); setBusy(false); releasePackageOperation(); }
+    finally { setCheckingManagers(false); }
   };
   const applyPackages = async (updateKeys = [...packageIds]) => {
     const selectedRows = updateRows.filter(({ key }) => updateKeys.includes(key));
     if (!selectedRows.length) return;
-    if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
-    setApplyingUpdateId(selectedRows.length === 1 ? selectedRows[0].key : undefined);
-    setBusy(true); setMessage(undefined);
+    setMessage(undefined);
     try {
-      let updatedCount = 0;
-      const errors: string[] = [];
-      const catalogRows = selectedRows.filter((row) => row.kind === "catalog");
-      const managerRows = selectedRows.filter((row) => row.kind === "manager");
+      await runPackageAction("Update", async (wasQueued) => {
+        setApplyingUpdateId(selectedRows.length === 1 ? selectedRows[0].key : undefined);
+        setMessage("Applying selected package updates…");
+        try {
+          let updatedCount = 0;
+          const errors: string[] = [];
+          const catalogRows = selectedRows.filter((row) => row.kind === "catalog");
+          const managerRows = selectedRows.filter((row) => row.kind === "manager");
 
-      for (const row of catalogRows) {
-        const result = await backendRef.current.upgradeApp(row.actionId);
-        if (result.success) updatedCount += 1;
-        else errors.push(result.error || `Could not update ${row.packageName}.`);
-      }
-      if (managerRows.length) {
-        const result = await backendRef.current.packageUpdatesApply(managerRows.map((row) => row.actionId));
-        updatedCount += result.updated;
-        errors.push(...result.errors);
-        if (result.cancelled) errors.push("Package updates were cancelled.");
-      }
+          for (const row of catalogRows) {
+            const result = await backendRef.current.upgradeApp(row.actionId);
+            if (result.success) updatedCount += 1;
+            else errors.push(result.error || `Could not update ${row.packageName}.`);
+          }
 
-      setMessage(`Updated ${updatedCount} package${updatedCount === 1 ? "" : "s"}${errors.length ? `; ${errors.length} failed.` : "."} Refreshing the list…`);
-      await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
-        refreshAppInventoryFully,
-        async () => {
-          setCheckingManagers(true);
-          try { return await backendRef.current.packageUpdatesInventory(); }
-          finally { setCheckingManagers(false); }
-        },
-      ));
-      setPackageIds(new Set());
-      setMessage(`Updated ${updatedCount} package${updatedCount === 1 ? "" : "s"}${errors.length ? `; ${errors.length} failed.` : "."} App inventory refreshed.`);
+          let managerUpdateIds = managerRows.map((row) => row.actionId);
+          let noLongerPending = 0;
+          if (wasQueued && managerRows.length) {
+            setMessage("Queued update is starting. Refreshing package updates before applying…");
+            setCheckingManagers(true);
+            try {
+              const freshInventory = await runPackageUpdateInventoryCheck(
+                () => backendRef.current.packageUpdatesInventory(),
+              );
+              managerUpdateIds = [];
+              for (const row of managerRows) {
+                const freshUpdate = freshInventory.managers
+                  .find((manager) => manager.manager.toLocaleLowerCase() === row.manager.toLocaleLowerCase())
+                  ?.updates.find((update) => update.package.trim().toLocaleLowerCase() === row.packageName.trim().toLocaleLowerCase());
+                if (freshUpdate) managerUpdateIds.push(freshUpdate.id);
+                else noLongerPending += 1;
+              }
+            } finally {
+              setCheckingManagers(false);
+            }
+          }
+
+          if (managerUpdateIds.length) {
+            const result = await backendRef.current.packageUpdatesApply(managerUpdateIds);
+            updatedCount += result.updated;
+            errors.push(...result.errors);
+            if (result.cancelled) errors.push("Package updates were cancelled.");
+          }
+
+          const skipped = noLongerPending
+            ? ` ${noLongerPending} selected update${noLongerPending === 1 ? " was" : "s were"} no longer pending.`
+            : "";
+          setMessage(`Updated ${updatedCount} package${updatedCount === 1 ? "" : "s"}${errors.length ? `; ${errors.length} failed.` : "."}${skipped} Refreshing the list…`);
+          await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
+            refreshAppInventoryFully,
+            async () => {
+              setCheckingManagers(true);
+              try { return await backendRef.current.packageUpdatesInventory(); }
+              finally { setCheckingManagers(false); }
+            },
+          ));
+          setPackageIds(new Set());
+          setMessage(`Updated ${updatedCount} package${updatedCount === 1 ? "" : "s"}${errors.length ? `; ${errors.length} failed.` : "."}${skipped} App inventory refreshed.`);
+        } finally {
+          setCheckingManagers(false);
+          setApplyingUpdateId(undefined);
+        }
+      });
     } catch (cause) { setMessage(`Update operation failed: ${String(cause)}`); }
-    finally { setCheckingManagers(false); setApplyingUpdateId(undefined); setBusy(false); releasePackageOperation(); }
+    finally { setCheckingManagers(false); setApplyingUpdateId(undefined); }
   };
   const installMissingOptionalManagers = async () => {
     if (!unavailableOptionalManagers.length) return;
-    if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
-    setBusy(true);
-    setInstallingOptionalManagers(true);
-    setMessage(`Installing missing package managers: ${unavailableOptionalManagers.join(" and ")}…`);
+    setMessage(undefined);
     try {
-      const result = await backendRef.current.packageUpdatesInstallOptionalManagers();
-      setInstallingOptionalManagers(false);
-      const outcome = summarizeOptionalManagerInstall(result);
-      setPackageIds(new Set());
-      setMessage(`${outcome.text} Refreshing updates…`);
-      try {
-        await runPackageUpdateInventoryCheck(() => backendRef.current.packageUpdatesInventory());
-        setMessage(`${outcome.text} Update list refreshed.`);
-      } catch (cause) {
-        setMessage(`${outcome.text} The update list could not be refreshed: ${String(cause)}`);
-      }
+      await runPackageAction("Install missing managers", async () => {
+        setInstallingOptionalManagers(true);
+        setMessage(`Installing missing package managers: ${unavailableOptionalManagers.join(" and ")}…`);
+        try {
+          const result = await backendRef.current.packageUpdatesInstallOptionalManagers();
+          setInstallingOptionalManagers(false);
+          const outcome = summarizeOptionalManagerInstall(result);
+          setPackageIds(new Set());
+          setMessage(`${outcome.text} Refreshing updates…`);
+          try {
+            await runPackageUpdateInventoryCheck(() => backendRef.current.packageUpdatesInventory());
+            setMessage(`${outcome.text} Update list refreshed.`);
+          } catch (cause) {
+            setMessage(`${outcome.text} The update list could not be refreshed: ${String(cause)}`);
+          }
+        } finally {
+          setInstallingOptionalManagers(false);
+        }
+      });
     } catch (cause) {
       setMessage(`Package manager installation failed: ${String(cause)}`);
     } finally {
       setInstallingOptionalManagers(false);
-      setBusy(false);
-      releasePackageOperation();
     }
   };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
@@ -167,7 +230,7 @@ export function PackageUpdateTools() {
       <h3 className="text-sm font-semibold" title="App inventory and package manager updates are shown together.">App and package updates</h3>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-mute)]">
         {isBusy
-          ? <span className="flex items-center gap-2 text-[var(--text-dim)]"><Spinner size={14} />{installingOptionalManagers ? "Installing missing managers…" : "Checking package updates…"}</span>
+          ? <span className="flex items-center gap-2 text-[var(--text-dim)]"><Spinner size={14} />{waitingForPackageOperation ? "Queued — waiting for the current package operation…" : installingOptionalManagers ? "Installing missing managers…" : "Checking package updates…"}</span>
           : packageSnapshot.lastCheckedAt
             ? <span>Last checked {new Date(packageSnapshot.lastCheckedAt).toLocaleTimeString()}</span>
             : <span>Checks automatically after WinCommander starts</span>}

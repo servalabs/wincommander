@@ -8,11 +8,13 @@
 import { useCallback, useMemo } from 'react';
 import { executeBackendCommand } from './useBackend';
 import type { PanelId } from '../types/panels';
+import { runQueuedDependencyInstall } from '../lib/packageOperationLock';
+import { showInfo } from '../utils/toast';
 
 export interface DependencyInfo {
     id: string;
     name: string;
-    panelId: PanelId;
+    panelId: PanelId | null;
     installed: boolean;
     version: string | null;
     running: boolean | null;
@@ -47,10 +49,14 @@ export default function useDependencies() {
 
     const installDependency = useCallback(
         (id: string, target?: string) =>
-            executeBackendCommand<InstallDependencyResponse>("Install-Dependency", {
-                Id: id,
-                ...(target ? { Target: target } : {}),
-            }),
+            runQueuedDependencyInstall(
+                id,
+                () => executeBackendCommand<InstallDependencyResponse>("Install-Dependency", {
+                    Id: id,
+                    ...(target ? { Target: target } : {}),
+                }),
+                () => showInfo(`Installing ${id} after the current package operation finishes.`),
+            ),
         []
     );
 

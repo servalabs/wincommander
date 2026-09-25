@@ -14,6 +14,7 @@ describe("apps populated-state interaction contracts", () => {
 
   test("package update selections expose their selected state", () => {
     expect(packages).toContain("aria-pressed={checked}");
-    expect(packages).toContain('aria-label={`${checked ? "Deselect" : "Select"} ${title} update`}');
+    expect(packages).toContain('aria-label={`${checked ? "Deselect" : "Select"} ${packageName} update from ${manager}`}');
   });
+
 });

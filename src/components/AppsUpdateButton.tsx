@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { useAppState } from "../context/AppContext";
 import useBackend from "../hooks/useBackend";
 import { runOperation } from "../context/OperationContext";
 import { useTaskStatus } from "../context/TaskStatusContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../lib/appUpdateQueue";
-import { releasePackageOperation, tryAcquirePackageOperation } from "../lib/packageOperationLock";
+import { runQueuedPackageOperation } from "../lib/packageOperationLock";
 
 // Action button for "Update All Apps" — designed to live in the dashboard's
 // fix-all-actions slot at the bottom of the radar. The pending-update count is
@@ -17,6 +17,8 @@ export default function AppsUpdateButton({ compact = false }: { compact?: boolea
     const { tasks: activeTasks } = useTaskStatus();
     const pendingAppUpdates = appInventory?.pendingUpdates?.length ?? 0;
     const [updating, setUpdating] = useState(false);
+    const [waiting, setWaiting] = useState(false);
+    const updatePendingRef = useRef(false);
     // KT: Disabled while Fix Everything runs — it already covers app-update work,
     // so allowing this button would create a duplicate task + duplicate notification.
     const blockedByFixEverything = activeTasks.some(
@@ -26,66 +28,70 @@ export default function AppsUpdateButton({ compact = false }: { compact?: boolea
     if (pendingAppUpdates <= 0) return null;
 
     const handleUpdateAllApps = async () => {
-        if (!tryAcquirePackageOperation()) return;
+        if (updatePendingRef.current) return;
+        updatePendingRef.current = true;
         setUpdating(true);
         // Claim the currently-known pending ids synchronously (before any await)
         // so the dashboard's Fix All / Needs Attention drops them immediately.
         const mine = claimFreeAppUpdates((appInventory?.pendingUpdates ?? []).map((u) => u.id || ""));
         try {
-            const winget = await testWingetInstalled();
-            if (!winget.success || winget.data?.status !== "installed") {
-                const installRes = await installWinget();
-                if (!installRes.success) {
-                    throw new Error(installRes.error || "Package manager is not available.");
-                }
-            }
-
-            const inventoryRes = await getAppInventory();
-            if (!inventoryRes.success || !inventoryRes.data) {
-                throw new Error(inventoryRes.error || "Failed to read app inventory.");
-            }
-
-            const queue = new Map<string, string>();
-            (inventoryRes.data.pendingUpdates ?? []).forEach((item) => {
-                const id = (item.id || "").trim();
-                if (!id || queue.has(id)) return;
-                // Skip ids already claimed by ANOTHER in-flight upgrade so the
-                // same app isn't upgraded (or listed) twice.
-                if (isAppUpdateQueued(id) && !mine.includes(id)) return;
-                queue.set(id, (item.name || "").trim() || id);
-            });
-            // Claim any ids that appeared only in the fresh scan.
-            mine.push(...claimFreeAppUpdates(Array.from(queue.keys())));
-            const entries = Array.from(queue.entries());
-
-            if (entries.length === 0) {
-                await refreshSettings();
-                return;
-            }
-
-            const steps = entries.map(([appId, name], index) => ({
-                label: `[${index + 1}/${entries.length}] Upgrading ${name}`,
-                fn: async () => {
-                    const res = await upgradeApp(appId);
-                    if (!res.success) {
-                        throw new Error(res.error || `Upgrade failed for ${name}.`);
+            await runQueuedPackageOperation(async () => {
+                setWaiting(false);
+                const winget = await testWingetInstalled();
+                if (!winget.success || winget.data?.status !== "installed") {
+                    const installRes = await installWinget();
+                    if (!installRes.success) {
+                        throw new Error(installRes.error || "Package manager is not available.");
                     }
-                },
-            }));
+                }
 
-            await runOperation(
-                `Update ${entries.length} App${entries.length === 1 ? "" : "s"}`,
-                steps,
-                { mode: 'sequential', failFast: false, accent: 'blue' }
-            );
-            await runAppInventoryScan(true);
-            await refreshSettings();
+                const inventoryRes = await getAppInventory();
+                if (!inventoryRes.success || !inventoryRes.data) {
+                    throw new Error(inventoryRes.error || "Failed to read app inventory.");
+                }
+
+                const queue = new Map<string, string>();
+                (inventoryRes.data.pendingUpdates ?? []).forEach((item) => {
+                    const id = (item.id || "").trim();
+                    if (!id || queue.has(id)) return;
+                    // Skip ids already claimed by ANOTHER in-flight upgrade so the
+                    // same app isn't upgraded (or listed) twice.
+                    if (isAppUpdateQueued(id) && !mine.includes(id)) return;
+                    queue.set(id, (item.name || "").trim() || id);
+                });
+                // Claim any ids that appeared only in the fresh scan.
+                mine.push(...claimFreeAppUpdates(Array.from(queue.keys())));
+                const entries = Array.from(queue.entries());
+
+                if (entries.length === 0) {
+                    await refreshSettings();
+                    return;
+                }
+
+                const steps = entries.map(([appId, name], index) => ({
+                    label: `[${index + 1}/${entries.length}] Upgrading ${name}`,
+                    fn: async () => {
+                        const res = await upgradeApp(appId);
+                        if (!res.success) {
+                            throw new Error(res.error || `Upgrade failed for ${name}.`);
+                        }
+                    },
+                }));
+
+                await runOperation(
+                    `Update ${entries.length} App${entries.length === 1 ? "" : "s"}`,
+                    steps,
+                    { mode: 'sequential', failFast: false, accent: 'blue' }
+                );
+                await runAppInventoryScan(true);
+                await refreshSettings();
+            }, () => setWaiting(true), () => clearAppUpdatesQueued(mine));
         } catch (err) {
             console.error("Update All Apps failed:", err);
         } finally {
+            updatePendingRef.current = false;
+            setWaiting(false);
             setUpdating(false);
-            clearAppUpdatesQueued(mine);
-            releasePackageOperation();
         }
     };
 
@@ -99,7 +105,7 @@ export default function AppsUpdateButton({ compact = false }: { compact?: boolea
                 title={blockedByFixEverything ? "Fix Everything is already updating apps" : "Update all pending app updates"}
             >
                 <Icon icon="automatic-updates" size={14} />
-                {updating ? "Updating..." : `Update ${pendingAppUpdates} App${pendingAppUpdates === 1 ? "" : "s"}`}
+                {waiting ? "Waiting..." : updating ? "Updating..." : `Update ${pendingAppUpdates} App${pendingAppUpdates === 1 ? "" : "s"}`}
             </button>
         );
     }
@@ -115,7 +121,7 @@ export default function AppsUpdateButton({ compact = false }: { compact?: boolea
                 <Icon icon="automatic-updates" size={22} />
             </span>
             <div className="fix-all-body">
-                <div className="fix-all-title">{updating ? "Updating..." : "Update All Apps"}</div>
+                <div className="fix-all-title">{waiting ? "Waiting..." : updating ? "Updating..." : "Update All Apps"}</div>
                 <div className="fix-all-sub">apply pending app updates</div>
             </div>
         </button>

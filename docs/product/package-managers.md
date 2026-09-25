@@ -3,6 +3,12 @@
 Packages & Apps checks each available package manager independently. A missing
 optional manager never blocks WinGet, npm, or another independent provider.
 
+Refreshes, updates, and optional manager installs share a FIFO with other
+WinCommander package work. If a package operation is already running, the
+requested action stays queued and starts automatically when the current
+operation finishes. A queued update refreshes its package-manager inventory
+before applying the selected updates, so it uses current update identifiers.
+
 ## Chocolatey and Scoop
 
 Chocolatey and Scoop are optional. If either is unavailable or cannot run,

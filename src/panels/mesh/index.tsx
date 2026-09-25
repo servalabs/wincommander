@@ -37,8 +37,9 @@ function sanitizeMeshError(raw: string | null | undefined): string {
 import { useAppState } from "../../context/AppContext";
 import useEntitlements from "../../hooks/useEntitlements";
 import { open } from "@tauri-apps/plugin-dialog";
-import { showError } from "../../utils/toast";
+import { showError, showInfo } from "../../utils/toast";
 import { runOperation } from "../../context/OperationContext";
+import { runQueuedDependencyInstall } from "../../lib/packageOperationLock";
 import SectionCard from "../../components/shared/SectionCard";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import EmbeddedWebView from "../../components/shared/EmbeddedWebView";
@@ -503,7 +504,14 @@ function PrivateMeshPanel() {
                     label: "Installing Private Mesh VPN",
                     fn: async () => {
                         setInstallProgressText("Installing mesh engine...");
-                        const res = await executeBackendCommand("Install-Dependency", { Id: "meshVpn" });
+                        const res = await runQueuedDependencyInstall(
+                            "meshVpn",
+                            () => executeBackendCommand("Install-Dependency", { Id: "meshVpn" }),
+                            () => {
+                                setInstallProgressText("Queued after the current package operation...");
+                                showInfo("Private Mesh installation will start after the current package operation finishes.");
+                            },
+                        );
                         if (!res.success) throw new Error(res.error || "Private Mesh install failed.");
                         if (res.data && (res.data as any).error) {
                             throw new Error((res.data as any).message || "Private Mesh install failed.");

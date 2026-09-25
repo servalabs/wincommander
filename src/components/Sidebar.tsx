@@ -13,6 +13,8 @@ import { getModuleForPanel, getModuleDef, isModuleEnabled } from "../types/modul
 import type { ModuleConfig } from "../types/modules";
 import { executeBackendCommand } from "../hooks/useBackend";
 import { runOperation } from "../context/OperationContext";
+import { runQueuedDependencyInstall } from "../lib/packageOperationLock";
+import { showInfo } from "../utils/toast";
 import useVisibility from "../hooks/useVisibility";
 import useBorrowedActive from "../hooks/useBorrowedActive";
 import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_EXTRAS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
@@ -122,7 +124,11 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
         {
           label: `Installing ${dep.name}`,
           fn: async () => {
-            const res = await executeBackendCommand('Install-Dependency', { Id: dep.id });
+            const res = await runQueuedDependencyInstall(
+              dep.id,
+              () => executeBackendCommand('Install-Dependency', { Id: dep.id }),
+              () => showInfo(`Installing ${dep.name} after the current package operation finishes.`),
+            );
             if (!res.success) throw new Error(res.error || 'Installation failed');
             if (res.data && (res.data as any).error) throw new Error((res.data as any).message || 'Installation failed');
           },
@@ -233,7 +239,7 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
     const m: Record<string, DependencyInfo> = {};
     if (dependencyStatus) {
       for (const dep of dependencyStatus) {
-        if (dep.id === 'privacyShieldAI') continue;
+        if (dep.id === 'privacyShieldAI' || dep.panelId === null) continue;
         m[dep.panelId] = dep;
       }
     }
