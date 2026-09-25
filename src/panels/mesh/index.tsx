@@ -16,6 +16,14 @@ import { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { panelVariants, panelTransition, DURATION_S, EASE } from "../../components/shared/motion";
 import useBackend, { MeshVPNStatus, MeshVPNPeer, executeBackendCommand } from "../../hooks/useBackend";
+import {
+    meshConfigPayload,
+    meshDraftFromPrefs,
+    meshPrefsMatchConfig,
+    shouldSyncMeshDraftFromStatus,
+    type MeshConfigDraft,
+    type MeshConfigPayload,
+} from "./meshConfig";
 
 // Backend errors from the underlying mesh engine binary include its
 // product name verbatim ("tailscale", "tailscaled.exe", etc). Strip
@@ -213,50 +221,27 @@ function PrivateMeshPanel() {
     }, [showHowItWorks, appSettings, patchAppSettings]);
 
     // Staging state
-    const [staging, setStaging] = useState(() => ({
-        advertiseExitNode: !!(cachedMeshStatus as any)?.prefs?.AdvertiseExitNode,
-        allowLanAccess: !!(cachedMeshStatus as any)?.prefs?.ExitNodeAllowLANAccess,
-        unattended: !!(cachedMeshStatus as any)?.prefs?.Unattended,
-        acceptRoutes: !!(cachedMeshStatus as any)?.prefs?.AcceptRoutes,
-        acceptDNS: !!(cachedMeshStatus as any)?.prefs?.AcceptDNS,
-        shieldsUp: !!(cachedMeshStatus as any)?.prefs?.ShieldsUp,
-        exitNodeIP: (cachedMeshStatus as any)?.prefs?.ExitNodeIP || ""
-    }));
+    const [staging, setStaging] = useState<MeshConfigDraft>(() => meshDraftFromPrefs(cachedMeshStatus?.prefs));
 
     // Check if anything has changed compared to last fetched status
     const hasChanges = useMemo(() => {
         if (!meshStatus?.prefs) return false;
-        const p = meshStatus.prefs;
-        return (
-            staging.advertiseExitNode !== !!p.AdvertiseExitNode ||
-            staging.allowLanAccess !== !!p.ExitNodeAllowLANAccess ||
-            staging.unattended !== !!p.Unattended ||
-            staging.shieldsUp !== !!p.ShieldsUp ||
-            staging.acceptRoutes !== !!p.AcceptRoutes ||
-            staging.acceptDNS !== !!p.AcceptDNS ||
-            staging.exitNodeIP !== (p.ExitNodeIP || "")
-        );
+        return !meshPrefsMatchConfig(meshStatus.prefs, meshConfigPayload(staging));
     }, [staging, meshStatus]);
 
-    // KT: Mirror hasChanges into a ref so refreshStatus doesn't need it in
-    // its useCallback dep array. Without this, every toggle flip recreates
-    // refreshStatus, which in turn re-fires the "mount-only" initial-load
-    // effect with forceUpdateStaging=true — overwriting the user's staged
-    // changes before they can click Apply (the primary apply-config breakage).
+    // Refresh callbacks stay stable while status updates retain the newest
+    // form values, including edits made while Apply is in flight.
     const hasChangesRef = useRef(hasChanges);
-    useEffect(() => { hasChangesRef.current = hasChanges; });
+    const latestStagingRef = useRef(staging);
+    const pendingApplyRef = useRef<MeshConfigPayload | null>(null);
+    useEffect(() => {
+        hasChangesRef.current = hasChanges;
+        latestStagingRef.current = staging;
+    });
 
     useEffect(() => {
         if (meshStatus?.prefs && !hasChanges) {
-            setStaging({
-                advertiseExitNode: !!meshStatus.prefs.AdvertiseExitNode,
-                allowLanAccess: !!meshStatus.prefs.ExitNodeAllowLANAccess,
-                unattended: !!meshStatus.prefs.Unattended,
-                acceptRoutes: !!meshStatus.prefs.AcceptRoutes,
-                acceptDNS: !!meshStatus.prefs.AcceptDNS,
-                shieldsUp: !!meshStatus.prefs.ShieldsUp,
-                exitNodeIP: meshStatus.prefs.ExitNodeIP || ""
-            });
+            setStaging(meshDraftFromPrefs(meshStatus.prefs));
         }
     }, [meshStatus, hasChanges]);
 
@@ -281,51 +266,42 @@ function PrivateMeshPanel() {
     useEffect(() => {
         if (cachedMeshStatus?.prefs && !meshStatus) {
             setMeshStatus(cachedMeshStatus);
-            const prefs = (cachedMeshStatus as any).prefs;
-            setStaging({
-                advertiseExitNode: !!prefs.AdvertiseExitNode,
-                allowLanAccess: !!prefs.ExitNodeAllowLANAccess,
-                unattended: !!prefs.Unattended,
-                acceptRoutes: !!prefs.AcceptRoutes,
-                acceptDNS: !!prefs.AcceptDNS,
-                shieldsUp: !!prefs.ShieldsUp,
-                exitNodeIP: prefs.ExitNodeIP || ""
-            });
+            setStaging(meshDraftFromPrefs(cachedMeshStatus.prefs));
             setIsLoading(false);
         }
     }, [cachedMeshStatus, meshStatus]);
 
-    // Initial load and manual refresh
-    const refreshStatus = useCallback(async (forceUpdateStaging = false, silent = false) => {
-        // Never block the panel with a full-screen spinner on silent background refreshes
+    // Initial load, polling, and manual refresh preserve the local draft until
+    // Tailscale reports it back. A late response must not undo newer edits.
+    const refreshStatus = useCallback(async (silent = false): Promise<MeshVPNStatus | null> => {
         if (!silent) setIsLoading(true);
-        const res = await getMeshVPNStatus();
-        if (res.success && res.data) {
-            // Trust res.data.installed (fresh from this call) instead of
-            // the cached meshInstalled, which can be stuck at false from
-            // an earlier fetch that ran before Tailscale was reachable.
-            // Otherwise the panel keeps showing "Not Installed" forever.
-            setMeshStatus({
-                ...res.data,
-                installed: res.data.installed,
-            });
+        try {
+            const res = await getMeshVPNStatus();
+            if (!res.success || !res.data) return null;
 
-            // Only update staging if forced (e.g. after APPLY) or if there are no pending changes.
-            // KT: read via ref — not the closure — so this branch doesn't force a dep on hasChanges.
-            if (res.data.prefs && (forceUpdateStaging || !hasChangesRef.current)) {
-                setStaging({
-                    advertiseExitNode: !!res.data.prefs.AdvertiseExitNode,
-                    allowLanAccess: !!res.data.prefs.ExitNodeAllowLANAccess,
-                    unattended: !!res.data.prefs.Unattended,
-                    acceptRoutes: !!res.data.prefs.AcceptRoutes,
-                    acceptDNS: !!res.data.prefs.AcceptDNS,
-                    shieldsUp: !!res.data.prefs.ShieldsUp,
-                    exitNodeIP: res.data.prefs.ExitNodeIP || ""
-                });
+            // Trust the installed flag from this fresh response instead of
+            // a cache that may predate registration of the executable.
+            const status = { ...res.data, installed: res.data.installed };
+            setMeshStatus(status);
+
+            const decision = shouldSyncMeshDraftFromStatus({
+                prefs: status.prefs,
+                hasLocalChanges: hasChangesRef.current,
+                pendingApply: pendingApplyRef.current,
+                currentDraft: latestStagingRef.current,
+            });
+            if (decision.clearPendingApply) {
+                pendingApplyRef.current = null;
+                setApplyError(null);
             }
+            if (decision.syncDraft && status.prefs) {
+                setStaging(meshDraftFromPrefs(status.prefs));
+            }
+            return status;
+        } finally {
+            if (!silent) setIsLoading(false);
         }
-        if (!silent) setIsLoading(false);
-    }, [getMeshVPNStatus]); // KT: hasChanges removed — read via hasChangesRef to keep refreshStatus stable
+    }, [getMeshVPNStatus]);
 
     useEffect(() => {
         // Use silent ONLY when we have cached data (no spinner needed).
@@ -334,23 +310,18 @@ function PrivateMeshPanel() {
         // forever on first launch and the spinner branch below traps
         // the user on "Connecting to mesh service…" with no way out.
         //
-        // KT: intentionally mount-only (empty deps). refreshStatus was
-        // previously listed here, but refreshStatus changes whenever
-        // hasChanges changes (every toggle flip), causing this effect
-        // to re-fire with forceUpdateStaging=true and clobber the
-        // user's staged values — that was the apply-config breakage.
-        // cachedMeshStatus late-arrivals are handled by the seed effect.
+        // Mount-only; late cached status is handled by the seed effect.
         const silent = !!cachedMeshStatus;
-        refreshStatus(true, silent);
+        refreshStatus(silent);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // mount-only — see KT note above
+    }, []);
 
     // Background polling
     // KT: Mesh status does not change often — 30s is sufficient and avoids
     // spawning a new powershell.exe every 5s which was a major CPU source.
     useEffect(() => {
         const timer = setInterval(() => {
-            refreshStatus(false, true);
+            refreshStatus(true);
         }, 30000);
         return () => clearInterval(timer);
     }, [refreshStatus]);
@@ -370,7 +341,7 @@ function PrivateMeshPanel() {
         const tick = setInterval(async () => {
             setBrowserPollSeconds((s) => s + 2);
             try {
-                await refreshStatus(false, true);
+                await refreshStatus(true);
             } catch { /* swallow — next tick retries */ }
         }, 2000);
         return () => clearInterval(tick);
@@ -403,21 +374,19 @@ function PrivateMeshPanel() {
 
     // Handle committing staged changes
     const handleApplyChanges = async () => {
+        const submittedConfig = meshConfigPayload(staging);
         setActionLoading(true);
         setApplyError(null);
         try {
-            const res = await setMeshVPNConfig({
-                AdvertiseExitNode: staging.advertiseExitNode,
-                AllowLanAccess: staging.allowLanAccess,
-                Unattended: staging.unattended,
-                AcceptRoutes: staging.acceptRoutes,
-                AcceptDNS: staging.acceptDNS,
-                ExitNodeIP: staging.exitNodeIP,
-                ShieldsUp: staging.shieldsUp,
-                Force: true
-            });
+            const res = await setMeshVPNConfig(submittedConfig);
             if (res.success) {
-                await refreshStatus(true); // force-sync staging to confirmed backend state
+                pendingApplyRef.current = submittedConfig;
+                const readback = await refreshStatus(true);
+                if (!meshPrefsMatchConfig(readback?.prefs, submittedConfig)) {
+                    setApplyError(readback?.prefs
+                        ? "Private Network accepted the request, but its reported settings do not match yet. Your edits were kept."
+                        : "Private Network accepted the request, but its settings could not be verified. Your edits were kept.");
+                }
             } else {
                 setApplyError(sanitizeMeshError(res.error) || "Failed to apply config.");
             }
@@ -530,12 +499,12 @@ function PrivateMeshPanel() {
                         // UI flashed "NOT DETECTED" simultaneously with
                         // the "installed" task notification.
                         markMeshInstalled(true);
-                        await Promise.allSettled([refreshDependencies(true), refreshMesh(true), refreshStatus(true, true)]);
+                        await Promise.allSettled([refreshDependencies(true), refreshMesh(true), refreshStatus(true)]);
                     },
                 },
             ], { mode: "sequential", accent: "blue", failFast: true, autoDismissMs: 4000 });
             setInstallProgressText("Private Mesh installed. Sign in if prompted.");
-            await refreshStatus(true);
+            await refreshStatus();
         } catch (err) {
             setInstallProgressText(err instanceof Error ? err.message : String(err));
         } finally {
@@ -855,7 +824,7 @@ function PrivateMeshPanel() {
         setServiceActionLoading(true);
         try {
             await startMeshService();
-            await refreshStatus(true);
+            await refreshStatus();
         } finally {
             setServiceActionLoading(false);
         }
@@ -870,7 +839,7 @@ function PrivateMeshPanel() {
             // on a service that's still in StopPending.
             await new Promise((r) => setTimeout(r, 800));
             await startMeshService();
-            await refreshStatus(true);
+            await refreshStatus();
         } finally {
             setServiceActionLoading(false);
         }
@@ -888,7 +857,7 @@ function PrivateMeshPanel() {
         try {
             const res = await connectMeshVPN();
             if (res.success && res.data) {
-                await refreshStatus(true);
+                await refreshStatus();
                 setTimeout(() => { refreshStatus(true).catch(() => {}); }, 3000);
                 setTimeout(() => { refreshStatus(true).catch(() => {}); }, 8000);
                 setTimeout(() => { refreshStatus(true).catch(() => {}); }, 15000);
@@ -999,7 +968,7 @@ function PrivateMeshPanel() {
 
                     <div className="flex flex-col items-end gap-2">
                         <div className="flex gap-3">
-                            {hasChanges && (
+                            {(hasChanges || !!applyError) && (
                                 <Button
                                     intent="primary"
                                     icon="cloud-upload"
@@ -1021,7 +990,7 @@ function PrivateMeshPanel() {
                             <Tooltip content="Refresh Private Mesh status" position="top">
                                 <Button
                                     icon="refresh"
-                                    onClick={() => refreshStatus(true)}
+                                    onClick={() => refreshStatus()}
                                     loading={isLoading}
                                     aria-label="Refresh Private Mesh status"
                                     className="mesh-btn-premium"
