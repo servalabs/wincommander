@@ -41,30 +41,30 @@ export interface DestructStepDef {
 }
 
 export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
-  // System cleaner
-  { id: "system_cleaner", label: "System Cleaner", command: "__system_cleaner__", group: "systemCleaner", defaultEnabled: true },
+  // Broad BleachBit sweep can remove application state beyond forensic traces.
+  { id: "system_cleaner", label: "System Cleaner", command: "__system_cleaner__", group: "systemCleaner", defaultEnabled: false },
 
   // Privacy traces
-  { id: "dismount_volumes",   label: "Dismount Volumes",      command: commandId("Dismount-", "All", "Encryption", "Volumes"), group: "privacyTraces", defaultEnabled: true },
-  { id: "encryption_keys",    label: "Clear Encryption Keys",  command: clearCommand("EncryptionKeys"),          group: "privacyTraces", defaultEnabled: true },
+  { id: "dismount_volumes",   label: "Dismount Volumes",      command: commandId("Dismount-", "All", "Encryption", "Volumes"), group: "privacyTraces", defaultEnabled: false },
+  { id: "encryption_keys",    label: "Clear Encryption Keys",  command: clearCommand("EncryptionKeys"),          group: "privacyTraces", defaultEnabled: false },
   { id: "usb_history",        label: "USB History",           command: clearCommand("USBDeviceHistory"),        group: "privacyTraces", defaultEnabled: true },
   { id: "dns_cache",          label: "DNS Cache",             command: "Clear-DnsCache",                group: "privacyTraces", defaultEnabled: true },
   { id: "execution_cache",    label: "Execution Cache",       command: clearCommand("ExecutionCache"),          group: "privacyTraces", defaultEnabled: true },
-  { id: "shadow_copies",      label: "Shadow Copies",         command: clearCommand("ShadowCopies"),            group: "privacyTraces", defaultEnabled: true },
-  { id: "rdp_history",        label: "RDP History",           command: clearCommand("RDPHistory"),              group: "privacyTraces", defaultEnabled: true },
-  { id: "rdp_passwords",      label: "RDP Passwords",         command: clearCommand("RDPPasswords"),            group: "privacyTraces", defaultEnabled: true },
+  { id: "shadow_copies",      label: "Shadow Copies",         command: clearCommand("ShadowCopies"),            group: "privacyTraces", defaultEnabled: false },
+  { id: "rdp_history",        label: "RDP History",           command: clearCommand("RDPHistory"),              group: "privacyTraces", defaultEnabled: false },
+  { id: "rdp_passwords",      label: "RDP Passwords",         command: clearCommand("RDPPasswords"),            group: "privacyTraces", defaultEnabled: false },
   { id: "srum",               label: "Resource Usage History", command: clearCommand("SRUM"),                    group: "privacyTraces", defaultEnabled: true },
   { id: "event_logs",         label: "Event Logs",            command: clearCommand("EventLogs"),               group: "privacyTraces", defaultEnabled: true },
   { id: "ntfs_journals",      label: "NTFS Journals",         command: clearCommand("NTFSJournals"),            group: "privacyTraces", defaultEnabled: true },
   // Feature 2 — Metadata-zone scrub (paid)
-  // recyclebin_overwrite: default ON — cheap, safe single-pass RNG $R overwrite before delete.
+  // Recycle Bin content is user data; require an explicit opt-in before overwriting it.
   // logfile_clear: default OFF — best-effort chkdsk /L resize; defers C: to next boot.
-  { id: "recyclebin_overwrite", label: "Recycle Bin overwrite-before-delete", command: clearCommand("RecycleBinMetadata"), group: "privacyTraces", defaultEnabled: true },
+  { id: "recyclebin_overwrite", label: "Recycle Bin overwrite-before-delete", command: clearCommand("RecycleBinMetadata"), group: "privacyTraces", defaultEnabled: false },
   { id: "logfile_clear",        label: "$LogFile / NTFS journal scrub",       command: clearCommand("NTFSLogFile"),        group: "privacyTraces", defaultEnabled: false },
   { id: "wifi_profiles",      label: "Wi-Fi Profiles",        command: commandId("Remove-", "Wlan", "Profile"),            group: "privacyTraces", defaultEnabled: false },
   { id: "bluetooth",          label: "Bluetooth",             command: clearCommand("BluetoothDevices"),        group: "privacyTraces", defaultEnabled: false },
   { id: "network_drives",     label: "Network Drives",        command: clearCommand("NetworkDrives"),           group: "privacyTraces", defaultEnabled: false },
-  { id: "clipboard",          label: "Clipboard",             command: clearCommand("Clipboard"),               group: "privacyTraces", defaultEnabled: true },
+  { id: "clipboard",          label: "Clipboard",             command: clearCommand("Clipboard"),               group: "privacyTraces", defaultEnabled: false },
   { id: "remove_schedules",   label: "Auto-clean Schedules",  command: "__remove_schedules__",         group: "privacyTraces", defaultEnabled: false },
   { id: "jump_lists",         label: "Jump Lists",            command: clearCommand("JumpLists"),               group: "privacyTraces", defaultEnabled: true },
   { id: "recent_files",       label: "Recent Files",          command: clearCommand("RecentFiles"),             group: "privacyTraces", defaultEnabled: true },
@@ -119,22 +119,23 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
 
   // Deep DFIR
   { id: "amcache",       label: "Amcache",          command: clearCommand("Amcache"),          group: "deepDfir", defaultEnabled: true },
-  { id: "ntuser_traces", label: "User Activity Traces", command: clearCommand("NTUserTraces"),     group: "deepDfir", defaultEnabled: true },
-  { id: "notepad_state", label: "Notepad State",    command: clearCommand("NotepadState"),     group: "deepDfir", defaultEnabled: true },
+  { id: "ntuser_traces", label: "User Activity Traces", command: clearCommand("NTUserTraces"),     group: "deepDfir", defaultEnabled: false },
+  // TabState files can contain unsaved user text; match Cleanup's default exclusion.
+  { id: "notepad_state", label: "Notepad State",    command: clearCommand("NotepadState"),     group: "deepDfir", defaultEnabled: false },
   { id: "pca_database",  label: "PCA Database",     command: clearCommand("PCADatabase"),      group: "deepDfir", defaultEnabled: true },
-  { id: "windows_old",   label: "Windows.old",      command: clearCommand("WindowsOld"),       group: "deepDfir", defaultEnabled: true },
-  { id: "crash_dumps",   label: "Crash Dumps",      command: invokeCommand("CrashDumpErase"),   group: "deepDfir", defaultEnabled: true },
-  { id: "sqlite_wal",    label: "SQLite WAL Files", command: invokeCommand("SQLiteWALKiller"), group: "deepDfir", defaultEnabled: true },
-  { id: "recall",        label: "Recall Database",  command: clearCommand("RecallDatabase"),   group: "deepDfir", defaultEnabled: true },
-  { id: "search_index",  label: "Search Index",     command: clearCommand("SearchIndex"),      group: "deepDfir", defaultEnabled: true },
-  { id: "print_spooler", label: "Print Spooler",    command: clearCommand("PrintSpooler"),     group: "deepDfir", defaultEnabled: true },
-  { id: "web_cache", label: "Web Cache Database", command: clearCommand("WebCache"), group: "deepDfir", defaultEnabled: true },
-  { id: "thumbnail_cache", label: "Thumbnail & Icon Cache", command: clearCommand("ThumbnailCache"), group: "deepDfir", defaultEnabled: true },
-  { id: "notification_database", label: "Notification History", command: clearCommand("NotificationDatabase"), group: "deepDfir", defaultEnabled: true },
-  { id: "branch_cache", label: "Peer Distribution Cache", command: clearCommand("BranchCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "windows_old",   label: "Windows.old",      command: clearCommand("WindowsOld"),       group: "deepDfir", defaultEnabled: false },
+  { id: "crash_dumps",   label: "Crash Dumps",      command: invokeCommand("CrashDumpErase"),   group: "deepDfir", defaultEnabled: false },
+  { id: "sqlite_wal",    label: "SQLite WAL Files", command: invokeCommand("SQLiteWALKiller"), group: "deepDfir", defaultEnabled: false },
+  { id: "recall",        label: "Recall Database",  command: clearCommand("RecallDatabase"),   group: "deepDfir", defaultEnabled: false },
+  { id: "search_index",  label: "Search Index",     command: clearCommand("SearchIndex"),      group: "deepDfir", defaultEnabled: false },
+  { id: "print_spooler", label: "Print Spooler",    command: clearCommand("PrintSpooler"),     group: "deepDfir", defaultEnabled: false },
+  { id: "web_cache", label: "Web Cache Database", command: clearCommand("WebCache"), group: "deepDfir", defaultEnabled: false },
+  { id: "thumbnail_cache", label: "Thumbnail & Icon Cache", command: clearCommand("ThumbnailCache"), group: "deepDfir", defaultEnabled: false },
+  { id: "notification_database", label: "Notification History", command: clearCommand("NotificationDatabase"), group: "deepDfir", defaultEnabled: false },
+  { id: "branch_cache", label: "Peer Distribution Cache", command: clearCommand("BranchCache"), group: "deepDfir", defaultEnabled: false },
   { id: "event_transcript", label: "Diagnostics Timeline", command: clearCommand("EventTranscript"), group: "deepDfir", defaultEnabled: true },
   { id: "activities_timeline", label: "Timeline Cache", command: clearCommand("ActivitiesTimeline"), group: "deepDfir", defaultEnabled: true },
-  { id: "rdp_bitmap_cache", label: "Remote Session Cache", command: clearCommand("RdpBitmapCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "rdp_bitmap_cache", label: "Remote Session Cache", command: clearCommand("RdpBitmapCache"), group: "deepDfir", defaultEnabled: false },
   { id: "servicing_logs", label: "Servicing Logs", command: clearCommand("ServicingLogs"), group: "deepDfir", defaultEnabled: true },
   { id: "device_install_logs", label: "Device Install Logs", command: clearCommand("DeviceInstallLogs"), group: "deepDfir", defaultEnabled: true },
   { id: "usage_trace_logs", label: "Usage Trace Logs", command: clearCommand("UsageTraceLogs"), group: "deepDfir", defaultEnabled: true },
@@ -157,17 +158,17 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   { id: "trace_push_notifications", label: "Push Notifications", command: clearCommand("PushNotifications"), group: "deepDfir", defaultEnabled: false },
   { id: "app_launch_history", label: "App Launch History", command: clearCommand("AppLaunchHistory"), group: "deepDfir", defaultEnabled: true },
   { id: "office_mru", label: "Office Document History", command: clearCommand("OfficeMru"), group: "deepDfir", defaultEnabled: true },
-  { id: "embedded_web_cache", label: "Embedded Browser Cache", command: clearCommand("EmbeddedWebCache"), group: "deepDfir", defaultEnabled: true },
-  { id: "p2p_update_cache", label: "Update Sharing Cache", command: clearCommand("P2PUpdateCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "embedded_web_cache", label: "Embedded Browser Cache", command: clearCommand("EmbeddedWebCache"), group: "deepDfir", defaultEnabled: false },
+  { id: "p2p_update_cache", label: "Update Sharing Cache", command: clearCommand("P2PUpdateCache"), group: "deepDfir", defaultEnabled: false },
   { id: "reliability_history", label: "Stability History", command: clearCommand("ReliabilityHistory"), group: "deepDfir", defaultEnabled: true },
   { id: "explorer_search_history", label: "Explorer Search History", command: clearCommand("ExplorerSearchHistory"), group: "deepDfir", defaultEnabled: true },
-  { id: "search_personalization", label: "Search Personalization Data", command: clearCommand("SearchPersonalizationData"), group: "deepDfir", defaultEnabled: true },
+  { id: "search_personalization", label: "Search Personalization Data", command: clearCommand("SearchPersonalizationData"), group: "deepDfir", defaultEnabled: false },
 
   // Privacy Clean deep erasers (default OFF — slow)
   { id: "unallocated_erase", label: "Free Space Cleanup",      command: invokeCommand("UnallocatedSpaceErase"), group: "privacyClean", defaultEnabled: false },
   { id: "ssd_trim",         label: "SSD TRIM",               command: invokeCommand("SSDTrim"),              group: "privacyClean", defaultEnabled: false },
-  { id: "virtual_memory",   label: "Virtual Memory Purge",   command: invokeCommand("VirtualMemoryPurge"),   group: "privacyClean", defaultEnabled: true },
-  { id: "configured_folders", label: "Configured Folder Shred", command: "__configured_folders__", group: "privacyClean", defaultEnabled: true },
+  { id: "virtual_memory",   label: "Virtual Memory Purge",   command: invokeCommand("VirtualMemoryPurge"),   group: "privacyClean", defaultEnabled: false },
+  { id: "configured_folders", label: "Configured Folder Shred", command: "__configured_folders__", group: "privacyClean", defaultEnabled: false },
 
   // Feature 5 — real crypto-erase (IRREVERSIBLE; default OFF — explicit opt-in required).
   // These steps destroy the encryption master key; the drive becomes permanently unreadable.
@@ -199,27 +200,27 @@ export const DESTRUCT_GROUP_LABELS: Record<DestructGroup, string> = {
  *  are the only place a non-expert can find out what e.g.
  *  "Amcache" actually means without leaving the app. */
 export const DESTRUCT_STEP_DESCRIPTIONS: Record<string, string> = {
-  // System cleaner
-  system_cleaner: "Clean system caches, logs, and temporary files.",
+  // Broad cleanup, intentionally opt-in because its target set includes more than traces.
+  system_cleaner: "Broad BleachBit cleanup. It can remove app state and files beyond forensic traces; opt in before running.",
 
   // Privacy traces
-  dismount_volumes:    "Force-unmount any open BitLocker or encrypted volumes.",
-  encryption_keys:     "Evicts mounted-volume master keys from memory by dismounting every encrypted volume. NOT a crypto-erase — container data stays intact and re-mountable with the password. Use 'VeraCrypt Header Destroy' for irreversible key destruction.",
+  dismount_volumes:    "Force-unmounts open encrypted volumes and can interrupt access to mounted storage; opt in before running.",
+  encryption_keys:     "Dismounts encrypted volumes to evict mounted-volume keys from memory; opt in before running. This is not a crypto-erase.",
   usb_history:         "Connected USB device log (registry + setupapi traces).",
   dns_cache:           "Local DNS resolver cache.",
   execution_cache:     "ShimCache + UserAssist + AppCompat execution traces.",
-  shadow_copies:       "Volume Shadow Copies (system restore points).",
-  rdp_history:         "Recent RDP connections and saved server addresses.",
-  rdp_passwords:       "Saved RDP credentials in the Windows Credential Manager.",
+  shadow_copies:       "Deletes all Volume Shadow Copies and restore points, including previous versions of user files.",
+  rdp_history:         "RDP history, cached credentials, and Default.rdp connection files in Documents and OneDrive Documents.",
+  rdp_passwords:       "Saved RDP credentials in Windows Credential Manager.",
   srum:                "System Resource Usage Monitor — per-app CPU + network history.",
   event_logs:          "Windows Application + System + Security event logs.",
   ntfs_journals:       "NTFS USN journal — file-change history per drive.",
-  recyclebin_overwrite: "Single durable RNG-overwrite pass of $R data files (and $I metadata) in the Recycle Bin before deletion, so carvers cannot recover the content.",
+  recyclebin_overwrite: "Permanently overwrites deleted user files in every Recycle Bin before removal.",
   logfile_clear:        "Best-effort resize of NTFS $LogFile (redo/undo log) to its minimum via chkdsk /L. The system volume (C:) is deferred to next boot; a live mounted volume cannot be fully zeroed without offline dismount.",
   wifi_profiles:       "Saved Wi-Fi networks and their stored passwords.",
   bluetooth:           "Paired Bluetooth devices and pairing history.",
   network_drives:      "Mapped network shares and recent UNC paths.",
-  clipboard:           "System clipboard (current contents + clipboard history).",
+  clipboard:           "Clears the current system clipboard and clipboard history.",
   remove_schedules:    "Remove configured auto-clean scheduled tasks (per-category).",
   jump_lists:          "App jump lists — recent files in taskbar / start menu.",
   recent_files:        "Shell Recent folder (Windows-key + R history, etc.).",
@@ -232,22 +233,22 @@ export const DESTRUCT_STEP_DESCRIPTIONS: Record<string, string> = {
 
   // Deep DFIR
   amcache:        "Amcache.hve — execution timestamps and binary hashes.",
-  ntuser_traces:  "RunMRU, TypedPaths, OpenSaveMRU, Recent Apps.",
+  ntuser_traces:  "Registry activity history, including saved form-fill data.",
   notepad_state:  "Unsaved Notepad tab content + .bin hash files.",
   pca_database:   "Program Compatibility Assistant logs.",
-  windows_old:    "Windows.old — full copy of the pre-upgrade user profile left after a Windows feature update.",
-  crash_dumps:    "WER reports, MEMORY.DMP, minidump files.",
-  sqlite_wal:     "Stale .wal / .shm files in user APPDATA.",
-  recall:         "Microsoft Recall + ConnectedDevices databases.",
-  search_index:   "Windows Search Index (Windows.edb) content.",
-  print_spooler:  "Document images sitting in the print spool queue.",
+  windows_old:    "Windows.old may contain the previous Windows installation and old user files.",
+  crash_dumps:    "Crash dumps, WER reports, Windows Update logs, and related caches; also changes WER policy.",
+  sqlite_wal:     "Wipes SQLite WAL/SHM files throughout user AppData; can discard uncheckpointed app data.",
+  recall:         "Removes Recall and Connected Devices databases, which can include activity and message previews.",
+  search_index:   "Deletes the rebuildable Windows Search index, which can contain indexed user-file content; opt in before clearing.",
+  print_spooler:  "Deletes queued print jobs, including rendered copies of documents.",
   web_cache: "Windows/WinINET web history, cookies, and cached responses.",
-  thumbnail_cache: "Explorer thumbnail and icon databases.",
-  notification_database: "Action Center notification history database.",
-  branch_cache: "BranchCache and peer-distribution content cache.",
+  thumbnail_cache: "Deletes cached previews of user files; Windows can rebuild them, so opt in before clearing.",
+  notification_database: "Action Center notification history, which can include message previews.",
+  branch_cache: "Deletes cached network-delivered content; it may need to be downloaded again, so opt in before clearing.",
   event_transcript: "Windows diagnostic activity and telemetry timeline database.",
   activities_timeline: "Per-user Windows Timeline and Activity Feed database.",
-  rdp_bitmap_cache: "Cached bitmap tiles from Remote Desktop sessions.",
+  rdp_bitmap_cache: "Deletes rendered screen tiles cached from Remote Desktop sessions; opt in because they can contain visible user content.",
   servicing_logs: "CBS and DISM component-install and update logs.",
   device_install_logs: "PnP and USB device installation history in SetupAPI logs.",
   usage_trace_logs: "SleepStudy, WDI, and WMI ETW usage traces.",
@@ -270,17 +271,17 @@ export const DESTRUCT_STEP_DESCRIPTIONS: Record<string, string> = {
   trace_push_notifications: "Securely removes local Windows notification files. Apps can recreate them, but existing notification history will be gone.",
   app_launch_history: "BAM per-user timestamps for launched programs.",
   office_mru: "Office recent-document, recent-location, and trusted-document records.",
-  embedded_web_cache: "WebView2 caches, cookies, and history stored by desktop apps.",
-  p2p_update_cache: "Delivery Optimization content cached for peer-to-peer sharing.",
+  embedded_web_cache: "Removes entire WebView2 data directories used by desktop apps, including persistent app state.",
+  p2p_update_cache: "Deletes Windows Update content cached for peer sharing; it may need to be downloaded again, so opt in before clearing.",
   reliability_history: "Reliability Monitor's dated app-install, crash, and stability history.",
   explorer_search_history: "Terms typed into File Explorer search and address fields.",
-  search_personalization: "Per-app search tracking and inking/typing personalization data.",
+  search_personalization: "Per-app search tracking and learned inking/typing data.",
 
   // Privacy Clean deep erasers (slow / destructive)
   unallocated_erase: "Overwrites unused disk space so deleted files cannot be recovered. May take 30+ minutes on large drives.",
   ssd_trim:         "Optimize-Volume -ReTrim — TRIMs unmapped SSD blocks. Irreversible.",
-  virtual_memory:   "Disable hibernation and clear the pagefile on next boot.",
-  configured_folders: "Securely erase every folder selected above on every lockdown trigger. Uses the MFT-resident/slack pass first when that shred policy is enabled.",
+  virtual_memory:   "Changes hibernation and pagefile settings and schedules virtual-memory data for removal.",
+  configured_folders: "Securely erases every user-selected folder on each lockdown trigger.",
 
   // Feature 5 — real crypto-erase (IRREVERSIBLE)
   bitlocker_erase:

@@ -321,9 +321,11 @@ Pillow).
 ### App capabilities (19 toggles)
 
 Per-capability Windows consent gates under `ideal.privacy.appCapabilities`
-(values `Allow` / `Deny` / `null`). Command:
-`Set-AppCapabilityAccess -Capability <key> -Enabled <bool>`; status:
-`Get-AppPrivacyCapabilitiesStatus`. Registry root:
+(values `Allow` / `Deny` / `null`). App Diagnostics also sets the Windows App
+Privacy force-deny policy (`LetAppsGetDiagnosticInfo=2`) so Windows blocks app
+access and locks the corresponding Settings control while denied. This app
+permission is separate from ETW diagnostic tracing. Status is read through
+`Get-AppPrivacyCapabilitiesStatus`; consent values live under
 `CapabilityAccessManager\ConsentStore\<key>`.
 
 | Key                      | UI label          | P | FS |   | Key             | UI label        | P | FS |
@@ -378,7 +380,7 @@ Cleanup Score. Each audit item has a view command and a clear command.
 |-------------------------------|---------------------------------------------------------------------------------------------------|
 | `Clear-Amcache`               | Purges Amcache.hve keys live; schedules `.hve` deletion at boot via PendingFileRenameOperations.   |
 | `Clear-NTUserTraces`          | Erases RunMRU, TypedPaths, OpenSaveMRU, TypedURLs, WordWheelQuery from HKCU.                       |
-| `Clear-NotepadState`          | Removes Windows 11 Notepad tab state + SHA-256 hashes from the Notepad package LocalState.         |
+| `Clear-NotepadState`          | Wipes Windows 11 Notepad tab state + SHA-256 hashes from the Notepad package LocalState; tab state can contain unsaved text. Lockdown leaves this off by default, matching System Cleanup's default exclusion. |
 | `Clear-PCADatabase`           | Deletes Program Compatibility Assistant launch logs (`Recentlyused.db`, `PcaApi.sdb`).            |
 | `Invoke-CrashDumpErase`       | Erases `MEMORY.DMP`, minidumps, WER ReportArchive/Queue, `CrashDumps`.                            |
 | `Invoke-VirtualMemoryPurge`   | Disables hibernation, enables `ClearPageFileAtShutdown`, schedules `swapfile.sys` for boot deletion.|
@@ -396,9 +398,11 @@ native confirmation whose single-use capability is bound to the selected target.
 Trusted hotkey, file-watch, and distress triggers are initiated and executed by
 Rust without placing that capability in a WebView event. Persisted flows cannot
 provide interactive authorization and therefore fail closed for these actions.
-The Rust-native `lockdown` command erases everything and uninstalls. The
-Rust-native `run_bleachbit_clean` drives BleachBit with preview mode, browser
-exclusion, and structured JSON output.
+The Rust-native `lockdown` command runs the configured trace-cleanup cascade.
+Its defaults clear forensic history while broad cleanup and steps that can
+remove user files or app state remain opt-in. User/account removal and app
+uninstall are also opt-in. The Rust-native `run_bleachbit_clean` drives
+BleachBit with preview mode, browser exclusion, and structured JSON output.
 
 ### Privacy monitors and panic triggers
 
@@ -422,6 +426,15 @@ Persisted under `ideal.privacy.*`. Several are paid (Pro sidecar). See
 | `selfDestruct.usersToRemove` | `string[]` (optional) — local usernames selected for removal by the `remove_users` lockdown step. Read by Free's `run_destruct_step`, which dispatches `{"stepId":"remove_users","usernames":[...]}` to Pro; Pro re-validates every account server-side (skips built-in/self/system/currently-signed-in), then `Wipe-Dir`s the profile folder and deletes the profile + account. Default empty (no users removed). | paid |
 | `f6_list_removable_volumes` / `f6_provision_wipe_usb(usbRoot)` (commands) | Create-Wipe-USB wizard: list removable drives; write `pubkey.bin` (32-byte device Ed25519 verifying key) + `device_id.txt` to `<usbRoot>\wipe\`, binding the USB to this device. Refuses fixed disks (DRIVE_REMOVABLE only). | Pro + Admin |
 | `prevention`                      | Advanced Activity Reduction — expert toggles that stop the OS from recording execution/device/network activity (some sub-flags paid). | —  |
+
+Lockdown's default-on steps clear forensic history and trace stores. Volume
+dismounts, rebuildable search/preview indexes, update-content caches, rendered
+Remote Desktop screen tiles, System Cleaner, app removal, user removal, Recycle Bin
+overwrite, restore-point deletion, credential cleanup, application-state cleanup,
+and configured-folder shredding are opt-in.
+Steps excluded by default in System Cleanup (including Notepad state, browser data,
+saved credentials, developer caches, WSL, Docker, virtual-machine, SSH, and password
+manager data) remain off in Lockdown as well.
 
 User-authored Clipboard Guard rules are intentionally outside `AppSettings`,
 because that store is machine-wide. They live in the signed-in Windows user's
@@ -461,7 +474,7 @@ noted.
 | Transparency Effects        | `Disable-TransparencyEffects`   | `Enable-TransparencyEffects`     | + minimize animation                              |
 | Full Path in Title Bar      | `Enable-FullPathInTitleBar`     | `Disable-FullPathInTitleBar`     | Explorer title bar                                |
 | Take Ownership Menu         | `Enable-TakeOwnershipMenu`      | `Disable-TakeOwnershipMenu`      | Right-click context menu                          |
-| Enthusiast Mode             | `Enable-EnthusiastMode`         | `Disable-EnthusiastMode`         | Power-user optimizations                           |
+| Enthusiast Mode             | `Enable-EnthusiastMode`         | `Disable-EnthusiastMode`         | Detailed Explorer copy/move dialog with throughput graph |
 | Instant Menu Delay          | `Enable-InstantMenuDelay`       | `Disable-InstantMenuDelay`       | Remove menu show-delay                            |
 | Wallpaper Quality           | `Enable-WallpaperQuality`       | `Disable-WallpaperQuality`       | Max JPEG quality (100%)                            |
 | Accessibility Shortcuts     | `Enable-AccessibilityShortcuts` | `Disable-AccessibilityShortcuts` | Sticky/Filter/Toggle keys                         |
@@ -472,6 +485,10 @@ Additional granular UI flags persisted under `ideal.tweaks.ui` (desktop icons,
 shortcut-arrow overlay, snap-assist, Explorer compact mode and checkboxes,
 window shake, clock seconds) — see `UiTweaks` in
 [`src/types/settings.ts`](../../src/types/settings.ts).
+
+Help & Setup preselects these Explorer defaults: hide sync notifications,
+Enthusiast Mode, show This PC and Recycle Bin on the desktop, show clock
+seconds, and open Explorer to This PC.
 
 ### Tweaks — security & apps
 

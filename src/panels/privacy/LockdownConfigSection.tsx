@@ -25,9 +25,8 @@
 //
 // Step list comes from src/types/lockdownSteps.ts (mirror of the Rust
 // DESTRUCT_STEPS slice). Stable IDs are the keys in
-// privacy.selfDestruct.steps. Sparse override map: writing the
-// step's defaultEnabled value DELETES the override so future default
-// changes flow through.
+// privacy.selfDestruct.steps. Sparse override map: missing keys use
+// defaultEnabled from the mirrored Rust step registry.
 
 import { Button, Checkbox, Icon, Tooltip } from "@/components/ui/bp";
 import type { IconName } from "@/components/ui/bp";

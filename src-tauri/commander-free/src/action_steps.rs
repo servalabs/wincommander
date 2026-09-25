@@ -41,23 +41,18 @@
 //     app process.
 //
 // `default_enabled` controls behaviour for users who haven't opened the
-// settings UI yet. Most steps default ON to preserve the existing
-// "panic = full lockdown" behaviour from before customisation existed.
-// The three slow Privacy Clean deep erasers (cipher /w, SSD TRIM, virtual-
-// memory purge) default OFF because they take minutes-to-hours and
-// shouldn't surprise a user who triggered a panic for time-critical
-// reasons. App removal also defaults ON to preserve current behaviour;
-// users who want "erase traces but keep the app installed" must opt out
-// explicitly.
+// settings UI yet. Default-on steps are limited to forensic history and
+// trace stores. Broad cleaners and steps that can remove user files, saved
+// app state, credentials, or system recovery data require explicit opt-in.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DestructGroup {
     /// run_bleachbit_clean — system-wide caches/logs cleaner.
     SystemCleaner,
-    /// Standard privacy cleaners (USB, DNS, RDP, event logs, etc.).
+    /// Standard forensic history cleaners (USB, DNS, event logs, etc.).
     /// Most are paid commands at the run_backend_script layer.
     PrivacyTraces,
-    /// Deep deep trace analysis clearers (Amcache, NTUSER, Recall, etc.). All paid.
+    /// Deep trace analysis clearers (Amcache, NTUSER, Recall, etc.). All paid.
     DeepDfir,
     /// Irreversible deep erasers (cipher /w, SSD TRIM, virtual memory).
     /// Slow and irreversible; default off.
@@ -84,12 +79,12 @@ pub struct DestructStepDef {
     /// `#[allow(dead_code)]` on the struct silences the lint.
     pub group: DestructGroup,
     /// Whether this step runs by default if the user hasn't customised
-    /// the settings yet. true preserves pre-customisation behaviour.
+    /// the settings yet. Destructive data and broad cleanup steps default off.
     pub default_enabled: bool,
 }
 
 /// All steps the orchestrator can run, in the order they execute.
-/// Order matters: System Cleaner runs first (fast, free), privacy
+/// Order matters: opted-in System Cleaner runs first, privacy
 /// cleaners next, deep trace analysis after, slow Privacy Clean deep erasers next,
 /// and the app-removal step last (Phase 3 exits the process).
 ///
@@ -104,20 +99,20 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "system_cleaner",
         label: "System Cleaner",
         group: DestructGroup::SystemCleaner,
-        default_enabled: true,
+        default_enabled: false,
     },
     // ── Privacy traces ────────────────────────────────────────────────
     DestructStepDef {
         id: "dismount_volumes",
         label: "Dismount Volumes",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "encryption_keys",
         label: "Clear Encryption Keys",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "usb_history",
@@ -141,19 +136,19 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "shadow_copies",
         label: "Shadow Copies",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "rdp_history",
         label: "RDP History",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "rdp_passwords",
         label: "RDP Passwords",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "srum",
@@ -174,13 +169,13 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: true,
     },
     // Feature 2 — Metadata-zone scrub (paid)
-    // recyclebin_overwrite: default ON — cheap, safe, always appropriate.
+    // The Recycle Bin holds deleted user files; overwrite requires an explicit opt-in.
     // logfile_clear: default OFF — best-effort on live system; defers C: to next boot.
     DestructStepDef {
         id: "recyclebin_overwrite",
         label: "Recycle Bin overwrite-before-delete",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "logfile_clear",
@@ -211,7 +206,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "clipboard",
         label: "Clipboard",
         group: DestructGroup::PrivacyTraces,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "jump_lists",
@@ -482,13 +477,14 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "ntuser_traces",
         label: "NTUSER Traces",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "notepad_state",
         label: "Notepad State",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        // TabState files can contain unsaved user text; match Cleanup's default exclusion.
+        default_enabled: false,
     },
     DestructStepDef {
         id: "pca_database",
@@ -500,61 +496,61 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "windows_old",
         label: "Windows.old",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "crash_dumps",
         label: "Crash Dumps",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "sqlite_wal",
         label: "SQLite WAL Files",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "recall",
         label: "Recall Database",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "search_index",
         label: "Search Index",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "print_spooler",
         label: "Print Spooler",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "web_cache",
         label: "Web Cache Database",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "thumbnail_cache",
         label: "Thumbnail & Icon Cache",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "notification_database",
         label: "Notification History",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "branch_cache",
         label: "Peer Distribution Cache",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "event_transcript",
@@ -572,7 +568,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "rdp_bitmap_cache",
         label: "Remote Session Cache",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "servicing_logs",
@@ -710,13 +706,13 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "embedded_web_cache",
         label: "Embedded Browser Cache",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "p2p_update_cache",
         label: "Update Sharing Cache",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "reliability_history",
@@ -734,7 +730,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "search_personalization",
         label: "Search Personalization Data",
         group: DestructGroup::DeepDfir,
-        default_enabled: true,
+        default_enabled: false,
     },
     // ── Privacy Clean deep erasers (slow; default OFF) ────────────────
     DestructStepDef {
@@ -749,20 +745,18 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         group: DestructGroup::PrivacyClean,
         default_enabled: false,
     },
-    // #13: default ON — disabling hibernation (removes hiberfil.sys, a RAM-on-disk
-    // source) + arming ClearPageFileAtShutdown is fast flag-setting, not a slow
-    // eraser. The immediate pagefile zero (pagefile_zero) stays opt-in.
+    // This changes hibernation and pagefile behavior, so it is opt-in.
     DestructStepDef {
         id: "virtual_memory",
         label: "Virtual Memory Purge",
         group: DestructGroup::PrivacyClean,
-        default_enabled: true,
+        default_enabled: false,
     },
     DestructStepDef {
         id: "configured_folders",
         label: "Configured Folder Shred",
         group: DestructGroup::PrivacyClean,
-        default_enabled: true,
+        default_enabled: false,
     },
     // Feature 5 — real crypto-erase (Irreversible; default OFF — must be opted in)
     DestructStepDef {
@@ -791,7 +785,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         id: "include_app",
         label: "Uninstall WinCommander",
         group: DestructGroup::AppRemoval,
-        default_enabled: true,
+        default_enabled: false,
     },
 ];
 
@@ -806,6 +800,35 @@ pub fn lookup(id: &str) -> Option<&'static DestructStepDef> {
 #[cfg(test)]
 mod tests {
     use super::{lookup, DestructGroup};
+
+    #[test]
+    fn user_content_and_app_state_steps_require_explicit_opt_in() {
+        for id in [
+            "system_cleaner",
+            "shadow_copies",
+            "rdp_history",
+            "rdp_passwords",
+            "recyclebin_overwrite",
+            "clipboard",
+            "ntuser_traces",
+            "windows_old",
+            "crash_dumps",
+            "sqlite_wal",
+            "recall",
+            "print_spooler",
+            "web_cache",
+            "notification_database",
+            "embedded_web_cache",
+            "search_personalization",
+            "virtual_memory",
+            "configured_folders",
+            "include_app",
+            "remove_users",
+        ] {
+            let step = lookup(id).expect("guarded Lockdown step must remain selectable");
+            assert!(!step.default_enabled, "{id} must require explicit opt-in");
+        }
+    }
 
     #[test]
     fn trace_security_and_forensic_steps_are_opt_in_deep_dfir_actions() {
