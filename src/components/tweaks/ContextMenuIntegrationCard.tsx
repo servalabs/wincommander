@@ -5,6 +5,7 @@ import useBackend from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { getDisplayBranding } from "../../lib/branding";
 import { showError } from "../../utils/toast";
+import WCSwitch from "../shared/WCSwitch";
 
 /**
  * WinCommander right-click integrations: Shred (secure single-pass
@@ -146,7 +147,8 @@ export default function ContextMenuIntegrationCard({
     const matchesShred = "context menu delete".includes(q) || "right-click delete".includes(q) || "delete".includes(q);
     const matchesScrub = "scrub".includes(q) || "scrub metadata".includes(q);
     const matchesSafeCopy = "safe copy".includes(q) || "safe paste".includes(q) || "clean copy".includes(q)
-        || "safe copy notifications".includes(q) || "copy notifications".includes(q);
+        || "safe copy notifications".includes(q) || "copy notifications".includes(q)
+        || "progress window".includes(q) || "show progress window".includes(q);
     const matchesSection = "context menu".includes(q) || "right-click".includes(q) || "explorer integration".includes(q);
     const showShred = !q || matchesShred || matchesSection;
     const showScrub = !q || matchesScrub || matchesSection;
@@ -200,14 +202,23 @@ export default function ContextMenuIntegrationCard({
                             checked={safeCopyContextMenuEnabled}
                             onChange={handleSafeCopyToggle}
                             disabled={loadingSafeCopy}
-                        />
-                        <UniversalToggle
-                            label="Safe Copy notifications"
-                            description="Show a WinCommander notification while Safe Copy scrubs and when the cleaned clipboard is ready, including elapsed time. Turn off to copy silently."
-                            icon="notifications"
-                            checked={safeCopyNotificationsEnabled}
-                            onChange={handleSafeCopyNotificationsToggle}
-                            disabled={savingSafeCopyNotifications}
+                            footer={(
+                                <div className="tile-footer-row">
+                                    <div className="tile-footer-copy">
+                                        <span className="tile-footer-label">Show progress window</span>
+                                        <span className="tile-footer-description">
+                                            Show a Windows progress window while Safe Copy scrubs files. Turn off to run silently.
+                                        </span>
+                                    </div>
+                                    <WCSwitch
+                                        checked={safeCopyNotificationsEnabled}
+                                        onChange={handleSafeCopyNotificationsToggle}
+                                        disabled={savingSafeCopyNotifications}
+                                        size="sm"
+                                        label="Show Safe Copy progress window"
+                                    />
+                                </div>
+                            )}
                         />
                     </>
                 )}

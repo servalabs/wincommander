@@ -86,6 +86,39 @@
   overflow-wrap: anywhere;
 }
 
+.tile-footer {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--color-border);
+}
+
+.tile-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tile-footer-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tile-footer-label {
+  color: var(--color-text-primary, #f0ede9);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tile-footer-description {
+  color: var(--color-text-secondary, #c7c3bd);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 /* ── Badges ─────────────────────────────────────────────────────────── */
 
 .tile-managed-badge {

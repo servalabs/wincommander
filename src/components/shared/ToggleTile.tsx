@@ -1,5 +1,6 @@
 import { Icon, Spinner } from "@/components/ui/bp";
 import type { IconName } from "@/components/ui/bp";
+import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { playSound } from "../../utils/sound";
 import { showInfo } from "../../utils/toast";
@@ -33,6 +34,8 @@ export interface ToggleTileProps {
   actionType?: "run" | "open";
   loading?: boolean;
   className?: string;
+  /** Optional controls rendered inside the tile below its description. */
+  footer?: ReactNode;
   size?: "normal" | "compact";
   domain?: "privacy" | "security" | "network" | "tweaks" | "identity";
   onPulse?: () => void;
@@ -65,6 +68,7 @@ function ToggleTile({
   actionType = "run",
   loading = false,
   className = "",
+  footer,
   size = "normal",
   domain,
   onPulse,
@@ -235,6 +239,11 @@ function ToggleTile({
 
       {/* Bottom row: description */}
       <p className="tile-description">{description}</p>
+      {footer && (
+        <div className="tile-footer" onClick={(event) => event.stopPropagation()}>
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
