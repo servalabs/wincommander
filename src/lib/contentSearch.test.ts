@@ -7,6 +7,7 @@ import {
   formatContentModified,
   formatSnippetWithHighlights,
   isNameOnlyMatch,
+  showIndexedSearchRow,
 } from "./contentSearch";
 import type { Chunk, ContentHit } from "../types/wincmd-search";
 
@@ -148,5 +149,24 @@ describe("isNameOnlyMatch", () => {
   it("NameSubstring hits map through contentHitToDisplayRow", () => {
     const row = contentHitToDisplayRow({ ...MOCK_HIT, match_kind: "NameSubstring" });
     expect(isNameOnlyMatch(row)).toBe(true);
+  });
+});
+
+describe("indexed search row visibility", () => {
+  it("keeps private filename-only hits available when Everything excludes that volume", () => {
+    expect(showIndexedSearchRow({ path: "v:\\private\\report.pdf", matchKind: "NameSubstring" }, ["V:\\"])).toBe(true);
+    expect(showIndexedSearchRow({ path: "\\\\?\\V:\\report.pdf", matchKind: "NameSubstring" }, ["V:\\"])).toBe(true);
+  });
+
+  it("leaves ordinary and unrecognized filename-only hits in the filename provider", () => {
+    expect(showIndexedSearchRow({ path: "C:\\report.pdf", matchKind: "NameSubstring" }, ["V:\\"])).toBe(false);
+    expect(showIndexedSearchRow({ path: "V:\\report.pdf", matchKind: "NameSubstring" }, [])).toBe(false);
+  });
+
+  it("preserves text matches regardless of whether the name also appears in Everything", () => {
+    for (const matchKind of ["Keyword", "Semantic", "Hybrid"]) {
+      expect(showIndexedSearchRow({ path: "C:\\report.pdf", matchKind }, ["V:\\"])).toBe(true);
+      expect(showIndexedSearchRow({ path: "V:\\report.pdf", matchKind }, ["V:\\"])).toBe(true);
+    }
   });
 });

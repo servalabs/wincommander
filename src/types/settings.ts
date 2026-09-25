@@ -421,6 +421,8 @@ export interface FileSearchSettings {
   exclusions: string[];
   /** False until default search roots have been seeded. */
   initialized: boolean;
+  /** Backend-managed VeraCrypt bindings. Never infer a volume identity from its letter. */
+  private_roots?: { path: string; volume_root: string; relative_path: string; volume_id: string }[];
   /** Maximum filename rows returned per search (50–2,000). Text matches use
    * their independent bounded window so filename volume never hides them. */
   resultLimit?: number;

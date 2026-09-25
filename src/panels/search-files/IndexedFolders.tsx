@@ -6,8 +6,10 @@
 
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import type { ContentPrivacyStatus } from "@/lib/searchPrivacy";
 
 interface IndexedFoldersProps {
+  privacyStatus: ContentPrivacyStatus | null;
   roots: string[];
   reindexing: boolean;
   rescanning: boolean;
@@ -17,7 +19,7 @@ interface IndexedFoldersProps {
   onRemoveFolder: (root: string) => void;
 }
 
-export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex, onRescan, onAddFolders, onRemoveFolder }: IndexedFoldersProps) {
+export function IndexedFoldersManager({ privacyStatus, roots, reindexing, rescanning, onReindex, onRescan, onAddFolders, onRemoveFolder }: IndexedFoldersProps) {
   const busy = reindexing || rescanning;
   return (
     <div className="sfp-folders-section">
@@ -49,6 +51,19 @@ export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex
             Add folder
           </Button>
         </div>
+      </div>
+      <p className="sfp-folders-empty">
+        Folders on detected VeraCrypt drives keep their content index inside that encrypted drive.
+        Mount the volume before adding a folder. Private file history is not saved.
+      </p>
+      <div role="status" aria-live="polite">
+        {!privacyStatus && <p className="sfp-folders-empty">Checking volume privacy. Search results are hidden until this check completes.</p>}
+        {privacyStatus?.volumes.map((volume) => (
+          <p key={volume.root} className="sfp-folders-empty">
+            {volume.root} · {volume.state.replace("_", " ")} · {volume.message}
+          </p>
+        ))}
+        {privacyStatus?.notice && <p className="sfp-folders-empty">{privacyStatus.notice}</p>}
       </div>
       {roots.length === 0 ? (
         <p className="sfp-folders-empty">No folders indexed — click "Add folder" to start.</p>

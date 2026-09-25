@@ -13,6 +13,8 @@ import {
 // KeySequenceTrigger now consumes events directly from the system-wide
 // keyboard hook in `services::keyboard_hook`.
 import { invoke } from "@tauri-apps/api/core";
+import { rememberSearchHandoff } from "./lib/searchPrivacy";
+import { useSearchPrivacy } from "./hooks/useSearchPrivacy";
 import { listen } from "@tauri-apps/api/event";
 import { motion, MotionConfig } from "framer-motion";
 import { showError, showInfo, showWarning } from "./utils/toast";
@@ -200,6 +202,7 @@ function AppContent({ splashDone, onSplashComplete }: {
   onSplashComplete: () => void;
 }) {
   const tourActive = useTourActive();
+  useSearchPrivacy();
   // Chromium's stock menu exposes developer tooling in packaged builds. Keep
   // it available to the dev server, but suppress the browser menu in releases.
   useEffect(() => {
@@ -1286,7 +1289,7 @@ function AppContent({ splashDone, onSplashComplete }: {
     const unlisten = listen<string>("open-search-files-panel", (event) => {
       const query = typeof event.payload === "string" ? event.payload.trim() : "";
       if (query) {
-        window.localStorage.setItem("wincommander.search-files-query", query);
+        rememberSearchHandoff(query);
       }
       handlePanelChange("search-files");
       if (query) {
