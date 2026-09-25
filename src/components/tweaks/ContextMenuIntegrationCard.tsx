@@ -169,7 +169,7 @@ export default function ContextMenuIntegrationCard({
                 {showSafeCopy && (
                     <UniversalToggle
                         label="Safe Copy / Safe Paste"
-                        description="Add 'Safe Copy' + 'Safe Paste' to right-click. Safe Copy remembers your selection; Safe Paste drops a copy into a folder — same filename, with metadata stripped. (Metadata scrub is a Pro feature.)"
+                        description="Add 'Safe Copy' + 'Safe Paste' to right-click. Safe Copy scrubs a private cache, then places only clean copies on the Windows clipboard; normal Paste and Safe Paste retain the original filenames. (Metadata scrub is a Pro feature.)"
                         icon="clipboard"
                         checked={safeCopyContextMenuEnabled}
                         onChange={handleSafeCopyToggle}

@@ -253,9 +253,8 @@ interface MetadataScrubberDialogProps {
    *  to scrub. Cleared after each fresh open so the same list doesn't
    *  re-seed on the next manual open. */
   initialPaths?: string[];
-  /** Safe Paste opens the dialog on the FRESH COPIES it just made and
-   *  wants them scrubbed in place (no `_scrubbed/` subfolder), so it
-   *  forces Replace mode on. */
+  /** Allows a caller to request in-place replacement for an explicit
+   *  scrub operation. */
   initialReplaceMode?: boolean;
 }
 
@@ -309,7 +308,7 @@ export default function MetadataScrubberDialog({
       setScrubDone(false);
       // Seed from right-click paths if present; otherwise start empty.
       setSelectedPaths(initialPaths && initialPaths.length > 0 ? [...initialPaths] : []);
-      // Safe Paste seeds fresh copies and wants them scrubbed in place.
+      // An explicit caller can request in-place replacement.
       if (initialReplaceMode) setReplaceMode(true);
     }
   }, [isOpen, initialPaths, initialReplaceMode]);

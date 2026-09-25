@@ -149,6 +149,17 @@ pub async fn scrub_metadata_paths(
     paths: Vec<String>,
     options: Option<ScrubOptions>,
 ) -> Result<ScrubReport, String> {
+    scrub_metadata_paths_headless(paths, options).await
+}
+
+/// The same paid scrub dispatch used by the Tauri command, without an app
+/// handle.  Explorer invokes Safe Copy before a Tauri window/runtime exists;
+/// that path must still be able to create a scrubbed clipboard cache and must
+/// never fall back to publishing the original files.
+pub async fn scrub_metadata_paths_headless(
+    paths: Vec<String>,
+    options: Option<ScrubOptions>,
+) -> Result<ScrubReport, String> {
     crate::license::require_paid("metadata scrubber")?;
     let args = serde_json::json!({
         "paths": paths,

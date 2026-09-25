@@ -1073,9 +1073,9 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
             crate::updater::INSTALL_TIMEOUT,
             update.download_and_install(|_, _| {}, || {}),
         )
-            .await
-            .map_err(|_| "Update installation timed out".to_string())?
-            .map_err(|e| format!("Install failed: {}", e))?;
+        .await
+        .map_err(|_| "Update installation timed out".to_string())?
+        .map_err(|e| format!("Install failed: {}", e))?;
         Ok((version, current, body))
     }
     .await;
@@ -1495,6 +1495,9 @@ pub fn run() {
         let cli_args: Vec<String> = std::env::args().collect();
         if cli_args.iter().any(|a| a == "--safe-copy") {
             safe_clip::handle_safe_copy_cli(&cli_args);
+            // Safe Copy's STA publisher has already handed the cleaned file
+            // list to the Windows clipboard. Exit this headless verb promptly
+            // instead of retaining the Pro scrub worker in the background.
             std::process::exit(0);
         }
         // Explorer secure-delete is another GUI-free operation, but unlike
@@ -2004,11 +2007,18 @@ pub fn run() {
                     let event = session_instance::resolve_context_menu_event(|flag| {
                         args.iter().any(|a| a == flag)
                     });
-                    let app_handle = app.handle().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(1800));
-                        let _ = app_handle.emit(event, &menu_paths);
-                    });
+                    if event == "safe-paste-requested" {
+                        // Unlike ordinary context-menu events, Safe Paste is
+                        // collected by the mounted webview from a native queue.
+                        // A fixed startup delay can fire before React subscribes.
+                        session_instance::queue_safe_paste_request(app.handle(), menu_paths);
+                    } else {
+                        let app_handle = app.handle().clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(1800));
+                            let _ = app_handle.emit(event, &menu_paths);
+                        });
+                    }
                 }
 
                 // Window is ready
@@ -2510,6 +2520,7 @@ pub fn run() {
             safe_clip::safe_copy_record,
             safe_clip::safe_clip_status,
             safe_clip::safe_paste_prepare,
+            session_instance::take_safe_paste_requests,
             backend::connect_rdp,
             backend::set_rdp_credentials,
             backend::kill_privacy_shield_process,

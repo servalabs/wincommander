@@ -122,7 +122,6 @@ export default function RightSidebar() {
         verifyVaultDrive,
         getEncryptionPartitions,
         safePastePrepare,
-        scrubMetadataPaths,
     } = useBackend();
 
     const visibility = useVisibility();
@@ -174,6 +173,36 @@ export default function RightSidebar() {
     const sdSilentRef = useRef<boolean>(false);
     const [scrubDialogOpen, setScrubDialogOpen] = useState(false);
     const [scrubInitialPaths, setScrubInitialPaths] = useState<string[] | undefined>(undefined);
+    // Keep the staged Safe Copy state visible in the app so an Explorer copy
+    // has a clear, durable acknowledgement before the user chooses a
+    // destination. The native clipboard only receives the cleaned cache, not
+    // the raw sources.
+    const [safeClipCount, setSafeClipCount] = useState<number | null>(null);
+
+    const refreshSafeClipStatus = useCallback(async () => {
+        try {
+            const status = await invoke<{ count: number }>("safe_clip_status");
+            setSafeClipCount(status.count);
+        } catch {
+            // Status is advisory. A failed read must not interfere with the
+            // Safe Paste request listener below, which reports its own error.
+            setSafeClipCount(null);
+        }
+    }, []);
+
+    // Explorer takes focus while its context menu is used. Refresh when the
+    // app regains focus (and after a tab becomes visible) so a headless Safe
+    // Copy made outside the app is immediately reflected in the rail.
+    useEffect(() => {
+        const refresh = () => { void refreshSafeClipStatus(); };
+        refresh();
+        window.addEventListener("focus", refresh);
+        document.addEventListener("visibilitychange", refresh);
+        return () => {
+            window.removeEventListener("focus", refresh);
+            document.removeEventListener("visibilitychange", refresh);
+        };
+    }, [refreshSafeClipStatus]);
 
     // ── Quick Mount ──────────────────────────────────────────────────────────
     const [qmOpen, setQmOpen] = useState(false);
@@ -320,17 +349,16 @@ export default function RightSidebar() {
         };
     }, []);
 
-    // Listen for `safe-paste-requested` — Explorer's right-click "Safe Paste"
-    // on a destination folder. Copy the recorded sources into that folder
-    // (exact names, collisions skipped — never renamed), then scrub the fresh
-    // copies in place automatically — Safe Paste is a one-shot verb, so it
-    // does NOT open the scrub dialog (that's the explicit "Scrub metadata"
-    // verb's job). Replace-in-place, non-paranoid defaults match a normal
-    // MetadataScrubberDialog scrub.
+    // Safe Paste requests are kept in a native queue until this listener drains
+    // them. Tauri events alone can be emitted before this effect subscribes on
+    // a cold or hidden launch, silently dropping the scrub workflow.
     useEffect(() => {
         let unlisten: (() => void) | undefined;
-        listen<string[]>('safe-paste-requested', async (e) => {
-            const dest = (e.payload ?? [])[0];
+        let draining = false;
+        let drainRequested = false;
+
+        const processRequest = async (paths: string[]) => {
+            const dest = paths[0];
             if (!dest) return;
             try {
                 const res = await safePastePrepare(dest);
@@ -344,38 +372,49 @@ export default function RightSidebar() {
                     if (res.sourceCount === 0) showError("Nothing to Safe Paste — use Safe Copy first.", undefined, { kind: "notification" });
                     return;
                 }
-                const report = await scrubMetadataPaths(res.copied, {
-                    dryRun: false,
-                    recursive: true,
-                    replaceOriginals: true,
-                    paranoid: { randomizeTimestamps: false, stripAltStreams: false },
-                });
-                const cleaned = report.scrubbed.length;
-                const noun = `${cleaned} file${cleaned !== 1 ? "s" : ""}`;
-                // Survivors: files where identifying metadata couldn't be fully
-                // stripped — surfaced loudly so a leaky copy isn't read as clean.
-                const residual = report.scrubbed.filter((r) => (r.residualFields?.length ?? 0) > 0).length;
-                if (report.errors.length > 0) {
-                    const first = report.errors[0];
-                    const more = report.errors.length > 1 ? ` +${report.errors.length - 1} more` : "";
-                    showError(`Safe-pasted, but scrub failed on ${report.errors.length} of ${res.copied.length}: ${first.message}${more}`, undefined, { kind: "notification" });
-                } else if (residual > 0) {
-                    showError(`Safe-pasted & scrubbed ${noun} — ${residual} still contain${residual === 1 ? "s" : ""} metadata that couldn't be removed`, undefined, { kind: "notification" });
-                } else {
-                    showSuccess(`Safe-pasted & scrubbed ${noun}`);
-                }
+                const noun = `${res.copied.length} item${res.copied.length !== 1 ? "s" : ""}`;
+                showSuccess(`Safe-pasted ${noun} after metadata scrub`);
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 // require_paid surfaces here for Free users — honest upsell.
                 showError(`Safe Paste: ${msg}`, undefined, { kind: "notification" });
+            } finally {
+                // Safe Paste does not consume a Safe Copy, but reading again
+                // covers a newer headless copy made while this request ran.
+                void refreshSafeClipStatus();
             }
+        };
+
+        const drainRequests = async () => {
+            if (draining) {
+                drainRequested = true;
+                return;
+            }
+            draining = true;
+            try {
+                do {
+                    drainRequested = false;
+                    const requests = await invoke<string[][]>('take_safe_paste_requests');
+                    for (const paths of requests) await processRequest(paths);
+                } while (drainRequested);
+            } finally {
+                draining = false;
+            }
+        };
+
+        listen('safe-paste-requested', () => {
+            void drainRequests();
         }).then((u) => {
             unlisten = u;
+            // A context-menu launch can queue before React finishes mounting.
+            // Drain once after subscription so that wake-up event isn't needed
+            // for cold-start reliability.
+            void drainRequests();
         });
         return () => {
             unlisten?.();
         };
-    }, [safePastePrepare, scrubMetadataPaths]);
+    }, [safePastePrepare, refreshSafeClipStatus]);
 
     // Resolve which steps are enabled per the user's config in
     // privacy.selfDestruct. Sparse override map; missing keys fall
@@ -898,6 +937,19 @@ export default function RightSidebar() {
                                 ariaLabel="Open metadata scrubber"
                             />
                             <span className="action-label">Scrub Meta</span>
+                        </div>
+                    )}
+
+                    {safeClipCount !== null && safeClipCount > 0 && (
+                        <div
+                            className="safe-clip-status"
+                            role="status"
+                            aria-label={`${safeClipCount} item${safeClipCount === 1 ? "" : "s"} ready for Safe Paste`}
+                            data-tip={`${safeClipCount} item${safeClipCount === 1 ? "" : "s"} ready for Safe Paste. Only the scrubbed copies are placed on the Windows clipboard.`}
+                        >
+                            <Icon icon="clipboard" size={16} />
+                            <span>Safe Copy</span>
+                            <strong>{safeClipCount} ready</strong>
                         </div>
                     )}
 

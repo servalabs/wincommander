@@ -292,7 +292,7 @@ export interface SafeSkip {
   reason: string;
 }
 export interface SafePasteResult {
-  /** Absolute paths of the fresh copies to be scrubbed. */
+  /** Absolute destination paths of copies already scrubbed and committed. */
   copied: string[];
   skipped: SafeSkip[];
   sourceCount: number;

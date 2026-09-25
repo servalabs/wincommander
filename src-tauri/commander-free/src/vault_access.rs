@@ -4,7 +4,7 @@
 //! available in this crate. This module preserves the frozen snake_case wire
 //! and contains that temporary adaptation at one boundary.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;

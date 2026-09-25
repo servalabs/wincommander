@@ -1292,7 +1292,9 @@ mod tests {
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
         assert_eq!(tauri_commands.len(), 480);
-        assert!(!tauri_commands.iter().any(|entry| entry.name == "apply_admin_config_cmd"));
+        assert!(!tauri_commands
+            .iter()
+            .any(|entry| entry.name == "apply_admin_config_cmd"));
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         for name in [
             "decoy_read_audit_status",

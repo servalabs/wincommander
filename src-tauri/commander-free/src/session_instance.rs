@@ -65,6 +65,11 @@ static MUTEX_HANDLE: OnceLock<isize> = OnceLock::new();
 static APP_READY: AtomicBool = AtomicBool::new(false);
 /// Payloads forwarded over the pipe before the app was ready, replayed on ready.
 static PENDING_FORWARDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Safe Paste requests survive until the webview has explicitly collected
+/// them. Tauri events are lossy when emitted before a React effect subscribes;
+/// a cold context-menu launch used to rely on a timing delay and could copy
+/// without ever reaching the scrub/commit workflow.
+static PENDING_SAFE_PASTES: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
 
 pub fn is_app_ready() -> bool {
     APP_READY.load(Ordering::SeqCst)
@@ -80,6 +85,27 @@ pub fn set_app_ready(app: &tauri::AppHandle) {
     for payload in queued {
         handle_forwarded_args(app, &payload);
     }
+}
+
+/// Queue a Safe Paste request and wake an already-mounted frontend. The event
+/// is only a wake-up signal: the frontend atomically drains this queue, so an
+/// event emitted before its listener exists cannot lose a request.
+pub(crate) fn queue_safe_paste_request(app: &tauri::AppHandle, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    PENDING_SAFE_PASTES.lock().unwrap().push(paths);
+    let _ = app.emit("safe-paste-requested", ());
+}
+
+#[tauri::command]
+pub fn take_safe_paste_requests() -> Vec<Vec<String>> {
+    take_pending_safe_pastes(&PENDING_SAFE_PASTES)
+}
+
+fn take_pending_safe_pastes(pending: &Mutex<Vec<Vec<String>>>) -> Vec<Vec<String>> {
+    let mut pending = pending.lock().unwrap();
+    std::mem::take(&mut *pending)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -717,7 +743,11 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
         });
     } else if !paths.is_empty() {
         let event = resolve_context_menu_event(|flag| parts.contains(&flag));
-        let _ = app.emit(event, &paths);
+        if event == "safe-paste-requested" {
+            queue_safe_paste_request(app, paths);
+        } else {
+            let _ = app.emit(event, &paths);
+        }
     }
 }
 
@@ -729,8 +759,9 @@ fn should_exit_for_elevation_handoff(requested: bool, primary_is_elevated: bool)
 mod resolve_context_menu_event_tests {
     use super::{
         instance_object_name, pipe_path, primary_pid_value_name, resolve_context_menu_event,
-        should_exit_for_elevation_handoff,
+        should_exit_for_elevation_handoff, take_pending_safe_pastes,
     };
+    use std::sync::Mutex;
 
     #[cfg(wincommander_dev_profile)]
     #[test]
@@ -801,6 +832,26 @@ mod resolve_context_menu_event_tests {
         assert_eq!(
             resolve_context_menu_event(|f| f == "--safe-paste" || f == "--scrub"),
             "safe-paste-requested"
+        );
+    }
+
+    #[test]
+    fn safe_paste_queue_drains_each_pending_request_exactly_once() {
+        let pending = Mutex::new(vec![
+            vec![r"C:\Drop".to_string()],
+            vec![r"D:\Transfer".to_string(), r"D:\Archive".to_string()],
+        ]);
+
+        assert_eq!(
+            take_pending_safe_pastes(&pending),
+            vec![
+                vec![r"C:\Drop".to_string()],
+                vec![r"D:\Transfer".to_string(), r"D:\Archive".to_string()],
+            ]
+        );
+        assert!(
+            take_pending_safe_pastes(&pending).is_empty(),
+            "a second drain must not run the same Safe Paste again"
         );
     }
 }

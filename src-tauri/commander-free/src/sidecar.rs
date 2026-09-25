@@ -1911,7 +1911,7 @@ mod tests {
                     "category": category.id,
                     "full_detail": true
                 }))
-                    .unwrap(),
+                .unwrap(),
                 category.id
             );
         }

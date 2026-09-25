@@ -4465,13 +4465,38 @@ mod tests {
 
         let reread: AppSettings =
             serde_json::from_value(serde_json::to_value(&applied).unwrap()).unwrap();
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.remote_access, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.driver_health, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.network_honeypot, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.print, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.usb, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.dlp, Some(true));
-        assert_eq!(reread.ideal.security.monitor_alert_reporting.tamper, Some(true));
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.remote_access,
+            Some(true)
+        );
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.driver_health,
+            Some(true)
+        );
+        assert_eq!(
+            reread
+                .ideal
+                .security
+                .monitor_alert_reporting
+                .network_honeypot,
+            Some(true)
+        );
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.print,
+            Some(true)
+        );
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.usb,
+            Some(true)
+        );
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.dlp,
+            Some(true)
+        );
+        assert_eq!(
+            reread.ideal.security.monitor_alert_reporting.tamper,
+            Some(true)
+        );
         assert_eq!(reread.policy.locked_paths, locked_paths);
     }
 

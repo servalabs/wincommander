@@ -197,6 +197,39 @@
     font-weight: 700;
 }
 
+/* This compact, non-interactive status stays in the rail until a subsequent
+   Safe Copy replaces it, so the user can confirm a cleaned clipboard source
+   before choosing a destination in Explorer. */
+.safe-clip-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: calc(100% - 10px);
+    padding: 6px 2px;
+    border: 1px solid color-mix(in srgb, var(--color-primary) 38%, var(--border));
+    border-radius: var(--r);
+    background: color-mix(in srgb, var(--color-primary) 10%, var(--surface-2));
+    color: var(--color-primary);
+    font-family: var(--font-mono);
+    font-size: 8px;
+    line-height: 1.2;
+    letter-spacing: 0;
+    text-align: center;
+}
+
+.safe-clip-status span {
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+}
+
+.safe-clip-status strong {
+    color: var(--color-primary);
+    font-size: 9px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
 /* Light mode — lift the rail border contrast; the tinted fills read fine. */
 html.light .right-sidebar {
     border-left: 1px solid rgba(0, 0, 0, 0.18);

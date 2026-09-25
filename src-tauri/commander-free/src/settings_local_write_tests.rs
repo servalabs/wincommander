@@ -105,7 +105,8 @@ fn local_or_elevated_writes_cannot_disable_each_locked_extended_monitor_reporter
         {
             let mut state = SETTINGS_CACHE.lock().unwrap();
             let current = state.as_mut().unwrap();
-            current.policy.locked_paths = vec![format!("security.monitorAlertReporting.{reporter}")];
+            current.policy.locked_paths =
+                vec![format!("security.monitorAlertReporting.{reporter}")];
             let reporting = &mut current.ideal.security.monitor_alert_reporting;
             match reporter {
                 "print" => reporting.print = Some(true),
