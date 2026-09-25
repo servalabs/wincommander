@@ -621,11 +621,22 @@ pub struct FileSearchSettings {
     /// Distinguishes "never configured" from "user explicitly cleared all folders".
     #[serde(default)]
     pub initialized: bool,
+    /// Bind private folders to a driver volume identity, never a reusable letter.
+    #[serde(default)]
+    pub private_roots: Vec<PrivateSearchRoot>,
     /// Maximum filename rows returned to the Search Files panel. The command
     /// clamps this again so a malformed settings file cannot create an
     /// unbounded Everything request.
     #[serde(default = "default_file_search_result_limit")]
     pub result_limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateSearchRoot {
+    pub path: std::path::PathBuf,
+    pub volume_root: std::path::PathBuf,
+    pub relative_path: std::path::PathBuf,
+    pub volume_id: String,
 }
 
 const fn default_file_search_result_limit() -> u32 {
@@ -638,6 +649,7 @@ impl Default for FileSearchSettings {
             roots: Vec::new(),
             exclusions: Vec::new(),
             initialized: false,
+            private_roots: Vec::new(),
             result_limit: default_file_search_result_limit(),
         }
     }

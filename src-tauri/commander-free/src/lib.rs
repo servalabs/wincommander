@@ -2841,6 +2841,7 @@ pub fn run() {
             // ── File-content search (FTS, Free tier) ──
             file_search::search_content,
             file_search::content_index_status,
+            file_search::content_privacy_status,
             file_search::content_index_configure,
             file_search::content_rescan,
             file_search::content_reindex,

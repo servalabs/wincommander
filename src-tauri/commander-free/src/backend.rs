@@ -353,6 +353,7 @@ pub fn register_file_search_commands() {
     register_commands(vec![
         mk("search_content"),
         mk("content_index_status"),
+        mk("content_privacy_status"),
         mk("content_index_configure"),
         mk("content_rescan"),
         mk("content_reindex"),
@@ -7854,6 +7855,30 @@ Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$batchPath`"" -WindowStyle
 
 // ── Everything Search ────────────────────────────────────────────────────────
 
+mod everything_privacy;
+use everything_privacy::{ObservedVolume, PublicSearchPolicy};
+
+fn observe_search_volume(path: &std::path::Path) -> Option<ObservedVolume> {
+    wincmd_volume::inspect_path(path)
+        .ok()
+        .map(|volume| ObservedVolume {
+            root: volume.root,
+            identity: volume.identity,
+            is_private: volume.is_private,
+        })
+}
+
+fn public_search_policy() -> Result<PublicSearchPolicy, String> {
+    let (roots, generation) = crate::file_search::protected_search_policy()?;
+    Ok(PublicSearchPolicy::new(roots, generation))
+}
+
+fn search_policy_unchanged(policy: &PublicSearchPolicy) -> bool {
+    crate::file_search::protected_search_policy().is_ok_and(|(roots, generation)| {
+        policy.unchanged(&roots, &generation, observe_search_volume)
+    })
+}
+
 #[derive(serde::Serialize)]
 pub struct EsResult {
     pub name: String,
@@ -7879,7 +7904,10 @@ pub async fn get_file_icon_data(path: String) -> Result<Option<String>, String> 
 }
 
 fn get_file_icon_data_sync(path: &str) -> Result<Option<String>, String> {
-    if path.trim().is_empty() {
+    let Ok(mut policy) = public_search_policy() else {
+        return Ok(None);
+    };
+    if !policy.allows(std::path::Path::new(path), observe_search_volume) {
         return Ok(None);
     }
     let script = r#"
@@ -7929,7 +7957,10 @@ $icon.Dispose()
         return Ok(None);
     }
     let encoded = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if encoded.is_empty() {
+    if encoded.is_empty()
+        || !policy.allows(std::path::Path::new(path), observe_search_volume)
+        || !search_policy_unchanged(&policy)
+    {
         Ok(None)
     } else {
         Ok(Some(format!("data:image/png;base64,{encoded}")))
@@ -8136,6 +8167,7 @@ fn build_es_search_args(
 }
 
 /// Build the argv for a count-only es.exe run.
+#[cfg(test)]
 fn build_es_count_args(scope_path: Option<&str>, tokens: &[String]) -> Vec<String> {
     let mut args: Vec<String> = vec!["-get-result-count".to_string()];
     if let Some(scope) = scope_path {
@@ -8147,6 +8179,7 @@ fn build_es_count_args(scope_path: Option<&str>, tokens: &[String]) -> Vec<Strin
 }
 
 /// Parse the integer printed by `-get-result-count`.
+#[cfg(test)]
 fn parse_es_count(stdout: &[u8]) -> Result<u64, String> {
     let raw = String::from_utf8_lossy(stdout);
     raw.lines()
@@ -8163,7 +8196,6 @@ fn parse_es_count(stdout: &[u8]) -> Result<u64, String> {
 // which froze the search overlay. Bounded here so a bad filter degrades into an
 // error message instead of a hang.
 const ES_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
-const ES_COUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 const ES_TIMEOUT_MSG: &str =
     "Search took too long — that filter isn't indexed. Try a narrower query.";
 
@@ -8352,6 +8384,19 @@ pub async fn search_everything(
         None => None,
     };
 
+    let policy_scope = scope.clone();
+    let mut policy = tokio::task::spawn_blocking(move || {
+        let mut policy = public_search_policy()?;
+        if policy_scope.as_deref().is_some_and(|path| {
+            !policy.allows(std::path::Path::new(path), observe_search_volume)
+        }) {
+            return Err("Filename search is unavailable for this location. Use inside-file search for private volumes.".to_string());
+        }
+        Ok(policy)
+    })
+    .await
+    .map_err(|_| "Search privacy check failed.".to_string())??;
+
     let Some(es_exe_path) = locate_es_exe() else {
         return Err(
             "Search engine not installed. Install it from the Packages panel and try again."
@@ -8362,40 +8407,45 @@ pub async fn search_everything(
 
     let args = build_es_search_args(limit, sort.as_deref(), scope.as_deref(), &query_tokens);
     let stdout = run_es_with_daemon_retry(&es_exe, &args, ES_SEARCH_TIMEOUT).await?;
-    parse_es_output(stdout, query)
+    // ES may retain records from unmounted drives or indexed aliases. Validate
+    // each returned path against native state before it reaches any renderer.
+    // Filtering can shorten a limited page; never report its unfiltered total.
+    tokio::task::spawn_blocking(move || {
+        let mut response = parse_es_output(stdout, query)?;
+        response.results.retain(|row| {
+            policy.allows(std::path::Path::new(&row.full_path), observe_search_volume)
+        });
+        if !search_policy_unchanged(&policy) {
+            return Err("Search volume state changed. Run the search again.".to_string());
+        }
+        response.total = response.results.len();
+        Ok(response)
+    })
+    .await
+    .map_err(|_| "Search result privacy check failed.".to_string())?
 }
 
-/// Total number of matches for a query, without fetching the rows.
-/// Uses es.exe's `-get-result-count`; same validation and timeout as the search.
+/// Aggregate provider counts cannot verify each hit's existence, reparse
+/// ancestry or current volume identity. Returning one would disclose private
+/// or offline matches hidden by search_everything. Callers already support an
+/// unknown total; keep this IPC endpoint explicit and never invoke ES here.
 #[tauri::command]
 pub async fn search_everything_count(
     query: String,
     tokens: Option<Vec<String>>,
     scope_path: Option<String>,
 ) -> Result<u64, String> {
-    let query_tokens = resolve_es_tokens(&query, tokens)?;
-    let scope = match scope_path {
-        Some(raw) => Some(validate_es_scope_path(&raw)?),
-        None => None,
-    };
-
-    let Some(es_exe_path) = locate_es_exe() else {
-        return Err(
-            "Search engine not installed. Install it from the Packages panel and try again."
-                .to_string(),
-        );
-    };
-    let es_exe = es_exe_path.to_str().unwrap_or("es.exe").to_string();
-
-    let args = build_es_count_args(scope.as_deref(), &query_tokens);
-    let stdout = run_es_with_daemon_retry(&es_exe, &args, ES_COUNT_TIMEOUT).await?;
-    parse_es_count(&stdout)
+    resolve_es_tokens(&query, tokens)?;
+    if let Some(scope) = scope_path {
+        validate_es_scope_path(&scope)?;
+    }
+    Err("Total count is unavailable because provider counts cannot verify volume privacy. Search results are checked individually.".into())
 }
 
 // KT: MEASURED — the uncached lookup below walks several filesystem
 // directories, then falls back to `where es.exe` and finally a PowerShell
 // `Get-Command`, all synchronously on the async command task and outside
-// ES_SEARCH_TIMEOUT/ES_COUNT_TIMEOUT. Once resolved, es.exe's install path
+// ES_SEARCH_TIMEOUT. Once resolved, es.exe's install path
 // cannot change for the lifetime of this process, so we resolve it once and
 // reuse the answer — one fewer PowerShell spawn (or dir walk) per keystroke.
 static ES_EXE_PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
