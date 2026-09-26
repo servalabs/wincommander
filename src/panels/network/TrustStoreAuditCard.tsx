@@ -98,7 +98,7 @@ export function TrustStoreAuditCard() {
     [baseline, currentIds],
   );
   const outsideWindowsReference = useMemo(
-    () => roots.filter((cert) => cert.scope === "LocalMachine" && !cert.inWindowsAuthRoot),
+    () => roots.filter((cert) => !cert.inWindowsAuthRoot),
     [roots],
   );
   const notable = useMemo(() => {
@@ -190,7 +190,7 @@ export function TrustStoreAuditCard() {
             </div>
 
             {!baseline ? (
-              <MaintenanceNotice tone="info" headline="Save a known-good baseline">
+              <MaintenanceNotice tone="primary" headline="Save a known-good baseline">
                 Windows roots change over time. Save the current state only after you recognise the
                 certificates you expect; later scans will show additions and removals.
               </MaintenanceNotice>
@@ -217,7 +217,7 @@ export function TrustStoreAuditCard() {
                     {visible.map((cert) => {
                       const owner = likelyOwner(cert.subject);
                       const isAdded = baselineIds.size > 0 && !baselineIds.has(identity(cert));
-                      const outsideRef = cert.scope === "LocalMachine" && !cert.inWindowsAuthRoot;
+                      const outsideRef = !cert.inWindowsAuthRoot;
                       const why = [
                         isAdded ? "added since baseline" : null,
                         outsideRef ? "outside Windows AuthRoot" : null,
