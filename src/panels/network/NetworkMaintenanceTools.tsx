@@ -11,6 +11,7 @@
 // in this subtree.
 import { ArpCacheCard } from "./ArpCacheCard";
 import { FirewallAuditCard } from "./FirewallAuditCard";
+import { TrustStoreAuditCard } from "./TrustStoreAuditCard";
 import { useArpMaintenance } from "./useArpMaintenance";
 import { useFirewallAudit } from "./useFirewallAudit";
 import type { ReactNode } from "react";
@@ -26,6 +27,7 @@ export function NetworkMaintenanceTools({ adapterControls }: { adapterControls: 
         <div className="network-maintenance-layout__adapters">{adapterControls}</div>
       </div>
       <FirewallAuditCard firewall={firewall} />
+      <TrustStoreAuditCard />
     </div>
   );
 }
