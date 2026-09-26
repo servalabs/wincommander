@@ -7,7 +7,9 @@
 //! The UI presents differences as transparency signals, never as malware proof.
 
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use std::collections::HashSet;
+#[cfg(windows)]
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
