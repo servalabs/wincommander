@@ -11395,7 +11395,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
     {
@@ -11406,7 +11407,8 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/App.tsx",
-        "src/hooks/usbHidApprovalIpc.ts"
+        "src/hooks/usbHidApprovalIpc.ts",
+        "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
     {
@@ -11416,7 +11418,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
     {
@@ -11426,7 +11429,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
     {
@@ -11435,7 +11439,9 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/panels/privacy/UsbDevicesSection.tsx"
+      ]
     },
     {
       "id": "tauri:stop_wifi_guard",
