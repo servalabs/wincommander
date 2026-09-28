@@ -580,9 +580,6 @@ function AppContent({ splashDone, onSplashComplete }: {
   const rdpIdleWarningSeconds = Math.max(5, appSettings?.ideal?.privacy?.tracking?.rdpIdleWarningSeconds ?? 5);
   const rdpClearCache    = appSettings?.ideal?.privacy?.tracking?.rdpClearCacheOnDisconnect ?? true;
   const rdpRemoveCreds   = appSettings?.ideal?.privacy?.tracking?.rdpRemoveCredsOnDisconnect ?? false;
-  // One opt-in covers the safe RDP timeline for outgoing and incoming
-  // monitors. It never enables or changes an RDP protection action.
-  const rdpDiagnosticLoggingEnabled = appSettings?.ideal?.privacy?.tracking?.rdpSaveLog === true;
   const rdpDismountVaultsCfg = appSettings?.ideal?.privacy?.tracking?.rdpDismountVaultsOnDisconnect ?? false;
   const rdpIncomingDismountCfg = appSettings?.ideal?.tweaks?.rdp?.incomingDismountOnEmpty ?? false;
   const rdpIncomingSignOffOnDisconnectCfg = appSettings?.ideal?.tweaks?.rdp?.incomingSignOffOnDisconnect ?? false;
@@ -599,7 +596,7 @@ function AppContent({ splashDone, onSplashComplete }: {
     rdpIdleWarningSeconds,
     rdpClearCache,
     rdpRemoveCreds,
-    rdpDiagnosticLoggingEnabled,
+    false,
     rdpDismountVaultsCfg,
     rdpIdleDisabledReason,
   );
@@ -613,14 +610,8 @@ function AppContent({ splashDone, onSplashComplete }: {
     hasPaid && rdpIncomingIdleEnabledCfg && (rdpIncomingDismountCfg || rdpIncomingSignOffOnDisconnectCfg),
     rdpIncomingDismountCfg,
     rdpIncomingSignOffOnDisconnectCfg,
-    rdpDiagnosticLoggingEnabled,
   );
-  useRdpIncomingIdleSignout(
-    hasPaid && rdpIncomingIdleEnabledCfg,
-    rdpIncomingIdleSeconds,
-    rdpIncomingDismountCfg,
-    rdpDiagnosticLoggingEnabled,
-  );
+  useRdpIncomingIdleSignout(hasPaid && rdpIncomingIdleEnabledCfg, rdpIncomingIdleSeconds, rdpIncomingDismountCfg);
 
   useEffect(() => {
     console.log("[RdpIdle] Gate", {

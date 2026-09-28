@@ -17,17 +17,14 @@ const RETENTION_DAYS: i64 = 7;
 const MAX_EMERGENCY_FAILURES: usize = 32;
 const ALLOWED_CONTEXT_KEYS: &[&str] = &[
     "attempt",
-    "attended_session_count",
     "build_version",
     "capability",
-    "configured_timeout_seconds",
     "driver_state",
     "health",
     "os_error_code",
     "policy_version",
     "reason_category",
     "retry_count",
-    "session_count",
     "state",
 ];
 
@@ -468,26 +465,6 @@ mod tests {
         assert_eq!(
             input.redacted_context,
             BTreeMap::from([("driver_state".into(), "unavailable".into())])
-        );
-    }
-
-    #[test]
-    fn redaction_keeps_bounded_rdp_monitor_context() {
-        let mut input = event("2026-09-07");
-        input.redacted_context = BTreeMap::from([
-            ("configured_timeout_seconds".into(), "300".into()),
-            ("session_count".into(), "2".into()),
-            ("attended_session_count".into(), "1".into()),
-            ("username".into(), "private-user".into()),
-        ]);
-        assert_eq!(redact_context(&mut input), 1);
-        assert_eq!(
-            input.redacted_context,
-            BTreeMap::from([
-                ("configured_timeout_seconds".into(), "300".into()),
-                ("session_count".into(), "2".into()),
-                ("attended_session_count".into(), "1".into()),
-            ])
         );
     }
 

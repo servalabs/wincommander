@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { LogRecord } from "../lib/logFilter";
-import { DIAGNOSTIC_RECORDED_EVENT } from "../lib/diagnostics";
-
-const LIVE_REFRESH_DEBOUNCE_MS = 150;
-const LIVE_REFRESH_FALLBACK_MS = 5_000;
 
 export type DiagnosticEvent = {
   eventId: string;
@@ -36,17 +32,8 @@ export function useDiagnosticCenter() {
   const [health, setHealth] = useState<DiagnosticsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
-  const refreshInFlightRef = useRef(false);
-  const refreshPendingRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) {
-      // A write can finish while the initial screen load is still reading.
-      // Queue one more pass so the just-written event is not missed.
-      refreshPendingRef.current = true;
-      return;
-    }
-    refreshInFlightRef.current = true;
     setLoading(true);
     try {
       const [nextEvents, nextHealth, serviceEvents, proEvents, nextLegacyRecords] = await Promise.all([
@@ -72,35 +59,10 @@ export function useDiagnosticCenter() {
       setUnavailable(true);
     } finally {
       setLoading(false);
-      refreshInFlightRef.current = false;
-      if (refreshPendingRef.current) {
-        refreshPendingRef.current = false;
-        void refresh();
-      }
     }
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
-
-  useEffect(() => {
-    let scheduledRefresh: number | undefined;
-    const refreshAfterDurableWrite = () => {
-      if (scheduledRefresh !== undefined) return;
-      scheduledRefresh = window.setTimeout(() => {
-        scheduledRefresh = undefined;
-        void refresh();
-      }, LIVE_REFRESH_DEBOUNCE_MS);
-    };
-    window.addEventListener(DIAGNOSTIC_RECORDED_EVENT, refreshAfterDurableWrite);
-    // Native diagnostics (such as the session-end watcher) have no WebView
-    // callback. This small fallback keeps an open Diagnostics screen current.
-    const fallback = window.setInterval(() => { void refresh(); }, LIVE_REFRESH_FALLBACK_MS);
-    return () => {
-      window.removeEventListener(DIAGNOSTIC_RECORDED_EVENT, refreshAfterDurableWrite);
-      window.clearInterval(fallback);
-      if (scheduledRefresh !== undefined) window.clearTimeout(scheduledRefresh);
-    };
-  }, [refresh]);
 
   return { structuredEvents, legacyRecords, health, loading, unavailable, refresh };
 }

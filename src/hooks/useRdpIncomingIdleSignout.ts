@@ -24,10 +24,10 @@
  * post-sign-off dismount (handled by useRdpIncomingDismount while the app is
  * still alive) could never run for the app's own session.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
 import { showError } from "../utils/toast";
-import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
+import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -51,18 +51,12 @@ export default function useRdpIncomingIdleSignout(
   enabled: boolean,
   timeoutSeconds: number,
   dismountOnEmpty: boolean = false,
-  diagnosticLoggingEnabled: boolean = false,
 ) {
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
-  const previousSessionCountRef = useRef<number | null>(null);
   // Sessions we've already issued a logoff for — avoids re-firing every poll
   // while the session winds down. Entries are cleared once the session is gone.
   const signedOffRef = useRef<Set<number>>(new Set());
-  const recordRdpDiagnostic = useMemo(
-    () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
-    [diagnosticLoggingEnabled],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -72,18 +66,11 @@ export default function useRdpIncomingIdleSignout(
   useEffect(() => {
     if (!enabled || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
       signedOffRef.current.clear();
-      previousSessionCountRef.current = null;
       console.log("[RdpIncomingSignout] Disabled — not polling");
       return;
     }
 
-    previousSessionCountRef.current = null;
     console.log(`[RdpIncomingSignout] Starting idle sign-out monitor (threshold ${timeoutSeconds}s)`);
-    const monitorOperationId = beginRdpOperation("session_monitor");
-    recordRdpDiagnostic(monitorOperationId, "session_monitor", "incoming_idle_signout_monitor_enabled", "applying", "started", "info", undefined, {
-      configured_timeout_seconds: timeoutSeconds,
-      state: "incoming_idle_signout_monitor_enabled",
-    });
 
     const poll = async () => {
       if (!mountedRef.current || inFlightRef.current) return;
@@ -111,15 +98,6 @@ export default function useRdpIncomingIdleSignout(
           : rawSessions
             ? [rawSessions]
             : [];
-        if (previousSessionCountRef.current !== sessions.length) {
-          const operationId = beginRdpOperation("session_monitor");
-          recordRdpDiagnostic(operationId, "session_monitor", sessions.length === 0 ? "incoming_sessions_absent" : "incoming_sessions_present", "verified", "succeeded", "info", undefined, {
-            configured_timeout_seconds: timeoutSeconds,
-            session_count: sessions.length,
-            state: sessions.length === 0 ? "incoming_sessions_absent" : "incoming_sessions_present",
-          });
-          previousSessionCountRef.current = sessions.length;
-        }
         if (sessions.length === 0) {
           // Diagnostic: show what quser/qwinsta actually returned. If rawLines
           // contains an rdp-tcp# row but sessions is empty, the parser (backend
@@ -150,10 +128,7 @@ export default function useRdpIncomingIdleSignout(
           );
           if (reached && !signedOffRef.current.has(id)) {
             const operationId = beginRdpOperation("idle_signoff");
-            recordRdpDiagnostic(operationId, "idle_signoff", "incoming_idle_threshold_reached", "requested", "started", "warn", undefined, {
-              configured_timeout_seconds: timeoutSeconds,
-              state: "incoming_idle_threshold_reached",
-            });
+            recordRdpDiagnostic(operationId, "idle_signoff", "requested", "requested", "started", "warn");
             signedOffRef.current.add(id); // optimistic: blocks duplicate in-flight logoffs
             const signOff = () => {
               console.log(`[RdpIncomingSignout] Signing off idle session ${id} ('${s.username ?? "?"}')`);
@@ -213,5 +188,5 @@ export default function useRdpIncomingIdleSignout(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, timeoutSeconds, dismountOnEmpty, recordRdpDiagnostic]);
+  }, [enabled, timeoutSeconds, dismountOnEmpty]);
 }

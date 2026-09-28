@@ -90,27 +90,6 @@ describe("frontend diagnostics producer", () => {
     }
   });
 
-  test("RDP monitors persist readable coarse transitions without session identities", async () => {
-    const [writer, outgoing, incomingSignout, incomingDismount] = await Promise.all([
-      Bun.file("src/hooks/rdpDiagnostics.ts").text(),
-      Bun.file("src/hooks/useRdpIdleDisconnect.ts").text(),
-      Bun.file("src/hooks/useRdpIncomingIdleSignout.ts").text(),
-      Bun.file("src/hooks/useRdpIncomingDismount.ts").text(),
-    ]);
-    expect(writer).toContain("context,");
-    expect(outgoing).toContain('"outgoing_client_present"');
-    expect(outgoing).toContain('"outgoing_activity_resumed"');
-    expect(outgoing).toContain('"outgoing_idle_threshold_reached"');
-    expect(incomingSignout).toContain('"incoming_idle_signout_monitor_enabled"');
-    expect(incomingSignout).toContain('"incoming_idle_threshold_reached"');
-    expect(incomingDismount).toContain('"incoming_dismount_monitor_enabled"');
-    for (const source of [outgoing, incomingSignout, incomingDismount]) {
-      expect(source).not.toContain("context: { username");
-      expect(source).not.toContain("context: { sessionId");
-      expect(source).not.toContain("context: { rawLines");
-    }
-  });
-
   test("background monitor reconciliation and failure paths persist safe diagnostics", async () => {
     for (const [path, requiredCodes] of [
       ["src/hooks/useDecoyMonitor.ts", ["DEC.MONITOR.RECONCILE_FAILED", "recordDiagnostic"]],

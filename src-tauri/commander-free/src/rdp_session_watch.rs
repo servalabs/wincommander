@@ -72,15 +72,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
-/// The persisted RDP history preference deliberately fails closed: a
-/// settings-read failure must not create a diagnostic record behind the
-/// person's back.
-fn rdp_diagnostics_enabled() -> bool {
-    crate::settings::read_settings()
-        .map(|settings| settings.ideal.privacy.tracking.rdp_save_log == Some(true))
-        .unwrap_or(false)
-}
-
 fn record_rdp_event(
     action: &str,
     stage: &str,
@@ -89,9 +80,6 @@ fn record_rdp_event(
     severity: DiagnosticSeverity,
     error_code: Option<&str>,
 ) {
-    if !rdp_diagnostics_enabled() {
-        return;
-    }
     let id = NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed);
     let event = DiagnosticEvent {
         event_id: format!("evt-rdp-session-{id}"),

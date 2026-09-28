@@ -81,9 +81,6 @@ export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
     const rdpClearCache   = appSettings?.ideal?.privacy?.tracking?.rdpClearCacheOnDisconnect ?? true;
     const rdpRemoveCreds  = appSettings?.ideal?.privacy?.tracking?.rdpRemoveCredsOnDisconnect ?? false;
     const rdpDismountVaults = appSettings?.ideal?.privacy?.tracking?.rdpDismountVaultsOnDisconnect ?? false;
-    // This is the one persisted opt-in for the safe RDP timeline in Secret
-    // Settings. It does not enable monitoring or change RDP behaviour.
-    const rdpSaveLog = appSettings?.ideal?.privacy?.tracking?.rdpSaveLog === true;
     const [rdpDismountDraft, setRdpDismountDraft] = useState(rdpDismountVaults);
 
     useEffect(() => {
@@ -96,7 +93,6 @@ export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
     const rdpClearCacheLocked = isLocked("ideal.privacy.tracking.rdpClearCacheOnDisconnect");
     const rdpRemoveCredsLocked= isLocked("ideal.privacy.tracking.rdpRemoveCredsOnDisconnect");
     const rdpDismountLocked   = isLocked("ideal.privacy.tracking.rdpDismountVaultsOnDisconnect");
-    const rdpSaveLogLocked    = isLocked("ideal.privacy.tracking.rdpSaveLog");
 
     const [timeoutPreset, setTimeoutPreset] = useState<number>(() =>
         RDP_TIMEOUT_PRESETS.slice(0, -1).some(p => p.value === rdpIdleTimeout) ? rdpIdleTimeout : -1
@@ -556,24 +552,6 @@ export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
                                 </div>
                             )}
                         </div>
-                    </div>
-
-                    <div className="mt-3 flex items-start justify-between gap-4 rounded-lg border p-4" style={{ background: 'var(--shield-bg-idle)', borderColor: 'var(--color-border)' }}>
-                        <div className="flex flex-col gap-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-sm font-semibold text-[var(--shield-text-primary)]">Record Remote Desktop activity in Diagnostics</span>
-                                {rdpSaveLogLocked && <Icon icon="lock" size={12} className="text-[var(--color-text-muted)]" />}
-                            </div>
-                            <p className="m-0 max-w-[540px] text-xs text-[var(--shield-text-subtle)]">
-                                Adds safe Remote Desktop monitor events to Secret Settings → Diagnostics. It never saves names, session IDs, addresses, or raw developer-console text.
-                            </p>
-                        </div>
-                        <Switch
-                            checked={rdpSaveLog}
-                            disabled={rdpSaveLogLocked}
-                            aria-label="Record Remote Desktop activity in Diagnostics"
-                            onChange={(event) => { void patchRdpTracking({ rdpSaveLog: event.currentTarget.checked }); }}
-                        />
                     </div>
 
                 </>

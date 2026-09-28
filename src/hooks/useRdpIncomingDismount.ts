@@ -27,9 +27,9 @@
  * attended session, so a mislabelled STATE can never cause a premature dismount
  * while a user is still connected.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
-import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
+import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -55,17 +55,12 @@ export default function useRdpIncomingDismount(
   enabled: boolean,
   dismountOnEmpty: boolean = true,
   signOffOnDisconnect: boolean = false,
-  diagnosticLoggingEnabled: boolean = false,
 ) {
   const mountedRef = useRef(true);
   const prevAttendedRef = useRef<number | null>(null);
   const prevTotalRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const signOffInFlightRef = useRef<Set<number>>(new Set());
-  const recordRdpDiagnostic = useMemo(
-    () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
-    [diagnosticLoggingEnabled],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -82,10 +77,6 @@ export default function useRdpIncomingDismount(
     }
 
     console.log("[RdpIncomingDismount] Starting session monitor");
-    const monitorOperationId = beginRdpOperation("session_monitor");
-    recordRdpDiagnostic(monitorOperationId, "session_monitor", "incoming_dismount_monitor_enabled", "applying", "started", "info", undefined, {
-      state: "incoming_dismount_monitor_enabled",
-    });
 
     const poll = async () => {
       if (!mountedRef.current || inFlightRef.current) return;
@@ -117,14 +108,6 @@ export default function useRdpIncomingDismount(
         const total = sessions.length;
         const prevAttended = prevAttendedRef.current;
         const prevTotal = prevTotalRef.current;
-        if (prevAttended !== attended || prevTotal !== total) {
-          const operationId = beginRdpOperation("session_monitor");
-          recordRdpDiagnostic(operationId, "session_monitor", total === 0 ? "incoming_sessions_absent" : "incoming_sessions_present", "verified", "succeeded", "info", undefined, {
-            attended_session_count: attended,
-            session_count: total,
-            state: total === 0 ? "incoming_sessions_absent" : "incoming_sessions_present",
-          });
-        }
         console.log(
           `[RdpIncomingDismount] Attended: ${attended} / ${total} total ` +
             `(prev attended: ${prevAttended ?? "unknown"}, prev total: ${prevTotal ?? "unknown"})`
@@ -198,5 +181,5 @@ export default function useRdpIncomingDismount(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, dismountOnEmpty, signOffOnDisconnect, recordRdpDiagnostic]);
+  }, [enabled, dismountOnEmpty, signOffOnDisconnect]);
 }
