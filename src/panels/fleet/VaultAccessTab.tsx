@@ -380,7 +380,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
-    return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
+    return {
+      ...source,
+      entries: source.entries.map(entry => entry.id === id
+        ? { ...entry, ...patch, ...(patch.grants ? { access_pattern: undefined } : {}) }
+        : entry),
+    };
   });
 
   const openEntryEditor = (entryId: string, mode: "details" | "access") => {

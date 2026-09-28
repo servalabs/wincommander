@@ -36,6 +36,7 @@ function isVaultAccessPolicy(value: unknown): value is VaultAccessPolicy {
     && (containerKind === undefined || containerKind === "standard" || containerKind === "dual")
     && (entry.container_identity === undefined || entry.container_identity === null || typeof entry.container_identity === "string")
     && typeof entry.owner_account === "string"
+    && (entry.access_pattern === undefined || entry.access_pattern === null || entry.access_pattern === "private" || entry.access_pattern === "shared-read" || entry.access_pattern === "shared-write")
     && Array.isArray(entry.grants)
     && entry.grants.every(grant => (
       !!grant

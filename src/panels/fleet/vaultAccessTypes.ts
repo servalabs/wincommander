@@ -6,6 +6,9 @@
  */
 export type VaultAccess = "read" | "write";
 export type VaultPresentation = "machine" | "per-user";
+/** Durable UI intent for the three access-selector choices. The service still
+ * derives and enforces the real grants and mount presentation. */
+export type VaultAccessPattern = "private" | "shared-read" | "shared-write";
 /** `dual` is a VeraCrypt outer + hidden pair in one container file. */
 export type VaultContainerKind = "standard" | "dual";
 /** Chosen for one mount request; this is never persisted with the policy. */
@@ -89,6 +92,9 @@ export interface VaultAccessEntry {
   container_identity?: string | null;
   container_kind: VaultContainerKind;
   owner_account: string;
+  /** Preserves the exact selector choice when a one-owner shared policy has
+   * grants that would otherwise be indistinguishable. */
+  access_pattern?: VaultAccessPattern | null;
   grants: VaultGrantInput[];
   mount: VaultMountPolicy;
 }
@@ -135,6 +141,8 @@ export interface VaultAuthorizedEntry {
   presentation: VaultPresentation;
   container_kind: VaultContainerKind;
   mount_state: VaultMountState;
+  /** Service-projected configured preference, separate from actual mounted drive_letter. */
+  preferred_letter?: string | null;
   drive_letter: string | null;
 }
 
@@ -256,6 +264,7 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
     owner_account: "",
     // A shared presentation changes only where Windows exposes the mounted
     // drive. It must not silently grant a generic local account write access.
+    access_pattern: shared ? "shared-write" : "private",
     grants: [{ principal_name: "", access: "write" }],
     mount: { presentation: shared ? "machine" : "per-user" },
   };
@@ -280,10 +289,13 @@ export function normalizeVaultAccessPolicy(policy: VaultAccessPolicy): VaultAcce
     ...policy,
     entries: policy.entries.map(entry => {
       const legacy = entry as VaultAccessEntry & { volume_kind?: VaultContainerKind };
-      const { volume_kind: _legacyVolumeKind, ...normalized } = legacy;
+      const { volume_kind: _legacyVolumeKind, access_pattern, ...normalized } = legacy;
       return {
         ...normalized,
         container_kind: legacy.container_kind ?? legacy.volume_kind ?? "standard",
+        ...(access_pattern === "private" || access_pattern === "shared-read" || access_pattern === "shared-write"
+          ? { access_pattern }
+          : {}),
       };
     }),
   };

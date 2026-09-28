@@ -63,9 +63,10 @@ describe("Vault access editor presentation", () => {
     // Actual hover/focus/Escape interaction is covered by check-vault-access-ui.cjs.
   });
 
-  test("makes the signed-in administrator and durable SID visible in the owner picker", () => {
+  test("shows account names while keeping the selected owner durable behind the UI", () => {
     const html = renderEditor({ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } });
-    expect(html).toContain("Example user (signed in) — S-1-5-21-example");
+    expect(html).toContain("Example user (Current user)");
+    expect(html).not.toContain(">S-1-5-21-example<");
     expect(html).toContain("Only service-approved local administrators appear here.");
     expect(html).toContain("Select an administrator…");
     expect(html).not.toContain(">Current Windows user<");
@@ -81,7 +82,8 @@ describe("Vault access editor presentation", () => {
       currentCallerSid="S-1-5-21-example"
       onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
     />);
-    expect(html).toContain("Example admin (signed in) — S-1-5-21-example");
+    expect(html).toContain("Example admin (Current user)");
+    expect(html).not.toContain(">S-1-5-21-example<");
     expect(html).not.toContain("Example standard user");
   });
 

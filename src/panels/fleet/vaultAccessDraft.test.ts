@@ -33,6 +33,18 @@ describe("Vault access draft persistence", () => {
     expect(readVaultAccessDraft(storage)).toBeNull();
   });
 
+  test("round-trips the exact shared access selector choice", () => {
+    const storage = memoryStorage();
+    const policy = newVaultPolicy();
+    const entry = policy.entries[0]!;
+    entry.owner_account = "PC\\Owner";
+    entry.grants = [{ principal_name: "PC\\Owner", access: "write" }];
+    entry.access_pattern = "shared-write";
+
+    writeVaultAccessDraft(policy, storage);
+    expect(readVaultAccessDraft(storage)?.entries[0]?.access_pattern).toBe("shared-write");
+  });
+
   test("rejects malformed local data instead of treating it as policy", () => {
     const storage = memoryStorage();
     storage.setItem("wincommander.vault-access-draft.v1", JSON.stringify({ schema_version: 1, entries: "bad" }));

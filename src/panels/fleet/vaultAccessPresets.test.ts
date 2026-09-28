@@ -33,6 +33,31 @@ describe("Vault access presets", () => {
     expect(vaultAccessPreset(editable)).toBe("shared-write");
   });
 
+  test("keeps the chosen shared pattern distinct when the owner is the only grant", () => {
+    const entry = newVaultEntry("shared");
+    entry.owner_account = "PC\\Owner";
+    entry.grants = [{ principal_name: "PC\\Owner", access: "write" }];
+
+    const viewOnly = applyVaultAccessPreset(entry, "shared-read");
+    const editable = applyVaultAccessPreset(viewOnly, "shared-write");
+
+    expect(viewOnly.grants).toEqual(editable.grants);
+    expect(viewOnly.mount).toEqual(editable.mount);
+    expect(viewOnly.access_pattern).toBe("shared-read");
+    expect(editable.access_pattern).toBe("shared-write");
+    expect(vaultAccessPreset(viewOnly)).toBe("shared-read");
+    expect(vaultAccessPreset(editable)).toBe("shared-write");
+  });
+
+  test("ignores stale edit intent when grants now match the view-only pattern", () => {
+    const entry = newVaultEntry("shared");
+    entry.owner_account = "PC\\Owner";
+    entry.grants = [{ principal_name: "PC\\Owner", access: "write" }, { principal_name: "PC\\Reader", access: "read" }];
+    entry.access_pattern = "shared-write";
+
+    expect(vaultAccessPreset(entry)).toBe("shared-read");
+  });
+
   test("adds an explicit owner write grant when turning an existing share view-only", () => {
     const entry = newVaultEntry("shared");
     entry.owner_account = "PC\\Owner";

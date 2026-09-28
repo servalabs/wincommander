@@ -1,6 +1,6 @@
-import type { VaultAccessEntry } from "./vaultAccessTypes";
+import type { VaultAccessEntry, VaultAccessPattern } from "./vaultAccessTypes";
 
-export type VaultAccessPreset = "private" | "shared-read" | "shared-write" | "custom";
+export type VaultAccessPreset = VaultAccessPattern | "custom";
 
 export const VAULT_ACCESS_PRESETS: Record<Exclude<VaultAccessPreset, "custom">, {
   label: string;
@@ -28,6 +28,14 @@ export function vaultAccessPreset(entry: VaultAccessEntry): VaultAccessPreset {
   const isOwnerGrant = (principalName: string) => owner.length > 0
     && principalName.trim().toLocaleLowerCase() === owner;
   const ownerHasWriteGrant = entry.grants.some(grant => isOwnerGrant(grant.principal_name) && grant.access === "write");
+  const matchesPattern = (pattern: VaultAccessPattern) => {
+    if (pattern === "private") return entry.mount.presentation === "per-user" && hasOwnerOnlyWriteGrant;
+    if (entry.mount.presentation !== "machine" || entry.grants.length === 0) return false;
+    return pattern === "shared-read"
+      ? ownerHasWriteGrant && entry.grants.every(grant => isOwnerGrant(grant.principal_name) || grant.access === "read")
+      : entry.grants.every(grant => grant.access === "write");
+  };
+  if (entry.access_pattern && matchesPattern(entry.access_pattern)) return entry.access_pattern;
   if (entry.mount.presentation === "per-user" && hasOwnerOnlyWriteGrant) return "private";
   // A view-only shared Vault still needs one accountable owner who can
   // maintain its contents. Everyone else starts read-only; deliberately
@@ -47,6 +55,7 @@ export function applyVaultAccessPreset(
   if (preset === "private") {
     return {
       ...entry,
+      access_pattern: preset,
       grants: [{ principal_name: entry.owner_account, access: "write" }],
       mount: { ...entry.mount, presentation: "per-user" },
     };
@@ -68,6 +77,7 @@ export function applyVaultAccessPreset(
   if (owner && !containsOwner) grants.unshift({ principal_name: owner, access: "write" });
   return {
     ...entry,
+    access_pattern: preset,
     grants,
     mount: { ...entry.mount, presentation: "machine" },
   };

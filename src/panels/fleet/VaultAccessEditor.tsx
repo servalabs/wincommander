@@ -30,11 +30,11 @@ function Field({ label, help, children }: { label: string; help: string; childre
   </div>;
 }
 
-/** The service supplies only approved candidates. Show the durable SID so
- * similarly named Windows accounts cannot be confused in the owner picker. */
+/** The service supplies only approved candidates. The selected SID remains
+ * durable policy data, but the picker presents ordinary account names. */
 function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: string | null) {
   const name = principal.display_name.trim() || "Windows account";
-  return `${name}${principal.sid === currentCallerSid ? " (signed in)" : ""} — ${principal.sid}`;
+  return `${name}${principal.sid === currentCallerSid ? " (Current user)" : ""}`;
 }
 
 export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
@@ -94,7 +94,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
           ? "Windows administrator accounts are unavailable right now, so owner selection and policy saving are disabled. Refresh this page after the local Vault service is ready."
           : accessPreset === "private"
             ? "Only service-approved local administrators appear here. Transfer ownership only while this Vault is unmounted."
-            : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
+            : "The service validates this Windows account."} WinCommander saves the selected Windows account securely, not merely by its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
