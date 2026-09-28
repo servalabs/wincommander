@@ -3,6 +3,7 @@
 // No Tauri IPC here — all functions are pure transforms on plain data.
 
 import type { Chunk, ContentHit, ContentQueryArgs } from "../types/wincmd-search";
+import { pathWithinRoots } from "./searchPrivacy";
 
 export interface SnippetSegment {
   text:        string;
@@ -139,6 +140,16 @@ export function contentHitToDisplayRow(hit: ContentHit): ContentDisplayRow {
  *  or body match) — the UI labels these instead of showing a body snippet. */
 export function isNameOnlyMatch(row: Pick<ContentDisplayRow, "matchKind">): boolean {
   return row.matchKind === "NameSubstring";
+}
+
+/** Private filenames are served by their volume index because Everything is
+ * restricted to ordinary volumes. Ordinary filename-only hits remain in the
+ * filename tab; text matches from either kind of volume stay in this tab. */
+export function showIndexedSearchRow(
+  row: Pick<ContentDisplayRow, "matchKind" | "path">,
+  privateRoots: string[],
+): boolean {
+  return !isNameOnlyMatch(row) || pathWithinRoots(row.path, privateRoots);
 }
 
 /**

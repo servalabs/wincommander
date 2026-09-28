@@ -14,6 +14,11 @@ pub mod extract;
 pub mod filters;
 pub mod index;
 pub mod query;
+mod read_only;
+#[cfg(windows)]
+mod direct_directory;
+pub mod reconcile;
+mod restricted;
 pub mod semantic_model;
 pub mod tokenize;
 pub mod types;
@@ -37,8 +42,16 @@ use query::merge_hits;
 use types::{ContentHit, ContentQuery, FileMeta, IndexConfig, IndexStatus};
 use watch::{watch_roots, FsEventAction};
 
+/// Application policy, checked immediately before extraction and persistence.
+pub type PathPolicy = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
+
+/// Relocate stored paths only after the caller verifies the index's volume identity.
+pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf> + Send + Sync>;
+
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
+    path_policy: PathPolicy,
+    path_mapper: Option<PathMapper>,
     config: IndexConfig,
     ci: Arc<ContentIndex>,
     status: Arc<Mutex<IndexStatus>>,
@@ -54,9 +67,59 @@ pub struct SearchEngine {
 impl SearchEngine {
     /// Open (or create) the index described by `config`.
     pub fn open(config: IndexConfig) -> Result<Self> {
+        Self::open_with_policy(config, Arc::new(|_| true))
+    }
+
+    pub fn open_with_policy(config: IndexConfig, path_policy: PathPolicy) -> Result<Self> {
         let ci = Arc::new(ContentIndex::open_or_create(&config.index_dir)?);
+        Self::from_index(config, ci, path_policy)
+    }
+
+    /// Caller must hold its cross-process volume guard until this engine is dropped.
+    pub fn open_existing(config: IndexConfig) -> Result<Self> {
+        Self::open_existing_with_policy(config, Arc::new(|_| true))
+    }
+
+    pub fn open_existing_with_policy(config: IndexConfig, path_policy: PathPolicy) -> Result<Self> {
+        let ci = Arc::new(ContentIndex::open_existing(&config.index_dir)?);
+        Self::from_index(config, ci, path_policy)
+    }
+
+    /// Read an identity-verified private index after its mount path changes, without writes.
+    /// Mapped paths must still pass the current configured roots and native path policy.
+    pub fn open_existing_with_mapped_paths(
+        config: IndexConfig,
+        path_policy: PathPolicy,
+        path_mapper: PathMapper,
+    ) -> Result<Self> {
+        let mut engine = Self::open_existing_with_policy(config, path_policy)?;
+        engine.path_mapper = Some(path_mapper);
+        Ok(engine)
+    }
+
+    /// Open an ordinary index concurrently with its writer. May create metadata lockfiles,
+    /// but never creates an index, migrates its schema, or permits indexing operations.
+    pub fn open_existing_shared(config: IndexConfig) -> Result<Self> {
+        Self::open_existing_shared_with_policy(config, Arc::new(|_| true))
+    }
+
+    pub fn open_existing_shared_with_policy(
+        config: IndexConfig,
+        path_policy: PathPolicy,
+    ) -> Result<Self> {
+        let ci = Arc::new(ContentIndex::open_existing_shared(&config.index_dir)?);
+        Self::from_index(config, ci, path_policy)
+    }
+
+    fn from_index(
+        config: IndexConfig,
+        ci: Arc<ContentIndex>,
+        path_policy: PathPolicy,
+    ) -> Result<Self> {
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
+            path_policy,
+            path_mapper: None,
             config,
             ci,
             status,
@@ -89,8 +152,18 @@ impl SearchEngine {
             s.pending_docs = files.len() as u64;
         }
         for meta in files {
+            if !(self.path_policy)(&meta.path) {
+                let mut status = self.status.lock().unwrap();
+                status.pending_docs = status.pending_docs.saturating_sub(1);
+                continue;
+            }
             match extract_text(meta.clone()) {
                 Ok(doc) => {
+                    if !(self.path_policy)(&doc.meta.path) {
+                        let mut status = self.status.lock().unwrap();
+                        status.pending_docs = status.pending_docs.saturating_sub(1);
+                        continue;
+                    }
                     if let Err(e) =
                         self.ci
                             .upsert(&mut writer, &doc.meta, &doc.title, &doc.body, &doc.props)
@@ -129,6 +202,7 @@ impl SearchEngine {
     ///    writer is already gone.
     pub fn start_indexing(&self) -> Result<()> {
         let ci = Arc::clone(&self.ci);
+        let path_policy = Arc::clone(&self.path_policy);
         let status = Arc::clone(&self.status);
         let stop = Arc::clone(&self.stop);
         let roots = self.config.roots.clone();
@@ -179,8 +253,18 @@ impl SearchEngine {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
+                if !path_policy(&meta.path) {
+                    let mut s = status.lock().unwrap();
+                    s.pending_docs = s.pending_docs.saturating_sub(1);
+                    continue;
+                }
                 match extract_text(meta.clone()) {
                     Ok(doc) => {
+                        if !path_policy(&doc.meta.path) {
+                            let mut s = status.lock().unwrap();
+                            s.pending_docs = s.pending_docs.saturating_sub(1);
+                            continue;
+                        }
                         if let Err(e) =
                             ci.upsert(&mut writer, &doc.meta, &doc.title, &doc.body, &doc.props)
                         {
@@ -221,8 +305,14 @@ impl SearchEngine {
             let apply_action = |w: &mut IndexWriter, action: FsEventAction| {
                 match action {
                     FsEventAction::Upsert(meta) => {
+                        if !path_policy(&meta.path) {
+                            return;
+                        }
                         match extract_text(meta.clone()) {
                             Ok(doc) => {
+                                if !path_policy(&doc.meta.path) {
+                                    return;
+                                }
                                 if let Err(e) =
                                     ci.upsert(w, &doc.meta, &doc.title, &doc.body, &doc.props)
                                 {
@@ -371,6 +461,14 @@ impl SearchEngine {
 
     /// Re-derive chunks for a stored document on demand (no separate chunk store in P1).
     pub fn get_chunks(&self, doc_id: crate::types::DocId) -> Result<Vec<crate::types::Chunk>> {
+        self.get_chunks_inner(doc_id, false)
+    }
+
+    fn get_chunks_inner(
+        &self,
+        doc_id: crate::types::DocId,
+        restricted: bool,
+    ) -> Result<Vec<crate::types::Chunk>> {
         use tantivy::query::TermQuery;
         use tantivy::schema::IndexRecordOption;
 
@@ -401,7 +499,7 @@ impl SearchEngine {
                     .unwrap_or_default()
             };
 
-            let meta = FileMeta {
+            let mut meta = FileMeta {
                 doc_id,
                 path: std::path::PathBuf::from(get_str(self.ci.f_path)),
                 name: get_str(self.ci.f_name),
@@ -409,6 +507,17 @@ impl SearchEngine {
                 mtime: get_u64(self.ci.f_mtime),
                 size: get_u64(self.ci.f_size),
             };
+            if restricted {
+                if let Some(mapper) = &self.path_mapper {
+                    let Some(path) = mapper(&meta.path) else {
+                        return Ok(vec![]);
+                    };
+                    meta.path = path;
+                }
+                if !self.permits_path(&meta.path) {
+                    return Ok(vec![]);
+                }
+            }
             let extracted = types::ExtractedDoc {
                 meta,
                 title: get_str(self.ci.f_title),

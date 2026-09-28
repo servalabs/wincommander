@@ -30,6 +30,8 @@ import { buildContentTerms, buildEverythingPlan, contentSearchApplies, splitScop
 import type { EverythingPlan } from "@/lib/searchQueryPlan";
 import { EMPTY_QUERY, addChip, chipOf, parseFolderJump, suggestChip } from "@/lib/searchTokens";
 import type { ChipSuggestion, QueryState } from "@/lib/searchTokens";
+import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
+import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
 
 /** Rows that carry no real stat data — reconstructed from a remembered path. */
 export type BrowseResult = SearchResult & { synthetic?: boolean };
@@ -411,6 +413,11 @@ export interface ChipSearchApi {
 export type ChipSearchBlocker = (state: QueryState) => string | null;
 
 export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker): ChipSearchApi {
+  const privacy = useSearchPrivacy();
+  const privacyReady = privacy.status !== null;
+  const previousPrivateRoots = useRef(false);
+  const [rowsRevision, setRowsRevision] = useState(-1);
+  const [contentRevision, setContentRevision] = useState(-1);
   const [query, setQuery] = useState<QueryState>(EMPTY_QUERY);
   const [primary, setPrimary] = useState<BrowseResult[]>([]);
   // Tracks what the CURRENT rows are, not what the pending plan wants. Reading
@@ -455,6 +462,15 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     setIsSearching(false);
   }, []);
 
+  useEffect(() => {
+    runIdRef.current += 1;
+    setPrimary([]);
+    setContentRows([]);
+    setTotalCount(null);
+    if (previousPrivateRoots.current) setQuery(EMPTY_QUERY);
+    previousPrivateRoots.current = (privacy.status?.privateRoots.length ?? 0) > 0;
+  }, [privacy.revision, privacy.status?.privateRoots.length]);
+
   // A corrected drive request is a new query, not a failed retry. Remove the
   // previous scope message immediately while the normal debounced search runs.
   useEffect(() => {
@@ -464,9 +480,10 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
   // ── Filename / browse pass ──
   useEffect(() => {
     if (nameTimerRef.current) clearTimeout(nameTimerRef.current);
-    if (!active) return;
+    if (!active || !privacyReady) return;
     const runId = ++runIdRef.current;
-    const live = () => runIdRef.current === runId;
+    const lease = searchPrivacyLease();
+    const live = () => runIdRef.current === runId && lease();
 
     // A missing drive is not a query with zero results. Suppress it before
     // either engine sees its words, or unrelated matches make the storage
@@ -499,8 +516,10 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
           const rows = plan.isBrowse
             ? await fetchBrowse(plan, searchState.chips.length > 0)
             : await fetchMatches(plan, jump.term);
+          await refreshSearchPrivacy(true);
           if (!live()) return;
-          setPrimary(rows);
+          setPrimary(rows.filter((row) => mayShowSearchPath(row.full_path)));
+          setRowsRevision(privacy.revision);
           setShowingBrowse(plan.isBrowse);
           setError(null);
         } catch (err) {
@@ -532,19 +551,21 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     }, NAME_DEBOUNCE_MS);
 
     return () => {
+      runIdRef.current += 1;
       if (nameTimerRef.current) clearTimeout(nameTimerRef.current);
     };
-  }, [active, blockedReason, plan, searchState, jump.term]);
+  }, [active, blockedReason, plan, searchState, jump.term, privacy.revision, privacyReady]);
 
   // ── Content pass (best-effort, silent on failure) ──
   useEffect(() => {
     if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
-    if (!active) return;
+    if (!active || !privacyReady) return;
     if (blockedReason || jump.term.length < 2 || !contentSearchApplies(searchState)) {
       setContentRows([]);
       return;
     }
     let cancelled = false;
+    const lease = searchPrivacyLease();
     const terms = buildContentTerms(searchState);
     // KT: the `in` chip must scope BOTH result sections. The content index only
     // started honouring a folder scope recently, and its command gained the
@@ -559,10 +580,15 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
         "search_content",
         {
           ...buildContentQueryArgs(terms, 5),
-          ...(contentScope ? { scope_path: contentScope } : {}),
+          ...(contentScope ? { scopePath: contentScope } : {}),
         } as unknown as Record<string, unknown>,
       )
-        .then((hits) => { if (!cancelled) setContentRows(hits.map(contentHitToDisplayRow)); })
+        .then(async (hits) => {
+          await refreshSearchPrivacy(true);
+          if (cancelled || !lease()) return;
+          setContentRows(hits.filter((hit) => mayShowSearchPath(hit.path)).map(contentHitToDisplayRow));
+          setContentRevision(privacy.revision);
+        })
         .catch(() => { /* the bar must not break when the index is cold */ });
     }, CONTENT_DEBOUNCE_MS);
 
@@ -570,12 +596,14 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
       cancelled = true;
       if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
     };
-  }, [active, blockedReason, jump.term, searchState]);
+  }, [active, blockedReason, jump.term, searchState, privacy.revision, privacyReady]);
 
   return {
     query, setQuery, suggestion,
     isBrowse: showingBrowse, isJump: jump.isJump, term: jump.term,
-    primary, contentRows, totalCount, isSearching, error, setError, reset,
+    primary: rowsRevision === privacy.revision ? primary.filter((row) => mayShowSearchPath(row.full_path)) : [],
+    contentRows: contentRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
+    totalCount, isSearching, error, setError, reset,
   };
 }
 

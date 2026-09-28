@@ -21,7 +21,7 @@ import { reportSettingsWriteFailure } from "@/lib/settingsWriteRecovery";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
-import { isNameOnlyMatch } from "@/lib/contentSearch";
+import { showIndexedSearchRow } from "@/lib/contentSearch";
 import { getIndexDisplayError, getTabFilterSuggestion } from "@/lib/searchFilesPanel";
 import { isEngineMissingError } from "@/lib/fileNameSearch";
 import { buildContentFilterTokens } from "@/lib/contentQueryFilters";
@@ -31,9 +31,10 @@ import SearchEmptyState from "./SearchEmptyState";
 import FilterBar from "./FilterBar";
 import NameResultsSection from "./NameResultsSection";
 import ContentResultsSection, { contentRowDir } from "./ContentResultsSection";
+import IndexControls from "./IndexControls";
 import "./index.css";
 
-const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
+import { consumeSearchHandoff } from "@/lib/searchPrivacy";
 
 export default function SearchFilesPanel() {
   const search = useFileSearch();
@@ -51,8 +52,7 @@ export default function SearchFilesPanel() {
   const hotkey = useSearchHotkey();
 
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
-  // Indexed-folders management is tucked behind a gear toggle now that both
-  // result groups share one screen.
+  // Index setup stays available independently of the query and result tab.
   const [showIndexSettings, setShowIndexSettings] = useState(false);
   // Virtual selection across BOTH groups as one flat list; -1 = none.
   // Focus never leaves the input — rows are aria options, not tab stops.
@@ -82,9 +82,8 @@ export default function SearchFilesPanel() {
   // The compact Ctrl+Space launcher deliberately caps its visible rows. When
   // a query has more matches, it hands its text to this complete results view.
   useEffect(() => {
-    const query = window.localStorage.getItem(SEARCH_FILES_HANDOFF_KEY);
+    const query = consumeSearchHandoff();
     if (query !== null) {
-      window.localStorage.removeItem(SEARCH_FILES_HANDOFF_KEY);
       acceptHandoffQuery(query);
     }
 
@@ -99,12 +98,12 @@ export default function SearchFilesPanel() {
     return () => window.removeEventListener("search-files-query-handoff", onHandoff);
   }, [acceptHandoffQuery]);
 
-  // Name and inside-text results are intentionally independent. Removing a
-  // content hit because its filename also matches made actual text matches
-  // invisible whenever the filename result window was full.
+  // Keep private filename-only hits in their volume index's result tab;
+  // Everything deliberately serves ordinary volumes only. Text matches stay
+  // independent of filename results, including when their result page is full.
   const textContentRows = useMemo(
-    () => content.contentRows.filter((row) => !isNameOnlyMatch(row)),
-    [content.contentRows],
+    () => content.contentRows.filter((row) => showIndexedSearchRow(row, content.privacyStatus?.privateRoots ?? [])),
+    [content.contentRows, content.privacyStatus?.privateRoots],
   );
 
   // Only the visible tab participates in arrow-key navigation. This keeps the
@@ -253,10 +252,10 @@ export default function SearchFilesPanel() {
   // results — it degrades to an inline notice under the File-names group.
   const engineMissing = isEngineMissingError(search.error);
   const activeError = (engineMissing ? null : search.error) ?? content.contentError;
-  const indexDisplayError = getIndexDisplayError(content.indexStatus?.last_error);
+  const indexDisplayError = content.indexStatusError ?? getIndexDisplayError(content.indexStatus?.last_error);
 
   const trimmed = search.query.trim();
-  const showContentSection = trimmed.length >= 2 || showIndexSettings || content.currentRoots.length === 0;
+  const showContentSection = trimmed.length >= 2;
   const showNameSection = search.hasSearched || search.isSearching;
   const showEmptyState = !showNameSection && !trimmed && content.currentRoots.length > 0 && !showIndexSettings;
   const anySearching = search.isSearching || content.contentLoading;
@@ -281,6 +280,9 @@ export default function SearchFilesPanel() {
   return (
     <div className="search-files-panel">
       <SearchHeader hotkey={hotkey} />
+      {!content.privacyStatus && (
+        <p className="sfp-indexing-note" role="status">Checking volume privacy. Search results are hidden until this check completes.</p>
+      )}
 
       {/* Hero search input — one query drives BOTH result groups */}
       <div className="search-files-input-wrap">
@@ -367,6 +369,23 @@ export default function SearchFilesPanel() {
         />
       </div>
 
+      <IndexControls
+        expanded={showIndexSettings}
+        onToggle={() => setShowIndexSettings((value) => !value)}
+        indexStatus={content.indexStatus}
+        indexDisplayError={indexDisplayError}
+        foldersReindexing={content.foldersReindexing}
+        managementError={content.managementError}
+        privacyStatus={content.privacyStatus}
+        roots={content.currentRoots}
+        reindexing={content.reindexing}
+        rescanning={content.rescanning}
+        onReindex={content.reindex}
+        onRescan={content.rescan}
+        onAddFolders={content.addFolders}
+        onRemoveFolder={content.removeFolder}
+      />
+
       {/* Error (either engine) */}
       <AnimatePresence>
         {activeError && (
@@ -432,7 +451,7 @@ export default function SearchFilesPanel() {
                 }
               }}
             >
-              Text inside files
+              Indexed files
               {!content.contentLoading && textContentRows.length > 0 && <span>{textContentRows.length.toLocaleString()}</span>}
             </button>
           </div>
@@ -443,7 +462,7 @@ export default function SearchFilesPanel() {
             id={activeResultTab === "names" ? "sfp-tabpanel-names" : "sfp-tabpanel-content"}
             aria-labelledby={activeResultTab === "names" ? "sfp-tab-names" : "sfp-tab-content"}
           >
-            <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Text inside files"} search results`}>
+            <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Indexed files"} search results`}>
               {activeResultTab === "names" && showNameSection && (
                 <div>
                 <NameResultsSection
@@ -471,18 +490,6 @@ export default function SearchFilesPanel() {
                 query={search.query}
                 contentLoading={content.contentLoading}
                 showNoMatches={!content.contentLoading && textContentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
-                indexStatus={content.indexStatus}
-                indexDisplayError={indexDisplayError}
-                foldersReindexing={content.foldersReindexing}
-                showIndexSettings={showIndexSettings}
-                onToggleIndexSettings={() => setShowIndexSettings((v) => !v)}
-                roots={content.currentRoots}
-                reindexing={content.reindexing}
-                rescanning={content.rescanning}
-                onReindex={content.reindex}
-                onRescan={content.rescan}
-                onAddFolders={content.addFolders}
-                onRemoveFolder={content.removeFolder}
                 expandedDocId={content.expandedDocId}
                 expandedText={content.expandedText}
                 expandedLoading={content.expandedLoading}
@@ -515,7 +522,7 @@ export default function SearchFilesPanel() {
                   ? `Showing ${search.results.length.toLocaleString()} of ${search.totalCount.toLocaleString()} name matches`
                   : `${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}`}
                 {!content.contentLoading && textContentRows.length > 0 &&
-                  ` · ${textContentRows.length.toLocaleString()} text matches`}
+                  ` · ${textContentRows.length.toLocaleString()} indexed matches`}
               </span>
             )}
             {search.canShowMore && (

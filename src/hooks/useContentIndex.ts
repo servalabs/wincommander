@@ -12,8 +12,12 @@ import { buildContentQueryArgs, chunksToText, contentHitToDisplayRow } from "@/l
 import { mergeIndexedRoots, removeIndexedRoot } from "@/lib/searchFilesPanel";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { Chunk, ContentHit, IndexStatus } from "@/types/wincmd-search";
+import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
+import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
+import type { ContentPrivacyStatus } from "@/lib/searchPrivacy";
 
 export interface ContentIndexState {
+  privacyStatus: ContentPrivacyStatus | null;
   contentRows: ContentDisplayRow[];
   contentLoading: boolean;
   contentError: string | null;
@@ -22,8 +26,10 @@ export interface ContentIndexState {
   contentQuery: string | null;
   clearContent: () => void;
   indexStatus: IndexStatus | null;
+  indexStatusError: string | null;
   currentRoots: string[];
   foldersReindexing: boolean;
+  managementError: string | null;
   reindexing: boolean;
   rescanning: boolean;
   addFolders: () => Promise<void>;
@@ -45,15 +51,26 @@ export interface ContentIndexState {
  */
 export function useContentIndex(query: string, filterTokens: string): ContentIndexState {
   const { appSettings, refreshSettings } = useAppState();
+  const privacy = useSearchPrivacy();
+  const privacyReady = privacy.status !== null;
+  const [rowsRevision, setRowsRevision] = useState(-1);
+  const searchRequest = useRef(0);
+  const searchInFlight = useRef(false);
+  const previewRequest = useRef(0);
 
   const [contentRows, setContentRows] = useState<ContentDisplayRow[]>([]);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [contentQuery, setContentQuery] = useState<string | null>(null);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const [indexStatusError, setIndexStatusError] = useState<string | null>(null);
   const [foldersReindexing, setFoldersReindexing] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [rescanning, setRescanning] = useState(false);
+  const [managementError, setManagementError] = useState<string | null>(null);
+  const [indexRefresh, setIndexRefresh] = useState(0);
+  const [searchRefresh, setSearchRefresh] = useState(0);
+  const managementBusy = useRef(false);
   // Expand/collapse full doc text per content hit row (keyed by docId string).
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [expandedText, setExpandedText] = useState<string | null>(null);
@@ -82,42 +99,63 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   }, [optimisticRoots, settingsRoots]);
 
   const addFolders = useCallback(async () => {
-    const selected = await openFolderPicker({ directory: true, multiple: true });
-    if (!selected) return;
-    const added = Array.isArray(selected) ? selected : [selected];
-    if (added.length === 0) return;
-    const merged = mergeIndexedRoots(currentRoots, added);
-    setOptimisticRoots(merged);
-    setFoldersReindexing(true);
+    if (managementBusy.current) return;
+    managementBusy.current = true;
+    setManagementError(null);
     try {
+      const selected = await openFolderPicker({ directory: true, multiple: true });
+      if (!selected) return;
+      const added = Array.isArray(selected) ? selected : [selected];
+      if (added.length === 0) return;
+      const merged = mergeIndexedRoots(currentRoots, added);
+      setOptimisticRoots(merged);
+      setFoldersReindexing(true);
       await invoke("content_index_configure", { roots: merged, exclusions: currentExclusions });
+      await refreshSearchPrivacy(true);
       await refreshSettings();
+      setIndexRefresh((value) => value + 1);
     } catch {
-      setOptimisticRoots(settingsRoots);
+      setOptimisticRoots(null);
+      setManagementError("Could not add the folder. Check that it is mounted and accessible, then try again.");
     } finally {
+      managementBusy.current = false;
       setFoldersReindexing(false);
     }
-  }, [currentRoots, currentExclusions, refreshSettings, settingsRoots]);
+  }, [currentRoots, currentExclusions, refreshSettings]);
 
   const removeFolder = useCallback(async (root: string) => {
+    if (managementBusy.current) return;
+    managementBusy.current = true;
+    setManagementError(null);
     const next = removeIndexedRoot(currentRoots, root);
     setOptimisticRoots(next);
     setFoldersReindexing(true);
     try {
       await invoke("content_index_configure", { roots: next, exclusions: currentExclusions });
+      await refreshSearchPrivacy(true);
       await refreshSettings();
+      setIndexRefresh((value) => value + 1);
     } catch {
-      setOptimisticRoots(settingsRoots);
+      setOptimisticRoots(null);
+      setManagementError("Could not remove the folder. Try again.");
     } finally {
+      managementBusy.current = false;
       setFoldersReindexing(false);
     }
-  }, [currentRoots, currentExclusions, refreshSettings, settingsRoots]);
+  }, [currentRoots, currentExclusions, refreshSettings]);
 
   const reindex = useCallback(async () => {
+    if (managementBusy.current) return;
+    managementBusy.current = true;
+    setManagementError(null);
     setReindexing(true);
     try {
       await invoke("content_reindex");
-    } catch { /* errors surfaced via status poller */ } finally {
+      setIndexRefresh((value) => value + 1);
+    } catch {
+      setManagementError("Could not rebuild the index. Check that indexed folders are mounted and writable, then try again.");
+    } finally {
+      managementBusy.current = false;
       setReindexing(false);
     }
   }, []);
@@ -127,10 +165,17 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   // background crawl continues after the invoke resolves; the status poller
   // reflects its progress via `is_indexing`.
   const rescan = useCallback(async () => {
+    if (managementBusy.current) return;
+    managementBusy.current = true;
+    setManagementError(null);
     setRescanning(true);
     try {
       await invoke("content_rescan");
-    } catch { /* errors surfaced via status poller */ } finally {
+      setIndexRefresh((value) => value + 1);
+    } catch {
+      setManagementError("Could not rescan the folders. Check that they are mounted and accessible, then try again.");
+    } finally {
+      managementBusy.current = false;
       setRescanning(false);
     }
   }, []);
@@ -138,6 +183,10 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   // Toggle expand/collapse of full extracted text for a content hit.
   // docId is always a string (64-bit FNV hash serialised as decimal).
   const toggleExpand = useCallback(async (docId: string) => {
+    const request = ++previewRequest.current;
+    const lease = searchPrivacyLease();
+    const live = () => lease() && request === previewRequest.current;
+    if (!lease()) return;
     if (expandedDocId === docId) {
       // Collapse
       setExpandedDocId(null);
@@ -153,11 +202,13 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
       // content_get_doc returns Vec<Chunk> (NOT a string) — join the body
       // chunks into readable text for the <pre> preview.
       const chunks = await invoke<Chunk[]>("content_get_doc", { docId });
+      await refreshSearchPrivacy(true);
+      if (!live()) return;
       setExpandedText(chunksToText(chunks));
     } catch (e) {
-      setExpandedError(String(e));
+      if (live()) setExpandedError(String(e));
     } finally {
-      setExpandedLoading(false);
+      if (live()) setExpandedLoading(false);
     }
   }, [expandedDocId]);
 
@@ -168,14 +219,23 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     let id: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
     const poll = async () => {
+      const lease = searchPrivacyLease();
       try {
         const s = await invoke<IndexStatus>("content_index_status");
         if (cancelled) return;
-        setIndexStatus(s);
+        if (lease()) {
+          setIndexStatus(s);
+          setIndexStatusError(null);
+          // Synced edits can change matches without changing the document count.
+          if (!searchInFlight.current) setSearchRefresh((value) => value + 1);
+        }
         id = setTimeout(poll, s.is_indexing ? 3000 : 15000);
       } catch {
-        /* not ready yet — suppress, retry at the fast interval */
-        if (!cancelled) id = setTimeout(poll, 3000);
+        if (!cancelled) {
+          setIndexStatus(null);
+          setIndexStatusError("Index status is unavailable. Check that your indexed volumes are accessible, then retry.");
+          id = setTimeout(poll, 3000);
+        }
       }
     };
     poll();
@@ -183,7 +243,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
       cancelled = true;
       if (id) clearTimeout(id);
     };
-  }, []);
+  }, [indexRefresh, privacy.revision]);
 
   // On mount, nudge the backend to seed default roots
   // (Desktop/Downloads/Documents on first run) and pull them into appSettings,
@@ -206,6 +266,10 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   // every intermediate keystroke.
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    const request = ++searchRequest.current;
+    const lease = searchPrivacyLease();
+    const live = () => lease() && request === searchRequest.current;
+    if (!privacyReady) { setContentRows([]); setContentLoading(false); return; }
     const trimmed = query.trim();
     if (!trimmed) { setContentRows([]); setContentLoading(false); setContentError(null); setContentQuery(query); return; }
     // KT: content search still needs a TEXT term even when filter chips are
@@ -213,7 +277,14 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     // purpose. The filename group already covers browse-by-filter with no
     // text, and running content search on chips alone would mean sending the
     // backend an arbitrary match-all query.
-    if (trimmed.length < 2) return;
+    if (trimmed.length < 2) {
+      setContentRows([]);
+      setContentLoading(false);
+      setContentError(null);
+      setContentQuery(query);
+      return;
+    }
+    searchInFlight.current = true;
     setContentLoading(true);
     setContentError(null);
     // Chip state rides along as extra query-string tokens (ext:/size:/after:)
@@ -222,21 +293,35 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     const terms = [trimmed, filterTokens].filter(Boolean).join(" ");
     debounceRef.current = setTimeout(() => {
       invoke<ContentHit[]>("search_content", buildContentQueryArgs(terms) as unknown as Record<string, unknown>)
-        .then((hits) => { setContentRows(hits.map(contentHitToDisplayRow)); setContentQuery(query); })
+        .then(async (hits) => {
+          await refreshSearchPrivacy(true);
+          if (!live()) return;
+          setContentRows(hits.filter((hit) => mayShowSearchPath(hit.path)).map(contentHitToDisplayRow));
+          setRowsRevision(privacy.revision);
+          setContentQuery(query);
+        })
         // On failure drop the previous query's rows too — keeping them would
         // let Enter open a stale row while the error box says "Search failed".
-        .catch((e) => { setContentError(String(e)); setContentRows([]); setContentQuery(query); })
-        .finally(() => setContentLoading(false));
+        .catch((e) => { if (live()) { setContentError(String(e)); setContentRows([]); setContentQuery(query); } })
+        .finally(() => {
+          if (request === searchRequest.current) searchInFlight.current = false;
+          if (live()) setContentLoading(false);
+        });
     }, 275);
     return () => {
+      searchRequest.current += 1;
+      searchInFlight.current = false;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
     // KT: filterTokens is a dependency so toggling a chip while the text is
     // unchanged re-runs the search — without it, chip changes would silently
     // never reach the backend until the text query also changed.
-  }, [query, filterTokens]);
+  }, [query, filterTokens, privacy.revision, privacyReady, searchRefresh]);
 
   const clearContent = useCallback(() => {
+    searchRequest.current += 1;
+    searchInFlight.current = false;
+    previewRequest.current += 1;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     setContentRows([]);
     setContentLoading(false);
@@ -245,25 +330,42 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     setExpandedDocId(null);
     setExpandedText(null);
     setExpandedError(null);
+    setExpandedLoading(false);
   }, []);
 
+  useEffect(() => {
+    previewRequest.current += 1;
+    setExpandedDocId(null);
+    setExpandedText(null);
+    setExpandedError(null);
+    setExpandedLoading(false);
+    setContentRows([]);
+    setContentError(null);
+    setIndexStatus(null);
+  }, [privacy.revision]);
+
+  useEffect(() => () => { previewRequest.current += 1; }, []);
+
   return {
-    contentRows,
+    privacyStatus: privacy.status,
+    contentRows: rowsRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
     contentLoading,
     contentError,
     contentQuery,
     clearContent,
     indexStatus,
+    indexStatusError,
     currentRoots,
     foldersReindexing,
+    managementError,
     reindexing,
     rescanning,
     addFolders,
     removeFolder,
     reindex,
     rescan,
-    expandedDocId,
-    expandedText,
+    expandedDocId: rowsRevision === privacy.revision ? expandedDocId : null,
+    expandedText: rowsRevision === privacy.revision ? expandedText : null,
     expandedLoading,
     expandedError,
     toggleExpand,

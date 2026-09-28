@@ -73,6 +73,10 @@ each section at rest:
 - **Store files:** `%ProgramData%\<APP>\store\<section>.dat`. Settings are the `settings` section.
 - **At-rest format:** `enc:v1:` + base64(`nonce[12]` ‖ ciphertext-with-GCM-tag), encrypted with **AES-256-GCM**.
 - **Key derivation:** a per-install 32-byte material file (`%ProgramData%\<APP>\.install.material`) is the Argon2id salt. General sections derive their key from an empty password; the private section derives from a user passphrase. The material is generated once and is **not** tied to the binary version, so settings survive app updates.
+- **Key preservation:** concurrent first launches use the same committed material.
+  Read or unlock failures never automatically replace a key. If encrypted data
+  exists without its matching material, startup preserves it for recovery;
+  restoring that data requires its matching key, not administrator elevation.
 
 A wrong passphrase on the private section yields an AES-256-GCM authentication
 failure — there is no plaintext fallback.
@@ -805,20 +809,45 @@ optional `customCss`. Commands: `open_server_app`, `hide_server_app`,
 
 ### File content search (`app.fileSearch`)
 
-Keyword content search via tantivy. **Free** tier; the five backend commands are
-`search_content`, `content_index_status`, `content_index_configure`,
-`content_reindex`, `content_get_doc`.
+Keyword content search via Tantivy. **Free** tier; backend commands include
+`search_content`, `content_index_status`, `content_privacy_status`,
+`content_index_configure`, `content_rescan`, `content_reindex`, `content_get_doc`.
 
 | Key                       | Type       | Default                                          | Notes |
 |---------------------------|------------|--------------------------------------------------|-------|
 | `app.fileSearch.roots`    | `string[]` | `[]` (seeded on first Contents-mode use)         | Absolute paths of folders in the tantivy index. On first content-search use, seeded to the current user's Desktop, Downloads, and Documents unless `initialized` is already `true`. |
 | `app.fileSearch.exclusions` | `string[]` | `["node_modules", ".git", "*.tmp", "~$*"]`     | Glob patterns excluded during crawl. |
+| `app.fileSearch.private_roots` | `object[]` | `[]` | Backend-created folder, relative-path and stable-volume bindings. Retained after removing a folder to protect history and reused drive letters. |
 | `app.fileSearch.initialized` | `boolean` | `false`                                        | Set `true` once roots are seeded or explicitly configured; prevents re-seeding after the user clears all folders. |
 
-> The settings record is stored in the machine-wide encrypted store
+> Folder selection is stored in the current user's encrypted settings overlay
 > (`FileSearchSettings` on `AppPreferences`). The on-disk index itself is
-> per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` (tantivy on-disk
-> segment store), not machine-wide.
+> per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` for ordinary
+> folders. Private shards live inside the mounted VeraCrypt drive at
+> `.wincommander\search\<device-id hash>\fts`.
+
+Open **File Search → Indexed folders → Add folder** to select a folder; these
+controls are available before entering a query and on either results tab.
+Folder-management failures and index status remain visible above the results.
+Active queries refresh as indexing progresses, including edits that leave the
+file count unchanged. Syncthing can deliver files into a selected mounted
+folder; each device indexes its own received files. Share the document folder,
+leaving `.wincommander` index storage outside the synced folder.
+
+Add a folder while its VeraCrypt volume is mounted. The index excludes its own
+storage and records unsupported/oversized files by name without extracting
+content. Removing every folder disables content results; explicit query scope
+cannot restore a removed folder. Remounting the same volume at another letter
+is recognized, and a writable reconciliation updates stored paths. A read-only
+mount requires an existing compatible index from this device. Stored paths are
+mapped to the current drive letter in memory and checked against the selected
+folders and native volume identity; the index is never rewritten, created or
+repaired. Different devices build separate indexes inside the volume.
+
+Private results use the local index rather than Everything. Everything totals
+are unavailable because its aggregate count cannot validate every returned
+path. External indexer exclusions are configured separately; see
+[the security boundary](../../SECURITY.md#private-volume-search).
 
 ### Native command catalog
 

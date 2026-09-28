@@ -118,6 +118,7 @@ wincmd-shared = { path = "../wincmd-shared" }
 wincmd-service-auth = { path = "../wincmd-service-auth" }
 fleet-proto = { path = "../fleet-proto", optional = true }
 wincmd-search = { path = "../wincmd-search" }
+wincmd-volume = { path = "../wincmd-volume" }
 commander-context-shred = { path = "../commander-context-shred" }
 # Clipboard Guard's rule engine (plan §4.1): the same pure matcher/compiler
 # Fleet uses to validate rules, so paste_monitor.rs's on-device matching

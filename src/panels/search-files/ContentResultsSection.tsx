@@ -2,8 +2,7 @@
 //
 // Content-index result group — matches from text extracted out of the folders
 // the user chose to index, rendered as two-line rows.
-// rows (file line + highlighted snippet line), plus the index status bar,
-// indexed-folders management, and the extracted-text expansion pane.
+// rows (file line + highlighted snippet line) and the extracted-text expansion pane.
 // Rows share the panel's single listbox selection model. Pure renderer.
 
 import { Fragment } from "react";
@@ -11,10 +10,8 @@ import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import FileIcon from "./FileIcon";
-import { IndexedFoldersManager, NoFoldersOnboarding } from "./IndexedFolders";
 import { isNameOnlyMatch } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
-import type { IndexStatus } from "@/types/wincmd-search";
 
 export function contentRowDir(path: string): string {
   const cut = path.lastIndexOf("\\");
@@ -26,18 +23,6 @@ interface ContentResultsSectionProps {
   query: string;
   contentLoading: boolean;
   showNoMatches: boolean;
-  indexStatus: IndexStatus | null;
-  indexDisplayError: string | null;
-  foldersReindexing: boolean;
-  showIndexSettings: boolean;
-  onToggleIndexSettings: () => void;
-  roots: string[];
-  reindexing: boolean;
-  rescanning: boolean;
-  onReindex: () => void;
-  onRescan: () => void;
-  onAddFolders: () => void;
-  onRemoveFolder: (root: string) => void;
   expandedDocId: string | null;
   expandedText: string | null;
   expandedLoading: boolean;
@@ -59,9 +44,6 @@ interface ContentResultsSectionProps {
 export default function ContentResultsSection(props: ContentResultsSectionProps) {
   const {
     rows, query, contentLoading, showNoMatches,
-    indexStatus, indexDisplayError, foldersReindexing,
-    showIndexSettings, onToggleIndexSettings,
-    roots, reindexing, rescanning, onReindex, onRescan, onAddFolders, onRemoveFolder,
     expandedDocId, expandedText, expandedLoading, expandedError, onToggleExpand,
     flatOffset, selectedIndex, onSelect,
     onOpenFile, onOpenFolder, onCopyPath, copiedPath,
@@ -73,86 +55,14 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     <div className="sfp-section">
       {!headerless && <div className="sfp-section-bar">
         <span className="sfp-section-label">
-          Text inside files
+          Indexed files
           {!contentLoading && rows.length > 0 && (
             <span className="sfp-section-count">{rows.length.toLocaleString()}</span>
           )}
         </span>
-        <div className="sfp-group-header-actions">
-          {indexStatus && !indexStatus.is_indexing && indexStatus.indexed_docs > 0 && (
-            <span className="sfp-index-status">
-              {indexStatus.indexed_docs.toLocaleString()} files indexed
-              {indexDisplayError && (
-                <span className="sfp-index-status__error"> · {indexDisplayError}</span>
-              )}
-            </span>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-pressed={showIndexSettings}
-            title="Choose which folders are indexed for inside-file search"
-            onClick={onToggleIndexSettings}
-          >
-            <Icon icon="cog" size={14} />
-            Indexed folders
-          </Button>
-        </div>
       </div>}
 
-      {headerless && (
-        <div className="sfp-content-tools">
-          {indexStatus && !indexStatus.is_indexing && indexStatus.indexed_docs > 0 && (
-            <span className="sfp-index-status">
-              {indexStatus.indexed_docs.toLocaleString()} files indexed
-              {indexDisplayError && <span className="sfp-index-status__error"> · {indexDisplayError}</span>}
-            </span>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-pressed={showIndexSettings}
-            title="Choose which folders are indexed for inside-file search"
-            onClick={onToggleIndexSettings}
-          >
-            <Icon icon="cog" size={14} />
-            Indexed folders
-          </Button>
-        </div>
-      )}
-
-      {indexStatus?.is_indexing && (
-        <div className="sfp-indexing-bar" role="status" aria-live="polite">
-          <Spinner size={12} className="sfp-indexing-spinner" />
-          <span>
-            Indexing… {indexStatus.indexed_docs.toLocaleString()} of{" "}
-            {(indexStatus.indexed_docs + indexStatus.pending_docs).toLocaleString()} files
-            {foldersReindexing && " · re-indexing…"}
-          </span>
-          <span className="sfp-indexing-note">Results may be incomplete until done.</span>
-          {indexDisplayError && (
-            <span className="sfp-index-status__error"> · {indexDisplayError}</span>
-          )}
-        </div>
-      )}
-
-      {/* Folder management — always shown while nothing is indexed, so
-          setup stays discoverable. */}
-      {(showIndexSettings || roots.length === 0) && (
-        <IndexedFoldersManager
-          roots={roots}
-          reindexing={reindexing}
-          rescanning={rescanning}
-          onReindex={onReindex}
-          onRescan={onRescan}
-          onAddFolders={onAddFolders}
-          onRemoveFolder={onRemoveFolder}
-        />
-      )}
-
-      {roots.length === 0 && <NoFoldersOnboarding onAddFolders={onAddFolders} />}
-
-      {contentLoading && <div className="sfp-loading">Searching inside files…</div>}
+      {contentLoading && <div className="sfp-loading">Searching indexed files…</div>}
 
       {/* search_content is backend-windowed at 50 rows, leaving the other half
           of the 100-row DOM budget for the virtualized filename group. Keep
@@ -238,7 +148,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                   <div className="sfp-content-snippet">
                     {isNameOnlyMatch(row) && (
                       <span className="sfp-name-match-badge" title="The search text appears in this file's name, not (only) its contents">
-                        name match
+                        filename match
                       </span>
                     )}
                     <span className="sfp-snippet">
@@ -279,7 +189,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
 
       {showNoMatches && (
         <div className="sfp-section-empty">
-          <p>No matches inside indexed files for <strong>"{query}"</strong></p>
+          <p>No indexed-file matches for <strong>"{query}"</strong></p>
           <p className="search-empty-hint">Try different keywords, or add the folders you need via "Indexed folders".</p>
           <p className="search-empty-hint">
             Tip: refine with ext:pdf, size:&gt;10mb, after:2026-01, author:name

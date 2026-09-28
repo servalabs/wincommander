@@ -10,6 +10,26 @@ Public release notes are published with each versioned
   Differences are transparency signals, not malware findings; nothing is
   removed or changed.
 
+- File Search exposes indexed-folder controls before searching and refreshes
+  active results after indexing or synced file changes. Folder-operation and
+  private-index failures are visible, and temporarily locked files no longer
+  discard progress for other files in a private indexing batch.
+  VeraCrypt mounts without a Windows canonical volume path can now create and
+  read their search index using files kept on that same encrypted drive.
+
+- Settings writes use separate temporary files for concurrent launches and
+  briefly retry Windows file-sharing conflicts. First-time key creation keeps
+  one committed key; unreadable keys and encrypted settings are preserved
+  instead of automatically replacing the key and resetting preferences.
+
+- Selected VeraCrypt folders now use an index inside the mounted volume.
+  Search checks the native volume identity, updates incrementally while mounted,
+  and reads existing indexes without writing on read-only mounts, including
+  after the same container moves to another drive letter. Private
+  results and previews are cleared after mount changes; private paths are
+  excluded from persistent launch history and the ordinary search provider.
+  Pending filename searches are cancelled when the mounted volume changes.
+
 - Secure Storage and Quick Mount now request machine-wide writable drives,
   preserve existing file permissions, and retain explicit read-only mounting.
   The service checks the caller's access to containers and keyfiles before

@@ -1,24 +1,26 @@
 // src/panels/search-files/IndexedFolders.tsx
 //
 // Indexed-folders management box (list + Add folder + Rescan + Re-index) shown
-// behind the "Indexed folders" gear, plus the first-run onboarding card
-// when nothing is indexed yet. Pure renderer.
+// behind the always-visible "Indexed folders" button. Pure renderer.
 
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import type { ContentPrivacyStatus } from "@/lib/searchPrivacy";
 
-interface IndexedFoldersProps {
+export interface IndexedFoldersProps {
+  privacyStatus: ContentPrivacyStatus | null;
   roots: string[];
   reindexing: boolean;
   rescanning: boolean;
+  foldersReindexing?: boolean;
   onReindex: () => void;
   onRescan: () => void;
   onAddFolders: () => void;
   onRemoveFolder: (root: string) => void;
 }
 
-export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex, onRescan, onAddFolders, onRemoveFolder }: IndexedFoldersProps) {
-  const busy = reindexing || rescanning;
+export function IndexedFoldersManager({ privacyStatus, roots, reindexing, rescanning, foldersReindexing = false, onReindex, onRescan, onAddFolders, onRemoveFolder }: IndexedFoldersProps) {
+  const busy = reindexing || rescanning || foldersReindexing;
   return (
     <div className="sfp-folders-section">
       <div className="sfp-folders-header">
@@ -44,11 +46,24 @@ export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex
             <Icon icon="reset" size={14} />
             {reindexing ? "Re-indexing…" : "Re-index"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={onAddFolders} title="Add folder to index">
+          <Button size="sm" variant="ghost" onClick={onAddFolders} disabled={busy} title="Add folder to index">
             <Icon icon="folder-new" size={14} />
             Add folder
           </Button>
         </div>
+      </div>
+      <p className="sfp-folders-empty">
+        Folders on detected VeraCrypt drives keep their content index inside that encrypted drive.
+        Mount the volume before adding a folder. Private file history is not saved.
+      </p>
+      <div role="status" aria-live="polite">
+        {!privacyStatus && <p className="sfp-folders-empty">Checking volume privacy. Search results are hidden until this check completes.</p>}
+        {privacyStatus?.volumes.map((volume) => (
+          <p key={volume.root} className="sfp-folders-empty">
+            {volume.root} · {volume.state.replace("_", " ")} · {volume.message}
+          </p>
+        ))}
+        {privacyStatus?.notice && <p className="sfp-folders-empty">{privacyStatus.notice}</p>}
       </div>
       {roots.length === 0 ? (
         <p className="sfp-folders-empty">No folders indexed — click "Add folder" to start.</p>
@@ -63,6 +78,7 @@ export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex
                 variant="ghost"
                 title={`Remove ${root} from indexed folders`}
                 aria-label={`Remove ${root} from indexed folders`}
+                disabled={busy}
                 onClick={() => onRemoveFolder(root)}
               >
                 <Icon icon="cross" size={14} />
@@ -71,24 +87,6 @@ export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-export function NoFoldersOnboarding({ onAddFolders }: { onAddFolders: () => void }) {
-  return (
-    <div className="sfp-no-folders-state">
-      <div className="sfp-no-folders-icon" aria-hidden="true">
-        <Icon icon="folder-new" size={40} />
-      </div>
-      <p className="sfp-no-folders-heading">No folders indexed yet</p>
-      <p className="sfp-no-folders-hint">
-        Add at least one folder so WinCommander can index its contents for full-text search.
-      </p>
-      <Button variant="primary" onClick={onAddFolders} className="sfp-no-folders-cta">
-        <Icon icon="folder-new" size={14} />
-        Add folder
-      </Button>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { chunksToText } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { Chunk } from "@/types/wincmd-search";
+import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
+import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
 
 export interface ContentPreview {
   row: ContentDisplayRow | null;
@@ -16,6 +18,8 @@ export interface ContentPreview {
 }
 
 export function useContentPreview(queryKey: string): ContentPreview {
+  const privacy = useSearchPrivacy();
+  const [rowRevision, setRowRevision] = useState(-1);
   const [row, setRow] = useState<ContentDisplayRow | null>(null);
   const [text, setText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -26,7 +30,8 @@ export function useContentPreview(queryKey: string): ContentPreview {
   useEffect(() => {
     requestId.current += 1;
     setRow(null);
-  }, [queryKey]);
+    setText("");
+  }, [queryKey, privacy.revision]);
 
   useEffect(() => {
     if (!row) {
@@ -35,20 +40,30 @@ export function useContentPreview(queryKey: string): ContentPreview {
       return;
     }
     const id = ++requestId.current;
+    const lease = searchPrivacyLease();
+    const live = () => requestId.current === id && lease() && mayShowSearchPath(row.path);
     setIsLoading(true);
     setText("");
     invoke<Chunk[]>("content_get_doc", { docId: row.docId })
-      .then((chunks) => {
-        if (requestId.current === id) setText(chunksToText(chunks));
+      .then(async (chunks) => {
+        await refreshSearchPrivacy(true);
+        if (live()) setText(chunksToText(chunks));
       })
       .catch(() => {
-        // The result snippet remains useful while an index is warming up.
-        if (requestId.current === id) setText(row.snippetSegs.map((segment) => segment.text).join(""));
+        if (live()) setText("");
       })
       .finally(() => {
-        if (requestId.current === id) setIsLoading(false);
+        if (live()) setIsLoading(false);
       });
+    return () => { requestId.current += 1; };
   }, [row]);
 
-  return { row, text, isLoading, select: useCallback((next) => setRow(next), []) };
+  const visible = rowRevision === privacy.revision && row !== null && mayShowSearchPath(row.path);
+  return { row: visible ? row : null, text: visible ? text : "", isLoading, select: useCallback((next) => {
+    if (next === row && rowRevision === privacy.revision) return;
+    requestId.current += 1;
+    setText("");
+    setRow(next);
+    setRowRevision(privacy.revision);
+  }, [privacy.revision, row, rowRevision]) };
 }

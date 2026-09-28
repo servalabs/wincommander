@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { clearFrecency, frecencyScore, normalizeKey, recordOpen, sortByFrecency, topPaths } from "./frecency";
+import { setSearchPrivacy } from "./searchPrivacy";
 
 // Bun does not guarantee a browser-like `localStorage` global, and frecency.ts
 // must degrade gracefully whether one exists or not — so every test installs
@@ -67,6 +68,7 @@ function setTestStorage(value: Storage | undefined): void {
 beforeEach(() => {
   storage = new MemoryStorage();
   setTestStorage(storage);
+  setSearchPrivacy({ generation: "test-public", privateRoots: [], blockedRoots: [], volumes: [], notice: null });
 });
 
 describe("frecencyScore", () => {

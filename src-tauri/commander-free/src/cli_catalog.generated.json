@@ -7844,6 +7844,16 @@
       ]
     },
     {
+      "id": "tauri:content_privacy_status",
+      "name": "content_privacy_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useSearchPrivacy.ts"
+      ]
+    },
+    {
       "id": "tauri:content_reindex",
       "name": "content_reindex",
       "transport": "tauri",
