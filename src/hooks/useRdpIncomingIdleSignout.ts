@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
 import { showError } from "../utils/toast";
-import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpConsoleMirror, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -47,6 +47,13 @@ interface RdpSession {
   isCurrentSession?: boolean;
 }
 
+function safeIncomingSessionState(state?: string): "incoming_session_active" | "incoming_session_disconnected" | "incoming_session_other" {
+  const normalized = state?.trim().toLowerCase();
+  if (normalized === "active" || normalized === "conn" || normalized === "connected") return "incoming_session_active";
+  if (normalized === "disc" || normalized === "disconnected") return "incoming_session_disconnected";
+  return "incoming_session_other";
+}
+
 export default function useRdpIncomingIdleSignout(
   enabled: boolean,
   timeoutSeconds: number,
@@ -63,6 +70,10 @@ export default function useRdpIncomingIdleSignout(
     () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
     [diagnosticLoggingEnabled],
   );
+  const mirrorRdpConsole = useMemo(
+    () => createRdpConsoleMirror(diagnosticLoggingEnabled),
+    [diagnosticLoggingEnabled],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,6 +85,7 @@ export default function useRdpIncomingIdleSignout(
       signedOffRef.current.clear();
       previousSessionCountRef.current = null;
       console.log("[RdpIncomingSignout] Disabled — not polling");
+      mirrorRdpConsole(["session_monitor", "incoming_idle_signout_monitor_disabled", "verified", "cancelled", "info"]);
       return;
     }
 
@@ -148,6 +160,7 @@ export default function useRdpIncomingIdleSignout(
             `[RdpIncomingSignout] session ${id} '${s.username ?? "?"}' state=${s.state ?? "?"} ` +
               `idle=${idleSec}s / threshold=${timeoutSeconds}s${reached ? " — REACHED" : ""}`
           );
+          mirrorRdpConsole(["session_observation", safeIncomingSessionState(s.state), "verified", "succeeded", "info"]);
           if (reached && !signedOffRef.current.has(id)) {
             const operationId = beginRdpOperation("idle_signoff");
             recordRdpDiagnostic(operationId, "idle_signoff", "incoming_idle_threshold_reached", "requested", "started", "warn", undefined, {
@@ -213,5 +226,5 @@ export default function useRdpIncomingIdleSignout(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, timeoutSeconds, dismountOnEmpty, recordRdpDiagnostic]);
+  }, [enabled, timeoutSeconds, dismountOnEmpty, mirrorRdpConsole, recordRdpDiagnostic]);
 }

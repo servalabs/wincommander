@@ -1084,6 +1084,29 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
         </div>
       )}
 
+      {/* A clean PDF still has structural facts such as page count and PDF
+          version. They are not personal metadata and aren't a scrub target. */}
+      {isDryRun && categoryRollup.length === 0 && (
+        <div
+          style={{
+            padding: 10,
+            background: 'var(--color-success-dim)',
+            border: '1px solid color-mix(in srgb, var(--color-success) 40%, transparent)',
+            borderRadius: 6,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+            fontSize: 12,
+          }}
+        >
+          <Icon icon="tick-circle" size={14} style={{ color: 'var(--color-success)', marginTop: 1 }} />
+          <div style={{ flex: 1, color: 'var(--color-text-primary)', lineHeight: 1.5 }}>
+            <strong>No removable metadata found.</strong> Normal PDF structure,
+            such as page count and PDF version, is not personal information.
+          </div>
+        </div>
+      )}
+
       {/* ── Aggregate headline ────────────────────────────────────── */}
       <div
         style={{
@@ -1248,7 +1271,7 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
               marginBottom: 6,
             }}
           >
-            What we removed
+            {isDryRun ? 'Detected in original — will remove' : 'Verified removed'}
           </div>
           {/* Stacked bar — width proportional to bytes per category. */}
           <div

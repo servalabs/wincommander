@@ -28,7 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { clearCommand } from "../lib/commandIds";
 import { executeBackendCommand } from "./useBackend";
-import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpConsoleMirror, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 5_000; // PowerShell: is mstsc running? (rdpOpen + remote hosts)
 const TICK_MS = 1_000; // native: system-wide idle seconds
@@ -65,6 +65,10 @@ export default function useRdpIdleDisconnect(
   const effectiveWarningSeconds = Math.max(5, warningSeconds || 5);
   const recordRdpDiagnostic = useMemo(
     () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
+    [diagnosticLoggingEnabled],
+  );
+  const mirrorRdpConsole = useMemo(
+    () => createRdpConsoleMirror(diagnosticLoggingEnabled),
     [diagnosticLoggingEnabled],
   );
 
@@ -107,7 +111,7 @@ export default function useRdpIdleDisconnect(
       configured_timeout_seconds: timeoutSeconds,
       state: "snoozed",
     });
-  }, [effectiveWarningSeconds, timeoutSeconds, dropAlwaysOnTop]);
+  }, [effectiveWarningSeconds, timeoutSeconds, dropAlwaysOnTop, recordRdpDiagnostic]);
 
   useEffect(() => {
     if (!enabled) {
@@ -123,6 +127,7 @@ export default function useRdpIdleDisconnect(
       setWarningLeft(effectiveWarningSeconds);
       setIsIdle(false);
       console.log("[RdpIdle] Monitor not started —", disabledReason);
+      mirrorRdpConsole(["session_monitor", "outgoing_monitor_disabled", "verified", "cancelled", "info"]);
       return;
     }
 
@@ -291,6 +296,13 @@ export default function useRdpIdleDisconnect(
         console.log(
           `[RdpIdle] effective=${effectiveIdle}s | idle=${idle}s | base=${baselineIdleRef.current}s | warn=${inWarning} | kill=${shouldKill} | threshold=${timeoutSeconds}s`
         );
+        mirrorRdpConsole([
+          "idle_state",
+          shouldKill ? "outgoing_idle_timeout_reached" : inWarning ? "outgoing_idle_warning" : "outgoing_idle_active",
+          "verified",
+          shouldKill ? "started" : "progress",
+          shouldKill ? "warn" : "info",
+        ]);
 
         if (shouldKill && !killedRef.current) {
           const operationId = beginRdpOperation("idle_disconnect");
@@ -366,6 +378,7 @@ export default function useRdpIdleDisconnect(
     dismountVaultsOnDisconnect,
     disabledReason,
     dropAlwaysOnTop,
+    mirrorRdpConsole,
     recordRdpDiagnostic,
   ]);
 
