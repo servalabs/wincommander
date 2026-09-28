@@ -86,21 +86,48 @@ impl SearchEngine {
         if scoped.roots.is_empty() {
             return Ok(vec![]);
         }
+        // Stored paths retain their old mount letter. Current scopes apply after relocation.
+        if self.path_mapper.is_some() {
+            scoped.roots.clear();
+        }
         scoped.offset = 0;
         scoped.limit = query
             .limit
             .saturating_add(query.offset)
             .saturating_mul(8)
             .min(100_000);
-        let hits = self.search(&scoped)?;
-        Ok(hits
-            .into_iter()
-            .filter(|hit| {
-                path_in_roots(&hit.path, &query.roots) && self.permits_path(Path::new(&hit.path))
-            })
-            .skip(query.offset)
-            .take(query.limit)
-            .collect())
+        loop {
+            let hits = self.search(&scoped)?;
+            let fetched = hits.len();
+            let mut mapped_paths = std::collections::HashSet::new();
+            let permitted: Vec<_> = hits
+                .into_iter()
+                .filter_map(|mut hit| {
+                    if let Some(mapper) = &self.path_mapper {
+                        hit.path = mapper(Path::new(&hit.path))?.to_string_lossy().into_owned();
+                    }
+                    Some(hit)
+                })
+                .filter(|hit| {
+                    path_in_roots(&hit.path, &query.roots)
+                        && self.permits_path(Path::new(&hit.path))
+                        && (self.path_mapper.is_none()
+                            || mapped_paths.insert(hit.path.to_lowercase().replace('/', "\\")))
+                })
+                .collect();
+            if permitted.len() >= query.limit.saturating_add(query.offset)
+                || fetched < scoped.limit
+                || scoped.limit >= 100_000
+            {
+                return Ok(permitted
+                    .into_iter()
+                    .skip(query.offset)
+                    .take(query.limit)
+                    .collect());
+            }
+            // Removed or inaccessible rows must not hide lower-ranked permitted results.
+            scoped.limit = scoped.limit.saturating_mul(2).min(100_000);
+        }
     }
 
     /// Retrieve stored content only for a file still permitted by the current policy.

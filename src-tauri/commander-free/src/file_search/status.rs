@@ -50,7 +50,7 @@ pub(super) fn snapshot() -> Result<PrivacyStatus, String> {
         private_roots: plan.protected.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
         blocked_roots: plan.blocked.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
         volumes,
-        notice: Some("VeraCrypt indexes stay inside their volume. Exclude private drives separately in Everything and Windows Search; WinCommander does not change those providers' databases. Read-only indexes require the same drive letter used when last updated.".into()),
+        notice: Some("VeraCrypt indexes stay inside their volume. Exclude private drives separately in Everything and Windows Search; WinCommander does not change those providers' databases.".into()),
     })
 }
 

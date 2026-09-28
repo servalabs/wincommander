@@ -827,9 +827,10 @@ storage and records unsupported/oversized files by name without extracting
 content. Removing every folder disables content results; explicit query scope
 cannot restore a removed folder. Remounting the same volume at another letter
 is recognized, and a writable reconciliation updates stored paths. A read-only
-mount requires an existing compatible index from this device and the indexed
-drive letter; it cannot create, repair or rebase an index. Different devices
-build separate indexes inside the volume.
+mount requires an existing compatible index from this device. Stored paths are
+mapped to the current drive letter in memory and checked against the selected
+folders and native volume identity; the index is never rewritten, created or
+repaired. Different devices build separate indexes inside the volume.
 
 Private results use the local index rather than Everything. Everything totals
 are unavailable because its aggregate count cannot validate every returned

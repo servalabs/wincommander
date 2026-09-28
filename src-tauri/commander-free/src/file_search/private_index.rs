@@ -47,6 +47,33 @@ fn policy(shard: &PrivateShard) -> wincmd_search::PathPolicy {
     Arc::new(move |path| inspect_path(path).is_ok_and(|v| v.is_private && v.identity == identity))
 }
 
+fn remap_stored_path(path: &Path, mounted_root: &Path) -> Option<PathBuf> {
+    let text = path.to_str()?.replace('/', "\\");
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    let bytes = text.as_bytes();
+    if bytes.len() < 4
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1..3] != *b":\\"
+        || text.chars().any(char::is_control)
+        || text[3..].split('\\').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with(['.', ' '])
+                || part.contains(':')
+        })
+    {
+        return None;
+    }
+    Some(mounted_root.join(&text[3..]))
+}
+
+fn path_mapper(shard: &PrivateShard) -> wincmd_search::PathMapper {
+    let root = shard.volume.root.clone();
+    // The index belongs to the verified container; stored drive letters can be stale.
+    Arc::new(move |path| remap_stored_path(path, &root))
+}
+
 fn ensure_directory(shard: &PrivateShard, directory: &Path) -> Result<(), String> {
     verify(shard)?;
     let relative = directory
@@ -89,6 +116,9 @@ pub(super) fn reconcile(
         if !config.index_dir.join("meta.json").is_file() {
             return Err("No private index exists on this read-only volume.".into());
         }
+        if inspect_path(&config.index_dir)?.identity != shard.volume.identity {
+            return Err("Private index is unavailable.".into());
+        }
         let engine = SearchEngine::open_existing_with_policy(config, policy(shard))
             .map_err(|_| "The read-only private index is unavailable.")?;
         let count = engine
@@ -122,8 +152,9 @@ pub(super) fn search(
     if inspect_path(&config.index_dir)?.identity != shard.volume.identity {
         return Err("Private index is unavailable.".into());
     }
-    let engine = SearchEngine::open_existing_with_policy(config, policy(shard))
-        .map_err(|_| "Private index requires a writable rebuild.")?;
+    let engine =
+        SearchEngine::open_existing_with_mapped_paths(config, policy(shard), path_mapper(shard))
+            .map_err(|_| "Private index requires a writable rebuild.")?;
     let hits = engine
         .search_restricted(query)
         .map_err(|_| "Private search failed.")?;
@@ -146,8 +177,9 @@ pub(super) fn chunks(
     if inspect_path(&config.index_dir)?.identity != shard.volume.identity {
         return Err("Private index is unavailable.".into());
     }
-    let engine = SearchEngine::open_existing_with_policy(config, policy(shard))
-        .map_err(|_| "Private index requires a writable rebuild.")?;
+    let engine =
+        SearchEngine::open_existing_with_mapped_paths(config, policy(shard), path_mapper(shard))
+            .map_err(|_| "Private index requires a writable rebuild.")?;
     let chunks = engine
         .get_chunks_restricted(id)
         .map_err(|_| "Private preview is unavailable.")?;
@@ -170,4 +202,41 @@ pub(super) fn rebuild(shard: &PrivateShard, device: &str) -> Result<(), String> 
             .map_err(|_| "Private index rebuild could not remove the old index.")?;
     }
     verify(shard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_private_paths_follow_the_verified_mount_without_changing_the_suffix() {
+        for original in [
+            r"V:\Docs\file.txt",
+            r"\\?\V:\Docs\file.txt",
+            "v:/Docs/file.txt",
+        ] {
+            assert_eq!(
+                remap_stored_path(Path::new(original), Path::new(r"W:\")),
+                Some(PathBuf::from(r"W:\Docs\file.txt"))
+            );
+        }
+    }
+
+    #[test]
+    fn stored_paths_cannot_escape_or_use_ambiguous_windows_names() {
+        for original in [
+            r"\\server\share\file",
+            r"V:relative",
+            r"V:\",
+            r"V:\Docs\..\secret",
+            r"V:\.\file",
+            r"V:\Docs.\file",
+            r"V:\Docs \file",
+            r"V:\file:stream",
+            "V:\\Docs\\\nsecret",
+            r"V:\\Docs\file",
+        ] {
+            assert!(remap_stored_path(Path::new(original), Path::new(r"W:\")).is_none());
+        }
+    }
 }

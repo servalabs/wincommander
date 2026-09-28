@@ -43,9 +43,13 @@ use watch::{watch_roots, FsEventAction};
 /// Application policy, checked immediately before extraction and persistence.
 pub type PathPolicy = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 
+/// Relocate stored paths only after the caller verifies the index's volume identity.
+pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf> + Send + Sync>;
+
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
     path_policy: PathPolicy,
+    path_mapper: Option<PathMapper>,
     config: IndexConfig,
     ci: Arc<ContentIndex>,
     status: Arc<Mutex<IndexStatus>>,
@@ -79,6 +83,18 @@ impl SearchEngine {
         Self::from_index(config, ci, path_policy)
     }
 
+    /// Read an identity-verified private index after its mount path changes, without writes.
+    /// Mapped paths must still pass the current configured roots and native path policy.
+    pub fn open_existing_with_mapped_paths(
+        config: IndexConfig,
+        path_policy: PathPolicy,
+        path_mapper: PathMapper,
+    ) -> Result<Self> {
+        let mut engine = Self::open_existing_with_policy(config, path_policy)?;
+        engine.path_mapper = Some(path_mapper);
+        Ok(engine)
+    }
+
     /// Open an ordinary index concurrently with its writer. May create metadata lockfiles,
     /// but never creates an index, migrates its schema, or permits indexing operations.
     pub fn open_existing_shared(config: IndexConfig) -> Result<Self> {
@@ -101,6 +117,7 @@ impl SearchEngine {
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
             path_policy,
+            path_mapper: None,
             config,
             ci,
             status,
@@ -480,7 +497,7 @@ impl SearchEngine {
                     .unwrap_or_default()
             };
 
-            let meta = FileMeta {
+            let mut meta = FileMeta {
                 doc_id,
                 path: std::path::PathBuf::from(get_str(self.ci.f_path)),
                 name: get_str(self.ci.f_name),
@@ -488,8 +505,16 @@ impl SearchEngine {
                 mtime: get_u64(self.ci.f_mtime),
                 size: get_u64(self.ci.f_size),
             };
-            if restricted && !self.permits_path(&meta.path) {
-                return Ok(vec![]);
+            if restricted {
+                if let Some(mapper) = &self.path_mapper {
+                    let Some(path) = mapper(&meta.path) else {
+                        return Ok(vec![]);
+                    };
+                    meta.path = path;
+                }
+                if !self.permits_path(&meta.path) {
+                    return Ok(vec![]);
+                }
             }
             let extracted = types::ExtractedDoc {
                 meta,
