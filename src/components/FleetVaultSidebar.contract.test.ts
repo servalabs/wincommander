@@ -19,6 +19,15 @@ describe("Fleet Vault quick mount", () => {
     expect(source).toContain('window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave)');
   });
 
+  test("opens on saved Fleet Vaults without requiring a personal shortcut", () => {
+    const openHandler = source.slice(source.indexOf("const handleQmOpen"), source.indexOf("const patchQmSlots"));
+
+    expect(openHandler).toContain("setQmEditing(null)");
+    expect(openHandler).not.toContain("quickMountSlots.length === 0");
+    expect(source).toContain("entry.drive_letter ?? entry.preferred_letter");
+    expect(source).toContain("Loading your saved Fleet Vaults");
+  });
+
   test("does not disclose saved Fleet paths through the sidebar dropdown", () => {
     const fleetStart = source.indexOf('className="qm-fleet-vaults"');
     const fleetSection = source.slice(fleetStart, source.indexOf('{quickMountSlots.length === 0', fleetStart));

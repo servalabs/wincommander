@@ -25,6 +25,11 @@ import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "../hooks/useVaultAcc
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import './RightSidebar.css';
 
+// The service can add a preferred mount letter without exposing a container
+// path. Keep this narrow display-only extension local to the sidebar until
+// the generated renderer contract includes the optional projection field.
+type FleetQuickMountEntry = VaultAuthorizedEntry & { preferred_letter?: string | null };
+
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
 // of the always-visible quick-action rail until the operator requests it.
 const MetadataScrubberDialog = lazy(() => import("./MetadataScrubberDialog"));
@@ -186,7 +191,8 @@ export default function RightSidebar() {
     const [qmSaving, setQmSaving] = useState(false);
     // Fleet Vaults never use this user-settings list: the secure service owns
     // the caller-filtered projection and takes only an opaque entry id on mount.
-    const [fleetVaults, setFleetVaults] = useState<VaultAuthorizedEntry[]>([]);
+    const [fleetVaults, setFleetVaults] = useState<FleetQuickMountEntry[]>([]);
+    const [fleetVaultsLoading, setFleetVaultsLoading] = useState(false);
     const [fleetVaultEntryId, setFleetVaultEntryId] = useState('');
     const [fleetVaultPassword, setFleetVaultPassword] = useState('');
     const [fleetVaultMounting, setFleetVaultMounting] = useState(false);
@@ -201,6 +207,7 @@ export default function RightSidebar() {
     );
 
     const refreshFleetVaults = useCallback(async () => {
+        setFleetVaultsLoading(true);
         try {
             const entries = await listAuthorizedEntries();
             setFleetVaults(entries);
@@ -211,6 +218,8 @@ export default function RightSidebar() {
             // policy/path data for this caller-filtered list.
             setFleetVaults([]);
             setFleetVaultEntryId('');
+        } finally {
+            setFleetVaultsLoading(false);
         }
     }, [listAuthorizedEntries]);
 
@@ -254,9 +263,12 @@ export default function RightSidebar() {
     const handleQmOpen = useCallback(() => {
         setQmPassword('');
         setQmSelectedIdx(0);
-        setQmEditing(quickMountSlots.length === 0 ? { idx: 'new', path: '', letter: nextFreeLetter(), targetType: 'file' } : null);
+        // A service-owned Fleet Vault is a mount target immediately after its
+        // policy is saved.  Do not force the personal-shortcut editor merely
+        // because this Windows account has no local Quick Mount slots.
+        setQmEditing(null);
         setQmOpen(true);
-    }, [quickMountSlots.length, nextFreeLetter]);
+    }, []);
 
     const patchQmSlots = useCallback(async (slots: QmSlot[]) => {
         setQmSaving(true);
@@ -1129,7 +1141,9 @@ export default function RightSidebar() {
                                     <div className="qm-title-row">
                                         <span className="qm-title">Saved Fleet Vaults</span>
                                     </div>
-                                    {fleetVaults.length === 0 ? (
+                                    {fleetVaultsLoading ? (
+                                        <div className="qm-empty">Loading your saved Fleet Vaults…</div>
+                                    ) : fleetVaults.length === 0 ? (
                                         <div className="qm-empty">No Fleet Vault is assigned to this Windows account.</div>
                                     ) : (
                                         <>
@@ -1142,7 +1156,7 @@ export default function RightSidebar() {
                                                     onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); }}
                                                 >
                                                     {fleetVaults.map(entry => <option key={entry.entry_id} value={entry.entry_id}>
-                                                        {entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
+                                                        {(entry.drive_letter ?? entry.preferred_letter) ? `${entry.drive_letter ?? entry.preferred_letter}: — ` : ''}{entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
                                                     </option>)}
                                                 </select>
                                                 <span className="qm-hint">This list is supplied by the Vault service for this Windows account. Container paths are never exposed here.</span>
