@@ -29,6 +29,7 @@ pub mod autonomous_test;
 mod canary_tokens;
 mod context_menu_shred;
 mod datastore;
+mod datastore_io;
 mod devtools;
 mod diagnostics;
 mod disk_analyzer;

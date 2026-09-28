@@ -48,21 +48,10 @@ use rand::RngCore;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
-// These are the only encrypted blobs that share USER_MATERIAL_FILENAME.  If
-// Windows can no longer unlock that material (for example, after a profile or
-// DPAPI migration), archive the key and its matching ciphertext together so a
-// fresh profile can start with defaults without ever overwriting recoverable
-// bytes. Keep this allow-list narrow: unrelated LocalAppData files are not a
-// datastore recovery responsibility.
-const USER_STORE_RECOVERY_FILES: [&str; 3] = [
-    USER_MATERIAL_FILENAME,
-    "user-settings.dat",
-    "clipboard-guard-rules.dat",
-];
+const USER_STORE_FILES: [&str; 2] = ["user-settings.dat", "clipboard-guard-rules.dat"];
 const STORE_SUBDIR: &str = "store";
 const FORMAT_PREFIX_V1: &str = "enc:v1:";
 const FORMAT_PREFIX_V2: &str = "enc:v2:";
@@ -286,44 +275,98 @@ fn install_material() -> Result<[u8; 32], String> {
     // Machine-wide alongside the store (see store_dir): the AES/Argon2 salt
     // must live where the sections it decrypts live, so all accounts share one key.
     let path = crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME);
-    if path.exists() {
-        let raw = fs::read(&path).map_err(|e| format!("Failed to read install material: {e}"))?;
-        if raw.len() == 32 {
-            // Legacy plaintext material. Use it, and best-effort re-write it
-            // DPAPI-protected so the salt is no longer readable from an image.
-            let mut buf = [0u8; 32];
-            buf.copy_from_slice(&raw);
-            if let Ok(protected) = dpapi_protect(&buf) {
-                let _ = atomic_write_bytes(&path, &protected);
+    let raw = match read_material_file(&path)? {
+        Some(raw) => raw,
+        None => {
+            let creation = ensure_material_can_be_created(path.parent().unwrap(), true, &[]);
+            match read_material_file(&path)? {
+                Some(raw) => raw,
+                None => {
+                    creation?;
+                    let mut material = [0u8; 32];
+                    OsRng.fill_bytes(&mut material);
+                    let protected = dpapi_protect(&material)
+                        .map_err(|e| format!("Failed to protect install material: {e}"))?;
+                    crate::datastore_io::publish_new(&path, &protected)?;
+                    // Every initializer must use the committed winner's key.
+                    fs::read(&path).map_err(|e| format!("Failed to read install material: {e}"))?
+                }
             }
-            return Ok(buf);
         }
-        // DPAPI-protected material (blobs are always far larger than 32 bytes).
-        // A file that can't be unprotected is a truncated/partial write or a
-        // foreign machine; fail closed so the bytes survive for manual recovery
-        // rather than rotating the salt and bricking the encrypted store.
-        let plain = dpapi_unprotect(&raw).map_err(|e| format!(
+    };
+    if raw.len() == 32 {
+        // Legacy plaintext material. Use it, and best-effort re-write it
+        // DPAPI-protected so the salt is no longer readable from an image.
+        let mut buf = [0u8; 32];
+        buf.copy_from_slice(&raw);
+        if let Ok(protected) = dpapi_protect(&buf) {
+            let _ = atomic_write_bytes(&path, &protected);
+        }
+        return Ok(buf);
+    }
+    // DPAPI-protected material (blobs are always far larger than 32 bytes).
+    // A file that can't be unprotected is a truncated/partial write or a
+    // foreign machine; fail closed so the bytes survive for manual recovery
+    // rather than rotating the salt and bricking the encrypted store.
+    let plain = dpapi_unprotect(&raw).map_err(|e| format!(
             "Install material at {} could not be unprotected ({e}) — refusing to regenerate (would destroy the encrypted store)",
             path.display()
         ))?;
-        if plain.len() != 32 {
-            return Err(format!(
-                "Install material at {} unprotected to {} bytes, expected 32 — refusing to regenerate",
-                path.display(),
-                plain.len()
-            ));
-        }
-        let mut buf = [0u8; 32];
-        buf.copy_from_slice(&plain);
-        return Ok(buf);
+    if plain.len() != 32 {
+        return Err(format!(
+            "Install material at {} unprotected to {} bytes, expected 32 — refusing to regenerate",
+            path.display(),
+            plain.len()
+        ));
     }
     let mut buf = [0u8; 32];
-    OsRng.fill_bytes(&mut buf);
-    let protected =
-        dpapi_protect(&buf).map_err(|e| format!("Failed to protect install material: {e}"))?;
-    atomic_write_bytes(&path, &protected)
-        .map_err(|e| format!("Failed to write install material: {e}"))?;
+    buf.copy_from_slice(&plain);
     Ok(buf)
+}
+
+fn read_material_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Could not read settings key; existing data preserved: {error}"
+        )),
+    }
+}
+
+fn ensure_material_can_be_created(
+    directory: &std::path::Path,
+    include_sections: bool,
+    filenames: &[&str],
+) -> Result<(), String> {
+    let missing_key = "Settings key is missing but encrypted data exists; restore the matching key. Existing data preserved.";
+    for filename in filenames {
+        match fs::symlink_metadata(directory.join(filename)) {
+            Ok(_) => return Err(missing_key.to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not inspect settings data: {error}")),
+        }
+    }
+    if include_sections {
+        match fs::read_dir(directory.join(STORE_SUBDIR)) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry
+                        .map_err(|error| format!("Could not inspect settings data: {error}"))?;
+                    if entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("dat"))
+                    {
+                        return Err(missing_key.to_string());
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not inspect settings data: {error}")),
+        }
+    }
+    Ok(())
 }
 
 fn protect_user_store_material(
@@ -360,68 +403,40 @@ fn write_new_user_material(
     let mut material = [0u8; 32];
     OsRng.fill_bytes(&mut material);
     let protected = protect_user_store_material(&material, current_user_install)?;
-    atomic_write_bytes(path, &protected)
+    crate::datastore_io::publish_new(path, &protected)
         .map_err(|_| "could not write per-user store material".to_string())?;
-    Ok(material)
+    let committed =
+        fs::read(path).map_err(|_| "could not read per-user store material".to_string())?;
+    decode_user_material(&committed, current_user_install)
 }
 
-/// Move an unrecoverable current-user key and only the ciphertext blobs tied to
-/// it out of their loadable names.  The backup name cannot be reached through
-/// `load_user_blob`, and a UUID keeps repeated recovery attempts from
-/// overwriting a prior forensic/recovery copy.
-fn archive_unreadable_user_store(directory: &std::path::Path) -> Result<(), String> {
-    let recovery_id = Uuid::new_v4().simple().to_string();
-    for filename in USER_STORE_RECOVERY_FILES {
-        let source = directory.join(filename);
-        let archive = directory.join(format!(
-            ".unreadable-user-store-{recovery_id}-{filename}.bak"
-        ));
-        match fs::symlink_metadata(&source) {
-            Ok(metadata) if metadata.file_type().is_file() => {}
-            Ok(_) => return Err("could not archive unreadable per-user data".to_string()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => return Err("could not archive unreadable per-user data".to_string()),
-        }
-        match fs::rename(&source, &archive) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err("could not archive unreadable per-user data".to_string()),
-        }
-    }
-    Ok(())
-}
-
-fn recover_unreadable_user_material(
-    directory: &std::path::Path,
-    current_user_install: bool,
-) -> Result<[u8; 32], String> {
-    archive_unreadable_user_store(directory)?;
-    write_new_user_material(
-        &directory.join(USER_MATERIAL_FILENAME),
-        current_user_install,
-    )
+fn decode_user_material(raw: &[u8], current_user_install: bool) -> Result<[u8; 32], String> {
+    let plain = unprotect_user_store_material(raw, current_user_install).map_err(|_| {
+        "Could not unlock settings key; existing key and encrypted data preserved.".to_string()
+    })?;
+    plain
+        .try_into()
+        .map_err(|_| "Invalid settings key length; existing data preserved.".to_string())
 }
 
 fn user_material() -> Result<[u8; 32], String> {
     let directory = crate::paths::user_data_dir()?;
     let path = directory.join(USER_MATERIAL_FILENAME);
     let current_user_install = crate::paths::current_user_install_uses_local_datastore();
-    if path.exists() {
-        let raw = match fs::read(&path) {
-            Ok(raw) => raw,
-            Err(_) => return recover_unreadable_user_material(&directory, current_user_install),
-        };
-        let plain = match unprotect_user_store_material(&raw, current_user_install) {
-            Ok(plain) if plain.len() == 32 => plain,
-            Ok(_) | Err(_) => {
-                return recover_unreadable_user_material(&directory, current_user_install)
+    match read_material_file(&path)? {
+        Some(raw) => decode_user_material(&raw, current_user_install),
+        None => {
+            let creation =
+                ensure_material_can_be_created(&directory, current_user_install, &USER_STORE_FILES);
+            match read_material_file(&path)? {
+                Some(raw) => decode_user_material(&raw, current_user_install),
+                None => {
+                    creation?;
+                    write_new_user_material(&path, current_user_install)
+                }
             }
-        };
-        let mut material = [0u8; 32];
-        material.copy_from_slice(&plain);
-        return Ok(material);
+        }
     }
-    write_new_user_material(&path, current_user_install)
 }
 
 fn derive_section_key(
@@ -521,24 +536,7 @@ fn decode_section(
 // ── Atomic write helper ───────────────────────────────────────────────────────
 
 fn atomic_write_bytes(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Path has no parent directory".to_string())?;
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| "Path has no file name".to_string())?;
-    let tmp = parent.join(format!(".{file_name}.tmp"));
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| format!("Create temp: {e}"))?;
-        f.write_all(data).map_err(|e| format!("Write temp: {e}"))?;
-        f.sync_all().map_err(|e| format!("Fsync temp: {e}"))?;
-    }
-    fs::rename(&tmp, path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        format!("Atomic rename: {e}")
-    })
+    crate::datastore_io::atomic_write(path, data)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -589,11 +587,8 @@ pub(crate) fn load_user_blob(
     max_plaintext_bytes: usize,
 ) -> Result<Option<Vec<u8>>, String> {
     let path = user_file_path(filename)?;
-    // Resolve the material before looking for the blob. If the current user's
-    // DPAPI material is unrecoverable, this archives the material and its known
-    // companion blobs (including this one); the subsequent existence check then
-    // correctly returns `None` and startup uses defaults instead of attempting
-    // to decode bytes that were encrypted with the retired key.
+    // Never replace unreadable material: the same key may protect settings,
+    // private sections and clipboard rules that remain recoverable.
     let key = derive_section_key(&user_material()?, None)?;
     if !path.exists() {
         return Ok(None);
@@ -925,69 +920,73 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_user_material_archives_only_its_known_blobs_then_recovers() {
+    fn missing_key_does_not_replace_existing_encrypted_sections() {
         let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path();
-        let expected = [
-            (
-                USER_MATERIAL_FILENAME,
-                b"unreadable-dpapi-material".as_slice(),
-            ),
-            ("user-settings.dat", b"old-settings-ciphertext".as_slice()),
-            (
-                "clipboard-guard-rules.dat",
-                b"old-clipboard-policy-ciphertext".as_slice(),
-            ),
-        ];
-        for (filename, bytes) in expected {
-            fs::write(directory.join(filename), bytes).unwrap();
-        }
-        fs::write(directory.join("unrelated-user-file.dat"), b"leave me alone").unwrap();
-
-        let fresh_material = recover_unreadable_user_material(directory, true).unwrap();
-        let new_material = fs::read(directory.join(USER_MATERIAL_FILENAME)).unwrap();
-        assert_eq!(
-            dpapi_unprotect(&new_material).unwrap(),
-            fresh_material.to_vec(),
-            "a fresh current-user-install material must use machine DPAPI"
-        );
-        assert_eq!(
-            fs::read(directory.join("unrelated-user-file.dat")).unwrap(),
-            b"leave me alone",
-            "recovery must not move unrelated LocalAppData files"
-        );
-
-        let archived: Vec<_> = fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with(".unreadable-user-store-"))
-            })
-            .collect();
-        assert_eq!(archived.len(), USER_STORE_RECOVERY_FILES.len());
-        for (filename, bytes) in expected {
-            let archive = archived
-                .iter()
-                .find(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.ends_with(&format!("-{filename}.bak")))
-                })
-                .expect("every known encrypted blob must be archived");
-            assert_eq!(fs::read(archive).unwrap(), bytes);
-        }
+        let store = temp.path().join(STORE_SUBDIR);
+        fs::create_dir(&store).unwrap();
+        let path = store.join("settings.dat");
+        fs::write(&path, b"preserve encrypted policy").unwrap();
+        assert!(ensure_material_can_be_created(temp.path(), true, &[]).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"preserve encrypted policy");
+        assert!(!temp.path().join(MATERIAL_FILENAME).exists());
     }
 
     #[test]
-    fn user_store_recovery_refuses_to_move_a_directory_named_like_a_blob() {
+    fn missing_user_key_preserves_overlay_and_local_install_sections() {
         let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path();
-        fs::create_dir(directory.join(USER_MATERIAL_FILENAME)).unwrap();
+        assert!(ensure_material_can_be_created(temp.path(), true, &USER_STORE_FILES).is_ok());
+        fs::write(temp.path().join(USER_STORE_FILES[0]), b"saved overlay").unwrap();
+        assert!(ensure_material_can_be_created(temp.path(), false, &USER_STORE_FILES).is_err());
+        assert!(!temp.path().join(USER_MATERIAL_FILENAME).exists());
+    }
 
-        assert!(archive_unreadable_user_store(directory).is_err());
-        assert!(directory.join(USER_MATERIAL_FILENAME).is_dir());
+    #[test]
+    fn key_read_errors_do_not_become_first_run() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(read_material_file(temp.path()).is_err());
+        assert_eq!(
+            read_material_file(&temp.path().join("absent")).unwrap(),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unreadable_user_key_is_preserved_without_rotation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(USER_MATERIAL_FILENAME);
+        fs::write(&path, b"unreadable material").unwrap();
+        let raw = read_material_file(&path).unwrap().unwrap();
+        assert!(decode_user_material(&raw, true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), raw);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_user_key_creation_returns_the_committed_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(USER_MATERIAL_FILENAME);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    write_new_user_material(&path, false).unwrap()
+                })
+            })
+            .collect();
+        let material = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(material.iter().all(|key| key == &material[0]));
+        assert_eq!(
+            decode_user_material(&fs::read(path).unwrap(), false).unwrap(),
+            material[0]
+        );
     }
 
     #[cfg(windows)]

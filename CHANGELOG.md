@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Settings writes use separate temporary files for concurrent launches and
+  briefly retry Windows file-sharing conflicts. First-time key creation keeps
+  one committed key; unreadable keys and encrypted settings are preserved
+  instead of automatically replacing the key and resetting preferences.
+
 - Selected VeraCrypt folders now use an index inside the mounted volume.
   Search checks the native volume identity, updates incrementally while mounted,
   and reads existing indexes without writing on read-only mounts, including

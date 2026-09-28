@@ -73,6 +73,10 @@ each section at rest:
 - **Store files:** `%ProgramData%\<APP>\store\<section>.dat`. Settings are the `settings` section.
 - **At-rest format:** `enc:v1:` + base64(`nonce[12]` ‖ ciphertext-with-GCM-tag), encrypted with **AES-256-GCM**.
 - **Key derivation:** a per-install 32-byte material file (`%ProgramData%\<APP>\.install.material`) is the Argon2id salt. General sections derive their key from an empty password; the private section derives from a user passphrase. The material is generated once and is **not** tied to the binary version, so settings survive app updates.
+- **Key preservation:** concurrent first launches use the same committed material.
+  Read or unlock failures never automatically replace a key. If encrypted data
+  exists without its matching material, startup preserves it for recovery;
+  restoring that data requires its matching key, not administrator elevation.
 
 A wrong passphrase on the private section yields an AES-256-GCM authentication
 failure — there is no plaintext fallback.
