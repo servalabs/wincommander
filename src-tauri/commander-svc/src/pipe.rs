@@ -23,7 +23,7 @@
 
 #![cfg(windows)]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
@@ -411,19 +411,6 @@ pub(crate) async fn handle_connection(
                 crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
-                if is_vault_management_verb(&req.feature_id)
-                    && !caller_privileged
-                    && !vault_policy_manager
-                {
-                    let reply = Envelope::Error(ErrorReply {
-                        request_id,
-                        kind: "forbidden".to_string(),
-                        message: "vault policy operation requires Vault Policy Administrator"
-                            .to_string(),
-                    });
-                    crate::pipe_transport::write_frame(&mut conn, &reply).await?;
-                    continue;
-                }
                 let reply = dispatch_verb(
                     req,
                     trust_origin,
@@ -432,7 +419,7 @@ pub(crate) async fn handle_connection(
                     &vault_access,
                     &vault_mount,
                     peer.as_deref(),
-                    caller_privileged || vault_policy_manager,
+                    caller_privileged,
                 )
                 .await;
                 crate::pipe_transport::write_frame(&mut conn, &reply).await?;
@@ -613,16 +600,31 @@ async fn dispatch_verb(
 
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
-        "svc.vault.get_policy" => {
-            Ok(serde_json::to_value(vault_access.policy()).unwrap_or(serde_json::Value::Null))
-        }
+        "svc.vault.get_policy" => Ok(serde_json::to_value(
+            peer.map(|peer| vault_access.caller_projection(peer.caller_sid()))
+                .unwrap_or_else(|| vault_access.caller_projection("")),
+        )
+        .unwrap_or(serde_json::Value::Null)),
+        "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
         "svc.vault.get_status" => {
             Ok(serde_json::to_value(vault_access.status()).unwrap_or(serde_json::Value::Null))
         }
-        "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
-        "svc.vault.forget_entry_policy_only" => {
-            handle_vault_forget_entry_policy_only(vault_access, vault_mount, args)
+        // The historical whole-policy wire cannot safely be caller-scoped:
+        // an owner would have to receive other owners' records or omission
+        // would become deletion.  Keep it closed now that fragments exist.
+        "svc.vault.apply_policy" => Err(VerbError::new(
+            "vault_legacy_policy_wire_retired",
+            "reload Fleet Vaults before saving policy changes",
+        )),
+        "svc.vault.apply_owner_fragment" => {
+            handle_vault_apply_owner_fragment(vault_access, vault_mount, args, peer)
         }
+        "svc.vault.forget_entry_policy_only" => handle_vault_forget_entry_policy_only(
+            vault_access,
+            vault_mount,
+            args,
+            caller_privileged,
+        ),
         "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, peer),
         "svc.vault.mount" if args.get("personal") == Some(&serde_json::Value::Bool(true)) => {
             handle_personal_vault_mount(request_id, vault_access, vault_mount, args, peer).await
@@ -981,31 +983,228 @@ fn handle_vault_apply(
         .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))
 }
 
-/// A policy swap can remove a caller or narrow a grant. Dismount every active
-/// entry *before* accepting the new policy; failure leaves the prior policy
-/// intact and reports no false success to an administrator.
-fn handle_vault_apply_and_cleanup(
+fn handle_vault_apply_owner_fragment(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
-    let policy = prepare_vault_apply_policy(args)?;
+    let fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment =
+        serde_json::from_value(args).map_err(|_| {
+            VerbError::new(
+                "vault_validation_failed",
+                "vault owner policy request is invalid",
+            )
+        })?;
+    let caller_sid = peer
+        .map(AuthenticatedPipePeer::caller_sid)
+        .filter(|sid| !sid.is_empty())
+        .ok_or_else(|| VerbError::new("vault_not_authorized", "vault owner session unavailable"))?;
     vault_mount.with_exclusive_operation(|| {
-        // A competing request can change the durable policy after the first
-        // parse. Re-check the version under the same exclusive mount gate,
-        // before dismounting anything.
+        if vault_mount.has_active_mounts_locked() {
+            return Err(VerbError::new(
+                "vault_mounted",
+                "dismount the vault before changing its policy",
+            ));
+        }
+        let policy = merge_owner_fragment(vault_access, fragment.clone(), caller_sid)?;
+        // The fragment has already been merged with the service's complete
+        // protected policy.  The ordinary apply path now performs its normal
+        // identity/ACL read-back and atomic persistence.
         validate_vault_apply_version(vault_access, &policy)?;
+        validate_vault_owner_mutation(vault_access, &policy, caller_sid, false)?;
         vault_access
             .preflight_apply(policy.clone())
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
-        vault_mount.dismount_all_locked(vault_access).map_err(|_| {
-            VerbError::new(
-                "vault_dismount_failed",
-                "active vaults could not be dismounted",
-            )
-        })?;
         handle_vault_apply(vault_access, policy)
     })
+}
+
+fn merge_owner_fragment(
+    vault_access: &VaultAccessStore,
+    fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment,
+    caller_sid: &str,
+) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
+    use wincmd_shared::vault_access::VaultAccessPolicy;
+    let denied = || {
+        VerbError::new(
+            "vault_not_authorized",
+            "vault policy is owned by another Windows user",
+        )
+    };
+    if fragment.schema_version != wincmd_shared::vault_access::VAULT_ACCESS_SCHEMA_VERSION {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "vault owner policy request is invalid",
+        ));
+    }
+    let previous = vault_access.policy();
+    let mut incoming = HashMap::new();
+    for owned in fragment.entries {
+        if owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) {
+            return Err(denied());
+        }
+        if incoming.insert(owned.entry.id.clone(), owned).is_some() {
+            return Err(VerbError::new(
+                "vault_validation_failed",
+                "vault owner policy request is invalid",
+            ));
+        }
+    }
+    let Some(previous) = previous else {
+        let policy_id = fragment
+            .policy_id
+            .unwrap_or_else(|| format!("vault-owner-{caller_sid}"));
+        return Ok(VaultAccessPolicy {
+            schema_version: fragment.schema_version,
+            policy_id,
+            version: 1,
+            expected_previous_version: 0,
+            entries: incoming.into_values().map(|owned| owned.entry).collect(),
+        });
+    };
+    if fragment.policy_id.as_deref() != Some(previous.policy_id.as_str())
+        || fragment.expected_previous_version != previous.version
+    {
+        return Err(VerbError::new("vault_apply_failed", "vault policy was changed elsewhere since this draft was loaded — reload the Vault tab and reapply"));
+    }
+    let mut entries = Vec::with_capacity(previous.entries.len() + incoming.len());
+    for existing in &previous.entries {
+        let Some(replacement) = incoming.remove(&existing.id) else {
+            // Omission is never deletion: the caller may only receive their
+            // own fragment and must not be able to erase a hidden owner.
+            entries.push(existing.clone());
+            continue;
+        };
+        if existing.primary_owner_sid.as_deref() != Some(caller_sid) {
+            return Err(denied());
+        }
+        let mut entry = replacement.entry;
+        // A saved Vault is an opaque service identity. Preserve backing path,
+        // stable identity, and container kind from the protected record; the
+        // owner may change policy, not retarget it to an arbitrary file.
+        entry.container_path = existing.container_path.clone();
+        entry.container_identity = existing.container_identity.clone();
+        entry.container_kind = existing.container_kind;
+        entries.push(entry);
+    }
+    // New entries are accepted only for the caller's SID. Their backing path
+    // is subsequently normalized and identity-attested by `apply`.
+    entries.extend(incoming.into_values().map(|owned| owned.entry));
+    Ok(VaultAccessPolicy {
+        schema_version: previous.schema_version,
+        policy_id: previous.policy_id,
+        version: previous.version.saturating_add(1),
+        expected_previous_version: previous.version,
+        entries,
+    })
+}
+
+/// Ownership is a service decision based on the authenticated Windows SID,
+/// never a renderer's selected account name.  A privileged caller can create
+/// a policy for another user and can remove an unmounted entry, but cannot
+/// inspect, edit, transfer, mount, or dismount someone else's Vault.
+fn validate_vault_owner_mutation(
+    vault_access: &VaultAccessStore,
+    requested: &wincmd_shared::vault_access::VaultAccessPolicy,
+    caller_sid: &str,
+    caller_privileged: bool,
+) -> Result<(), VerbError> {
+    let previous = vault_access.policy();
+    let denied = || {
+        VerbError::new(
+            "vault_not_authorized",
+            "vault policy is owned by another Windows user",
+        )
+    };
+    let Some(previous) = previous else {
+        if requested.entries.iter().all(|entry| {
+            entry.primary_owner_sid.as_deref() == Some(caller_sid) || caller_privileged
+        }) {
+            return Ok(());
+        }
+        return Err(denied());
+    };
+    let requested_by_id = requested
+        .entries
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    for existing in &previous.entries {
+        let owns_existing = existing.primary_owner_sid.as_deref() == Some(caller_sid);
+        match requested_by_id.get(existing.id.as_str()) {
+            None if owns_existing || caller_privileged => {}
+            None => return Err(denied()),
+            Some(replacement) if !owns_existing => {
+                // A full policy draft may include another entry only when it
+                // is byte-for-byte unchanged.  This prevents a guessed ID
+                // from becoming a cross-owner edit or ownership transfer.
+                if *replacement != existing {
+                    return Err(denied());
+                }
+            }
+            Some(replacement) => {
+                if replacement.primary_owner_sid != existing.primary_owner_sid && !owns_existing {
+                    return Err(denied());
+                }
+            }
+        }
+    }
+    for entry in &requested.entries {
+        if previous.entries.iter().all(|old| old.id != entry.id)
+            && entry.primary_owner_sid.as_deref() != Some(caller_sid)
+            && !caller_privileged
+        {
+            return Err(denied());
+        }
+    }
+    Ok(())
+}
+
+fn handle_vault_list_principals(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    if !args.is_null() && args != serde_json::json!({}) {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "principal list request is invalid",
+        ));
+    }
+    let peer = peer
+        .ok_or_else(|| VerbError::new("vault_not_authorized", "vault owner session unavailable"))?;
+    let directory = vault_access.access_directory().map_err(|_| {
+        VerbError::new(
+            "vault_directory_unavailable",
+            "vault owner list is unavailable",
+        )
+    })?;
+    let mut principals = directory
+        .users
+        .into_iter()
+        .map(|user| wincmd_shared::vault_access::VaultKnownPrincipal {
+            sid: user.sid,
+            display_name: user.display_name.unwrap_or(user.username),
+        })
+        .collect::<Vec<_>>();
+    // The current interactive user must always be selectable even when an
+    // administrator has not yet populated Fleet's optional access directory.
+    if !principals
+        .iter()
+        .any(|principal| principal.sid == peer.caller_sid())
+    {
+        principals.push(wincmd_shared::vault_access::VaultKnownPrincipal {
+            sid: peer.caller_sid().to_owned(),
+            display_name: "Current Windows user".to_owned(),
+        });
+    }
+    principals.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    serde_json::to_value(wincmd_shared::vault_access::VaultKnownPrincipalsResponse {
+        current_caller_sid: peer.caller_sid().to_owned(),
+        principals,
+    })
+    .map_err(|_| VerbError::new("vault_internal_error", "vault owner list is unavailable"))
 }
 
 /// Removes only the selected service-owned policy record after a degraded ACL
@@ -1018,7 +1217,14 @@ fn handle_vault_forget_entry_policy_only(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
+    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
+    if !caller_privileged {
+        return Err(VerbError::new(
+            "vault_not_authorized",
+            "only a local administrator may remove another user's vault policy",
+        ));
+    }
     let request: wincmd_shared::vault_access::VaultForgetEntryPolicyOnlyRequest =
         serde_json::from_value(args).map_err(|_| {
             VerbError::new(
@@ -1027,12 +1233,12 @@ fn handle_vault_forget_entry_policy_only(
             )
         })?;
     vault_mount.with_exclusive_operation(|| {
-        vault_mount.dismount_all_locked(vault_access).map_err(|_| {
-            VerbError::new(
-                "vault_dismount_failed",
-                "active vaults could not be dismounted",
-            )
-        })?;
+        if vault_mount.has_active_mounts_locked() {
+            return Err(VerbError::new(
+                "vault_mounted",
+                "dismount the vault before deleting its policy",
+            ));
+        }
         vault_access
             .forget_entry_policy_only(
                 &request.entry_id,
@@ -1145,10 +1351,8 @@ fn handle_vault_save_access_directory(
                 }
                 Ok(())
             };
-            let (directory, results) =
-                vault_access.save_access_directory_before_change(request.directory, || {
-                    dismount_once()
-                })?;
+            let (directory, results) = vault_access
+                .save_access_directory_before_change(request.directory, || dismount_once())?;
             let membership_changed = results.iter().any(|result| {
                 matches!(
                     result.state,
@@ -2236,8 +2440,7 @@ fn require_personal_mount_peer(
 
 fn valid_personal_mount_query(args: &serde_json::Value) -> bool {
     args.as_object().is_some_and(|object| {
-        object.get("personal") == Some(&serde_json::Value::Bool(true))
-            && object.len() == 1
+        object.get("personal") == Some(&serde_json::Value::Bool(true)) && object.len() == 1
     })
 }
 

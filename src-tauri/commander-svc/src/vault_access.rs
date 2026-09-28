@@ -261,6 +261,20 @@ fn valid_personal_record(record: &PersonalVaultRecord) -> bool {
         && record.created_by_session != 0
 }
 
+/// Kept local to the service: the renderer may display a SID, but only this
+/// protected store decides whether it is structurally safe to persist as a
+/// Vault owner identity.
+fn valid_windows_sid(value: &str) -> bool {
+    let parts = value.split('-').collect::<Vec<_>>();
+    value.len() <= 184
+        && (3..=18).contains(&parts.len())
+        && parts.first() == Some(&"S")
+        && parts.get(1) == Some(&"1")
+        && parts[2..]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 fn valid_pending_personal(pending: &PendingPersonalVault) -> bool {
     !pending.owner_sid.is_empty()
         && valid_creation_path(Path::new(&pending.container_path))
@@ -716,8 +730,9 @@ impl VaultAccessStore {
                 // misleadingly healthy policy.
                 let normalized = self.normalize_policy_paths(&mut policy.policy)?;
                 let migrated = self.migrate_authorization_grants(policy)?;
+                let owner_migrated = self.migrate_primary_owner_sids(policy)?;
                 self.revalidate_persisted_policy(policy)?;
-                if normalized || migrated {
+                if normalized || migrated || owner_migrated {
                     let bytes = serde_json::to_vec(policy).map_err(|_| VaultError::Persistence)?;
                     self.fs
                         .atomic_write(&self.path, &bytes)
@@ -1936,6 +1951,65 @@ impl VaultAccessStore {
             .map(|p| p.policy.clone())
     }
 
+    /// A caller-scoped policy view.  The service never projects another
+    /// owner's label, path, letter, grants, or SID to a normal Fleet user.
+    pub fn caller_projection(
+        &self,
+        caller_sid: &str,
+    ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+        use wincmd_shared::vault_access::{
+            VaultContainerPathState, VaultOwnedPolicyEntry, VaultOwnerPolicyFragment,
+        };
+
+        let empty = || VaultOwnerPolicyFragment {
+            schema_version: VAULT_ACCESS_SCHEMA_VERSION,
+            policy_id: None,
+            version: 0,
+            expected_previous_version: 0,
+            entries: Vec::new(),
+        };
+        if !valid_windows_sid(caller_sid) {
+            return empty();
+        }
+        let Ok(state) = self.state.lock() else {
+            return empty();
+        };
+        if state.status.validation_state != VaultValidationState::Current {
+            return empty();
+        }
+        let Some(active) = state.active.as_ref() else {
+            return empty();
+        };
+        let entries = active
+            .policy
+            .entries
+            .iter()
+            .filter(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid))
+            .map(|entry| {
+                let available = self
+                    .fs
+                    .stable_file_identity(Path::new(&entry.container_path))
+                    .is_ok();
+                VaultOwnedPolicyEntry {
+                    entry: entry.clone(),
+                    container_path_state: if available {
+                        VaultContainerPathState::Available
+                    } else {
+                        VaultContainerPathState::Unavailable
+                    },
+                    canonical_container_path: available.then(|| entry.container_path.clone()),
+                }
+            })
+            .collect();
+        VaultOwnerPolicyFragment {
+            schema_version: active.policy.schema_version,
+            policy_id: Some(active.policy.policy_id.clone()),
+            version: active.policy.version,
+            expected_previous_version: active.policy.version,
+            entries,
+        }
+    }
+
     /// Return service-only mount facts after the pipe caller has already been
     /// authorized. These paths and resolved SIDs must never be serialized onto
     /// the UI wire.
@@ -2501,15 +2575,24 @@ impl VaultAccessStore {
                 } else {
                     let owner = self.principals.resolve_principal(&entry.owner_account)?;
                     match owner.kind {
-                        PrincipalKind::User => {
+                        PrincipalKind::User
+                            if entry.primary_owner_sid.is_none()
+                                || entry.primary_owner_sid.as_deref()
+                                    == Some(owner.sid.as_str()) =>
+                        {
                             write_members.push(owner.sid.clone());
                             merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
                             merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
                         }
-                        PrincipalKind::Group => {
+                        // Legacy policy records did not carry an immutable
+                        // primary-owner SID. Keep them mount-compatible until
+                        // their owner saves them once; new records with a SID
+                        // may never nominate a group or a mismatched user.
+                        PrincipalKind::Group if entry.primary_owner_sid.is_none() => {
                             merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
                             merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
                         }
+                        _ => return Err(VaultError::Validation),
                     }
                 }
                 for grant in &entry.grants {
@@ -2666,6 +2749,28 @@ impl VaultAccessStore {
             let normalized = normalized.to_string_lossy().into_owned();
             if entry.container_path != normalized {
                 entry.container_path = normalized;
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Upgrade legacy records to the immutable owner SID without trusting a
+    /// WebView profile.  A non-Windows/unit-test resolver may intentionally
+    /// use synthetic IDs, so only a real SID is persisted; unsupported legacy
+    /// records stay usable by their old grant policy until an explicit save.
+    fn migrate_primary_owner_sids(
+        &self,
+        persisted: &mut PersistedPolicy,
+    ) -> Result<bool, VaultError> {
+        let mut changed = false;
+        for entry in &mut persisted.policy.entries {
+            if entry.primary_owner_sid.is_some() {
+                continue;
+            }
+            let owner = self.principals.resolve_principal(&entry.owner_account)?;
+            if owner.kind == PrincipalKind::User && valid_windows_sid(&owner.sid) {
+                entry.primary_owner_sid = Some(owner.sid);
                 changed = true;
             }
         }
@@ -4140,6 +4245,10 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
             || entry.label.trim().is_empty()
             || entry.label.len() > 128
             || entry.owner_account.trim().is_empty()
+            || entry
+                .primary_owner_sid
+                .as_deref()
+                .is_some_and(|sid| !valid_windows_sid(sid))
             || !Path::new(&entry.container_path).is_absolute()
             || entry.grants.is_empty()
             || entry.grants.len() > MAX_GRANTS
@@ -4626,6 +4735,7 @@ mod tests {
                 container_path: "C:\\vaults\\shared.hc".into(),
                 container_identity: None,
                 container_kind: wincmd_shared::vault_access::VaultContainerKind::Standard,
+                primary_owner_sid: None,
                 owner_account: "Admin".into(),
                 grants: vec![
                     wincmd_shared::vault_access::VaultGrantInput {

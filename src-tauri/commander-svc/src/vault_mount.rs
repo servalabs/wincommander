@@ -1306,6 +1306,17 @@ impl VaultMountBroker {
         self.with_exclusive_operation(|| self.dismount_all_locked(store))
     }
 
+    /// Policy ownership is deliberately immutable while a container is live.
+    /// Callers use this under `with_exclusive_operation`; it does not dismount
+    /// on their behalf because an implicit close would let an administrator
+    /// bypass the owner's active session.
+    pub(crate) fn has_active_mounts_locked(&self) -> bool {
+        self.active
+            .lock()
+            .map(|active| !active.is_empty())
+            .unwrap_or(true)
+    }
+
     pub(crate) fn dismount_all_locked(
         &self,
         store: &VaultAccessStore,
