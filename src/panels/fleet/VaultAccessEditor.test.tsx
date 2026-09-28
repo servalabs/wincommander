@@ -29,6 +29,7 @@ const status: VaultPolicyStatus = {
 };
 const root = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
 const editorSource = readFileSync("src/panels/fleet/VaultAccessEditor.tsx", "utf8");
+const vaultHookSource = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const helpSource = readFileSync("src/panels/fleet/VaultAccessInfo.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/VaultAccessEditor.css", "utf8");
 const renderEditor = (value = entry) => renderToStaticMarkup(<VaultAccessEditor
@@ -160,6 +161,11 @@ describe("Vault path display", () => {
     expect(unavailable).toContain('value="Path unavailable"');
     expect(unavailable).not.toContain('value="???"');
   });
+});
+
+test("gets owner choices from the native service adapter, never browser storage", () => {
+  expect(vaultHookSource).toContain('invoke<VaultOwnerPrincipalList>("vault_list_known_principals")');
+  expect(vaultHookSource).not.toContain("localStorage");
 });
 
 describe("Vault access state boundaries remain distinct", () => {

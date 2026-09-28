@@ -56,7 +56,7 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const listOwnerPrincipals = useCallback(
-    () => invoke<VaultOwnerPrincipalList>("svc.vault.list_principals"),
+    () => invoke<VaultOwnerPrincipalList>("vault_list_known_principals"),
     [],
   );
   const reconcileAccessGroups = useCallback(
