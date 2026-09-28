@@ -23,13 +23,15 @@ describe("RDP diagnostic-history preference", () => {
   });
 
   test("one persisted preference gates every RDP timeline producer", async () => {
-    const [app, card, outgoing, incomingSignout, incomingDismount, nativeWatch] = await Promise.all([
+    const [app, card, outgoing, incomingSignout, incomingDismount, nativeWatch, writer, reader] = await Promise.all([
       Bun.file("src/App.tsx").text(),
       Bun.file("src/panels/privacy/RdpIdleCard.tsx").text(),
       Bun.file("src/hooks/useRdpIdleDisconnect.ts").text(),
       Bun.file("src/hooks/useRdpIncomingIdleSignout.ts").text(),
       Bun.file("src/hooks/useRdpIncomingDismount.ts").text(),
       Bun.file("src-tauri/commander-free/src/rdp_session_watch.rs").text(),
+      Bun.file("src/lib/diagnostics.ts").text(),
+      Bun.file("src/hooks/useDiagnosticCenter.ts").text(),
     ]);
     expect(app).toContain("rdpSaveLog === true");
     expect(app).toContain("rdpDiagnosticLoggingEnabled");
@@ -40,5 +42,8 @@ describe("RDP diagnostic-history preference", () => {
     }
     expect(nativeWatch).toContain("rdp_save_log == Some(true)");
     expect(nativeWatch).toContain("if !rdp_diagnostics_enabled() {");
+    expect(writer).toContain("new Event(DIAGNOSTIC_RECORDED_EVENT)");
+    expect(reader).toContain("window.addEventListener(DIAGNOSTIC_RECORDED_EVENT");
+    expect(reader).toContain("LIVE_REFRESH_FALLBACK_MS");
   });
 });

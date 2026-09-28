@@ -5,6 +5,9 @@ import { recordDiagnosticEvent, type DiagnosticEventRequest } from "../hooks/use
 import { routeDiagnosticNotification } from "./diagnosticNotification";
 import { pushDiagnosticNotification } from "./notificationStore";
 
+/** A durable record was written; Diagnostic Center can refresh immediately. */
+export const DIAGNOSTIC_RECORDED_EVENT = "wincommander:diagnostic-recorded";
+
 export type DiagnosticLifecycle = "requested" | "delivered" | "acknowledged" | "applying" | "applied" | "verified";
 export type DiagnosticOutcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "recovered" | "cancelled" | "timed_out";
 export type DiagnosticSeverity = "debug" | "info" | "warn" | "error" | "critical";
@@ -78,6 +81,12 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
       privacyClass: input.privacyClass, redactedContext: safeContext(input.context),
   };
   void recordDiagnosticEvent(event).then(() => {
+    // Notify only after the encrypted write succeeds. The event carries no
+    // diagnostic content; it simply lets an already-open Diagnostics screen
+    // fetch the new safe record instead of requiring a manual refresh.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(DIAGNOSTIC_RECORDED_EVENT));
+    }
     // The bell is a projection of a durable event, never a parallel error path.
     // It contains only a stable operation reference; details stay encrypted.
     if (route.bell) pushDiagnosticNotification(route.bell, operationId);

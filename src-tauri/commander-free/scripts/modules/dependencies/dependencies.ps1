@@ -661,10 +661,26 @@ function Resolve-QpdfExe {
         "$env:ProgramFiles\qpdf\bin\qpdf.exe",
         "${env:ProgramFiles(x86)}\qpdf\bin\qpdf.exe",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links\qpdf.exe",
+        "$env:ProgramFiles\WinGet\Links\qpdf.exe",
         "$env:APPDATA\WinCommander\tools\qpdf.exe"
     )
     foreach ($p in $candidates) {
         if ($p -and (Test-Path $p)) { return $p }
+    }
+    # The official QPDF NSIS installer distributed by winget creates a
+    # versioned directory (for example `qpdf 12.4.2\bin\qpdf.exe`) instead
+    # of an unversioned `qpdf` directory or PATH shim. Inspect only the two
+    # Program Files roots and choose the highest layout name, not a broad disk
+    # scan, so a successful silent install is immediately verifiable.
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+        $dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^qpdf\s+' } |
+            Sort-Object -Property Name -Descending
+        foreach ($dir in $dirs) {
+            $candidate = Join-Path $dir.FullName 'bin\qpdf.exe'
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
     }
     foreach ($base in @("$env:LOCALAPPDATA\Microsoft\WinGet\Packages", "$env:ProgramFiles\WinGet\Packages")) {
         if (Test-Path $base) {
