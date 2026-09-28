@@ -600,17 +600,15 @@ async fn dispatch_verb(
 
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
-        "svc.vault.get_policy" => Ok(serde_json::to_value(
-            if caller_privileged {
-                // An actual local administrator may inspect Vault policy
-                // records for recovery/removal.  This does not bypass the
-                // owner checks in apply/mount/unmount handlers.
-                vault_access.administrator_projection()
-            } else {
-                peer.map(|peer| vault_access.caller_projection(peer.caller_sid()))
-                    .unwrap_or_else(|| vault_access.caller_projection(""))
-            },
-        )
+        "svc.vault.get_policy" => Ok(serde_json::to_value(if caller_privileged {
+            // An actual local administrator may inspect Vault policy
+            // records for recovery/removal.  This does not bypass the
+            // owner checks in apply/mount/unmount handlers.
+            vault_access.administrator_projection()
+        } else {
+            peer.map(|peer| vault_access.caller_projection(peer.caller_sid()))
+                .unwrap_or_else(|| vault_access.caller_projection(""))
+        })
         .unwrap_or(serde_json::Value::Null)),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
         "svc.vault.get_status" => {
@@ -623,9 +621,13 @@ async fn dispatch_verb(
             "vault_legacy_policy_wire_retired",
             "reload Fleet Vaults before saving policy changes",
         )),
-        "svc.vault.apply_owner_fragment" => {
-            handle_vault_apply_owner_fragment(vault_access, vault_mount, args, peer)
-        }
+        "svc.vault.apply_owner_fragment" => handle_vault_apply_owner_fragment(
+            vault_access,
+            vault_mount,
+            args,
+            peer,
+            caller_privileged,
+        ),
         "svc.vault.forget_entry_policy_only" => handle_vault_forget_entry_policy_only(
             vault_access,
             vault_mount,
@@ -995,6 +997,7 @@ fn handle_vault_apply_owner_fragment(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
+    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment =
         serde_json::from_value(args).map_err(|_| {
@@ -1014,13 +1017,18 @@ fn handle_vault_apply_owner_fragment(
                 "dismount the vault before changing its policy",
             ));
         }
-        let policy = merge_owner_fragment(vault_access, fragment.clone(), caller_sid)?;
+        let policy = merge_owner_fragment(
+            vault_access,
+            fragment.clone(),
+            caller_sid,
+            caller_privileged,
+        )?;
         validate_private_owner_administrators(&policy)?;
         // The fragment has already been merged with the service's complete
         // protected policy.  The ordinary apply path now performs its normal
         // identity/ACL read-back and atomic persistence.
         validate_vault_apply_version(vault_access, &policy)?;
-        validate_vault_owner_mutation(vault_access, &policy, caller_sid)?;
+        validate_vault_owner_mutation(vault_access, &policy, caller_sid, caller_privileged)?;
         vault_access
             .preflight_apply(policy.clone())
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
@@ -1074,6 +1082,7 @@ fn merge_owner_fragment(
     vault_access: &VaultAccessStore,
     fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment,
     caller_sid: &str,
+    caller_privileged: bool,
 ) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
     use wincmd_shared::vault_access::VaultAccessPolicy;
     let denied = || {
@@ -1089,6 +1098,11 @@ fn merge_owner_fragment(
         ));
     }
     let previous = vault_access.policy();
+    let administrator_sids = if caller_privileged {
+        Some(local_administrator_sids()?)
+    } else {
+        None
+    };
     let mut incoming = HashMap::new();
     for owned in fragment.entries {
         // Initial policy creation may nominate another valid Windows user as
@@ -1098,9 +1112,24 @@ fn merge_owner_fragment(
         // check could verify it.  A brand-new entry added to an existing
         // policy must still belong to the caller.
         if let Some(previous) = previous.as_ref() {
-            match previous.entries.iter().find(|entry| entry.id == owned.entry.id) {
+            match previous
+                .entries
+                .iter()
+                .find(|entry| entry.id == owned.entry.id)
+            {
                 Some(existing) if existing.primary_owner_sid.as_deref() != Some(caller_sid) => {
-                    return Err(denied());
+                    let eligible_target =
+                        owned.entry.primary_owner_sid.as_deref().is_some_and(|sid| {
+                            administrator_sids
+                                .as_ref()
+                                .is_some_and(|sids| sids.contains(sid))
+                        });
+                    if !caller_privileged
+                        || !is_administrator_ownership_transfer(existing, &owned.entry)
+                        || !eligible_target
+                    {
+                        return Err(denied());
+                    }
                 }
                 None if owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) => {
                     return Err(denied());
@@ -1140,7 +1169,9 @@ fn merge_owner_fragment(
             entries.push(existing.clone());
             continue;
         };
-        if existing.primary_owner_sid.as_deref() != Some(caller_sid) {
+        let administrator_transfer =
+            caller_privileged && is_administrator_ownership_transfer(existing, &replacement.entry);
+        if existing.primary_owner_sid.as_deref() != Some(caller_sid) && !administrator_transfer {
             return Err(denied());
         }
         let mut entry = replacement.entry;
@@ -1164,6 +1195,41 @@ fn merge_owner_fragment(
     })
 }
 
+fn local_administrator_sids() -> Result<HashSet<String>, VerbError> {
+    crate::vault_access::local_administrator_principals()
+        .map_err(|_| {
+            VerbError::new(
+                "vault_directory_unavailable",
+                "local administrator accounts are unavailable",
+            )
+        })
+        .map(|principals| {
+            principals
+                .into_iter()
+                .map(|principal| principal.sid)
+                .collect()
+        })
+}
+
+/// The recovery-administrator path can change only durable ownership facts.
+/// It never accepts a path, drive, grants, mount policy, or container change
+/// alongside the transfer. Vault credentials are not policy data and are
+/// therefore never copied or transferred here.
+fn is_administrator_ownership_transfer(
+    existing: &wincmd_shared::vault_access::VaultAccessEntry,
+    requested: &wincmd_shared::vault_access::VaultAccessEntry,
+) -> bool {
+    if requested.primary_owner_sid == existing.primary_owner_sid
+        || requested.primary_owner_sid.is_none()
+    {
+        return false;
+    }
+    let mut ownership_only = requested.clone();
+    ownership_only.primary_owner_sid = existing.primary_owner_sid.clone();
+    ownership_only.owner_account = existing.owner_account.clone();
+    ownership_only == *existing
+}
+
 /// Ownership is a service decision based on the authenticated Windows SID,
 /// never a renderer's selected account name.  A privileged caller can create
 /// a policy for another user and can remove an unmounted entry, but cannot
@@ -1172,6 +1238,7 @@ fn validate_vault_owner_mutation(
     vault_access: &VaultAccessStore,
     requested: &wincmd_shared::vault_access::VaultAccessPolicy,
     caller_sid: &str,
+    caller_privileged: bool,
 ) -> Result<(), VerbError> {
     let previous = vault_access.policy();
     let denied = || {
@@ -1197,9 +1264,13 @@ fn validate_vault_owner_mutation(
             None => return Err(denied()),
             Some(replacement) if !owns_existing => {
                 // A full policy draft may include another entry only when it
-                // is byte-for-byte unchanged.  This prevents a guessed ID
-                // from becoming a cross-owner edit or ownership transfer.
-                if *replacement != existing {
+                // is byte-for-byte unchanged, except that an actual local
+                // administrator may perform the narrow ownership-only
+                // transfer validated by `merge_owner_fragment`.
+                if *replacement != existing
+                    && !(caller_privileged
+                        && is_administrator_ownership_transfer(existing, replacement))
+                {
                     return Err(denied());
                 }
             }
@@ -3687,6 +3758,21 @@ mod tests {
             .expect_err("private owner must be an administrator");
 
         assert_eq!(error.kind, "vault_not_authorized");
+    }
+
+    #[test]
+    fn administrator_transfer_cannot_smuggle_an_access_policy_edit() {
+        let mut policy = valid_vault_policy_args();
+        policy["entries"][0]["primary_owner_sid"] = serde_json::json!("S-1-5-21-owner");
+        let existing: wincmd_shared::vault_access::VaultAccessEntry =
+            serde_json::from_value(policy["entries"][0].clone()).expect("test entry");
+        let mut transfer = existing.clone();
+        transfer.primary_owner_sid = Some("S-1-5-21-admin-target".into());
+        transfer.owner_account = "Admin target".into();
+        assert!(is_administrator_ownership_transfer(&existing, &transfer));
+
+        transfer.grants[0].access = wincmd_shared::vault_access::VaultAccess::Read;
+        assert!(!is_administrator_ownership_transfer(&existing, &transfer));
     }
 
     #[test]
