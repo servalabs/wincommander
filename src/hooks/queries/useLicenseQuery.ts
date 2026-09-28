@@ -11,6 +11,7 @@
 // staleTime: 12h — license state rarely changes. After activate /
 // refresh / deactivate, callers invalidate the query to force a refetch.
 
+import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppLicenseStatus } from "../useBackend";
@@ -35,5 +36,8 @@ export function useLicenseQuery() {
 /** Call after activate / refresh / deactivate / start_trial. */
 export function useInvalidateLicense() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: licenseKeys.all });
+  return useCallback(
+    () => qc.invalidateQueries({ queryKey: licenseKeys.all }),
+    [qc],
+  );
 }
