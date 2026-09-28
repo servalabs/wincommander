@@ -7,10 +7,28 @@ import {
   VAULT_MOUNT_REASONS,
   validateVaultAccessIntent,
   vaultMountResultLabel,
+  vaultOwnerFragmentFromPolicy,
+  vaultPolicyFromOwnerFragment,
   vaultPresentationLabel,
 } from "./vaultAccessTypes";
 
 describe("Vault Access service intent", () => {
+  test("maps only the owner-scoped service fragment into an editable policy", () => {
+    const entry = newVaultEntry("private");
+    entry.owner_account = "Owner";
+    entry.primary_owner_sid = "S-1-5-21-owner";
+    entry.container_path = "D:\\Vaults\\owner.hc";
+    const policy = { ...newVaultPolicy(), policy_id: "owner-policy", entries: [entry] };
+    const fragment = vaultOwnerFragmentFromPolicy(policy);
+    const roundTrip = vaultPolicyFromOwnerFragment({
+      ...fragment,
+      entries: [{ ...fragment.entries[0]!, container_path_state: "available", canonical_container_path: "D:\\Vaults\\owner.hc" }],
+    });
+
+    expect(roundTrip?.entries[0]?.primary_owner_sid).toBe("S-1-5-21-owner");
+    expect(roundTrip?.entries[0]?.canonical_container_path).toBe("D:\\Vaults\\owner.hc");
+    expect(fragment.entries[0]?.entry).not.toHaveProperty("container_path_state");
+  });
   test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
     expect(VAULT_MOUNT_REASONS).toEqual([
       "not_authorized", "invalid_request", "broker_unavailable", "broker_rejected",

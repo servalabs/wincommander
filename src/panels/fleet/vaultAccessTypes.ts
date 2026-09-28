@@ -143,6 +143,57 @@ export interface VaultAccessCapabilities {
   can_manage_policy: boolean;
 }
 
+/** Owner-only edit fragment returned by the service. It is deliberately not
+ * the machine's full durable policy: entries belonging to other owners never
+ * cross into the renderer. */
+export interface VaultOwnerPolicyEntry {
+  entry: VaultAccessEntry;
+  container_path_state: "available" | "unavailable";
+  canonical_container_path?: string | null;
+}
+
+export interface VaultOwnerPolicyFragment {
+  schema_version: 1;
+  policy_id: string | null;
+  version: number;
+  expected_previous_version: number;
+  entries: VaultOwnerPolicyEntry[];
+}
+
+export function vaultPolicyFromOwnerFragment(fragment: VaultOwnerPolicyFragment): VaultAccessPolicy | null {
+  if (!fragment.policy_id) return null;
+  return {
+    schema_version: fragment.schema_version,
+    policy_id: fragment.policy_id,
+    version: fragment.version,
+    expected_previous_version: fragment.expected_previous_version,
+    entries: fragment.entries.map(({ entry, container_path_state, canonical_container_path }) => ({
+      ...entry,
+      container_path_state,
+      canonical_container_path: canonical_container_path ?? null,
+    })),
+  };
+}
+
+/** Strip service-observation-only fields before applying the owner fragment.
+ * The service independently resolves identity, canonical path, access and
+ * mount state; the renderer cannot feed those observations back as authority. */
+export function vaultOwnerFragmentFromPolicy(policy: VaultAccessPolicy): VaultOwnerPolicyFragment {
+  return {
+    schema_version: policy.schema_version,
+    policy_id: policy.policy_id,
+    version: policy.version,
+    expected_previous_version: policy.expected_previous_version,
+    entries: policy.entries.map(entry => {
+      const { container_path_state: _state, canonical_container_path: _canonical, ...requestEntry } = entry;
+      // The shared fragment retains this required field for response-shape
+      // compatibility. The service ignores it on writes and independently
+      // validates/attests both saved and newly selected container paths.
+      return { entry: requestEntry, container_path_state: "available" };
+    }),
+  };
+}
+
 /** A service-discovered Windows account that may become a Vault owner. */
 export interface VaultOwnerPrincipal {
   sid: string;

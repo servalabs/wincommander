@@ -4,13 +4,17 @@ import type {
   AccessGroupReconcileRequest, AccessGroupReconcileResponse, VaultAccessDirectory,
   VaultSaveAccessDirectoryResponse,
 } from "@/panels/fleet/accessControlTypes";
-import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultOwnerPrincipalList, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
+import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultOwnerPolicyFragment, VaultOwnerPrincipalList, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
 export default function useVaultAccess<Policy, Status>() {
   const getPolicy = useCallback(
     () => invoke<Policy | null>("get_vault_access_policy"),
+    [],
+  );
+  const getOwnerPolicyFragment = useCallback(
+    () => invoke<VaultOwnerPolicyFragment>("get_vault_access_policy"),
     [],
   );
   const getStatus = useCallback(
@@ -23,6 +27,14 @@ export default function useVaultAccess<Policy, Status>() {
         policy,
         diagnosticOperationId: operationId,
       }),
+    [],
+  );
+  const applyOwnerPolicyFragment = useCallback(
+    (fragment: VaultOwnerPolicyFragment, _operationId?: string) =>
+      // This adapter accepts the fragment itself, not a renderer-defined
+      // wrapper. Its service side authenticates the caller and derives every
+      // authoritative path/identity observation.
+      invoke<Status>("apply_vault_owner_policy_fragment", fragment),
     [],
   );
   // This is deliberately different from applying an empty policy. The
@@ -75,7 +87,7 @@ export default function useVaultAccess<Policy, Status>() {
   );
 
   return {
-    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals,
+    getPolicy, getOwnerPolicyFragment, getStatus, applyPolicy, applyOwnerPolicyFragment, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals,
     reconcileAccessGroups, getAccessDirectory, saveAccessDirectory,
   };
 }

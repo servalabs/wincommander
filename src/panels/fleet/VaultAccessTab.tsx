@@ -14,7 +14,7 @@ import {
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import {
-  newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
+  newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultMountResultLabel, vaultOwnerFragmentFromPolicy, vaultPolicyFromOwnerFragment, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
   type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultOwnerPrincipal, type VaultVolumeRole,
@@ -181,7 +181,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
-  const { getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const { getOwnerPolicyFragment, getStatus, applyOwnerPolicyFragment, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
@@ -234,7 +234,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       setPolicyLoadUnavailable(false);
       if (capabilities.can_manage_policy) {
         try {
-          const loadedPolicy = await getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null);
+          const loadedPolicy = await getOwnerPolicyFragment()
+            .then(vaultPolicyFromOwnerFragment)
+            .then(value => value ? normalizeVaultAccessPolicy(value) : null);
           if (revision !== refreshRevision.current) return false;
           setHasSavedPolicy(loadedPolicy !== null);
           if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
@@ -296,7 +298,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } finally {
       setLoading(false);
     }
-  }, [getCapabilities, getPolicy, getStatus, listAuthorizedEntries, listOwnerPrincipals, replacePolicy]);
+  }, [getCapabilities, getOwnerPolicyFragment, getStatus, listAuthorizedEntries, listOwnerPrincipals, replacePolicy]);
 
   useEffect(() => {
     if (draftBaseRef.current || !currentCallerSid || ownerPrincipals.length === 0) return;
@@ -486,7 +488,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const submittedPolicy = nextVaultAccessPolicy(policyToApply);
       // Keep the UI reference, desktop diagnostic and service event correlated.
       // Without this, a support reference could not identify the failed save.
-      const appliedStatus = await applyPolicy(submittedPolicy, operationId);
+      const appliedStatus = await applyOwnerPolicyFragment(vaultOwnerFragmentFromPolicy(submittedPolicy), operationId);
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // A successful full removal leaves no saved policy to edit. Clear every
@@ -651,8 +653,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const reloadSavedPolicy = async () => {
     try {
-      const current = await getPolicy();
-      const loaded = current ? normalizeVaultAccessPolicy(current) : null;
+      const current = await getOwnerPolicyFragment();
+      const loaded = vaultPolicyFromOwnerFragment(current);
       replacePolicy(loaded, false);
       await refresh(true);
     } catch {
@@ -664,8 +666,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     const draft = policyRef.current;
     if (!draft) return;
     try {
-      const current = await getPolicy();
-      const latest = current ? normalizeVaultAccessPolicy(current) : null;
+      const current = await getOwnerPolicyFragment();
+      const latest = vaultPolicyFromOwnerFragment(current);
       if (!latest) {
         return void showError("The saved Vault policy was removed. Your draft was kept; create a new policy or discard the draft.");
       }
