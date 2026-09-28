@@ -1082,7 +1082,23 @@ fn merge_owner_fragment(
     caller_sid: &str,
     caller_privileged: bool,
 ) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
+    let previous = vault_access.policy();
+    let administrator_sids = if caller_privileged {
+        Some(local_administrator_sids()?)
+    } else {
+        None
+    };
+    merge_owner_fragment_policy(previous, fragment, caller_sid, administrator_sids.as_ref())
+}
+
+fn merge_owner_fragment_policy(
+    previous: Option<wincmd_shared::vault_access::VaultAccessPolicy>,
+    fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment,
+    caller_sid: &str,
+    administrator_sids: Option<&HashSet<String>>,
+) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
     use wincmd_shared::vault_access::VaultAccessPolicy;
+    let caller_privileged = administrator_sids.is_some();
     let denied = || {
         VerbError::new(
             "vault_not_authorized",
@@ -1095,14 +1111,35 @@ fn merge_owner_fragment(
             "vault owner policy request is invalid",
         ));
     }
-    let previous = vault_access.policy();
-    let administrator_sids = if caller_privileged {
-        Some(local_administrator_sids()?)
-    } else {
-        None
-    };
+    let mut removals = HashSet::new();
+    for id in &fragment.remove_entry_ids {
+        if !valid_vault_entry_id(id) || !removals.insert(id.as_str()) {
+            return Err(VerbError::new(
+                "vault_validation_failed",
+                "vault removal request is invalid",
+            ));
+        }
+        let existing = previous
+            .as_ref()
+            .and_then(|policy| policy.entries.iter().find(|entry| entry.id == *id))
+            .ok_or_else(|| {
+                VerbError::new(
+                    "vault_validation_failed",
+                    "vault removal request is invalid",
+                )
+            })?;
+        if existing.primary_owner_sid.as_deref() != Some(caller_sid) && !caller_privileged {
+            return Err(denied());
+        }
+    }
     let mut incoming = HashMap::new();
     for owned in fragment.entries {
+        if removals.contains(owned.entry.id.as_str()) {
+            return Err(VerbError::new(
+                "vault_validation_failed",
+                "vault removal request is invalid",
+            ));
+        }
         // Initial policy creation may nominate another valid Windows user as
         // primary owner.  Once a record exists, its *current* owner may
         // transfer it while unmounted; comparing the proposed owner here
@@ -1161,6 +1198,9 @@ fn merge_owner_fragment(
     }
     let mut entries = Vec::with_capacity(previous.entries.len() + incoming.len());
     for existing in &previous.entries {
+        if removals.contains(existing.id.as_str()) {
+            continue;
+        }
         let Some(replacement) = incoming.remove(&existing.id) else {
             // Omission is never deletion: the caller may only receive their
             // own fragment and must not be able to erase a hidden owner.
@@ -1230,8 +1270,8 @@ fn is_administrator_ownership_transfer(
 
 /// Ownership is a service decision based on the authenticated Windows SID,
 /// never a renderer's selected account name.  A privileged caller can create
-/// a policy for another user and can remove an unmounted entry, but cannot
-/// inspect, edit, transfer, mount, or dismount someone else's Vault.
+/// a policy for another user, remove an unmounted entry, or perform the narrow
+/// ownership-only recovery transfer, but cannot edit its access or contents.
 fn validate_vault_owner_mutation(
     vault_access: &VaultAccessStore,
     requested: &wincmd_shared::vault_access::VaultAccessPolicy,
@@ -1239,6 +1279,20 @@ fn validate_vault_owner_mutation(
     caller_privileged: bool,
 ) -> Result<(), VerbError> {
     let previous = vault_access.policy();
+    validate_vault_owner_policy_mutation(
+        previous.as_ref(),
+        requested,
+        caller_sid,
+        caller_privileged,
+    )
+}
+
+fn validate_vault_owner_policy_mutation(
+    previous: Option<&wincmd_shared::vault_access::VaultAccessPolicy>,
+    requested: &wincmd_shared::vault_access::VaultAccessPolicy,
+    caller_sid: &str,
+    caller_privileged: bool,
+) -> Result<(), VerbError> {
     let denied = || {
         VerbError::new(
             "vault_not_authorized",
@@ -1258,7 +1312,7 @@ fn validate_vault_owner_mutation(
     for existing in &previous.entries {
         let owns_existing = existing.primary_owner_sid.as_deref() == Some(caller_sid);
         match requested_by_id.get(existing.id.as_str()) {
-            None if owns_existing => {}
+            None if owns_existing || caller_privileged => {}
             None => return Err(denied()),
             Some(replacement) if !owns_existing => {
                 // A full policy draft may include another entry only when it
@@ -3744,6 +3798,148 @@ mod tests {
                 "mount": { "presentation": "per-user", "preferred_letter": "V" }
             }]
         })
+    }
+
+    fn removal_test_policy() -> wincmd_shared::vault_access::VaultAccessPolicy {
+        let mut value = valid_vault_policy_args();
+        value["entries"][0]["primary_owner_sid"] = serde_json::json!("S-1-5-21-owner");
+        let mut other = value["entries"][0].clone();
+        other["id"] = serde_json::json!("vault-other");
+        other["primary_owner_sid"] = serde_json::json!("S-1-5-21-other");
+        value["entries"].as_array_mut().unwrap().push(other);
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn removal_test_fragment(
+        ids: &[&str],
+    ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "policy_id": "policy-1",
+            "version": 2,
+            "expected_previous_version": 1,
+            "entries": [],
+            "remove_entry_ids": ids,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn owner_fragment_removes_only_explicit_owned_entry_and_preserves_hidden_owner() {
+        let previous = removal_test_policy();
+        let merged = merge_owner_fragment_policy(
+            Some(previous.clone()),
+            removal_test_fragment(&["vault-1"]),
+            "S-1-5-21-owner",
+            None,
+        )
+        .unwrap();
+        assert_eq!(merged.entries, vec![previous.entries[1].clone()]);
+        assert_eq!((merged.version, merged.expected_previous_version), (2, 1));
+        validate_vault_owner_policy_mutation(Some(&previous), &merged, "S-1-5-21-owner", false)
+            .unwrap();
+    }
+
+    #[test]
+    fn owner_fragment_omission_is_not_a_delete_and_old_wire_defaults_to_no_removals() {
+        let previous = removal_test_policy();
+        let mut value = serde_json::to_value(removal_test_fragment(&[])).unwrap();
+        value.as_object_mut().unwrap().remove("remove_entry_ids");
+        let fragment = serde_json::from_value(value).unwrap();
+        let merged =
+            merge_owner_fragment_policy(Some(previous.clone()), fragment, "S-1-5-21-owner", None)
+                .unwrap();
+        assert_eq!(merged.entries, previous.entries);
+    }
+
+    #[test]
+    fn owner_fragment_cannot_delete_another_users_entry_without_admin_authority() {
+        let previous = removal_test_policy();
+        let error = merge_owner_fragment_policy(
+            Some(previous.clone()),
+            removal_test_fragment(&["vault-other"]),
+            "S-1-5-21-owner",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "vault_not_authorized");
+        let mut forged = previous.clone();
+        forged.entries.pop();
+        assert_eq!(
+            validate_vault_owner_policy_mutation(Some(&previous), &forged, "S-1-5-21-owner", false)
+                .unwrap_err()
+                .kind,
+            "vault_not_authorized"
+        );
+    }
+
+    #[test]
+    fn administrator_explicit_removal_can_clear_last_entry_through_normal_policy_mutation() {
+        let previous = removal_test_policy();
+        let administrators = HashSet::new();
+        let merged = merge_owner_fragment_policy(
+            Some(previous.clone()),
+            removal_test_fragment(&["vault-1", "vault-other"]),
+            "S-1-5-21-admin",
+            Some(&administrators),
+        )
+        .unwrap();
+        assert!(merged.entries.is_empty());
+        assert_eq!(merged.policy_id, previous.policy_id);
+        validate_vault_owner_policy_mutation(Some(&previous), &merged, "S-1-5-21-admin", true)
+            .unwrap();
+    }
+
+    #[test]
+    fn owner_fragment_rejects_ambiguous_unknown_and_stale_removals() {
+        let previous = removal_test_policy();
+        for ids in [vec!["vault-1", "vault-1"], vec!["unknown"], vec![""]] {
+            assert_eq!(
+                merge_owner_fragment_policy(
+                    Some(previous.clone()),
+                    removal_test_fragment(&ids),
+                    "S-1-5-21-owner",
+                    None,
+                )
+                .unwrap_err()
+                .kind,
+                "vault_validation_failed"
+            );
+        }
+        let mut fragment = removal_test_fragment(&["vault-1"]);
+        fragment
+            .entries
+            .push(wincmd_shared::vault_access::VaultOwnedPolicyEntry {
+                entry: previous.entries[0].clone(),
+                container_path_state:
+                    wincmd_shared::vault_access::VaultContainerPathState::Available,
+                canonical_container_path: None,
+            });
+        assert_eq!(
+            merge_owner_fragment_policy(Some(previous.clone()), fragment, "S-1-5-21-owner", None)
+                .unwrap_err()
+                .kind,
+            "vault_validation_failed"
+        );
+        let mut stale = removal_test_fragment(&["vault-1"]);
+        stale.expected_previous_version = 0;
+        assert_eq!(
+            merge_owner_fragment_policy(Some(previous), stale, "S-1-5-21-owner", None)
+                .unwrap_err()
+                .kind,
+            "vault_apply_failed"
+        );
+        assert_eq!(
+            merge_owner_fragment_policy(
+                None,
+                removal_test_fragment(&["vault-1"]),
+                "S-1-5-21-owner",
+                None
+            )
+            .unwrap_err()
+            .kind,
+            "vault_validation_failed"
+        );
     }
 
     #[test]

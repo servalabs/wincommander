@@ -1997,6 +1997,7 @@ impl VaultAccessStore {
             version: 0,
             expected_previous_version: 0,
             entries: Vec::new(),
+            remove_entry_ids: Vec::new(),
         };
         let Ok(state) = self.state.lock() else {
             return empty();
@@ -2038,6 +2039,7 @@ impl VaultAccessStore {
             version: active.policy.version,
             expected_previous_version: active.policy.version,
             entries,
+            remove_entry_ids: Vec::new(),
         }
     }
 
@@ -2048,6 +2050,7 @@ impl VaultAccessStore {
             version: 0,
             expected_previous_version: 0,
             entries: Vec::new(),
+            remove_entry_ids: Vec::new(),
         }
     }
 

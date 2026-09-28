@@ -127,6 +127,9 @@ pub struct VaultOwnerPolicyFragment {
     pub version: u64,
     pub expected_previous_version: u64,
     pub entries: Vec<VaultOwnedPolicyEntry>,
+    /// Explicit saved entry deletions; omissions never delete another owner's entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_entry_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
