@@ -15,6 +15,9 @@ use wincmd_shared::vault_access::{
     VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION, VAULT_ACCESS_SCHEMA_VERSION,
 };
 
+#[cfg(windows)]
+use wincmd_shared::vault_access::VaultKnownPrincipal;
+
 const POLICY_FILE: &str = "vault-access-v1.json";
 const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
 const PERSONAL_VAULTS_FILE: &str = "vault-personal-v1.json";
@@ -3229,6 +3232,114 @@ fn lookup_account(
     sid_to_string(sid.as_mut_ptr() as PSID)
         .map(|sid| (sid, use_type))
         .ok_or(VaultError::PrincipalResolution(original_name))
+}
+
+/// Resolve a durable SID into a Windows account label without accepting a
+/// renderer-provided name. The domain prefix keeps same-named local and domain
+/// accounts distinguishable in the primary-owner picker.
+#[cfg(windows)]
+pub fn account_label_for_sid(sid_text: &str) -> Option<String> {
+    lookup_account_by_sid(sid_text).map(|account| account.display_name)
+}
+
+#[cfg(windows)]
+struct SidAccount {
+    display_name: String,
+    kind: PrincipalKind,
+}
+
+#[cfg(windows)]
+fn lookup_account_by_sid(sid_text: &str) -> Option<SidAccount> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Security::{LookupAccountSidW, PSID, SID_NAME_USE};
+
+    let sid_text = wide(std::ffi::OsStr::new(sid_text));
+    let mut sid: PSID = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 || sid.is_null() {
+        return None;
+    }
+    struct LocalSid(PSID);
+    impl Drop for LocalSid {
+        fn drop(&mut self) {
+            unsafe { LocalFree(self.0 as _) };
+        }
+    }
+    let _sid = LocalSid(sid);
+    let mut name_len = 0u32;
+    let mut domain_len = 0u32;
+    let mut use_type = 0i32 as SID_NAME_USE;
+    unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            sid,
+            std::ptr::null_mut(),
+            &mut name_len,
+            std::ptr::null_mut(),
+            &mut domain_len,
+            &mut use_type,
+        );
+    }
+    if name_len == 0 {
+        return None;
+    }
+    let mut name = vec![0u16; name_len as usize + 1];
+    let mut domain = vec![0u16; domain_len as usize + 1];
+    if unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            sid,
+            name.as_mut_ptr(),
+            &mut name_len,
+            domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut use_type,
+        )
+    } == 0
+    {
+        return None;
+    }
+    let name = String::from_utf16_lossy(&name[..name_len as usize]);
+    let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+    if name.trim().is_empty() {
+        return None;
+    }
+    let display_name = if domain.trim().is_empty() {
+        name
+    } else {
+        format!("{domain}\\{name}")
+    };
+    let kind = if use_type == 1 || use_type == 9 {
+        PrincipalKind::User
+    } else {
+        PrincipalKind::Group
+    };
+    Some(SidAccount { display_name, kind })
+}
+
+/// List direct local Administrators members as safe private-Vault primary
+/// owners. The built-in group is identified by SID first, so this works on
+/// Windows installations where the group has been localized or renamed.
+#[cfg(windows)]
+pub fn local_administrator_principals() -> Result<Vec<VaultKnownPrincipal>, VaultError> {
+    const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+    let group = lookup_account_by_sid(BUILTIN_ADMINISTRATORS_SID)
+        .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
+    let members = local_group_members(&group.display_name)?
+        .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
+    let mut principals = members
+        .into_iter()
+        .filter_map(|sid| {
+            let account = lookup_account_by_sid(&sid)?;
+            (account.kind == PrincipalKind::User).then_some(VaultKnownPrincipal {
+                sid,
+                display_name: account.display_name,
+                is_local_administrator: true,
+            })
+        })
+        .collect::<Vec<_>>();
+    principals.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    Ok(principals)
 }
 
 /// `NetLocalGroupAdd` reports an existing *local* group as

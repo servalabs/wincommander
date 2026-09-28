@@ -1008,6 +1008,7 @@ fn handle_vault_apply_owner_fragment(
             ));
         }
         let policy = merge_owner_fragment(vault_access, fragment.clone(), caller_sid)?;
+        validate_private_owner_administrators(&policy)?;
         // The fragment has already been merged with the service's complete
         // protected policy.  The ordinary apply path now performs its normal
         // identity/ACL read-back and atomic persistence.
@@ -1018,6 +1019,48 @@ fn handle_vault_apply_owner_fragment(
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
         handle_vault_apply(vault_access, policy)
     })
+}
+
+/// Private Vault ownership is an administrator-only responsibility. This is
+/// enforced before any container identity or ACL work, using Windows' local
+/// Administrators membership rather than a picker value or browser state.
+fn validate_private_owner_administrators(
+    policy: &wincmd_shared::vault_access::VaultAccessPolicy,
+) -> Result<(), VerbError> {
+    let administrators = crate::vault_access::local_administrator_principals().map_err(|_| {
+        VerbError::new(
+            "vault_directory_unavailable",
+            "local administrator accounts are unavailable",
+        )
+    })?;
+    let administrator_sids = administrators
+        .iter()
+        .map(|principal| principal.sid.as_str())
+        .collect::<HashSet<_>>();
+    validate_private_owner_sids(policy, &administrator_sids)
+}
+
+fn validate_private_owner_sids(
+    policy: &wincmd_shared::vault_access::VaultAccessPolicy,
+    administrator_sids: &HashSet<&str>,
+) -> Result<(), VerbError> {
+    for entry in policy.entries.iter().filter(|entry| {
+        entry.mount.presentation == wincmd_shared::vault_access::VaultPresentation::PerUser
+    }) {
+        let Some(owner_sid) = entry.primary_owner_sid.as_deref() else {
+            return Err(VerbError::new(
+                "vault_not_authorized",
+                "a private vault requires a local administrator primary owner",
+            ));
+        };
+        if !administrator_sids.contains(owner_sid) {
+            return Err(VerbError::new(
+                "vault_not_authorized",
+                "a private vault primary owner must be a local administrator",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn merge_owner_fragment(
@@ -1179,31 +1222,69 @@ fn handle_vault_list_principals(
             "vault owner list is unavailable",
         )
     })?;
-    let mut principals = directory
+    let directory_principals = directory
         .users
         .into_iter()
         .map(|user| wincmd_shared::vault_access::VaultKnownPrincipal {
             sid: user.sid,
             display_name: user.display_name.unwrap_or(user.username),
+            is_local_administrator: false,
         })
         .collect::<Vec<_>>();
-    // The current interactive user must always be selectable even when an
-    // administrator has not yet populated Fleet's optional access directory.
-    if !principals
-        .iter()
-        .any(|principal| principal.sid == peer.caller_sid())
-    {
-        principals.push(wincmd_shared::vault_access::VaultKnownPrincipal {
-            sid: peer.caller_sid().to_owned(),
-            display_name: "Current Windows user".to_owned(),
-        });
-    }
-    principals.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-    serde_json::to_value(wincmd_shared::vault_access::VaultKnownPrincipalsResponse {
-        current_caller_sid: peer.caller_sid().to_owned(),
-        principals,
-    })
+    let administrators = crate::vault_access::local_administrator_principals().map_err(|_| {
+        VerbError::new(
+            "vault_directory_unavailable",
+            "local administrator accounts are unavailable",
+        )
+    })?;
+    let caller_label = crate::vault_access::account_label_for_sid(peer.caller_sid())
+        // A Windows token SID is still the only truthful identifier if its
+        // account was removed between authentication and this request.
+        .unwrap_or_else(|| peer.caller_sid().to_owned());
+    serde_json::to_value(build_known_principals_response(
+        peer.caller_sid(),
+        caller_label,
+        directory_principals,
+        administrators,
+    ))
     .map_err(|_| VerbError::new("vault_internal_error", "vault owner list is unavailable"))
+}
+
+fn build_known_principals_response(
+    caller_sid: &str,
+    caller_label: String,
+    directory_principals: Vec<wincmd_shared::vault_access::VaultKnownPrincipal>,
+    administrators: Vec<wincmd_shared::vault_access::VaultKnownPrincipal>,
+) -> wincmd_shared::vault_access::VaultKnownPrincipalsResponse {
+    let mut principals = HashMap::new();
+    for principal in directory_principals {
+        principals.insert(principal.sid.clone(), principal);
+    }
+    for administrator in administrators {
+        // Windows' live account lookup wins over a directory display alias.
+        principals.insert(administrator.sid.clone(), administrator);
+    }
+    let caller_is_administrator = principals
+        .get(caller_sid)
+        .is_some_and(|principal| principal.is_local_administrator);
+    principals.insert(
+        caller_sid.to_owned(),
+        wincmd_shared::vault_access::VaultKnownPrincipal {
+            sid: caller_sid.to_owned(),
+            display_name: caller_label,
+            is_local_administrator: caller_is_administrator,
+        },
+    );
+    let mut principals = principals.into_values().collect::<Vec<_>>();
+    principals.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then_with(|| left.sid.cmp(&right.sid))
+    });
+    wincmd_shared::vault_access::VaultKnownPrincipalsResponse {
+        current_caller_sid: caller_sid.to_owned(),
+        principals,
+    }
 }
 
 /// Removes only the selected service-owned policy record after a degraded ACL
@@ -3576,6 +3657,45 @@ mod tests {
                 "mount": { "presentation": "per-user", "preferred_letter": "V" }
             }]
         })
+    }
+
+    #[test]
+    fn private_vault_rejects_a_primary_owner_who_is_not_a_local_administrator() {
+        let mut value = valid_vault_policy_args();
+        value["entries"][0]["primary_owner_sid"] = serde_json::json!("S-1-5-21-standard");
+        let policy = serde_json::from_value(value).expect("valid policy shape");
+        let administrators = HashSet::from(["S-1-5-21-admin"]);
+
+        let error = validate_private_owner_sids(&policy, &administrators)
+            .expect_err("private owner must be an administrator");
+
+        assert_eq!(error.kind, "vault_not_authorized");
+    }
+
+    #[test]
+    fn known_principal_response_preserves_trusted_caller_label_and_admin_flag() {
+        let response = build_known_principals_response(
+            "S-1-5-21-caller",
+            "WORKSTATION\\Parth".into(),
+            vec![wincmd_shared::vault_access::VaultKnownPrincipal {
+                sid: "S-1-5-21-directory-user".into(),
+                display_name: "Fleet User".into(),
+                is_local_administrator: false,
+            }],
+            vec![wincmd_shared::vault_access::VaultKnownPrincipal {
+                sid: "S-1-5-21-caller".into(),
+                display_name: "WORKSTATION\\Parth".into(),
+                is_local_administrator: true,
+            }],
+        );
+
+        assert_eq!(response.current_caller_sid, "S-1-5-21-caller");
+        assert_eq!(response.principals.len(), 2);
+        assert!(response.principals.iter().any(|principal| {
+            principal.sid == "S-1-5-21-caller"
+                && principal.display_name == "WORKSTATION\\Parth"
+                && principal.is_local_administrator
+        }));
     }
 
     #[test]
