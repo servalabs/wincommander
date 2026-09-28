@@ -130,7 +130,7 @@ interface MountTarget {
 
 function newVaultEntryForOwner(kind: "shared" | "private", principals: readonly VaultOwnerPrincipal[], currentCallerSid: string | null): VaultAccessEntry {
   const entry = newVaultEntry(kind);
-  const owner = principals.find(principal => principal.sid === currentCallerSid);
+  const owner = principals.find(principal => principal.sid === currentCallerSid && (kind !== "private" || principal.is_local_administrator));
   return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
 }
 
@@ -302,14 +302,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   useEffect(() => {
     if (draftBaseRef.current || !currentCallerSid || ownerPrincipals.length === 0) return;
-    const owner = ownerPrincipals.find(principal => principal.sid === currentCallerSid);
     const current = policyRef.current;
-    if (!owner || !current || current.entries.every(entry => entry.primary_owner_sid)) return;
+    if (!current || current.entries.every(entry => entry.primary_owner_sid)) return;
     replacePolicy({
       ...current,
-      entries: current.entries.map(entry => entry.primary_owner_sid
-        ? entry
-        : { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name }),
+      entries: current.entries.map(entry => {
+        if (entry.primary_owner_sid) return entry;
+        const owner = ownerPrincipals.find(principal => principal.sid === currentCallerSid
+          && (vaultAccessPreset(entry) !== "private" || principal.is_local_administrator));
+        return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
+      }),
     }, true);
   }, [currentCallerSid, ownerPrincipals, replacePolicy]);
 

@@ -37,6 +37,9 @@ function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: stri
 
 export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
+  const eligibleOwnerPrincipals = accessPreset === "private"
+    ? ownerPrincipals.filter(principal => principal.is_local_administrator)
+    : ownerPrincipals;
   const vaultNumber = entryIndex + 1;
   // Use the actually discovered signed-in account for guidance instead of
   // assuming every PC calls its administrator account "Administrator".
@@ -72,19 +75,19 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         </div>
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
-      <Field label="Primary owner" help="The Windows account responsible for this Vault. Only a service-approved administrator can be selected. Only this selected account can manage or mount it through WinCommander.">
+      <Field label="Primary owner" help={accessPreset === "private" ? "The Windows account responsible for this Vault. For a private Vault, only a service-approved local administrator can be selected." : "The Windows account responsible for this Vault. For a shared Vault, the service validates the selected Windows account."}>
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
           onChange={event => {
-            const selected = ownerPrincipals.find(principal => principal.sid === event.target.value);
+            const selected = eligibleOwnerPrincipals.find(principal => principal.sid === event.target.value);
             if (selected) onOwnerChange(selected);
           }}
         >
-          <option value="" disabled>{ownerPrincipals.length > 0 ? "Select an administrator…" : "No eligible administrators found"}</option>
-          {ownerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
+          <option value="" disabled>{eligibleOwnerPrincipals.length > 0 ? (accessPreset === "private" ? "Select an administrator…" : "Select a Windows user…") : (accessPreset === "private" ? "No eligible administrators found" : "No eligible Windows users found")}</option>
+          {eligibleOwnerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
         </select>
-        <small>Only service-approved administrators appear here. The service saves the selected account by its Windows security ID (SID), not its displayed name.</small>
+        <small>{accessPreset === "private" ? "Only service-approved local administrators appear here." : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />

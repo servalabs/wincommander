@@ -198,6 +198,8 @@ export function vaultOwnerFragmentFromPolicy(policy: VaultAccessPolicy): VaultOw
 export interface VaultOwnerPrincipal {
   sid: string;
   display_name: string;
+  /** Derived by the service from the live local Administrators group. */
+  is_local_administrator: boolean;
 }
 
 /** The service owns both the caller SID and the safe owner-picker options. */

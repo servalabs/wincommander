@@ -34,7 +34,8 @@ const helpSource = readFileSync("src/panels/fleet/VaultAccessInfo.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/VaultAccessEditor.css", "utf8");
 const renderEditor = (value = entry) => renderToStaticMarkup(<VaultAccessEditor
   entry={value} entryIndex={0} directory={directory}
-  ownerPrincipals={[{ sid: "S-1-5-21-example", display_name: "Example user" }]}
+  ownerPrincipals={[{ sid: "S-1-5-21-example", display_name: "Example user", is_local_administrator: true }]}
+  currentCallerSid="S-1-5-21-example"
   onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
 />);
 
@@ -60,6 +61,28 @@ describe("Vault access editor presentation", () => {
     expect(helpSource).toContain('from "@/components/ui/tooltip"');
     expect(helpSource).toContain("collisionPadding={12}");
     // Actual hover/focus/Escape interaction is covered by check-vault-access-ui.cjs.
+  });
+
+  test("makes the signed-in administrator and durable SID visible in the owner picker", () => {
+    const html = renderEditor({ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } });
+    expect(html).toContain("Example user (signed in) — S-1-5-21-example");
+    expect(html).toContain("Only service-approved local administrators appear here.");
+    expect(html).toContain("Select an administrator…");
+    expect(html).not.toContain(">Current Windows user<");
+  });
+
+  test("does not offer a non-administrator as a private Vault owner", () => {
+    const html = renderToStaticMarkup(<VaultAccessEditor
+      entry={{ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } }} entryIndex={0} directory={directory}
+      ownerPrincipals={[
+        { sid: "S-1-5-21-example", display_name: "Example admin", is_local_administrator: true },
+        { sid: "S-1-5-21-standard", display_name: "Example standard user", is_local_administrator: false },
+      ]}
+      currentCallerSid="S-1-5-21-example"
+      onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
+    />);
+    expect(html).toContain("Example admin (signed in) — S-1-5-21-example");
+    expect(html).not.toContain("Example standard user");
   });
 
   test("keeps exact-file policy and sibling-container guidance outside collapsed help", () => {
@@ -165,7 +188,7 @@ describe("Vault path display", () => {
 
 test("gets owner choices from the native service adapter, never browser storage", () => {
   expect(vaultHookSource).toContain('invoke<VaultOwnerPrincipalList>("vault_list_known_principals")');
-  expect(vaultHookSource).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { ...fragment })');
+  expect(vaultHookSource).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment })');
   expect(vaultHookSource).not.toContain("localStorage");
 });
 
