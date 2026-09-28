@@ -961,6 +961,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 entryIndex={entryIndex}
                 directory={directory}
                 ownerPrincipals={ownerPrincipals}
+                currentCallerSid={currentCallerSid}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
                 onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
                 onPresetChange={preset => setAccessPreset(entry.id, preset)}

@@ -15,6 +15,7 @@ interface VaultAccessEditorProps {
   entryIndex: number;
   directory: FleetAccessDirectory;
   ownerPrincipals: readonly VaultOwnerPrincipal[];
+  currentCallerSid: string | null;
   onEntryChange: (patch: Partial<VaultAccessEntry>) => void;
   onOwnerChange: (owner: VaultOwnerPrincipal) => void;
   onPresetChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
@@ -27,7 +28,14 @@ function Field({ label, help, children }: { label: string; help: string; childre
   </div>;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+/** The service supplies only approved candidates. Show the durable SID so
+ * similarly named Windows accounts cannot be confused in the owner picker. */
+function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: string | null) {
+  const name = principal.display_name.trim() || "Windows account";
+  return `${name}${principal.sid === currentCallerSid ? " (signed in)" : ""} — ${principal.sid}`;
+}
+
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
   const vaultNumber = entryIndex + 1;
   // Use the actually discovered signed-in account for guidance instead of
@@ -64,7 +72,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         </div>
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
-      <Field label="Primary owner" help="The Windows account responsible for this Vault. Only this selected account can manage or mount it through WinCommander.">
+      <Field label="Primary owner" help="The Windows account responsible for this Vault. Only a service-approved administrator can be selected. Only this selected account can manage or mount it through WinCommander.">
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
@@ -73,10 +81,10 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
             if (selected) onOwnerChange(selected);
           }}
         >
-          <option value="" disabled>Select a Windows user…</option>
-          {ownerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{principal.display_name}</option>)}
+          <option value="" disabled>{ownerPrincipals.length > 0 ? "Select an administrator…" : "No eligible administrators found"}</option>
+          {ownerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
         </select>
-        <small>The service saves this account by its Windows security ID, not by its displayed name.</small>
+        <small>Only service-approved administrators appear here. The service saves the selected account by its Windows security ID (SID), not its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
