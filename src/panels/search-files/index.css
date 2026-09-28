@@ -9,7 +9,7 @@
   height: 100%;
   max-height: 100%;
   min-height: 0;
-  overflow-y: hidden;
+  overflow-y: auto;
   overflow-x: hidden;
 }
 
@@ -467,15 +467,6 @@ html.light .search-detective-body {
   padding: 1px 7px;
 }
 
-.sfp-group-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
 .sfp-group-note {
   font-size: 11px;
   font-weight: 400;
@@ -738,6 +729,7 @@ html.light .sfp-section-bar {
 
 .sfp-folders-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -745,6 +737,7 @@ html.light .sfp-section-bar {
 
 .sfp-folders-header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
@@ -802,65 +795,7 @@ html.light .sfp-section-bar {
   color: var(--color-text-primary);
 }
 
-/* ── Empty state — no folders indexed ── */
-.sfp-no-folders-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 40px 24px;
-  text-align: center;
-  color: var(--color-text-muted);
-  border: 1px dashed var(--color-border);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--color-bg-secondary) 60%, transparent);
-  margin: 6px 14px;
-}
-
-.sfp-no-folders-icon {
-  color: var(--color-accent);
-  opacity: 0.6;
-  margin-bottom: 4px;
-}
-
-.sfp-no-folders-heading {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.sfp-no-folders-hint {
-  margin: 0;
-  font-size: 13px;
-  color: var(--color-text-muted);
-  max-width: 340px;
-}
-
-.sfp-no-folders-cta {
-  margin-top: 6px;
-}
-
 /* ── Indexing progress indicator ── */
-.sfp-indexing-bar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  margin: 8px 14px 0;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
-  font-size: 12px;
-  color: var(--color-accent);
-}
-
-.sfp-indexing-spinner {
-  flex-shrink: 0;
-}
-
 .sfp-indexing-note {
   margin-left: auto;
   font-size: 11px;
@@ -955,13 +890,34 @@ html.light .sfp-section-bar {
 .sfp-result-tab:disabled { opacity: .55; cursor: default; }
 .sfp-result-tab span { padding: 1px 7px; border-radius: var(--radius-full); background: var(--color-accent-subtle); font-family: var(--font-mono); font-size: 10px; }
 
-.sfp-content-tools {
+.sfp-index-controls {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.sfp-index-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
   padding: 6px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 18%, var(--color-border));
+}
+
+.sfp-index-toolbar .sfp-index-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sfp-index-folders {
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.sfp-index-folders .sfp-folders-section {
+  margin: 8px 0 0;
 }
 
 .sfp-result-limit-control {

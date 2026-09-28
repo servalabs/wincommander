@@ -172,9 +172,12 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
         )?;
         private_jobs::refresh(&plan, &settings.device_id, &fs.exclusions, false);
         for shard in &plan.private {
-            let (state, _, count) = private_jobs::state(shard);
+            let (state, message, count) = private_jobs::state(shard);
             status.indexed_docs += count;
             status.is_indexing |= state == "indexing";
+            if state == "unavailable" && status.last_error.is_none() {
+                status.last_error = Some(message.into());
+            }
         }
         Ok(status)
     })

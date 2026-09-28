@@ -890,6 +890,8 @@ export function uiAuditDirectResponse(command: string): unknown {
       return 2;
     case "content_index_status":
       return { indexed_docs: 428, pending_docs: 0, is_indexing: false, last_error: null, index_size_bytes: 8388608 };
+    case "content_privacy_status":
+      return { generation: "ui-audit-search-1", privateRoots: [], blockedRoots: [], volumes: [], notice: null };
     case "get_pending_purchase":
       return null;
     case "create_purchase":

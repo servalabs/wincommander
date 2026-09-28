@@ -31,6 +31,7 @@ import SearchEmptyState from "./SearchEmptyState";
 import FilterBar from "./FilterBar";
 import NameResultsSection from "./NameResultsSection";
 import ContentResultsSection, { contentRowDir } from "./ContentResultsSection";
+import IndexControls from "./IndexControls";
 import "./index.css";
 
 import { consumeSearchHandoff } from "@/lib/searchPrivacy";
@@ -51,8 +52,7 @@ export default function SearchFilesPanel() {
   const hotkey = useSearchHotkey();
 
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
-  // Indexed-folders management is tucked behind a gear toggle now that both
-  // result groups share one screen.
+  // Index setup stays available independently of the query and result tab.
   const [showIndexSettings, setShowIndexSettings] = useState(false);
   // Virtual selection across BOTH groups as one flat list; -1 = none.
   // Focus never leaves the input — rows are aria options, not tab stops.
@@ -252,10 +252,10 @@ export default function SearchFilesPanel() {
   // results — it degrades to an inline notice under the File-names group.
   const engineMissing = isEngineMissingError(search.error);
   const activeError = (engineMissing ? null : search.error) ?? content.contentError;
-  const indexDisplayError = getIndexDisplayError(content.indexStatus?.last_error);
+  const indexDisplayError = content.indexStatusError ?? getIndexDisplayError(content.indexStatus?.last_error);
 
   const trimmed = search.query.trim();
-  const showContentSection = trimmed.length >= 2 || showIndexSettings || content.currentRoots.length === 0;
+  const showContentSection = trimmed.length >= 2;
   const showNameSection = search.hasSearched || search.isSearching;
   const showEmptyState = !showNameSection && !trimmed && content.currentRoots.length > 0 && !showIndexSettings;
   const anySearching = search.isSearching || content.contentLoading;
@@ -369,6 +369,23 @@ export default function SearchFilesPanel() {
         />
       </div>
 
+      <IndexControls
+        expanded={showIndexSettings}
+        onToggle={() => setShowIndexSettings((value) => !value)}
+        indexStatus={content.indexStatus}
+        indexDisplayError={indexDisplayError}
+        foldersReindexing={content.foldersReindexing}
+        managementError={content.managementError}
+        privacyStatus={content.privacyStatus}
+        roots={content.currentRoots}
+        reindexing={content.reindexing}
+        rescanning={content.rescanning}
+        onReindex={content.reindex}
+        onRescan={content.rescan}
+        onAddFolders={content.addFolders}
+        onRemoveFolder={content.removeFolder}
+      />
+
       {/* Error (either engine) */}
       <AnimatePresence>
         {activeError && (
@@ -470,22 +487,9 @@ export default function SearchFilesPanel() {
                 <div>
                 <ContentResultsSection
                 rows={textContentRows}
-                privacyStatus={content.privacyStatus}
                 query={search.query}
                 contentLoading={content.contentLoading}
                 showNoMatches={!content.contentLoading && textContentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
-                indexStatus={content.indexStatus}
-                indexDisplayError={indexDisplayError}
-                foldersReindexing={content.foldersReindexing}
-                showIndexSettings={showIndexSettings}
-                onToggleIndexSettings={() => setShowIndexSettings((v) => !v)}
-                roots={content.currentRoots}
-                reindexing={content.reindexing}
-                rescanning={content.rescanning}
-                onReindex={content.reindex}
-                onRescan={content.rescan}
-                onAddFolders={content.addFolders}
-                onRemoveFolder={content.removeFolder}
                 expandedDocId={content.expandedDocId}
                 expandedText={content.expandedText}
                 expandedLoading={content.expandedLoading}

@@ -820,11 +820,19 @@ Keyword content search via Tantivy. **Free** tier; backend commands include
 | `app.fileSearch.private_roots` | `object[]` | `[]` | Backend-created folder, relative-path and stable-volume bindings. Retained after removing a folder to protect history and reused drive letters. |
 | `app.fileSearch.initialized` | `boolean` | `false`                                        | Set `true` once roots are seeded or explicitly configured; prevents re-seeding after the user clears all folders. |
 
-> The settings record is stored in the machine-wide encrypted store
+> Folder selection is stored in the current user's encrypted settings overlay
 > (`FileSearchSettings` on `AppPreferences`). The on-disk index itself is
 > per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` for ordinary
 > folders. Private shards live inside the mounted VeraCrypt drive at
 > `.wincommander\search\<device-id hash>\fts`.
+
+Open **File Search → Indexed folders → Add folder** to select a folder; these
+controls are available before entering a query and on either results tab.
+Folder-management failures and index status remain visible above the results.
+Active queries refresh as indexing progresses, including edits that leave the
+file count unchanged. Syncthing can deliver files into a selected mounted
+folder; each device indexes its own received files. Share the document folder,
+leaving `.wincommander` index storage outside the synced folder.
 
 Add a folder while its VeraCrypt volume is mounted. The index excludes its own
 storage and records unsupported/oversized files by name without extracting

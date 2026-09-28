@@ -20,7 +20,7 @@ pub(crate) enum AccessMode {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CheckedDirectory {
-    inner: MmapDirectory,
+    inner: Box<dyn Directory>,
     root: PathBuf,
     mode: AccessMode,
 }
@@ -73,10 +73,39 @@ pub(crate) fn validate_storage(root: &Path) -> io::Result<()> {
 }
 
 impl CheckedDirectory {
-    pub(crate) fn open(root: &Path, mode: AccessMode) -> tantivy::Result<Self> {
+    #[cfg(all(test, windows))]
+    pub(crate) fn direct_for_test(root: &Path, mode: AccessMode) -> tantivy::Result<Self> {
         validate_storage(root)?;
         Ok(Self {
-            inner: MmapDirectory::open(root)?,
+            inner: Box::new(crate::direct_directory::DirectDirectory::new(root)),
+            root: root.into(),
+            mode,
+        })
+    }
+
+    pub(crate) fn open(root: &Path, mode: AccessMode) -> tantivy::Result<Self> {
+        validate_storage(root)?;
+        let inner: Box<dyn Directory> = match MmapDirectory::open(root) {
+            Ok(directory) => Box::new(directory),
+            Err(error) => {
+                #[cfg(windows)]
+                {
+                    // Session-local VeraCrypt drives can lack the DOS mapping canonicalize needs.
+                    let missing_mapping = root
+                        .canonicalize()
+                        .is_err_and(|e| e.raw_os_error() == Some(2));
+                    if missing_mapping && root.is_absolute() && root.is_dir() {
+                        Box::new(crate::direct_directory::DirectDirectory::new(root))
+                    } else {
+                        return Err(error.into());
+                    }
+                }
+                #[cfg(not(windows))]
+                return Err(error.into());
+            }
+        };
+        Ok(Self {
+            inner,
             root: root.to_owned(),
             mode,
         })

@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- File Search exposes indexed-folder controls before searching and refreshes
+  active results after indexing or synced file changes. Folder-operation and
+  private-index failures are visible, and temporarily locked files no longer
+  discard progress for other files in a private indexing batch.
+  VeraCrypt mounts without a Windows canonical volume path can now create and
+  read their search index using files kept on that same encrypted drive.
+
 - Settings writes use separate temporary files for concurrent launches and
   briefly retry Windows file-sharing conflicts. First-time key creation keeps
   one committed key; unreadable keys and encrypted settings are preserved

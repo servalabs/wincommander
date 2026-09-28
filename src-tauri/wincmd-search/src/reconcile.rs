@@ -104,7 +104,15 @@ impl SearchEngine {
                 complete = false;
                 break;
             }
-            for entry in std::fs::read_dir(&directory)? {
+            let entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if self.config.roots.contains(&directory) => return Err(error.into()),
+                Err(_) => {
+                    complete = false;
+                    continue;
+                }
+            };
+            for entry in entries {
                 if cancel.load(Ordering::Relaxed)
                     || (report.updated > 0
                         && started.elapsed() >= std::time::Duration::from_millis(500))
@@ -112,11 +120,23 @@ impl SearchEngine {
                     complete = false;
                     break 'scan;
                 }
-                let path = entry?.path();
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(_) => {
+                        complete = false;
+                        continue;
+                    }
+                };
                 if !self.permits_path(&path) {
                     continue;
                 }
-                let metadata = std::fs::symlink_metadata(&path)?;
+                let metadata = match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(_) => {
+                        complete = false;
+                        continue;
+                    }
+                };
                 if metadata.is_dir() {
                     directories.push(path);
                     continue;
@@ -129,7 +149,13 @@ impl SearchEngine {
                     continue;
                 }
                 report.visited += 1;
-                let stamp = revision_ns(&path)?;
+                let stamp = match revision_ns(&path) {
+                    Ok(stamp) => stamp,
+                    Err(_) => {
+                        complete = false;
+                        continue;
+                    }
+                };
                 if by_id
                     .get(&id)
                     .is_some_and(|f| f.size == metadata.len() && f.revision_ns == stamp)
@@ -172,9 +198,14 @@ impl SearchEngine {
                     Err(error) if error.is_per_file_skip() => {
                         (String::new(), String::new(), DocProps::default())
                     }
+                    Err(SearchError::Io(_)) => {
+                        // Sync tools can replace or briefly lock a file during extraction.
+                        complete = false;
+                        continue;
+                    }
                     Err(error) => return Err(error),
                 };
-                if !self.permits_path(&meta.path) || revision_ns(&meta.path)? != stamp {
+                if !self.permits_path(&meta.path) || revision_ns(&meta.path).ok() != Some(stamp) {
                     complete = false;
                     continue;
                 }
@@ -186,12 +217,12 @@ impl SearchEngine {
         if cancel.load(Ordering::Relaxed) {
             complete = false;
         }
-        if complete {
-            for root in &self.config.roots {
-                if !safe_path(root) || !root.is_dir() || !(self.path_policy)(root) {
-                    return Err(SearchError::Config("index root became unavailable".into()));
-                }
+        for root in &self.config.roots {
+            if !safe_path(root) || !root.is_dir() || !(self.path_policy)(root) {
+                return Err(SearchError::Config("index root became unavailable".into()));
             }
+        }
+        if complete {
             for file in &existing {
                 if !seen.contains(&file.id) || !self.permits_path(&file.path) {
                     self.ci.delete(&mut writer, file.id);

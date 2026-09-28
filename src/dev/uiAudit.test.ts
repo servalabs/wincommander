@@ -354,6 +354,9 @@ describe("UI audit fixture", () => {
     expect(content.every((row) => row.doc_id.length > 0 && row.snippet.includes("<mark>"))).toBe(true);
     expect(chunks.some((chunk) => chunk.field === "Body" && chunk.text.length > 40)).toBe(true);
     expect(uiAuditDirectResponse("content_index_status")).toMatchObject({ indexed_docs: 428, pending_docs: 0, is_indexing: false });
+    expect(uiAuditDirectResponse("content_privacy_status")).toEqual({
+      generation: "ui-audit-search-1", privateRoots: [], blockedRoots: [], volumes: [], notice: null,
+    });
     expect(drives.some((drive) => drive.isSystem)).toBe(true);
     expect(drives.some((drive) => drive.isRemovable)).toBe(true);
     expect(offers.some((offer) => offer.sku === "fleet" && !offer.checkoutEligible)).toBe(true);

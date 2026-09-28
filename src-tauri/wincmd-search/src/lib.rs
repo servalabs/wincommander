@@ -15,6 +15,8 @@ pub mod filters;
 pub mod index;
 pub mod query;
 mod read_only;
+#[cfg(windows)]
+mod direct_directory;
 pub mod reconcile;
 mod restricted;
 pub mod semantic_model;
