@@ -37,7 +37,6 @@ import RdpIdleWarningDialog from "./components/RdpIdleWarningDialog";
 import useRdpIdleDisconnect from "./hooks/useRdpIdleDisconnect";
 import useRdpIncomingDismount from "./hooks/useRdpIncomingDismount";
 import useRdpIncomingIdleSignout from "./hooks/useRdpIncomingIdleSignout";
-import { createRdpConsoleMirror } from "./hooks/rdpDiagnostics";
 import usePasteMonitor, {
   resolveCategories,
   DEFAULT_PASTE_MONITOR_CRYPTO_SWAP_ENABLED,
@@ -581,14 +580,9 @@ function AppContent({ splashDone, onSplashComplete }: {
   const rdpIdleWarningSeconds = Math.max(5, appSettings?.ideal?.privacy?.tracking?.rdpIdleWarningSeconds ?? 5);
   const rdpClearCache    = appSettings?.ideal?.privacy?.tracking?.rdpClearCacheOnDisconnect ?? true;
   const rdpRemoveCreds   = appSettings?.ideal?.privacy?.tracking?.rdpRemoveCredsOnDisconnect ?? false;
-  // The existing application logging preference is the single frontend gate
-  // for the safe Diagnostics timeline. It does not enable or change any RDP
-  // protection action; it only controls whether approved summaries are saved.
-  const rdpDiagnosticLoggingEnabled = appSettings?.app?.loggingEnabled !== false;
-  const mirrorRdpConsole = useMemo(
-    () => createRdpConsoleMirror(rdpDiagnosticLoggingEnabled),
-    [rdpDiagnosticLoggingEnabled],
-  );
+  // One opt-in covers the safe RDP timeline for outgoing and incoming
+  // monitors. It never enables or changes an RDP protection action.
+  const rdpDiagnosticLoggingEnabled = appSettings?.ideal?.privacy?.tracking?.rdpSaveLog === true;
   const rdpDismountVaultsCfg = appSettings?.ideal?.privacy?.tracking?.rdpDismountVaultsOnDisconnect ?? false;
   const rdpIncomingDismountCfg = appSettings?.ideal?.tweaks?.rdp?.incomingDismountOnEmpty ?? false;
   const rdpIncomingSignOffOnDisconnectCfg = appSettings?.ideal?.tweaks?.rdp?.incomingSignOffOnDisconnect ?? false;
@@ -637,14 +631,7 @@ function AppContent({ splashDone, onSplashComplete }: {
       timeoutSeconds: rdpIdleTimeout,
       reason: rdpIdleEnabled ? "started" : rdpIdleDisabledReason,
     });
-    mirrorRdpConsole([
-      "monitor_gate",
-      rdpIdleEnabled ? "outgoing_monitor_running" : "outgoing_monitor_not_running",
-      "verified",
-      rdpIdleEnabled ? "started" : "cancelled",
-      "info",
-    ]);
-  }, [rdpIdleEnabled, rdpIdleEnabledIdeal, hasPaid, entitlementLoading, rdpIdleTimeout, rdpIdleDisabledReason, mirrorRdpConsole]);
+  }, [rdpIdleEnabled, rdpIdleEnabledIdeal, hasPaid, entitlementLoading, rdpIdleTimeout, rdpIdleDisabledReason]);
 
   // This launch-only aggregate deliberately follows real privileged rearm
   // completions below. Settings hydration, listeners, and inactive controls

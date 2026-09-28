@@ -29,7 +29,7 @@
  */
 import { useEffect, useMemo, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
-import { beginRdpOperation, createRdpConsoleMirror, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -66,10 +66,6 @@ export default function useRdpIncomingDismount(
     () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
     [diagnosticLoggingEnabled],
   );
-  const mirrorRdpConsole = useMemo(
-    () => createRdpConsoleMirror(diagnosticLoggingEnabled),
-    [diagnosticLoggingEnabled],
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -82,7 +78,6 @@ export default function useRdpIncomingDismount(
       prevTotalRef.current = null;
       signOffInFlightRef.current.clear();
       console.log("[RdpIncomingDismount] Disabled — not polling");
-      mirrorRdpConsole(["session_monitor", "incoming_dismount_monitor_disabled", "verified", "cancelled", "info"]);
       return;
     }
 
@@ -134,13 +129,6 @@ export default function useRdpIncomingDismount(
           `[RdpIncomingDismount] Attended: ${attended} / ${total} total ` +
             `(prev attended: ${prevAttended ?? "unknown"}, prev total: ${prevTotal ?? "unknown"})`
         );
-        mirrorRdpConsole([
-          "session_observation",
-          total === 0 ? "incoming_sessions_absent" : attended > 0 ? "incoming_session_attended" : "incoming_session_unattended",
-          "verified",
-          "succeeded",
-          "info",
-        ]);
         const liveIds = new Set(
           sessions.map(session => session.sessionId).filter((id): id is number => typeof id === "number")
         );
@@ -210,5 +198,5 @@ export default function useRdpIncomingDismount(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, dismountOnEmpty, signOffOnDisconnect, mirrorRdpConsole, recordRdpDiagnostic]);
+  }, [enabled, dismountOnEmpty, signOffOnDisconnect, recordRdpDiagnostic]);
 }

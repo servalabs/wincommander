@@ -4,6 +4,7 @@ import type { LogRecord } from "../lib/logFilter";
 import { DIAGNOSTIC_RECORDED_EVENT } from "../lib/diagnostics";
 
 const LIVE_REFRESH_DEBOUNCE_MS = 150;
+const LIVE_REFRESH_FALLBACK_MS = 5_000;
 
 export type DiagnosticEvent = {
   eventId: string;
@@ -90,19 +91,13 @@ export function useDiagnosticCenter() {
         void refresh();
       }, LIVE_REFRESH_DEBOUNCE_MS);
     };
-    // A native writer does not have a WebView event channel. Refresh when the
-    // user returns to this screen instead of repeatedly reading all five
-    // diagnostic sources while it remains open.
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") refreshAfterDurableWrite();
-    };
     window.addEventListener(DIAGNOSTIC_RECORDED_EVENT, refreshAfterDurableWrite);
-    window.addEventListener("focus", refreshWhenVisible);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
+    // Native diagnostics (such as the session-end watcher) have no WebView
+    // callback. This small fallback keeps an open Diagnostics screen current.
+    const fallback = window.setInterval(() => { void refresh(); }, LIVE_REFRESH_FALLBACK_MS);
     return () => {
       window.removeEventListener(DIAGNOSTIC_RECORDED_EVENT, refreshAfterDurableWrite);
-      window.removeEventListener("focus", refreshWhenVisible);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.clearInterval(fallback);
       if (scheduledRefresh !== undefined) window.clearTimeout(scheduledRefresh);
     };
   }, [refresh]);
