@@ -345,6 +345,15 @@ pub struct AppPreferences {
     pub scrub_context_menu_enabled: bool,
     #[serde(default)]
     pub safe_copy_context_menu_enabled: bool,
+    /// Debug-build-only opt-in for Chromium's right-click developer menu.
+    /// This preference is not an authorization boundary: the frontend also
+    /// requires `is_dev_build`, which is false in every release binary.
+    #[serde(default)]
+    pub developer_context_menu_enabled: bool,
+    /// Debug-build-only opt-in for the small, in-app developer diagnostics
+    /// log. The log is memory-only and additionally requires `is_dev_build`.
+    #[serde(default)]
+    pub developer_diagnostics_log_enabled: bool,
     /// Show Safe Copy progress and completion in the WinCommander alert window.
     /// Existing installations default on so the scrub duration is visible.
     #[serde(default = "default_true")]
@@ -858,6 +867,8 @@ impl Default for AppPreferences {
             context_menu_enabled: false,
             scrub_context_menu_enabled: false,
             safe_copy_context_menu_enabled: false,
+            developer_context_menu_enabled: false,
+            developer_diagnostics_log_enabled: false,
             safe_copy_notifications_enabled: true,
             sidebar_collapsed: false,
             bulk_clear_excludes: default_bulk_clear_excludes(),
@@ -4034,6 +4045,14 @@ mod tests {
     #[test]
     fn new_settings_follow_system_theme_without_overwriting_saved_preferences() {
         assert_eq!(AppPreferences::default().theme, "system");
+        assert!(
+            !AppPreferences::default().developer_context_menu_enabled,
+            "developer tooling must start disabled even in debug builds"
+        );
+        assert!(
+            !AppPreferences::default().developer_diagnostics_log_enabled,
+            "the developer diagnostics log must start disabled"
+        );
         for theme in ["dark", "light", "system"] {
             let parsed: AppPreferences = serde_json::from_value(serde_json::json!({
                 "theme": theme

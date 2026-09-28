@@ -7,7 +7,7 @@
 // logic stays in callbacks here; the VisibilityTable for the panel-visibility
 // grid lives in VisibilityTable.tsx.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import PanelHeader from "../../components/shared/PanelHeader";
 import SectionCard from "../../components/shared/SectionCard";
@@ -39,6 +39,12 @@ import { useSecretSessionState } from "./secretSessionState";
 import RuntimeStatusSection from "./RuntimeStatusSection";
 import SupportConsole from "./SupportConsole";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
+import {
+    clearDeveloperDiagnosticsLog,
+    configureDeveloperDiagnosticsLog,
+    getDeveloperDiagnosticsSnapshot,
+    subscribeDeveloperDiagnostics,
+} from "../../lib/developerDiagnosticsLog";
 import "./index.css";
 import "../privacy/index.css";
 
@@ -685,6 +691,133 @@ function EmergencyToolsSection() {
     );
 }
 
+/**
+ * A deliberately narrow escape hatch for debugging the native app. The saved
+ * preference is only useful after the Rust debug-build sentinel says yes; a
+ * copied settings file cannot enable it in a shipped build.
+ */
+function DeveloperContextMenuSection() {
+    const { appSettings, patchAppSettings } = useAppState();
+    const [isNativeDebugBuild, setIsNativeDebugBuild] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        void invoke<boolean>("is_dev_build")
+            .then((value) => { if (active) setIsNativeDebugBuild(value === true); })
+            .catch(() => { if (active) setIsNativeDebugBuild(false); });
+        return () => { active = false; };
+    }, []);
+
+    // Never advertise the control in production or when the native bridge is
+    // absent (for example, a regular browser session).
+    if (isNativeDebugBuild !== true) return null;
+
+    const enabled = appSettings?.app?.developerContextMenuEnabled === true;
+    const onChange = async (next: boolean) => {
+        try {
+            await patchAppSettings({ app: { developerContextMenuEnabled: next } });
+            showSuccess(next
+                ? "Developer context menu enabled for this debug build."
+                : "Developer context menu disabled.");
+        } catch (error) {
+            reportSettingsWriteFailure(error);
+        }
+    };
+
+    return (
+        <section className="secret-devtools-context-menu" aria-label="Development tools">
+            <div className="dgz-tile-row sec-master-toggle">
+                <div className="dgz-tile-body">
+                    <div className="dgz-tile-title">Developer right-click menu</div>
+                    <div className="dgz-tile-desc">
+                        Lets this debug build show Chromium’s developer menu when you right-click inside WinCommander. It stays blocked in production and normal browser sessions, even if this setting was saved on.
+                    </div>
+                </div>
+                <Switch
+                    checked={enabled}
+                    onCheckedChange={onChange}
+                    aria-label="Developer right-click menu"
+                />
+            </div>
+        </section>
+    );
+}
+
+/**
+ * A tiny in-app alternative to raw DevTools. It only reads the allow-listed,
+ * in-memory FlowActivityLogger summaries and is therefore useful for a local
+ * debug check without making a production console available.
+ */
+function DeveloperDiagnosticsLogSection() {
+    const { appSettings, patchAppSettings } = useAppState();
+    const [isNativeDebugBuild, setIsNativeDebugBuild] = useState<boolean | null>(null);
+    const entries = useSyncExternalStore(
+        subscribeDeveloperDiagnostics,
+        getDeveloperDiagnosticsSnapshot,
+        getDeveloperDiagnosticsSnapshot,
+    );
+
+    useEffect(() => {
+        let active = true;
+        void invoke<boolean>("is_dev_build")
+            .then((value) => { if (active) setIsNativeDebugBuild(value === true); })
+            .catch(() => { if (active) setIsNativeDebugBuild(false); });
+        return () => { active = false; };
+    }, []);
+
+    const enabled = appSettings?.app?.developerDiagnosticsLogEnabled === true;
+    useEffect(() => {
+        configureDeveloperDiagnosticsLog(isNativeDebugBuild === true, enabled);
+    }, [enabled, isNativeDebugBuild]);
+
+    if (isNativeDebugBuild !== true) return null;
+
+    const onChange = async (next: boolean) => {
+        try {
+            await patchAppSettings({ app: { developerDiagnosticsLogEnabled: next } });
+            showSuccess(next
+                ? "Developer diagnostics log enabled for this debug build."
+                : "Developer diagnostics log disabled and cleared.");
+        } catch (error) {
+            reportSettingsWriteFailure(error);
+        }
+    };
+
+    return (
+        <section className="secret-devtools-context-menu" aria-label="Developer diagnostics log">
+            <div className="dgz-tile-row sec-master-toggle">
+                <div className="dgz-tile-body">
+                    <div className="dgz-tile-title">Developer console log</div>
+                    <div className="dgz-tile-desc">
+                        Keeps the latest 80 approved debug event summaries in memory only. It never captures raw console output, file paths, clipboard text, URLs, or account details; turning it off clears the list.
+                    </div>
+                </div>
+                <Switch
+                    checked={enabled}
+                    onCheckedChange={onChange}
+                    aria-label="Developer console log"
+                />
+            </div>
+            {enabled && (
+                <div className="secret-devtools-log" aria-live="polite" aria-label="Developer console entries">
+                    <div className="secret-devtools-log-head">
+                        <span>{entries.length} in-memory event{entries.length === 1 ? "" : "s"}</span>
+                        <button type="button" className="sec-btn" disabled={entries.length === 0} onClick={clearDeveloperDiagnosticsLog}>Clear</button>
+                    </div>
+                    {entries.length === 0 ? (
+                        <p className="sec-hint">Waiting for an approved debug event. Nothing is being persisted.</p>
+                    ) : entries.slice().reverse().map((entry) => (
+                        <div key={entry.id} className="secret-devtools-log-entry">
+                            <time dateTime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleTimeString()}</time>
+                            <span>{entry.summary}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </section>
+    );
+}
+
 // ── Panel ──────────────────────────────────────────────────────────────────────
 
 export default function SecretPanel() {
@@ -735,6 +868,8 @@ export default function SecretPanel() {
                     <div className="secret-grid secret-diagnostics-grid">
                         <RuntimeStatusSection />
                         <SectionCard title="Diagnostic Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
+                            <DeveloperContextMenuSection />
+                            <DeveloperDiagnosticsLogSection />
                             <SupportConsole />
                         </SectionCard>
                     </div>

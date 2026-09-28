@@ -195,6 +195,18 @@ export interface AppPreferences {
   contextMenuEnabled: boolean;
   scrubContextMenuEnabled: boolean;
   safeCopyContextMenuEnabled: boolean;
+  /**
+   * Debug-build-only opt-in for Chromium's right-click developer menu.
+   * A stored true is never sufficient: the native debug-build check must also
+   * succeed, so production and ordinary browser sessions remain fail-closed.
+   */
+  developerContextMenuEnabled?: boolean;
+  /**
+   * Debug-build-only opt-in for the small, in-app developer diagnostics log.
+   * It is in-memory, bounded, and cannot collect in release or a normal
+   * browser session. Kept separate from the right-click menu preference.
+   */
+  developerDiagnosticsLogEnabled?: boolean;
   /** Show Safe Copy start/ready notifications in the WinCommander alert window. Defaults on. */
   safeCopyNotificationsEnabled: boolean;
   sidebarCollapsed: boolean;

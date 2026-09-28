@@ -10,7 +10,8 @@
 // are already emitted). Console output is also mirrored to the backend log file
 // via the `[Flow]` prefix hook in logger.ts.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   clipboardActivitySummary,
@@ -19,8 +20,14 @@ import {
   flowNotifySummary,
 } from "./flowActivitySummary";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
+import { useAppState } from "../context/AppContext";
+import {
+  configureDeveloperDiagnosticsLog,
+  recordDeveloperFlowDiagnostic,
+} from "../lib/developerDiagnosticsLog";
 
 function log(message: string) {
+  recordDeveloperFlowDiagnostic(message);
   console.log(`[Flow] ${message}`);
 }
 
@@ -34,6 +41,24 @@ function monitorEvent(feature: string, action: string, errorCode?: string, sever
 }
 
 export default function FlowActivityLogger() {
+  const { appSettings } = useAppState();
+  const [isNativeDebugBuild, setIsNativeDebugBuild] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>("is_dev_build")
+      .then((value) => { if (active) setIsNativeDebugBuild(value === true); })
+      .catch(() => { if (active) setIsNativeDebugBuild(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    configureDeveloperDiagnosticsLog(
+      isNativeDebugBuild,
+      appSettings?.app?.developerDiagnosticsLogEnabled,
+    );
+  }, [appSettings?.app?.developerDiagnosticsLogEnabled, isNativeDebugBuild]);
+
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
     const add = (p: Promise<UnlistenFn>) =>
