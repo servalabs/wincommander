@@ -324,16 +324,19 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
         | "svc.vault.list_authorized"
+        // A policy owner needs to load their own service-filtered fragment
+        // before they can make an owner-authorized change.  The handler
+        // still derives that fragment from the named-pipe SID; ReadOnly here
+        // never makes another owner's data available.
+        | "svc.vault.get_policy"
+        | "svc.vault.apply_owner_fragment"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
-        // Fleet policy lifecycle is authenticated for the exact interactive
-        // Windows SID.  The service performs the privileged ACL work only
-        // after it has applied its owner/mounted-state checks; administrator
-        // membership alone is deliberately not an owner bypass.
-        "svc.vault.get_policy"
-        | "svc.vault.list_principals"
-        | "svc.vault.apply_policy"
-        | "svc.vault.apply_owner_fragment" => CapabilityClass::InteractiveSession,
+        // The principal directory contains local account/SID information.
+        // It is therefore a local-administrator management read, rather
+        // than an interactive-session request whose result may vary with a
+        // transient WTS session-state lookup.
+        "svc.vault.list_principals" | "svc.vault.apply_policy" => CapabilityClass::Privileged,
 
         // Creation is safe for a normal signed-in user only because the
         // service prepares a fixed driver and the Pro engine performs all
@@ -413,17 +416,23 @@ mod tests {
     }
 
     #[test]
-    fn fleet_vault_policy_lifecycle_uses_authenticated_interactive_sid() {
-        for verb in [
-            "svc.vault.get_policy",
-            "svc.vault.list_principals",
-            "svc.vault.apply_policy",
-            "svc.vault.apply_owner_fragment",
-        ] {
+    fn vault_owner_operations_are_caller_bound_in_handlers_not_wts_state() {
+        for verb in ["svc.vault.get_policy", "svc.vault.apply_owner_fragment"] {
             assert_eq!(
                 classify_verb(verb),
-                CapabilityClass::InteractiveSession,
-                "expected InteractiveSession for {verb}",
+                CapabilityClass::ReadOnly,
+                "expected caller-bound ReadOnly gate for {verb}",
+            );
+        }
+    }
+
+    #[test]
+    fn vault_principal_directory_is_admin_only() {
+        for verb in ["svc.vault.list_principals", "svc.vault.apply_policy"] {
+            assert_eq!(
+                classify_verb(verb),
+                CapabilityClass::Privileged,
+                "expected Privileged for {verb}",
             );
         }
     }

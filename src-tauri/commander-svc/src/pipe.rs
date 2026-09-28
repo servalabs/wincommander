@@ -601,8 +601,15 @@ async fn dispatch_verb(
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
         "svc.vault.get_policy" => Ok(serde_json::to_value(
-            peer.map(|peer| vault_access.caller_projection(peer.caller_sid()))
-                .unwrap_or_else(|| vault_access.caller_projection("")),
+            if caller_privileged {
+                // An actual local administrator may inspect Vault policy
+                // records for recovery/removal.  This does not bypass the
+                // owner checks in apply/mount/unmount handlers.
+                vault_access.administrator_projection()
+            } else {
+                peer.map(|peer| vault_access.caller_projection(peer.caller_sid()))
+                    .unwrap_or_else(|| vault_access.caller_projection(""))
+            },
         )
         .unwrap_or(serde_json::Value::Null)),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
@@ -1085,11 +1092,21 @@ fn merge_owner_fragment(
     let mut incoming = HashMap::new();
     for owned in fragment.entries {
         // Initial policy creation may nominate another valid Windows user as
-        // primary owner. The service resolves that SID against owner_account
-        // before persistence; once an entry exists, only its current owner
-        // may change or transfer it.
-        if previous.is_some() && owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) {
-            return Err(denied());
+        // primary owner.  Once a record exists, its *current* owner may
+        // transfer it while unmounted; comparing the proposed owner here
+        // would incorrectly reject that transfer before the later owner
+        // check could verify it.  A brand-new entry added to an existing
+        // policy must still belong to the caller.
+        if let Some(previous) = previous.as_ref() {
+            match previous.entries.iter().find(|entry| entry.id == owned.entry.id) {
+                Some(existing) if existing.primary_owner_sid.as_deref() != Some(caller_sid) => {
+                    return Err(denied());
+                }
+                None if owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) => {
+                    return Err(denied());
+                }
+                _ => {}
+            }
         }
         if incoming.insert(owned.entry.id.clone(), owned).is_some() {
             return Err(VerbError::new(
@@ -3788,6 +3805,32 @@ mod tests {
             let result = authorize("svc.ping", caller_privileged, 1234, &gate).await;
             assert_eq!(result, Ok(None));
         }
+    }
+
+    #[tokio::test]
+    async fn owner_fragment_does_not_depend_on_transient_wts_state() {
+        let result = authorize_with_interactive_session(
+            "svc.vault.apply_owner_fragment",
+            false,
+            false,
+            1234,
+            &passing_gate(),
+        )
+        .await;
+        assert_eq!(result, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn vault_principal_list_requires_an_actual_local_administrator() {
+        let gate = passing_gate();
+        assert_eq!(
+            authorize("svc.vault.list_principals", false, 1234, &gate).await,
+            Err("privileged verb requires SYSTEM/Admin caller".to_string()),
+        );
+        assert_eq!(
+            authorize("svc.vault.list_principals", true, 1234, &gate).await,
+            Ok(None),
+        );
     }
 
     #[tokio::test]

@@ -1960,6 +1960,28 @@ impl VaultAccessStore {
         &self,
         caller_sid: &str,
     ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+        if !valid_windows_sid(caller_sid) {
+            return self.empty_policy_projection();
+        }
+        self.policy_projection_for(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid))
+    }
+
+    /// An actual local administrator may inspect the single service-owned
+    /// policy in order to perform the narrow administrative recovery actions
+    /// (for example, removing an unmounted record).  The pipe dispatcher is
+    /// responsible for establishing that the caller has a real administrator
+    /// token before using this projection.  It does not grant mount, data,
+    /// dismount, or owner-edit authority.
+    pub fn administrator_projection(
+        &self,
+    ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+        self.policy_projection_for(|_| true)
+    }
+
+    fn policy_projection_for(
+        &self,
+        include: impl Fn(&VaultAccessEntry) -> bool,
+    ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
         use wincmd_shared::vault_access::{
             VaultContainerPathState, VaultOwnedPolicyEntry, VaultOwnerPolicyFragment,
         };
@@ -1971,9 +1993,6 @@ impl VaultAccessStore {
             expected_previous_version: 0,
             entries: Vec::new(),
         };
-        if !valid_windows_sid(caller_sid) {
-            return empty();
-        }
         let Ok(state) = self.state.lock() else {
             return empty();
         };
@@ -1987,7 +2006,7 @@ impl VaultAccessStore {
             .policy
             .entries
             .iter()
-            .filter(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid))
+            .filter(|entry| include(entry))
             .map(|entry| {
                 let available = self
                     .fs
@@ -2010,6 +2029,16 @@ impl VaultAccessStore {
             version: active.policy.version,
             expected_previous_version: active.policy.version,
             entries,
+        }
+    }
+
+    fn empty_policy_projection(&self) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+        wincmd_shared::vault_access::VaultOwnerPolicyFragment {
+            schema_version: VAULT_ACCESS_SCHEMA_VERSION,
+            policy_id: None,
+            version: 0,
+            expected_previous_version: 0,
+            entries: Vec::new(),
         }
     }
 
