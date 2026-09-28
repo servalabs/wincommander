@@ -1782,7 +1782,7 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let menu = Menu::with_items(app, &[&show_i, &shield_i, &dismount_all_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&quit_i, &show_i, &shield_i, &dismount_all_i])?;
 
             app.manage(TrayShieldState::new(shield_i.clone()));
             app.manage(PanicHotkeyState(Mutex::new("Ctrl+Shift+Q".to_string())));
