@@ -7,6 +7,11 @@ import type {
 import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultOwnerPolicyFragment, VaultOwnerPrincipalList, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
+/** Raised only after the service has durably accepted a Fleet Vault change.
+ * RightSidebar re-reads its caller-filtered, opaque-ID projection; no policy
+ * details or container locations travel with this notification. */
+export const FLEET_VAULTS_CHANGED_EVENT = "fleet-vaults-changed";
+
 /** Typed renderer boundary for the service-owned Vault Access policy. */
 export default function useVaultAccess<Policy, Status>() {
   const getPolicy = useCallback(
@@ -30,11 +35,14 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const applyOwnerPolicyFragment = useCallback(
-    (fragment: VaultOwnerPolicyFragment, _operationId?: string) =>
+    async (fragment: VaultOwnerPolicyFragment, _operationId?: string) => {
       // This adapter accepts the fragment itself, not a renderer-defined
       // wrapper. Its service side authenticates the caller and derives every
       // authoritative path/identity observation.
-      invoke<Status>("apply_vault_owner_policy_fragment", { ...fragment }),
+      const result = await invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment });
+      window.dispatchEvent(new Event(FLEET_VAULTS_CHANGED_EVENT));
+      return result;
+    },
     [],
   );
   // This is deliberately different from applying an empty policy. The

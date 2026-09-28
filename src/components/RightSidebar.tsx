@@ -21,7 +21,7 @@ import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
-import useVaultAccess from "../hooks/useVaultAccess";
+import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "../hooks/useVaultAccess";
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import './RightSidebar.css';
 
@@ -217,6 +217,12 @@ export default function RightSidebar() {
     useEffect(() => {
         if (qmOpen) void refreshFleetVaults();
     }, [qmOpen, refreshFleetVaults]);
+
+    useEffect(() => {
+        const refreshAfterFleetVaultSave = () => { void refreshFleetVaults(); };
+        window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave);
+        return () => window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave);
+    }, [refreshFleetVaults]);
 
     const handleFleetVaultMount = useCallback(async () => {
         if (!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting) return;
