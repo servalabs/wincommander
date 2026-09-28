@@ -73,6 +73,27 @@ describe("private volume search lifecycle", () => {
     expect(await accepted).toBeNull();
   });
 
+  test("a pre-search refresh cannot authorize a query from the previous mount", async () => {
+    setSearchPrivacy(mounted);
+    const live = searchPrivacyLease();
+    let finishRefresh!: () => void;
+    const refresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    let searchCalls = 0;
+    const search = refresh.then(() => { if (live()) searchCalls += 1; });
+    setSearchPrivacy({ ...mounted, generation: "replacement-mount" });
+    finishRefresh();
+    await search;
+    expect(searchCalls).toBe(0);
+  });
+
+  test("an unchanged pre-search refresh allows the fresh query", async () => {
+    setSearchPrivacy(mounted);
+    const live = searchPrivacyLease();
+    await Promise.resolve();
+    setSearchPrivacy({ ...mounted });
+    expect(live()).toBe(true);
+  });
+
   test("remount and status failures never revive an old response lease", () => {
     setSearchPrivacy(mounted);
     const old = searchPrivacyLease();

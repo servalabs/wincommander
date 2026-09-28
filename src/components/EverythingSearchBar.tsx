@@ -486,7 +486,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
     // A second Ctrl+Space press asks Rust to open the complete Search Files
     // panel. A Tauri acknowledgement carries the exact text to the main
-    // WebView; localStorage remains a fallback for the in-window "View all"
+    // WebView; memory remains a fallback for the in-window "View all"
     // button and for a panel that mounts after navigation.
     let unlistenHandoff: (() => void) | null = null;
     win.listen("handoff-search-query", () => {
@@ -497,7 +497,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       // delay could hide the overlay and change panels before this renderer
       // had a chance to write the query.
       emit("search-query-handoff-ready", { query: text }).catch(() => {
-        // The localStorage fallback still covers in-window navigation if a
+        // The memory fallback still covers in-window navigation if a
         // native event cannot be delivered during shutdown.
       });
     }).then(fn => { unlistenHandoff = fn; });

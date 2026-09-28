@@ -12,6 +12,15 @@ import { DEFAULT_RESULT_LIMIT, nextResultLimit, normalizeResultLimit } from "@/l
 import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
 import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
 
+export function cancelPendingFileSearch(
+  timer: { current: ReturnType<typeof setTimeout> | null },
+  request: { current: number },
+): void {
+  request.current += 1;
+  if (timer.current !== null) clearTimeout(timer.current);
+  timer.current = null;
+}
+
 export interface FileSearchState {
   query: string;
   results: SearchResult[];
@@ -74,9 +83,9 @@ export function useFileSearch(): FileSearchState {
     date = dateFilter,
   ) => {
     const runId = ++runIdRef.current;
-    await refreshSearchPrivacy(true);
     const lease = searchPrivacyLease();
     const isCurrent = () => runIdRef.current === runId && lease();
+    await refreshSearchPrivacy(true);
     if (!isCurrent()) return;
     const hasActiveFilters = types.size > 0 || size !== "any" || date !== "any";
     const effectiveQuery = q.trim();
@@ -157,17 +166,18 @@ export function useFileSearch(): FileSearchState {
   }, [performSearch, query, resultLimit]);
 
   const clear = useCallback(() => {
-    runIdRef.current += 1;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    cancelPendingFileSearch(debounceRef, runIdRef);
     setQueryState("");
     setResults([]);
+    setTotalCount(0);
+    setIsSearching(false);
     setHasSearched(false);
     setError(null);
     setResultsQuery("");
   }, []);
 
   useEffect(() => {
-    runIdRef.current += 1;
+    cancelPendingFileSearch(debounceRef, runIdRef);
     setResults([]);
     setTotalCount(0);
     setIsSearching(false);
