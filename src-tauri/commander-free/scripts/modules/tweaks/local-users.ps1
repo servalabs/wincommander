@@ -114,3 +114,129 @@ function Set-LocalLoginUserHidden {
     $values = Get-UserListRegistryValues
     ConvertTo-LocalLoginUserRow -Account $account -UserListValues $values
 }
+
+function Get-LocalServiceAccountSids {
+    $sids = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($service in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
+        $startName = [string]$service.StartName
+        if ([string]::IsNullOrWhiteSpace($startName) -or
+            $startName -match '^(LocalSystem|LocalService|NetworkService)$' -or
+            $startName -match '^(NT AUTHORITY|NT SERVICE)\\') {
+            continue
+        }
+
+        if ($startName.StartsWith('.\\')) {
+            $startName = "$env:COMPUTERNAME\\$($startName.Substring(2))"
+        }
+        elseif ($startName -notmatch '\\') {
+            $startName = "$env:COMPUTERNAME\\$startName"
+        }
+
+        try {
+            $sid = ([System.Security.Principal.NTAccount]$startName).Translate([System.Security.Principal.SecurityIdentifier]).Value
+            [void]$sids.Add([string]$sid)
+        }
+        catch {
+            # A deleted or remote domain identity cannot match a local SID.
+        }
+    }
+    return ,$sids
+}
+
+function Get-LocalPasswordExpirySnapshot {
+    $serviceSids = Get-LocalServiceAccountSids
+    $localUsersBySid = @{}
+    foreach ($user in @(Get-LocalUser -ErrorAction SilentlyContinue)) {
+        if ($user.SID) { $localUsersBySid[[string]$user.SID.Value] = $user }
+    }
+
+    $eligible = New-Object System.Collections.Generic.List[object]
+    $skipped = @{
+        builtIn = 0
+        disabled = 0
+        service = 0
+        externalIdentity = 0
+        nonUser = 0
+    }
+
+    foreach ($account in @(Get-CimInstance Win32_UserAccount -Filter 'LocalAccount = True' -ErrorAction Stop)) {
+        $sid = [string]$account.SID
+        if ([int]$account.SIDType -ne 1) {
+            $skipped.nonUser++
+            continue
+        }
+        if (Test-BuiltInLocalUserSid -Sid $sid) {
+            $skipped.builtIn++
+            continue
+        }
+        if ([bool]$account.Disabled) {
+            $skipped.disabled++
+            continue
+        }
+        if ($serviceSids.Contains($sid)) {
+            $skipped.service++
+            continue
+        }
+        $localUser = $localUsersBySid[$sid]
+        if ($localUser -and [string]$localUser.PrincipalSource -match '^(MicrosoftAccount|AzureAD)$') {
+            $skipped.externalIdentity++
+            continue
+        }
+        $eligible.Add([pscustomobject]@{
+            Sid             = $sid
+            PasswordExpires = [bool]$account.PasswordExpires
+        })
+    }
+
+    return [pscustomobject]@{
+        eligible = $eligible.ToArray()
+        skipped = $skipped
+    }
+}
+
+function Get-LocalPasswordExpiryStatus {
+    try {
+        $snapshot = Get-LocalPasswordExpirySnapshot
+        $eligible = @($snapshot.eligible)
+        $expiresCount = @($eligible | Where-Object { $_.PasswordExpires }).Count
+        $neverExpiresCount = $eligible.Count - $expiresCount
+        [pscustomobject]@{
+            isAdmin                  = [bool](Test-IsAdmin)
+            totalEligible            = $eligible.Count
+            passwordExpiresCount     = $expiresCount
+            passwordNeverExpiresCount = $neverExpiresCount
+            allEligibleNeverExpire   = ($eligible.Count -gt 0 -and $expiresCount -eq 0)
+            skipped                  = $snapshot.skipped
+        }
+    }
+    catch {
+        @{ error = $true; message = "Unable to inspect local password-expiry settings: $($_.Exception.Message)" }
+    }
+}
+
+function Set-LocalPasswordNeverExpires {
+    param([Parameter(Mandatory = $true)][bool]$Enabled)
+
+    Assert-IsAdmin
+    $snapshot = Get-LocalPasswordExpirySnapshot
+    $changed = 0
+    $failed = 0
+    foreach ($account in @($snapshot.eligible)) {
+        if ($account.PasswordExpires -eq (-not $Enabled)) { continue }
+        try {
+            Set-LocalUser -SID ([System.Security.Principal.SecurityIdentifier]$account.Sid) -PasswordNeverExpires:$Enabled -ErrorAction Stop
+            $changed++
+        }
+        catch {
+            $failed++
+        }
+    }
+
+    $status = Get-LocalPasswordExpiryStatus
+    if ($status.error) { return $status }
+    [pscustomobject]@{
+        status       = $status
+        changedCount = $changed
+        failedCount  = $failed
+    }
+}

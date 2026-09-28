@@ -9,6 +9,7 @@ import { AcquisitionMonitorSwitch } from "../../components/tweaks/ExploitProtect
 import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
 import PowerGraphicsCard from "../../components/tweaks/PowerGraphicsCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
+import LocalPasswordExpiryCard from "../../components/tweaks/LocalPasswordExpiryCard";
 import RdpRedirectionCard from "../privacy/RdpRedirectionCard";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
@@ -382,6 +383,7 @@ function SecurityAppsTab({ showExpertSpeed, noSearch, searchQuery, handlePostTog
                 during search, as before) — rendered ahead of the expert-gated
                 block below so it isn't swallowed by the showExpertSpeed gate. */}
             {noSearch && <VmSandboxSection />}
+            {noSearch && <LocalPasswordExpiryCard />}
 
             {/* Security & Apps + AI actions + Defender Auditor (expert) */}
             {showExpertSpeed && (

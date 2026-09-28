@@ -4960,6 +4960,16 @@
       ]
     },
     {
+      "id": "backend:Get\u002dLocalPasswordExpiryStatus",
+      "name": "Get\u002dLocalPasswordExpiryStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/LocalPasswordExpiryCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dLockScreenPrivacyStatus",
       "name": "Get\u002dLockScreenPrivacyStatus",
       "transport": "backend\u002dscript",
@@ -6736,6 +6746,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/components/tweaks/managers/LocalUsersManager.tsx"
+      ]
+    },
+    {
+      "id": "backend:Set\u002dLocalPasswordNeverExpires",
+      "name": "Set\u002dLocalPasswordNeverExpires",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/LocalPasswordExpiryCard.tsx"
       ]
     },
     {

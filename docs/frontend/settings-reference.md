@@ -616,6 +616,8 @@ via `Get-*` where present).
 | Unlimited Password Age        | `Set-UnlimitedPasswordAge`           | `Reset-PasswordAge`                   |
 | MSI Safe Mode                 | `Enable-MSISafeMode`                 | `Disable-MSISafeMode`                 |
 
+**Local Account Password Expiry** — Windows Settings → Security & Apps shows the live count of eligible local accounts whose passwords still expire. Its toggle sets the per-account `Password never expires` flag after administrator confirmation and re-reads Windows. Built-in, disabled, service, connected-work, and domain accounts are excluded. This is separate from **Unlimited Password Age**, which changes the computer-wide local password-age policy.
+
 ### Performance, GPU, and power tweaks
 
 Persisted under `ideal.tweaks.performance`, `ideal.tweaks.gpu`,

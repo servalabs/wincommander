@@ -2542,7 +2542,10 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         | "Stop-ServiceByName"
         | "Restart-ServiceByName" => Some("tweaks/service-manager"),
 
-        "Get-LocalLoginUsers" | "Set-LocalLoginUserHidden" => Some("tweaks/local-users"),
+        "Get-LocalLoginUsers"
+        | "Set-LocalLoginUserHidden"
+        | "Get-LocalPasswordExpiryStatus"
+        | "Set-LocalPasswordNeverExpires" => Some("tweaks/local-users"),
 
         // ── Tweaks - Disk Cleanup (granular) ─────────────────────────
         "Get-DiskCleanupScan" | "Invoke-DiskCleanupCategories" => {
@@ -3921,8 +3924,14 @@ mod fleet_forensic_projection_tests {
     #[test]
     fn shared_scheduler_uses_the_protected_module_loader() {
         #[cfg(wincommander_dev_profile)]
-        assert_eq!(AUTO_ERASE_SCHEDULER, wincmd_shared::AUTO_ERASE_PS_MODULE.as_bytes());
-        assert_eq!(load_module("core/auto-erase").unwrap(), wincmd_shared::AUTO_ERASE_PS_MODULE);
+        assert_eq!(
+            AUTO_ERASE_SCHEDULER,
+            wincmd_shared::AUTO_ERASE_PS_MODULE.as_bytes()
+        );
+        assert_eq!(
+            load_module("core/auto-erase").unwrap(),
+            wincmd_shared::AUTO_ERASE_PS_MODULE
+        );
         let build_script = include_str!("../build.rs");
         assert!(build_script.contains("../wincmd-shared/scripts/auto-erase.ps1"));
         assert!(build_script.contains("scripts/core/auto-erase.enc"));
