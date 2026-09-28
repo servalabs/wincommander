@@ -194,9 +194,12 @@ describe("Vault access editor presentation", () => {
 describe("Vault path display", () => {
   test("uses only a service-confirmed drive-letter path and never renders an invented placeholder", () => {
     const available = renderEditor({ ...entry, container_path: "???", container_path_state: "available", canonical_container_path: "D:\\Vaults\\example.hc" });
+    const extended = renderEditor({ ...entry, container_path: "???", container_path_state: "available", canonical_container_path: "\\\\?\\C:\\Vaults\\example.hc" });
     const unavailable = renderEditor({ ...entry, container_path: "???", container_path_state: "unavailable" });
     expect(available).toContain('value="D:\\Vaults\\example.hc"');
     expect(available).not.toContain('value="???"');
+    expect(extended).toContain('value="C:\\Vaults\\example.hc"');
+    expect(extended).not.toContain('value="Path unavailable"');
     expect(unavailable).toContain('value="Path unavailable"');
     expect(unavailable).not.toContain('value="???"');
   });
