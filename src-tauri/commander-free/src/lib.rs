@@ -121,6 +121,7 @@ mod startup_maintenance;
 mod startup_trace;
 mod startup_window;
 mod storage_probe;
+mod trust_store_audit;
 mod svc_client;
 // This is an executable-free admission contract, covered by its unit tests.
 // It is intentionally excluded from the shipped binary until the signed
@@ -2936,6 +2937,8 @@ pub fn run() {
             firewall_audit::firewall_audit_preview,
             firewall_audit::firewall_audit_remediate,
             firewall_audit::firewall_audit_cancel,
+            // ── Windows certificate trust-store transparency (read-only) ──
+            trust_store_audit::trust_store_audit,
             // ── Network toggle (free, in-process firewall block) ──
             network_toggle::internet_kill_switch_set,
             network_toggle::internet_kill_switch_get,
