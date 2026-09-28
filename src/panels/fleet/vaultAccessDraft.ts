@@ -201,3 +201,18 @@ export function prepareVaultAccessSave(
   if (draft.policy_id !== savedPolicy.policy_id || draft.version !== savedPolicy.version) return null;
   return clonePolicy(draft);
 }
+
+/** Keep unrelated edits without turning a concurrent addition into a later deletion. */
+export function retainVaultDraftAfterSave(
+  draft: VaultAccessPolicy,
+  base: VaultAccessPolicy | null,
+  saved: VaultAccessPolicy,
+  removedIds: readonly string[],
+): VaultAccessDraftSnapshot {
+  if (!saved.entries.length) return {
+    policy: { ...clonePolicy(draft), version: 0, expected_previous_version: 0 }, basePolicy: null,
+  };
+  const remainingBase = base ? { ...base, entries: base.entries.filter(entry => !removedIds.includes(entry.id)) } : null;
+  const rebased = rebaseVaultAccessDraft(draft, remainingBase, saved);
+  return { policy: rebased ?? draft, basePolicy: rebased ? saved : remainingBase };
+}

@@ -5,6 +5,7 @@ import {
   readVaultAccessDraft,
   readVaultAccessDraftSnapshot,
   prepareVaultAccessSave,
+  retainVaultDraftAfterSave,
   vaultAccessEntryIntentEqual,
   rebaseVaultAccessDraft,
   writeVaultAccessDraft,
@@ -21,6 +22,30 @@ function memoryStorage(): VaultDraftStorage {
 }
 
 describe("Vault access draft persistence", () => {
+  test("retains unrelated edits after deletion without losing a concurrent saved addition", () => {
+    const base = { ...newVaultPolicy(), version: 1 };
+    const removedId = base.entries[0]!.id;
+    const draft = { ...base, entries: base.entries.slice(1).map(entry => ({ ...entry, label: "Unsent edit" })) };
+    const added = newVaultPolicy().entries[0]!;
+    const saved = { ...base, version: 3, entries: [...base.entries.slice(1), added] };
+    const retained = retainVaultDraftAfterSave(draft, base, saved, [removedId]);
+    expect(retained.policy.entries.map(entry => entry.id)).toEqual(saved.entries.map(entry => entry.id));
+    expect(retained.policy.entries[0]!.label).toBe("Unsent edit");
+    expect(prepareVaultAccessSave(retained.policy, retained.basePolicy, saved)?.entries.at(-1)).toEqual(added);
+  });
+
+  test("keeps conflict evidence in a retained draft and detaches its base after final removal", () => {
+    const base = { ...newVaultPolicy(), version: 1 };
+    const draft = { ...base, entries: [{ ...base.entries[1]!, label: "Local" }] };
+    const saved = { ...base, version: 2, entries: [{ ...base.entries[1]!, label: "Remote" }] };
+    const removedIds = [base.entries[0]!.id, base.entries[2]!.id];
+    const retained = retainVaultDraftAfterSave(draft, base, saved, removedIds);
+    expect(retained.policy.entries[0]!.label).toBe("Local");
+    expect(prepareVaultAccessSave(retained.policy, retained.basePolicy, saved)).toBeNull();
+    const cleared = retainVaultDraftAfterSave(draft, base, { ...saved, entries: [] }, removedIds);
+    expect(cleared.basePolicy).toBeNull();
+    expect(cleared.policy.version).toBe(0);
+  });
   test("unchanged saved records compare equal across JSON property ordering", () => {
     const entry = newVaultPolicy().entries[0]!;
     const reordered = { ...entry, mount: { preferred_letter: "J", presentation: entry.mount.presentation } };

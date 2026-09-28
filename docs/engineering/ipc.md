@@ -380,6 +380,10 @@ edits to the same Vault keep the draft for review. The service still checks the
 exact previous revision when applying; a concurrent write is never overwritten
 by an automatic retry. Unchanged records belonging to other owners are omitted
 from the write fragment and remain preserved by the service.
+Removal uses explicit `remove_entry_ids`, never omission. The service checks the
+saved revision, caller ownership or local-administrator permission, and mounted
+state before revoking access and persisting the removal. The editor verifies the
+requested IDs are absent from service readback before reporting success.
 An administrator's recovery view retains the saved policy identity and revision
 when validation is degraded; ordinary owner listing and mounting remain denied
 until the policy is valid again.

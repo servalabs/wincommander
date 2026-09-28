@@ -9,7 +9,7 @@ import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
-  clearVaultAccessDraft, prepareVaultAccessSave, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, vaultAccessEntryIntentEqual, writeVaultAccessDraft,
+  clearVaultAccessDraft, prepareVaultAccessSave, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, retainVaultDraftAfterSave, vaultAccessEntryIntentEqual, writeVaultAccessDraft,
 } from "./vaultAccessDraft";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
@@ -304,6 +304,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           setPolicyLoadUnavailable(true);
           setHasSavedPolicy(false);
           setStatus(null);
+          return false;
         }
       } else {
         setOwnerDirectoryUnavailable(false);
@@ -542,13 +543,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const submittedPolicy = nextVaultAccessPolicy(prepared);
       // Keep the UI reference, desktop diagnostic and service event correlated.
       // Without this, a support reference could not identify the failed save.
-      const fragment = vaultOwnerFragmentFromPolicy(submittedPolicy);
+      const fragment = vaultOwnerFragmentFromPolicy(submittedPolicy, latest);
       // The service preserves omitted rows. Do not submit another owner's
       // unchanged record as an edit just because an administrator can see it.
       fragment.entries = fragment.entries.filter(({ entry }) =>
         entry.primary_owner_sid === currentCallerSid || !latest?.entries.some(saved =>
           saved.id === entry.id && vaultAccessEntryIntentEqual(saved, entry)));
+      const retainedDraft = draftToKeepAfterSave ? retainVaultDraftAfterSave(
+        draftToKeepAfterSave, draftBaseRef.current, submittedPolicy, fragment.remove_entry_ids ?? [],
+      ) : null;
       const appliedStatus = await applyOwnerPolicyFragment(fragment, operationId);
+      if (fragment.remove_entry_ids?.length) {
+        const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
+        if (confirmed?.entries.some(entry => fragment.remove_entry_ids!.includes(entry.id))) {
+          showError("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.", undefined, { operationId });
+          return;
+        }
+      }
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // A successful full removal leaves no saved policy to edit. Clear every
@@ -560,7 +571,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // Removing one saved Vault is intentionally a surgical operation.  A
       // separate edit the administrator has not saved yet remains a local
       // draft rather than being silently sent with the removal request.
-      replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy);
+      replacePolicy(retainedDraft?.policy ?? (removed ? null : submittedPolicy), keepDraft, retainedDraft ? retainedDraft.basePolicy : removed ? null : submittedPolicy);
+      // A reload must not resurrect the pre-removal draft during its debounce window.
+      if (retainedDraft) writeVaultAccessDraft(retainedDraft.policy, undefined, retainedDraft.basePolicy);
       if (savedPolicyRemoved) {
         setStatus(null);
         setAuthorizedEntries([]);
@@ -616,7 +629,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     const next = removeVaultEntryDraft(saved, entryId, true);
     if (!next) return;
     const remainingDraft = removeVaultEntryDraft(current, entryId, true);
-    const draftToKeepAfterSave = dirtyRef.current && remainingDraft
+    const hasRemainingEdits = remainingDraft && (remainingDraft.entries.length !== next.entries.length
+      || remainingDraft.entries.some(entry => !next.entries.some(savedEntry => savedEntry.id === entry.id && vaultAccessEntryIntentEqual(savedEntry, entry))));
+    const draftToKeepAfterSave = dirtyRef.current && hasRemainingEdits && remainingDraft
       ? {
         ...remainingDraft,
         // Clearing the last saved entry leaves no active policy. A later
@@ -1182,7 +1197,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogHeader>
             <DialogTitle>Remove the saved Vault policy?</DialogTitle>
             <DialogDescription>
-              WinCommander will dismount managed Vaults, revoke their shared Windows access, and remove the saved policy. The encrypted container files are not deleted.
+              All managed Vaults must be unmounted first. WinCommander will revoke their shared Windows access and remove the saved policy. The encrypted container files are not deleted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

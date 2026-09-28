@@ -59,13 +59,15 @@ window.__vaultUiService = {
       throw new Error('vault policy was changed elsewhere since this draft was loaded');
     }
     const merged = new Map(policy.entries.map(entry => [entry.id, entry]));
+    if (!window.__ignoreRemoval) for (const id of fragment.remove_entry_ids || []) merged.delete(id);
     for (const { entry } of fragment.entries) {
       if (entry.primary_owner_sid !== sid) throw new Error('Other-owner records must not be submitted as edits');
       merged.set(entry.id, structuredClone(entry));
     }
     policy = { ...structuredClone(fragment), entries: [...merged.values()] };
+    if (!policy.entries.length) policy = { ...policy, policy_id: null, version: 0, expected_previous_version: 0 };
     sessionStorage.setItem('fixture-policy', JSON.stringify(policy));
-    window.__lastSavedPattern = policy.entries[0].access_pattern;
+    window.__lastSavedPattern = policy.entries[0]?.access_pattern;
     return status();
   },
   mountEntry: blocked, unmountEntry: blocked, forgetPolicy: blocked
@@ -86,6 +88,13 @@ async function main() {
   page.setDefaultTimeout(15000);
   await page.route('**/src/hooks/useVaultAccess.ts*', route => route.fulfill({
     contentType: 'application/javascript', body: 'export default function useVaultAccess(){return window.__vaultUiService;}'
+  }));
+  await page.route('**/src/utils/toast.ts*', route => route.fulfill({
+    contentType: 'application/javascript', body: `
+      window.__toasts = [];
+      export const showSuccess = message => window.__toasts.push({ kind: 'success', message });
+      export const showError = message => window.__toasts.push({ kind: 'error', message });
+    `
   }));
   await page.route('**/__vault_selection_fixture.js', route => route.fulfill({ contentType: 'application/javascript', body: fixtureModule }));
   await page.route('**/__vault_selection__', route => route.fulfill({ contentType: 'text/html', body: fixture }));
@@ -141,8 +150,40 @@ async function main() {
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.length === 4);
     const savedLabels = await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.map(entry => entry.label));
     assert.deepEqual(savedLabels, ['Example vault', 'Other owner vault', 'New vault', 'Restored starter']);
+    // An omitted record is not a deletion: click the real saved-row removal flow.
+    const savedRow = label => page.locator('tr').filter({ has: page.getByText(label, { exact: true }) });
+    await page.evaluate(() => { window.__ignoreRemoval = true; window.__toasts = []; });
+    await savedRow('Other owner vault').getByRole('button', { name: 'Remove policy', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove and save', exact: true }).click();
+    await page.waitForFunction(() => window.__toasts.some(toast => toast.kind === 'error' && toast.message.includes('Removal was not confirmed')));
+    assert.equal(await page.evaluate(() => window.__toasts.some(toast => toast.kind === 'success')), false, 'A no-op response must not report removal success');
+    await page.evaluate(() => { window.__ignoreRemoval = false; });
+    const removeSaved = async label => {
+      await savedRow(label).getByRole('button', { name: 'Remove policy', exact: true }).click();
+      await page.getByRole('button', { name: 'Remove and save', exact: true }).click();
+      await page.waitForFunction(name => !JSON.parse(sessionStorage.getItem('fixture-policy')).entries.some(entry => entry.label === name), label);
+      await savedRow(label).waitFor({ state: 'detached' });
+    };
+    await removeSaved('Other owner vault');
+    await page.reload();
+    assert.equal(await savedRow('Other owner vault').count(), 0, 'Removed record stays absent after reload');
+    await savedRow('New vault').getByRole('button', { name: 'Edit', exact: true }).click();
+    await page.getByLabel('Vault 2 label', { exact: true }).fill('Unsent name');
+    await page.evaluate(() => window.__addOtherOwnerVault());
+    await removeSaved('Example vault');
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.find(entry => entry.label === 'New vault')?.label), 'New vault', 'Removal must not submit unrelated draft edits');
+    await page.reload();
+    await savedRow('Unsent name').waitFor();
+    await savedRow('Other owner vault').waitFor();
+    await savedRow('Unsent name').getByRole('button', { name: 'Edit', exact: true }).click();
+    await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.some(entry => entry.label === 'Unsent name'));
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.some(entry => entry.label === 'Other owner vault')), true, 'Saving retained edits must preserve concurrent additions');
+    for (const label of ['Unsent name', 'Restored starter', 'Other owner vault']) await removeSaved(label);
+    await page.reload();
+    await page.getByText('No vault access is configured yet', { exact: true }).waitFor();
     assert.deepEqual(errors, []);
-    console.log('PASS: owner labels; all three presets persist; revision changes and restored starters save without losing existing vaults.');
+    console.log('PASS: owner labels; presets and restored drafts; explicit removals persist through reload, including the last vault.');
   } catch (error) {
     console.error({ browserErrors: errors, fixtureText: await page.locator('body').innerText() });
     throw error;

@@ -166,6 +166,7 @@ export interface VaultOwnerPolicyFragment {
   version: number;
   expected_previous_version: number;
   entries: VaultOwnerPolicyEntry[];
+  remove_entry_ids?: string[];
 }
 
 export function vaultPolicyFromOwnerFragment(fragment: VaultOwnerPolicyFragment): VaultAccessPolicy | null {
@@ -186,12 +187,13 @@ export function vaultPolicyFromOwnerFragment(fragment: VaultOwnerPolicyFragment)
 /** Strip service-observation-only fields before applying the owner fragment.
  * The service independently resolves identity, canonical path, access and
  * mount state; the renderer cannot feed those observations back as authority. */
-export function vaultOwnerFragmentFromPolicy(policy: VaultAccessPolicy): VaultOwnerPolicyFragment {
+export function vaultOwnerFragmentFromPolicy(policy: VaultAccessPolicy, savedPolicy?: VaultAccessPolicy | null): VaultOwnerPolicyFragment {
   return {
     schema_version: policy.schema_version,
     policy_id: policy.policy_id,
     version: policy.version,
     expected_previous_version: policy.expected_previous_version,
+    remove_entry_ids: savedPolicy?.entries.filter(saved => !policy.entries.some(entry => entry.id === saved.id)).map(entry => entry.id) ?? [],
     entries: policy.entries.map(entry => {
       const { container_path_state: _state, canonical_container_path: _canonical, ...requestEntry } = entry;
       // The shared fragment retains this required field for response-shape

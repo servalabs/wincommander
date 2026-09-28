@@ -13,6 +13,16 @@ import {
 } from "./vaultAccessTypes";
 
 describe("Vault Access service intent", () => {
+  test("requests deletion explicitly without deleting retained or newly added vaults", () => {
+    const saved = newVaultPolicy();
+    const added = newVaultEntry("private");
+    const next = { ...saved, entries: [saved.entries[1]!, added] };
+    const fragment = vaultOwnerFragmentFromPolicy(next, saved);
+    expect(fragment.remove_entry_ids).toEqual([saved.entries[0]!.id, saved.entries[2]!.id]);
+    expect(fragment.entries.map(({ entry }) => entry.id)).toEqual([saved.entries[1]!.id, added.id]);
+    expect(vaultOwnerFragmentFromPolicy({ ...saved, entries: [] }, saved).remove_entry_ids).toEqual(saved.entries.map(entry => entry.id));
+    expect(vaultOwnerFragmentFromPolicy(next).remove_entry_ids).toEqual([]);
+  });
   test("maps only the owner-scoped service fragment into an editable policy", () => {
     const entry = newVaultEntry("private");
     entry.owner_account = "Owner";

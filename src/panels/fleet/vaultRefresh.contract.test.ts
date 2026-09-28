@@ -39,7 +39,7 @@ describe("Vault refresh boundaries", () => {
     const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
 
     expect(apply).toContain("const savedPolicyRemoved = removed && !keepDraft");
-    expect(apply).toContain("replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)");
+    expect(apply).toContain("replacePolicy(retainedDraft?.policy ?? (removed ? null : submittedPolicy), keepDraft, retainedDraft ? retainedDraft.basePolicy : removed ? null : submittedPolicy)");
     const cleared = apply.slice(apply.indexOf("if (savedPolicyRemoved)"), apply.indexOf("} else {\n        setStatus(appliedStatus);"));
     expect(cleared).toContain("setStatus(null)");
     expect(cleared).toContain("setAuthorizedEntries([])");
@@ -51,7 +51,7 @@ describe("Vault refresh boundaries", () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
 
-    expect(apply.indexOf("replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)"))
+    expect(apply.indexOf("replacePolicy(retainedDraft?.policy ?? (removed ? null : submittedPolicy), keepDraft, retainedDraft ? retainedDraft.basePolicy : removed ? null : submittedPolicy)"))
       .toBeLessThan(apply.indexOf("const refreshed = await refresh(!keepDraft, false)"));
     const selectedRowRepair = source.slice(source.indexOf("const entries = policy?.entries"), source.indexOf("const updateEntry"));
     expect(selectedRowRepair).toContain("!entries.some(entry => entry.id === selectedEntryId)");
