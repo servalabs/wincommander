@@ -4,12 +4,13 @@ import "./VaultAccessPatternPicker.css";
 
 interface VaultAccessPatternPickerProps {
   value: VaultAccessPreset;
+  disabled?: boolean;
   onChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
 }
 
 const PATTERN_ORDER: Exclude<VaultAccessPreset, "custom">[] = ["private", "shared-read", "shared-write"];
 
-export default function VaultAccessPatternPicker({ value, onChange }: VaultAccessPatternPickerProps) {
+export default function VaultAccessPatternPicker({ value, disabled = false, onChange }: VaultAccessPatternPickerProps) {
   return (
     <fieldset className="vault-access-pattern-picker">
       <legend>Access pattern</legend>
@@ -23,6 +24,7 @@ export default function VaultAccessPatternPicker({ value, onChange }: VaultAcces
               role="radio"
               aria-checked={value === pattern}
               data-vault-access-preset={pattern}
+              disabled={disabled}
               onClick={() => onChange(pattern)}
             >
               <strong>{definition.label}</strong>

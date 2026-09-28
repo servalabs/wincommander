@@ -217,7 +217,7 @@ describe("Vault access state boundaries remain distinct", () => {
     expect(vaultMountGate({ authorized, entryResult: "acl_readback_failed", draftDirty: false }).canMount).toBe(false);
     const beforeRecovery = root.split('<details className="fleet-vault-advanced">')[0];
     expect(beforeRecovery).toContain("Vault settings could not be loaded yet");
-    expect(beforeRecovery).toContain("This account needs Vault policy-manager access");
+    expect(beforeRecovery).toContain("Vault administrator access was not confirmed");
     expect(beforeRecovery).toContain('className="fleet-validation-errors"');
     expect(beforeRecovery).toContain("{verification.detail}");
     expect(editorSource).not.toContain("useVaultAccess");

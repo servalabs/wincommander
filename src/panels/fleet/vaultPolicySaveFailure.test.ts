@@ -32,11 +32,11 @@ describe("Vault policy save failures", () => {
     expect(failure.message).toContain("no Vault settings were changed");
   });
 
-  test("explains missing Vault policy-manager membership without suggesting elevation", () => {
+  test("explains that local-administrator access is required without suggesting elevation", () => {
     const failure = vaultPolicySaveFailure(new Error("forbidden: vault policy operation requires Vault Policy Administrator"));
 
     expect(failure.code).toBe("VLT.POLICY.ADMIN_ACCESS_REQUIRED");
-    expect(failure.message).toContain("WinCommander Vault Policy Administrators");
+    expect(failure.message).toContain("not a local administrator");
     expect(failure.message).not.toContain("Run as administrator");
   });
 
@@ -44,6 +44,6 @@ describe("Vault policy save failures", () => {
     const failure = vaultPolicySaveFailure("forbidden: vault policy operation requires Vault Policy Administrator");
 
     expect(failure.code).toBe("VLT.POLICY.ADMIN_ACCESS_REQUIRED");
-    expect(failure.message).toContain("not allowed to change Vault settings");
+    expect(failure.message).toContain("not a local administrator");
   });
 });

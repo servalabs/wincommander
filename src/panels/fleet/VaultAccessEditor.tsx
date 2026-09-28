@@ -16,6 +16,7 @@ interface VaultAccessEditorProps {
   directory: FleetAccessDirectory;
   ownerPrincipals: readonly VaultOwnerPrincipal[];
   currentCallerSid: string | null;
+  locked?: boolean;
   onEntryChange: (patch: Partial<VaultAccessEntry>) => void;
   onOwnerChange: (owner: VaultOwnerPrincipal) => void;
   onPresetChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
@@ -35,7 +36,7 @@ function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: stri
   return `${name}${principal.sid === currentCallerSid ? " (signed in)" : ""} — ${principal.sid}`;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
   const eligibleOwnerPrincipals = accessPreset === "private"
     ? ownerPrincipals.filter(principal => principal.is_local_administrator)
@@ -63,7 +64,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
     }
   };
 
-  return <div className="vault-access-editor">
+  return <fieldset className="vault-access-editor" disabled={locked}>
     <div className="fleet-owner-inputs">
       <Field label="Vault name" help="The label people recognize.">
         <Input aria-label={`Vault ${vaultNumber} label`} value={entry.label} placeholder="Shared vault" onChange={event => onEntryChange({ label: event.target.value })} />
@@ -75,7 +76,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         </div>
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
-      <Field label="Primary owner" help={accessPreset === "private" ? "The Windows account responsible for this Vault. For a private Vault, only a service-approved local administrator can be selected." : "The Windows account responsible for this Vault. For a shared Vault, the service validates the selected Windows account."}>
+      <Field label="Primary owner" help={accessPreset === "private" ? "The Windows account responsible for this Vault. For a private Vault, only a service-approved local administrator can be selected. Changing it transfers ownership and is available only while the Vault is unmounted." : "The Windows account responsible for this Vault. For a shared Vault, the service validates the selected Windows account."}>
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
@@ -87,7 +88,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
           <option value="" disabled>{eligibleOwnerPrincipals.length > 0 ? (accessPreset === "private" ? "Select an administrator…" : "Select a Windows user…") : (accessPreset === "private" ? "No eligible administrators found" : "No eligible Windows users found")}</option>
           {eligibleOwnerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
         </select>
-        <small>{accessPreset === "private" ? "Only service-approved local administrators appear here." : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
+        <small>{accessPreset === "private" ? "Only service-approved local administrators appear here. Transfer ownership only while this Vault is unmounted." : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
@@ -98,7 +99,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
       {pathIsServiceUnavailable ? "Path unavailable" : "Saved container path verified by the Vault service."}
     </p>}
 
-    <VaultAccessPatternPicker value={accessPreset} onChange={onPresetChange} />
+    <VaultAccessPatternPicker value={accessPreset} disabled={locked} onChange={onPresetChange} />
 
     <div className="fleet-vault-grants">
       <strong>Who can access this vault</strong>
@@ -124,6 +125,8 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
       </>}
     </div>
 
+    {locked && <p className="fleet-vault-verification-warning" role="status">This Vault is mounted. Dismount it before changing its owner, access, container, or policy.</p>}
+
     <details className="vault-access-details">
       <summary>Access details</summary>
       <dl>
@@ -135,5 +138,5 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         <dd>Saved settings do not mean a Vault is mounted. Check its current status below.</dd>
       </dl>
     </details>
-  </div>;
+  </fieldset>;
 }

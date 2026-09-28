@@ -14,7 +14,7 @@ import {
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import {
-  newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultMountResultLabel, vaultOwnerFragmentFromPolicy, vaultPolicyFromOwnerFragment, vaultPresentationLabel,
+  newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultCanonicalPathDisplay, vaultMountResultLabel, vaultOwnerFragmentFromPolicy, vaultPolicyFromOwnerFragment, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
   type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultOwnerPrincipal, type VaultVolumeRole,
@@ -30,7 +30,7 @@ function appliedAt(timestamp: number) {
 
 const VAULT_LIST_RETRY_DELAY_MS = 300;
 
-function vaultListFailure(cause: unknown): { category: "service_connect" | "service_reply" | "service_denied" | "unknown"; message: string } {
+function vaultListFailure(cause: unknown, request: "authorized vault list" | "Vault policy access check" | "administrator list"): { category: "service_connect" | "service_reply" | "service_denied" | "unknown"; message: string } {
   // Do not put a backend error into the renderer or diagnostic store: a list
   // request can fail while the service is restarting, and the original error
   // may contain OS transport detail.  Keep the user-facing result actionable
@@ -39,24 +39,24 @@ function vaultListFailure(cause: unknown): { category: "service_connect" | "serv
   if (detail.includes("rejected request") || detail.includes("forbidden")) {
     return {
       category: "service_denied",
-      message: "The local Vault service denied this list request. Close every WinCommander window and open it again.",
+      message: `The local Vault service denied the ${request}. Refresh the Vault page after the service has finished starting.`,
     };
   }
   if (detail.includes("reply") || detail.includes("signature") || detail.includes("unexpected")) {
     return {
       category: "service_reply",
-      message: "The local Vault service did not complete its secure reply. Refresh WinCommander after the service has finished starting.",
+      message: `The local Vault service did not complete the ${request}. Refresh WinCommander after the service has finished starting.`,
     };
   }
   if (detail.includes("connect") || detail.includes("hello") || detail.includes("pipe") || detail.includes("timed out")) {
     return {
       category: "service_connect",
-      message: "WinCommander could not reach its local Vault service. It may still be starting; refresh in a moment.",
+      message: `WinCommander could not reach its local Vault service for the ${request}. It may still be starting; refresh in a moment.`,
     };
   }
   return {
     category: "unknown",
-    message: "WinCommander could not load the Vault list. Refresh the Vault page; if it repeats, use the reference below when contacting support.",
+    message: `WinCommander could not load the ${request}. Refresh the Vault page; if it repeats, use the reference below when contacting support.`,
   };
 }
 
@@ -71,7 +71,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   if (detail.includes("forbidden") || detail.includes("privileged") || detail.includes("vault policy administrator")) {
     return {
       code: "VLT.POLICY.ADMIN_ACCESS_REQUIRED",
-      message: "This Windows account is not allowed to change Vault settings. Ask a device administrator to add it to WinCommander Vault Policy Administrators. Your assigned Vaults can still be mounted normally.",
+      message: "This Windows account is not a local administrator, so it cannot change Vault settings. A local administrator can review permissions, transfer an unmounted Vault, or remove its unmounted policy.",
     };
   }
   if (detail.includes("version conflict") || detail.includes("changed elsewhere")) {
@@ -132,6 +132,17 @@ function newVaultEntryForOwner(kind: "shared" | "private", principals: readonly 
   const entry = newVaultEntry(kind);
   const owner = principals.find(principal => principal.sid === currentCallerSid && (kind !== "private" || principal.is_local_administrator));
   return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
+}
+
+function policyEntryIsMounted(
+  entryId: string,
+  status: VaultPolicyStatus | null,
+  authorized: VaultAuthorizedEntry | undefined,
+  mountResult: VaultMountEntryResult | undefined,
+): boolean {
+  if (mountResult) return mountResult.state === "mounted";
+  return status?.entries.find(entry => entry.id === entryId)?.mount_state === "mounted"
+    || authorized?.mount_state === "mounted";
 }
 
 export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
@@ -204,6 +215,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const refresh = useCallback(async (replaceDirtyDraft = false, includeStatus = true) => {
     const revision = ++refreshRevision.current;
+    let request: "authorized vault list" | "Vault policy access check" | "administrator list" = "authorized vault list";
     try {
       // Windows can report that an account belongs to Administrators while UAC
       // gives this app a standard token. Ask the service about this *process*
@@ -220,10 +232,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // transient policy/status read.  Those are different operations: an
       // unavailable policy read needs a retry message, not the misleading
       // "not elevated" warning.
+      request = "Vault policy access check";
       const capabilities = await getCapabilities().catch(async () => {
         await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
         return getCapabilities();
       });
+      request = "administrator list";
       const ownerDirectory = await listOwnerPrincipals();
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries(entries);
@@ -289,7 +303,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const now = Date.now();
       if (now - lastRefreshErrorAt.current > 30_000) {
         lastRefreshErrorAt.current = now;
-        const failure = vaultListFailure(cause);
+        const failure = vaultListFailure(cause, request);
         const operationId = newDiagnosticOperationId("vault");
         recordDiagnostic({ operationId, feature: "vault", action: "list_authorized", stage: "service_read", lifecycle: "verified", outcome: "failed", errorCode: "VLT.LIST.UNAVAILABLE", severity: "warn", retryability: "automatic", suggestedNextAction: "refresh_status", privacyClass: "local_sensitive", context: { reason_category: failure.category, retry_count: 1 } });
         showError(failure.message, undefined, { operationId });
@@ -351,6 +365,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   }, [policy, selectedEntryId]);
 
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
+    if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
     return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
   });
@@ -434,6 +449,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   };
 
   const requestEntryRemoval = (id: string) => {
+    if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) {
+      showError("Dismount this Vault before removing its policy.");
+      return;
+    }
     // A row created only in this unsaved draft has no service policy to
     // revoke. Removing it locally is safe; a saved row must go through the
     // confirmation and service-backed apply below.
@@ -445,6 +464,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   };
 
   const setAccessPreset = (id: string, preset: Exclude<VaultAccessPreset, "custom">) => editPolicy(current => {
+    if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
     return {
       ...source,
@@ -453,6 +473,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   });
 
   const setOwnerAccount = (id: string, owner: VaultOwnerPrincipal) => editPolicy(current => {
+    if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
     return {
       ...source,
@@ -797,7 +818,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <CardTitle>{canManagePolicy ? "Saved vaults" : "My vaults"}</CardTitle>
           <CardDescription>
             {canManagePolicy
-              ? "Saved vault settings stay on this PC. Mounting asks only for the password, which is never stored."
+              ? "Local administrators can review saved Vault permissions. Only the primary owner can mount or use a private Vault."
               : "Only Vaults that the service has authorized for this Windows account appear here; mounting asks only for the password."}
           </CardDescription>
         </CardHeader>
@@ -850,7 +871,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
       {isAdmin && !canManagePolicy && <div className="fleet-vault-verification-warning" role="alert">
         <Icon icon="warning-sign" size={16} />
-        <div><strong>This account needs Vault policy-manager access</strong><p>Ask a device administrator to add this Windows account to WinCommander Vault Policy Administrators. You can still view and mount Vaults assigned to this account.</p></div>
+        <div><strong>Vault administrator access was not confirmed</strong><p>The local Vault service has not confirmed this elevated Windows account yet. Refresh after the service has finished starting. Your assigned Vaults can still be mounted normally.</p></div>
       </div>}
 
       {canManagePolicy && policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
@@ -863,7 +884,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <div className="fleet-vault-management-header">
             <div>
               <CardTitle>Manage saved Vaults</CardTitle>
-              <CardDescription>Open an existing Vault to edit its details or Windows access. Removing a policy never deletes its encrypted container file.</CardDescription>
+              <CardDescription>Local administrators can review permissions. Transfer ownership or remove a policy only while that Vault is unmounted. Removing a policy never deletes its encrypted container file.</CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={() => {
               setExistingVaultPath("");
@@ -884,23 +905,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               <tbody>{policyEntries.map(entry => {
                 const authorized = authorizedById.get(entry.id);
                 const result = status?.entries.find(item => item.id === entry.id)?.result;
-                const mounted = authorized?.mount_state === "mounted";
+                const mounted = policyEntryIsMounted(entry.id, status, authorized, mountResults[entry.id]);
                 const canRepairSharedAccess = result === "acl_apply_failed" || result === "acl_readback_failed";
                 return <tr className={selectedEntry?.id === entry.id ? "is-selected" : ""} key={entry.id}>
                   <td data-label="Vault"><strong>{entry.label}</strong></td>
-                  <td data-label="Container path" className="fleet-vault-policy-path" title={entry.container_path}>{entry.container_path}</td>
+                  <td data-label="Container path" className="fleet-vault-policy-path" title={vaultCanonicalPathDisplay(entry)}>{vaultCanonicalPathDisplay(entry)}</td>
                   <td data-label="Scope">{entry.mount.presentation === "machine" ? "Shared" : "Personal"}</td>
                   <td data-label="Allowed users / groups" title={entry.grants.map(grant => grant.principal_name).join(", ")}>{entry.grants.map(grant => `${grant.principal_name} (${grant.access === "write" ? "edit" : "view"})`).join(", ")}</td>
                   <td data-label="Mounted">{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
                   <td data-label="Health" className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
                   <td data-label="Actions"><div className="fleet-vault-policy-actions">
-                    <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
-                    <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
+                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before editing." : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
+                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before managing access or transferring ownership." : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
                     {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
                       : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
                     {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={repairSharedAccess}>Repair shared access</Button>}
                     {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
-                    <Button variant="outline" size="sm" onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
+                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before removing its policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
                   </div></td>
                 </tr>;
               })}</tbody>
@@ -950,13 +971,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const entryIndex = policyEntries.findIndex(candidate => candidate.id === entry.id);
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
-            const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
+            const isMounted = policyEntryIsMounted(entry.id, status, authorized, mountResult);
             const entryResult = status?.entries.find(item => item.id === entry.id)?.result;
             const mountGate = vaultMountGate({ authorized, entryResult, draftDirty });
             return <div className="fleet-vault-workspace" key={entry.id} ref={editorRef} data-vault-editor-mode={editorMode}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "Vault details"}</span><strong>{entry.label || `Vault ${entryIndex + 1}`}</strong></div>
-                <Button variant="outline" size="sm" onClick={() => requestEntryRemoval(entry.id)}>Remove</Button>
+                <Button variant="outline" size="sm" disabled={isMounted} title={isMounted ? "Dismount this Vault before removing its policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove</Button>
               </div>
               <VaultAccessEditor
                 entry={entry}
@@ -964,6 +985,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 directory={directory}
                 ownerPrincipals={ownerPrincipals}
                 currentCallerSid={currentCallerSid}
+                locked={isMounted}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
                 onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
                 onPresetChange={preset => setAccessPreset(entry.id, preset)}
@@ -1103,7 +1125,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogHeader>
             <DialogTitle>Remove this Vault from the saved policy?</DialogTitle>
             <DialogDescription>
-              WinCommander will dismount only this Vault if needed, revoke only its shared Windows access, and save that removal. Other unsaved edits stay as a local draft and are not included. The encrypted container file is not deleted; it can then be mounted through Secure Storage with normal Windows access and its password.
+              This is available only while the Vault is unmounted. WinCommander revokes only this saved policy; the encrypted container file is not deleted. Other unsaved edits stay as a local draft and are not included.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

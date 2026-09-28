@@ -9,8 +9,8 @@ describe("Vault refresh boundaries", () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
 
-    expect(apply.indexOf("++refreshRevision.current") < apply.indexOf("await applyPolicy")).toBe(true);
-    expect(apply.indexOf("setAuthorizedEntries([])") < apply.indexOf("await applyPolicy")).toBe(true);
+    expect(apply.indexOf("++refreshRevision.current") < apply.indexOf("await applyOwnerPolicyFragment")).toBe(true);
+    expect(apply.indexOf("setAuthorizedEntries([])") < apply.indexOf("await applyOwnerPolicyFragment")).toBe(true);
     expect(apply).toContain("const refreshed = await refresh(!keepDraft, false)");
     expect(apply).toContain("if (!refreshed)");
     expect(apply).toContain("if (saveInProgress.current) return");
@@ -28,7 +28,8 @@ describe("Vault refresh boundaries", () => {
     expect(confirmedRemoval).toContain("void apply(next, true, draftToKeepAfterSave)");
     expect(source).toContain("Remove this Vault from the saved policy?");
     expect(source).toContain("Remove and save");
-    expect(source).toContain("dismount only this Vault");
+    expect(source).toContain("available only while the Vault is unmounted");
+    expect(source).not.toContain("dismount only this Vault");
     expect(source).toContain("Other unsaved edits stay as a local draft");
     expect(source).toContain("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.");
   });
@@ -71,6 +72,18 @@ describe("Vault refresh boundaries", () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     expect(source).toContain("if (authorized) openMountPrompt(authorized)");
     expect(source).not.toContain("openMountPrompt({ ...entry");
+  });
+
+  test("mounted Vaults cannot be edited, transferred, or removed from the policy", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const editor = await Bun.file("src/panels/fleet/VaultAccessEditor.tsx").text();
+
+    expect(source).toContain("function policyEntryIsMounted");
+    expect(source).toContain("Dismount this Vault before removing its policy.");
+    expect(source).toContain("disabled={mounted}");
+    expect(source).toContain("locked={isMounted}");
+    expect(editor).toContain("Transfer ownership only while this Vault is unmounted.");
+    expect(editor).toContain("<fieldset className=\"vault-access-editor\" disabled={locked}>");
   });
 
   test("mount lifecycle patches the returned row instead of refetching policy, status, and entries", async () => {
