@@ -1965,7 +1965,9 @@ impl VaultAccessStore {
         if !valid_windows_sid(caller_sid) {
             return self.empty_policy_projection();
         }
-        self.policy_projection_for(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid))
+        self.policy_projection_for(false, |entry| {
+            entry.primary_owner_sid.as_deref() == Some(caller_sid)
+        })
     }
 
     /// An actual local administrator may inspect the single service-owned
@@ -1977,11 +1979,12 @@ impl VaultAccessStore {
     pub fn administrator_projection(
         &self,
     ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
-        self.policy_projection_for(|_| true)
+        self.policy_projection_for(true, |_| true)
     }
 
     fn policy_projection_for(
         &self,
+        allow_degraded_recovery: bool,
         include: impl Fn(&VaultAccessEntry) -> bool,
     ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
         use wincmd_shared::vault_access::{
@@ -1998,7 +2001,11 @@ impl VaultAccessStore {
         let Ok(state) = self.state.lock() else {
             return empty();
         };
-        if state.status.validation_state != VaultValidationState::Current {
+        // Recovery needs the retained revision; an empty response creates permanently stale drafts.
+        if state.status.validation_state != VaultValidationState::Current
+            && !(allow_degraded_recovery
+                && state.status.validation_state == VaultValidationState::Degraded)
+        {
             return empty();
         }
         let Some(active) = state.active.as_ref() else {
@@ -5465,6 +5472,70 @@ mod tests {
         removal.entries.clear();
         assert!(restarted.clear(removal).is_ok());
         assert!(parent_revoked.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn degraded_policy_keeps_administrator_revision_without_restoring_owner_access() {
+        struct SidResolver;
+        impl PrincipalResolver for SidResolver {
+            fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+                Ok(name.into())
+            }
+        }
+        let owner_sid = "S-1-5-21-1-2-3-1001";
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(SidResolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        let mut requested = policy(1, 0);
+        requested.entries[0].owner_account = owner_sid.into();
+        requested.entries[0].primary_owner_sid = Some(owner_sid.into());
+        requested.entries[0].grants = vec![wincmd_shared::vault_access::VaultGrantInput {
+            principal_name: owner_sid.into(),
+            access: VaultAccess::Write,
+        }];
+        requested.entries[0].mount.presentation = VaultPresentation::PerUser;
+        installed.apply(requested, 7).unwrap();
+        assert_eq!(installed.caller_projection(owner_sid).entries.len(), 1);
+        assert!(
+            installed
+                .authorize_mount("shared", &[owner_sid.into()])
+                .allowed
+        );
+
+        let restarted = VaultAccessStore::open(
+            Box::new(MissingTargetFs(files)),
+            Box::new(SidResolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+        let administrator = restarted.administrator_projection();
+        assert_eq!(administrator.policy_id.as_deref(), Some("p"));
+        assert_eq!(administrator.version, 1);
+        assert_eq!(administrator.expected_previous_version, 1);
+        assert_eq!(administrator.entries.len(), 1);
+        assert_eq!(administrator.entries[0].entry.id, "shared");
+        assert_eq!(
+            administrator.entries[0].container_path_state,
+            wincmd_shared::vault_access::VaultContainerPathState::Unavailable
+        );
+        assert!(administrator.entries[0].canonical_container_path.is_none());
+        let owner = restarted.caller_projection(owner_sid);
+        assert!(owner.policy_id.is_none());
+        assert!(owner.entries.is_empty());
+        assert!(
+            !restarted
+                .authorize_mount("shared", &[owner_sid.into()])
+                .allowed
+        );
     }
 
     #[test]
