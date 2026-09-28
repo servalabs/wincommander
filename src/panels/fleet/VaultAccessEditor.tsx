@@ -17,6 +17,7 @@ interface VaultAccessEditorProps {
   ownerPrincipals: readonly VaultOwnerPrincipal[];
   currentCallerSid: string | null;
   locked?: boolean;
+  ownerDirectoryUnavailable?: boolean;
   onEntryChange: (patch: Partial<VaultAccessEntry>) => void;
   onOwnerChange: (owner: VaultOwnerPrincipal) => void;
   onPresetChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
@@ -36,7 +37,7 @@ function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: stri
   return `${name}${principal.sid === currentCallerSid ? " (signed in)" : ""} — ${principal.sid}`;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
   const eligibleOwnerPrincipals = accessPreset === "private"
     ? ownerPrincipals.filter(principal => principal.is_local_administrator)
@@ -80,6 +81,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
+          disabled={ownerDirectoryUnavailable}
           onChange={event => {
             const selected = eligibleOwnerPrincipals.find(principal => principal.sid === event.target.value);
             if (selected) onOwnerChange(selected);
@@ -88,7 +90,11 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
           <option value="" disabled>{eligibleOwnerPrincipals.length > 0 ? (accessPreset === "private" ? "Select an administrator…" : "Select a Windows user…") : (accessPreset === "private" ? "No eligible administrators found" : "No eligible Windows users found")}</option>
           {eligibleOwnerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
         </select>
-        <small>{accessPreset === "private" ? "Only service-approved local administrators appear here. Transfer ownership only while this Vault is unmounted." : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
+        <small>{ownerDirectoryUnavailable
+          ? "Windows administrator accounts are unavailable right now, so owner selection and policy saving are disabled. Refresh this page after the local Vault service is ready."
+          : accessPreset === "private"
+            ? "Only service-approved local administrators appear here. Transfer ownership only while this Vault is unmounted."
+            : "The service validates this Windows account."} The selected account is saved by its Windows security ID (SID), not its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />

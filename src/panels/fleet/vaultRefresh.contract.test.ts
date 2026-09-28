@@ -68,6 +68,18 @@ describe("Vault refresh boundaries", () => {
     expect(failure).toContain("setAuthorizedEntries([])");
   });
 
+  test("a failed owner directory does not revoke a confirmed administrator's policy view", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const refresh = source.slice(source.indexOf("const refresh ="), source.indexOf("useEffect(() => { void refresh()"));
+
+    expect(refresh).toContain("if (capabilities.can_manage_policy)");
+    expect(refresh).toContain("ownerDirectory = await listOwnerPrincipals()");
+    expect(refresh).toContain("setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null)");
+    expect(refresh).toContain("const loadedPolicy = await getOwnerPolicyFragment()");
+    expect(source).toContain("Windows administrator accounts are unavailable");
+    expect(source).toContain("disabled={saving || !!error || ownerDirectoryUnavailable}");
+  });
+
   test("the editor mounts the saved authorized container type instead of unsaved fields", async () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     expect(source).toContain("if (authorized) openMountPrompt(authorized)");

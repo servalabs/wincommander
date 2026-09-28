@@ -85,6 +85,20 @@ describe("Vault access editor presentation", () => {
     expect(html).not.toContain("Example standard user");
   });
 
+  test("keeps a confirmed administrator's policy visible while the owner directory is unavailable", () => {
+    const html = renderToStaticMarkup(<VaultAccessEditor
+      entry={{ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } }} entryIndex={0} directory={directory}
+      ownerPrincipals={[]}
+      currentCallerSid={null}
+      ownerDirectoryUnavailable
+      onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
+    />);
+
+    expect(html).toContain('aria-label="Vault 1 primary owner"');
+    expect(html).toContain("Windows administrator accounts are unavailable right now");
+    expect(html).toContain("disabled");
+  });
+
   test("keeps exact-file policy and sibling-container guidance outside collapsed help", () => {
     const visible = renderEditor().split('<details class="vault-access-details">')[0];
     expect(visible).toContain("exact encrypted file");

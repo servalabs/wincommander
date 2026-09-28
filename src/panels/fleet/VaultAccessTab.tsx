@@ -152,6 +152,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [ownerPrincipals, setOwnerPrincipals] = useState<VaultOwnerPrincipal[]>([]);
   const [currentCallerSid, setCurrentCallerSid] = useState<string | null>(null);
+  const [ownerDirectoryUnavailable, setOwnerDirectoryUnavailable] = useState(false);
   const [canManagePolicy, setCanManagePolicy] = useState(false);
   // Only a successful service read can establish that a policy is saved.
   // A status object exists even for `never_applied`, so it must not be used
@@ -237,12 +238,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
         return getCapabilities();
       });
-      request = "administrator list";
-      const ownerDirectory = await listOwnerPrincipals();
+      let ownerDirectory: { current_caller_sid: string; principals: VaultOwnerPrincipal[] } | null = null;
+      if (capabilities.can_manage_policy) {
+        request = "administrator list";
+        try {
+          ownerDirectory = await listOwnerPrincipals();
+        } catch {
+          // The service has already confirmed administrator access. A failed
+          // Windows-directory read must not erase that confirmation or hide
+          // existing policy data; only owner-dependent changes are unsafe.
+          ownerDirectory = null;
+        }
+      }
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries(entries);
-      setOwnerPrincipals(ownerDirectory.principals);
-      setCurrentCallerSid(ownerDirectory.current_caller_sid);
+      setOwnerPrincipals(ownerDirectory?.principals ?? []);
+      setCurrentCallerSid(ownerDirectory?.current_caller_sid ?? null);
+      setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null);
       setMountResults({});
       setCanManagePolicy(capabilities.can_manage_policy);
       setPolicyLoadUnavailable(false);
@@ -291,6 +303,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           setStatus(null);
         }
       } else {
+        setOwnerDirectoryUnavailable(false);
         setHasSavedPolicy(false);
         setStatus(null);
       }
@@ -474,6 +487,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const setOwnerAccount = (id: string, owner: VaultOwnerPrincipal) => editPolicy(current => {
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
+    if (ownerDirectoryUnavailable) return current;
     const source = current ?? newVaultPolicy();
     return {
       ...source,
@@ -958,6 +972,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>
           </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
+          {ownerDirectoryUnavailable && <div className="fleet-vault-verification-warning" role="alert">
+            <Icon icon="warning-sign" size={16} />
+            <div><strong>Windows administrator accounts are unavailable</strong><p>Your local-administrator access is confirmed and saved Vault permissions remain visible. Owner selection, ownership transfer, and Save vault settings are disabled until the administrator list can be read. Refresh this page after the local Vault service is ready.</p></div>
+          </div>}
           {activePolicy && draftDirty && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="status">
             <Icon icon="info-sign" size={16} />
             <div>
@@ -986,6 +1004,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 ownerPrincipals={ownerPrincipals}
                 currentCallerSid={currentCallerSid}
                 locked={isMounted}
+                ownerDirectoryUnavailable={ownerDirectoryUnavailable}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
                 onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
                 onPresetChange={preset => setAccessPreset(entry.id, preset)}
@@ -1024,7 +1043,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <div className="fleet-action-row">
             <Button variant="outline" onClick={() => addVaultEntryDraft("private")}>Add private vault</Button>
             <Button variant="outline" onClick={() => addVaultEntryDraft("shared")}>Add shared vault</Button>
-            {policy && <Button variant="primary" disabled={saving || !!error} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
+            {policy && <Button variant="primary" disabled={saving || !!error || ownerDirectoryUnavailable} title={ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}
