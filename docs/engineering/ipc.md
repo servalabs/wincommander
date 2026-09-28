@@ -48,7 +48,7 @@ Tier column: **Free** runs in-process in `commander-free`; **Paid** is gated by 
 | `open_path` | Free | Open a path in Explorer / the default handler. |
 | `is_path_dir` | Free | Whether a path is a directory. |
 | `toggle_context_menu` / `get_context_menu_status` | Free | Add/remove + query the WinCommander shell context-menu entry. |
-| `toggle_scrub_context_menu` / `get_scrub_context_menu_status` | Free | Add/remove + query the "Share Safely" scrub context-menu entry. |
+| `toggle_scrub_context_menu` / `get_scrub_context_menu_status` | Free | Add/remove + query the headless "Share Safely" scrub context-menu entry. A right-click writes non-destructive output beside each source in `_scrubbed`; it reports success only after the scrubber's post-scrub check finds no identifying metadata. |
 | `run_bleachbit_clean` | Free | Run a BleachBit-backed clean. |
 
 ### Lockdown, identity & app window
@@ -321,8 +321,8 @@ All Argus collectors enforce the privacy invariant: window titles, exe paths, UR
 
 | Command | Tier | Purpose |
 |---------|------|---------|
-| `get_metadata_scrubber_status` | Free | Whether ExifTool is installed + version + path. |
-| `scrub_metadata_paths` | Free | "Share Safely" metadata scrubber — delegates to ExifTool across ~140 formats; output to `<dir>/_scrubbed/`. |
+| `get_metadata_scrubber_status` | Free | Whether the ExifTool and qpdf scrub engines are installed + version + path. |
+| `scrub_metadata_paths` | Free | "Share Safely" metadata scrubber — delegates to ExifTool across ~140 formats; non-destructive output to `<dir>/_scrubbed/`. PDF output requires qpdf for a full rewrite; without it, no PDF copy is reported as clean. |
 | `get_print_audit_status` | Free | PrintService/Operational channel state. |
 | `set_print_audit_enabled` | Free | Flip the print-audit channel via `wevtutil` (admin). |
 | `get_print_audit_log` | Free | Recent Event-307 print-job records via `Get-WinEvent`. |

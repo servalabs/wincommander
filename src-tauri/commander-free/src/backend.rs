@@ -5837,8 +5837,15 @@ pub async fn get_context_menu_status() -> Result<bool, String> {
 //
 // Mirrors `toggle_context_menu` (secure-delete) but writes a separate command
 // chain so the operator can have both secure-delete + scrub entries side-by-
-// side. Command value passes `--scrub` so the single-instance handler
-// in lib.rs knows to emit `scrub-requested` (not `shred-requested`).
+// side. Command value passes `--scrub` to the same headless WinCommander
+// scrubber used by Share Safely; it writes checked output beside the selected
+// source in `_scrubbed`, rather than relying on a running frontend instance.
+
+const SCRUB_CONTEXT_SELECTION_MODEL: &str = "Player";
+
+fn scrub_context_command(exe_path: &str) -> String {
+    format!("\"{}\" \"--scrub\" \"%1\"", exe_path)
+}
 
 #[tauri::command]
 pub async fn toggle_scrub_context_menu(enable: bool) -> Result<(), String> {
@@ -5856,7 +5863,7 @@ pub async fn toggle_scrub_context_menu(enable: bool) -> Result<(), String> {
         let exe_str = exe_path
             .to_str()
             .ok_or("Failed to convert exe path to string")?;
-        let cmd_value = format!("\"{}\" \"--scrub\" \"%1\"", exe_str);
+        let cmd_value = scrub_context_command(exe_str);
         // Cleaning glyph, not the WinCommander logo: point at the built-in
         // Disk Cleanup icon (a broom/brush). Resolved to an absolute path so
         // the REG_SZ value needs no env-var expansion; present wherever Explorer
@@ -5873,16 +5880,43 @@ pub async fn toggle_scrub_context_menu(enable: bool) -> Result<(), String> {
         // Files
         run_reg(&["add", KEY_FILE, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_FILE, "/v", "Icon", "/d", &icon_value, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_FILE,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            SCRUB_CONTEXT_SELECTION_MODEL,
+            "/f",
+        ])?;
         run_reg(&["add", CMD_KEY_FILE, "/ve", "/d", &cmd_value, "/f"])?;
 
         // Folders
         run_reg(&["add", KEY_DIR, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_DIR, "/v", "Icon", "/d", &icon_value, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_DIR,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            SCRUB_CONTEXT_SELECTION_MODEL,
+            "/f",
+        ])?;
         run_reg(&["add", CMD_KEY_DIR, "/ve", "/d", &cmd_value, "/f"])?;
 
         // Mixed (multi-select with both files + folders)
         run_reg(&["add", KEY_MIXED, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_MIXED, "/v", "Icon", "/d", &icon_value, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_MIXED,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            SCRUB_CONTEXT_SELECTION_MODEL,
+            "/f",
+        ])?;
         run_reg(&["add", CMD_KEY_MIXED, "/ve", "/d", &cmd_value, "/f"])?;
     } else {
         let _ = run_reg(&["delete", KEY_FILE, "/f"]);
@@ -6002,6 +6036,20 @@ mod safe_copy_verb_tests {
             r#""C:\Program Files\WinCommander\WinCommander.exe" "--safe-copy" "%1""#
         );
         assert_eq!(SAFE_COPY_KEYS.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod scrub_context_verb_tests {
+    use super::*;
+
+    #[test]
+    fn scrub_uses_one_headless_player_invocation_for_all_selected_items() {
+        assert_eq!(SCRUB_CONTEXT_SELECTION_MODEL, "Player");
+        assert_eq!(
+            scrub_context_command(r"C:\Program Files\WinCommander\WinCommander.exe"),
+            r#""C:\Program Files\WinCommander\WinCommander.exe" "--scrub" "%1""#
+        );
     }
 }
 

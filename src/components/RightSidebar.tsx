@@ -172,7 +172,6 @@ export default function RightSidebar() {
     // true when the active countdown was armed by hotkey or coercion — no audio.
     const sdSilentRef = useRef<boolean>(false);
     const [scrubDialogOpen, setScrubDialogOpen] = useState(false);
-    const [scrubInitialPaths, setScrubInitialPaths] = useState<string[] | undefined>(undefined);
     // ── Quick Mount ──────────────────────────────────────────────────────────
     const [qmOpen, setQmOpen] = useState(false);
     const [qmSelectedIdx, setQmSelectedIdx] = useState(0);
@@ -298,25 +297,6 @@ export default function RightSidebar() {
             setQmMountingIdx(null);
         }
     }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault, verifyVaultDrive]);
-
-    // Listen for `scrub-requested` events from the single-instance handler.
-    // Fires when Explorer's right-click "Scrub metadata with WinCommander"
-    // launches the exe — paths come in via the --scrub flag and bubble up
-    // to here so we can open the dialog pre-seeded.
-    useEffect(() => {
-        let unlisten: (() => void) | undefined;
-        listen<string[]>('scrub-requested', (e) => {
-            const paths = e.payload ?? [];
-            if (paths.length === 0) return;
-            setScrubInitialPaths(paths);
-            setScrubDialogOpen(true);
-        }).then((u) => {
-            unlisten = u;
-        });
-        return () => {
-            unlisten?.();
-        };
-    }, []);
 
     // Safe Paste requests are kept in a native queue until this listener drains
     // them. Tauri events alone can be emitted before this effect subscribes on
@@ -968,11 +948,7 @@ export default function RightSidebar() {
                 <Suspense fallback={null}>
                     <MetadataScrubberDialog
                         isOpen
-                        onClose={() => {
-                            setScrubDialogOpen(false);
-                            setScrubInitialPaths(undefined);
-                        }}
-                        initialPaths={scrubInitialPaths}
+                        onClose={() => setScrubDialogOpen(false)}
                     />
                 </Suspense>
             )}

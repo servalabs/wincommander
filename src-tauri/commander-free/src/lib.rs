@@ -27,6 +27,7 @@ pub mod autonomous_agent_test;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_test;
 mod canary_tokens;
+mod context_menu_scrub;
 mod context_menu_shred;
 mod datastore;
 mod devtools;
@@ -1511,6 +1512,22 @@ pub fn run() {
         // the files before this short-lived verb exits.
         if cli_args.iter().any(|a| a == "--safe-paste") {
             std::process::exit(safe_clip::handle_safe_paste_cli(&cli_args));
+        }
+        // Explorer Scrub is a headless privacy operation. It must not be
+        // forwarded to a pre-existing UI instance, because that left the
+        // right-click action dependent on a frontend listener and did not
+        // guarantee its adjacent `_scrubbed` output was verified.
+        if cli_args.iter().any(|a| a == "--scrub") {
+            let paths = cli_args
+                .iter()
+                .skip(1)
+                .filter(|arg| !arg.starts_with("--"))
+                .cloned()
+                .collect();
+            let result = context_menu_scrub::execute_cli(paths);
+            let succeeded = result.is_ok();
+            context_menu_scrub::show_result(result);
+            std::process::exit(if succeeded { 0 } else { 1 });
         }
         // Explorer secure-delete is another GUI-free operation, but unlike
         // Safe Copy it is destructive and must report a non-zero process exit

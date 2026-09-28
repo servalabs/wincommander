@@ -1223,13 +1223,11 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
                 ? 'Personal info detected.'
                 : 'Personal info removed.'}
             </strong>{' '}
-            These files contain data that could trace them back to you
-            (your camera, location, name, edit dates).
             {isDryRun
-              ? ' Will be stripped on real scrub.'
+              ? ' These files contain data that could trace them back to you (your camera, location, name, edit dates). It will be stripped on real scrub.'
               : residualResults.length > 0
-                ? ' Most was stripped — but see the warning above; some files are not fully clean.'
-                : ' Now safe to share.'}
+                ? ' The detected data was stripped, but see the warning above: some identifying data may still be recoverable.'
+                : ' The post-scrub check found no remaining identifying metadata. Now safe to share.'}
           </div>
         </div>
       )}

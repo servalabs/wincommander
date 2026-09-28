@@ -158,14 +158,12 @@ function Get-DependencyRegistry {
             canHide  = $false
         },
         @{
-            # Optional: enables HEIC / MP4 / MOV / TIFF / DNG / WebP / SVG
-            # / RAW / RIFF in the metadata scrubber. Without it the
-            # scrubber still works for JPEG / PNG / PDF / Office via our
-            # pure-Rust handlers; with it, the dialog opens up every
-            # format ExifTool understands (~100).
+            # ExifTool removes current metadata across the supported formats;
+            # QPDF performs the required full PDF rewrite so data from prior
+            # incremental saves cannot remain recoverable.
             id       = 'metadataScrubber'
             name     = 'Hidden Data Remover'
-            wingetId = 'OliverBetz.ExifTool'
+            wingetId = 'OliverBetz.ExifTool + QPDF.QPDF'
             panelId  = $null   # surfaced from the sidebar "Scrub Meta" action
             canStart = $false  # CLI-only, invoked on-demand
             canHide  = $false
@@ -651,15 +649,47 @@ function Resolve-ExifToolExe {
     return $null
 }
 
+function Resolve-QpdfExe {
+    # Refresh PATH for an install performed by a separate elevated process.
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+    $cmd = Get-Command qpdf.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $cmd = Get-Command qpdf -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $candidates = @(
+        "$env:ProgramFiles\qpdf\bin\qpdf.exe",
+        "${env:ProgramFiles(x86)}\qpdf\bin\qpdf.exe",
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links\qpdf.exe",
+        "$env:APPDATA\WinCommander\tools\qpdf.exe"
+    )
+    foreach ($p in $candidates) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    foreach ($base in @("$env:LOCALAPPDATA\Microsoft\WinGet\Packages", "$env:ProgramFiles\WinGet\Packages")) {
+        if (Test-Path $base) {
+            $hit = Get-ChildItem -Path $base -Filter 'qpdf.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+    }
+    return $null
+}
+
 function Test-MetadataScrubberInstalled {
-    $exe = Resolve-ExifToolExe
-    if (-not $exe) { return @{ installed = $false; version = $null } }
-    $version = $null
+    $exiftool = Resolve-ExifToolExe
+    $qpdf = Resolve-QpdfExe
+    if (-not $exiftool -or -not $qpdf) { return @{ installed = $false; version = $null } }
+    $exiftoolVersion = $null
+    $qpdfVersion = $null
     try {
-        $verOut = & $exe -ver 2>$null
-        if ($verOut) { $version = ($verOut -join '').Trim() }
+        $verOut = & $exiftool -ver 2>$null
+        if ($verOut) { $exiftoolVersion = ($verOut -join '').Trim() }
     } catch {}
-    return @{ installed = $true; version = $version }
+    try {
+        $verOut = & $qpdf --version 2>$null
+        if ($verOut) { $qpdfVersion = ($verOut -join '').Trim() }
+    } catch {}
+    return @{ installed = $true; version = "ExifTool $exiftoolVersion; $qpdfVersion" }
 }
 
 # Locates `ollama.exe` for the Local AI Advisor dep probe. winget drops it
@@ -1139,11 +1169,16 @@ function Install-MetadataScrubber {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install the Hidden Data Remover." }
 
-    & $wingetCmd install --id OliverBetz.ExifTool --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
-        throw "Failed to install Hidden Data Remover (winget exit code $LASTEXITCODE)"
+    foreach ($packageId in @('OliverBetz.ExifTool', 'QPDF.QPDF')) {
+        & $wingetCmd install --id $packageId --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
+            throw "Failed to install $packageId for the Hidden Data Remover (winget exit code $LASTEXITCODE)"
+        }
     }
 
+    if (-not (Test-MetadataScrubberInstalled).installed) {
+        throw 'Hidden Data Remover installation finished but ExifTool or QPDF could not be verified.'
+    }
     return @{ success = $true; message = "Hidden Data Remover installed." }
 }
 
