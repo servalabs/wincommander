@@ -374,6 +374,16 @@ validates it against the actual grants and mount presentation; this field never
 grants access. The owner picker displays account names and marks the current
 user, while its persisted identity remains the Windows SID.
 
+Before saving a Vault draft, the editor reads the current service policy and
+merges independent additions or edits using the draft's saved base. Conflicting
+edits to the same Vault keep the draft for review. The service still checks the
+exact previous revision when applying; a concurrent write is never overwritten
+by an automatic retry. Unchanged records belonging to other owners are omitted
+from the write fragment and remain preserved by the service.
+An administrator's recovery view retains the saved policy identity and revision
+when validation is degraded; ordinary owner listing and mounting remain denied
+until the policy is valid again.
+
 Saved preferred letters are reserved across the machine within supported
 WinCommander mount workflows, including when a Vault is unmounted. Reservations
 come from the existing service-owned policy rather than a separate settings

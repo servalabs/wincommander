@@ -4,6 +4,8 @@ import {
   clearVaultAccessDraft,
   readVaultAccessDraft,
   readVaultAccessDraftSnapshot,
+  prepareVaultAccessSave,
+  vaultAccessEntryIntentEqual,
   rebaseVaultAccessDraft,
   writeVaultAccessDraft,
   type VaultDraftStorage,
@@ -19,6 +21,65 @@ function memoryStorage(): VaultDraftStorage {
 }
 
 describe("Vault access draft persistence", () => {
+  test("unchanged saved records compare equal across JSON property ordering", () => {
+    const entry = newVaultPolicy().entries[0]!;
+    const reordered = { ...entry, mount: { preferred_letter: "J", presentation: entry.mount.presentation } };
+    const original = { mount: { presentation: entry.mount.presentation, preferred_letter: "J" },
+      ...Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "mount").reverse()) } as typeof entry;
+    expect(vaultAccessEntryIntentEqual(original, reordered)).toBe(true);
+    expect(vaultAccessEntryIntentEqual(original, { ...reordered, owner_account: "Changed" })).toBe(false);
+  });
+
+  test("saves a never-saved starter onto an existing service policy without replacing saved vaults", () => {
+    const draft = newVaultPolicy();
+    const saved = { ...newVaultPolicy(), version: 2, expected_previous_version: 1 };
+    const prepared = prepareVaultAccessSave(draft, null, saved)!;
+    expect(prepared.policy_id).toBe(saved.policy_id);
+    expect(prepared.version).toBe(2);
+    expect(prepared.entries).toEqual([...saved.entries, ...draft.entries]);
+    expect(draft.version).toBe(0);
+  });
+
+  test("saves an added vault after another save advanced the service version", () => {
+    const base = { ...newVaultPolicy(), version: 1 };
+    const draft = { ...base, entries: [...base.entries, newVaultPolicy().entries[0]!] };
+    const latest = { ...base, version: 3, entries: [...base.entries, newVaultPolicy().entries[0]!] };
+    const prepared = prepareVaultAccessSave(draft, base, latest)!;
+    expect(prepared.version).toBe(3);
+    expect(prepared.entries).toEqual([...latest.entries, draft.entries.at(-1)!]);
+  });
+
+  test("does not overwrite a newer edit to the same vault", () => {
+    const base = { ...newVaultPolicy(), version: 1 };
+    const draft = { ...base, entries: [{ ...base.entries[0]!, label: "My edit" }] };
+    const latest = { ...base, version: 2, entries: [{ ...base.entries[0]!, label: "Other edit" }] };
+    expect(prepareVaultAccessSave(draft, base, latest)).toBeNull();
+    expect(draft.entries[0]!.label).toBe("My edit");
+  });
+
+  test("path observations alone do not conflict with a vault edit", () => {
+    const base = { ...newVaultPolicy(), version: 1 };
+    const draft = { ...base, entries: base.entries.map(entry => ({ ...entry, label: "Edited" })) };
+    const latest = { ...base, version: 2, entries: base.entries.map(entry => ({
+      ...entry, container_path_state: "available" as const, canonical_container_path: entry.container_path,
+    })) };
+    expect(prepareVaultAccessSave(draft, base, latest)?.entries.every(entry => entry.label === "Edited")).toBe(true);
+  });
+
+  test("does not guess at a stale legacy draft or a replaced or removed policy", () => {
+    const draft = { ...newVaultPolicy(), version: 1 };
+    expect(prepareVaultAccessSave(draft, null, { ...draft, version: 2 })).toBeNull();
+    expect(prepareVaultAccessSave(draft, draft, { ...draft, policy_id: "replacement" })).toBeNull();
+    expect(prepareVaultAccessSave(draft, draft, null)).toBeNull();
+    expect(prepareVaultAccessSave(draft, null, draft)).toEqual(draft);
+  });
+
+  test("refuses a starter ID collision and keeps first-ever creation at revision zero", () => {
+    const draft = newVaultPolicy();
+    expect(prepareVaultAccessSave(draft, null, { ...draft, version: 1 })).toBeNull();
+    expect(prepareVaultAccessSave(draft, null, null)).toEqual(draft);
+  });
+
   test("keeps a renderer draft until the user clears it", () => {
     const storage = memoryStorage();
     const policy = newVaultPolicy();

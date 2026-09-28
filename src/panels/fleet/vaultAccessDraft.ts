@@ -62,6 +62,16 @@ function clonePolicy(policy: VaultAccessPolicy): VaultAccessPolicy {
   return JSON.parse(JSON.stringify(policy)) as VaultAccessPolicy;
 }
 
+export function vaultAccessEntryIntentEqual(left: VaultAccessEntry, right: VaultAccessEntry): boolean {
+  // Path availability is a service observation, not an administrator edit.
+  const { container_path_state: _leftState, canonical_container_path: _leftPath, ...leftIntent } = left;
+  const { container_path_state: _rightState, canonical_container_path: _rightPath, ...rightIntent } = right;
+  const orderedFields = (_key: string, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)))
+    : value;
+  return JSON.stringify(leftIntent, orderedFields) === JSON.stringify(rightIntent, orderedFields);
+}
+
 /**
  * Renderer drafts contain paths and account names only. They never contain a
  * mount secret and never count as applied policy; the SYSTEM service still
@@ -123,7 +133,7 @@ export function rebaseVaultAccessDraft(
   const base = new Map(basePolicy.entries.map(entry => [entry.id, entry]));
   const draftEntries = new Map(draft.entries.map(entry => [entry.id, entry]));
   const saved = new Map(savedPolicy.entries.map(entry => [entry.id, entry]));
-  const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const same = vaultAccessEntryIntentEqual;
   const entries = [...savedPolicy.entries];
 
   for (const [id, baseEntry] of base) {
@@ -164,4 +174,30 @@ export function clearVaultAccessDraft(storage: VaultDraftStorage | null = browse
   } catch {
     // Applying remains service-owned even when local cleanup is blocked.
   }
+}
+
+/** Prepare one save against a fresh service read without overwriting concurrent edits. */
+export function prepareVaultAccessSave(
+  draft: VaultAccessPolicy,
+  basePolicy: VaultAccessPolicy | null,
+  savedPolicy: VaultAccessPolicy | null,
+): VaultAccessPolicy | null {
+  if (!savedPolicy) {
+    if (basePolicy || draft.version !== 0) return null;
+    return { ...clonePolicy(draft), version: 0, expected_previous_version: 0 };
+  }
+  if (basePolicy) return rebaseVaultAccessDraft(draft, basePolicy, savedPolicy);
+  if (draft.version === 0 && draft.expected_previous_version === 0) {
+    // An unsaved starter has no saved rows to replace or delete.
+    const savedIds = new Set(savedPolicy.entries.map(entry => entry.id));
+    if (draft.entries.some(entry => savedIds.has(entry.id))) return null;
+    return {
+      ...clonePolicy(savedPolicy),
+      expected_previous_version: savedPolicy.version,
+      entries: [...clonePolicy(savedPolicy).entries, ...clonePolicy(draft).entries],
+    };
+  }
+  // Older persisted drafts have no base for a three-way comparison.
+  if (draft.policy_id !== savedPolicy.policy_id || draft.version !== savedPolicy.version) return null;
+  return clonePolicy(draft);
 }

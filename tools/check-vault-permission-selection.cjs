@@ -33,6 +33,14 @@ const status = () => ({ policy_id: policy.policy_id, version: policy.version,
   validation_state: 'current', applied_at: 1,
   entries: policy.entries.map(entry => ({ id: entry.id, result: 'applied', mount_state: 'unmounted' })) });
 const blocked = async () => { throw new Error('Native mutation blocked by fixture'); };
+window.__advanceVaultRevision = () => { policy.version += 1; };
+window.__addOtherOwnerVault = () => {
+  policy.entries.push({ ...structuredClone(policy.entries[0]), id: 'other-owner-vault', label: 'Other owner vault',
+    owner_account: 'OtherAdmin', primary_owner_sid: 'S-1-5-21-111-222-333-1002',
+    grants: [{ principal_name: 'OtherAdmin', access: 'write' }],
+    container_path: 'D:\\\\Fixture\\\\other.ec', mount: { presentation: 'per-user', preferred_letter: 'M' } });
+  policy.version += 1;
+};
 window.__vaultUiService = {
   getCapabilities: async () => ({ can_manage_policy: true }),
   listOwnerPrincipals: async () => ({ current_caller_sid: sid, principals: [
@@ -43,11 +51,19 @@ window.__vaultUiService = {
     entry: structuredClone(entry), container_path_state: 'available', canonical_container_path: entry.container_path
   })) }),
   getStatus: async () => status(),
-  listAuthorizedEntries: async () => policy.entries.map(entry => ({ entry_id: entry.id, label: entry.label,
+  listAuthorizedEntries: async () => policy.entries.filter(entry => entry.primary_owner_sid === sid).map(entry => ({ entry_id: entry.id, label: entry.label,
     access: 'write', presentation: entry.mount.presentation, container_kind: 'standard',
     mount_state: 'unmounted', drive_letter: null, preferred_letter: entry.mount.preferred_letter })),
   applyOwnerPolicyFragment: async fragment => {
-    policy = { ...structuredClone(fragment), entries: fragment.entries.map(owned => owned.entry) };
+    if (fragment.policy_id !== policy.policy_id || fragment.expected_previous_version !== policy.version) {
+      throw new Error('vault policy was changed elsewhere since this draft was loaded');
+    }
+    const merged = new Map(policy.entries.map(entry => [entry.id, entry]));
+    for (const { entry } of fragment.entries) {
+      if (entry.primary_owner_sid !== sid) throw new Error('Other-owner records must not be submitted as edits');
+      merged.set(entry.id, structuredClone(entry));
+    }
+    policy = { ...structuredClone(fragment), entries: [...merged.values()] };
     sessionStorage.setItem('fixture-policy', JSON.stringify(policy));
     window.__lastSavedPattern = policy.entries[0].access_pattern;
     return status();
@@ -94,6 +110,7 @@ async function main() {
       const choice = page.locator('[data-vault-access-preset="' + pattern + '"]');
       await choice.click();
       assert.equal(await choice.getAttribute('aria-checked'), 'true', 'Click selects ' + pattern);
+      if (pattern === 'shared-write') await page.evaluate(() => window.__advanceVaultRevision());
       await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
       await page.waitForFunction(expected => window.__lastSavedPattern === expected, pattern);
       await page.waitForFunction(() => !document.querySelector('button[disabled]')?.textContent?.includes('Saving'));
@@ -101,8 +118,31 @@ async function main() {
       await openEditor();
       assert.equal(await page.locator('[data-vault-access-preset="' + pattern + '"]').getAttribute('aria-checked'), 'true', 'Reload preserves ' + pattern);
     }
+    await page.getByRole('button', { name: 'Add private vault', exact: true }).click();
+    await page.getByLabel('Vault 2 label', { exact: true }).fill('New vault');
+    await page.getByLabel('Vault 2 container path', { exact: true }).fill('D:\\Fixture\\new.ec');
+    await page.getByLabel('Vault 2 preferred drive letter', { exact: true }).fill('K');
+    await page.evaluate(() => window.__addOtherOwnerVault());
+    await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.length === 3);
+    // Restore a starter created before the service already had a saved policy.
+    await page.evaluate(() => {
+      const saved = JSON.parse(sessionStorage.getItem('fixture-policy'));
+      const entry = { ...saved.entries.find(entry => entry.label === 'New vault'), id: 'restored-starter', label: 'Restored starter',
+        container_path: 'D:\\Fixture\\restored.ec', mount: { presentation: 'per-user', preferred_letter: 'L' } };
+      localStorage.setItem('wincommander.vault-access-draft.v1', JSON.stringify({
+        policy: { ...saved, policy_id: 'old-unsaved-starter', version: 0, expected_previous_version: 0, entries: [entry] },
+        basePolicy: null,
+      }));
+    });
+    await page.reload();
+    await openEditor();
+    await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.length === 4);
+    const savedLabels = await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.map(entry => entry.label));
+    assert.deepEqual(savedLabels, ['Example vault', 'Other owner vault', 'New vault', 'Restored starter']);
     assert.deepEqual(errors, []);
-    console.log('PASS: owner dropdown labels; real clicks on all three modes; save and page reload preserve exact selection.');
+    console.log('PASS: owner labels; all three presets persist; revision changes and restored starters save without losing existing vaults.');
   } catch (error) {
     console.error({ browserErrors: errors, fixtureText: await page.locator('body').innerText() });
     throw error;

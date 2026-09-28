@@ -9,7 +9,7 @@ import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
-  clearVaultAccessDraft, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, writeVaultAccessDraft,
+  clearVaultAccessDraft, prepareVaultAccessSave, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, vaultAccessEntryIntentEqual, writeVaultAccessDraft,
 } from "./vaultAccessDraft";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
@@ -77,7 +77,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   if (detail.includes("version conflict") || detail.includes("changed elsewhere")) {
     return {
       code: "VLT.POLICY.VERSION_CONFLICT",
-      message: "Vault settings changed in another WinCommander window. Refresh this page before saving again.",
+      message: "Saved Vault settings changed while this draft was open. Your draft was kept. Refresh and review the changes before saving again.",
     };
   }
   if (detail.includes("container identity")) {
@@ -131,7 +131,10 @@ interface MountTarget {
 function newVaultEntryForOwner(kind: "shared" | "private", principals: readonly VaultOwnerPrincipal[], currentCallerSid: string | null): VaultAccessEntry {
   const entry = newVaultEntry(kind);
   const owner = principals.find(principal => principal.sid === currentCallerSid && (kind !== "private" || principal.is_local_administrator));
-  return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
+  return owner ? applyVaultAccessPreset(
+    { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name },
+    kind === "private" ? "private" : "shared-write",
+  ) : entry;
 }
 
 function policyEntryIsMounted(
@@ -527,10 +530,25 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     try {
       // The service's optimistic lock accepts only the next revision. The
       // displayed version remains the last observed policy until refresh.
-      const submittedPolicy = nextVaultAccessPolicy(policyToApply);
+      const latest = vaultPolicyFromOwnerFragment(await getOwnerPolicyFragment());
+      const prepared = prepareVaultAccessSave(policyToApply, draftBaseRef.current,
+        latest ? normalizeVaultAccessPolicy(latest) : null);
+      if (!prepared) throw new Error("Vault policy version conflict");
+      const preparedError = validateVaultAccessIntent(prepared);
+      if (preparedError) {
+        showError(preparedError);
+        return;
+      }
+      const submittedPolicy = nextVaultAccessPolicy(prepared);
       // Keep the UI reference, desktop diagnostic and service event correlated.
       // Without this, a support reference could not identify the failed save.
-      const appliedStatus = await applyOwnerPolicyFragment(vaultOwnerFragmentFromPolicy(submittedPolicy), operationId);
+      const fragment = vaultOwnerFragmentFromPolicy(submittedPolicy);
+      // The service preserves omitted rows. Do not submit another owner's
+      // unchanged record as an edit just because an administrator can see it.
+      fragment.entries = fragment.entries.filter(({ entry }) =>
+        entry.primary_owner_sid === currentCallerSid || !latest?.entries.some(saved =>
+          saved.id === entry.id && vaultAccessEntryIntentEqual(saved, entry)));
+      const appliedStatus = await applyOwnerPolicyFragment(fragment, operationId);
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // A successful full removal leaves no saved policy to edit. Clear every
