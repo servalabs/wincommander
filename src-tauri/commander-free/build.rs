@@ -6,6 +6,16 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
+const SHARED_SCHEDULER: &str = "../wincmd-shared/scripts/auto-erase.ps1";
+
+fn encrypted_module_path(source: &Path) -> std::path::PathBuf {
+    if source == Path::new(SHARED_SCHEDULER) {
+        Path::new("scripts/core/auto-erase.enc").to_path_buf()
+    } else {
+        source.with_extension("enc")
+    }
+}
+
 fn script_files(root: &Path, output: &mut Vec<std::path::PathBuf>) {
     let entries = fs::read_dir(root).unwrap_or_else(|error| {
         panic!(
@@ -32,6 +42,7 @@ fn watch_protected_modules() {
     let mut sources = Vec::new();
     script_files(Path::new("scripts/core"), &mut sources);
     script_files(Path::new("scripts/modules"), &mut sources);
+    sources.push(Path::new(SHARED_SCHEDULER).to_path_buf());
     assert!(
         !sources.is_empty(),
         "no protected backend modules were found"
@@ -40,7 +51,7 @@ fn watch_protected_modules() {
         println!("cargo:rerun-if-changed={}", source_path.display());
         println!(
             "cargo:rerun-if-changed={}",
-            source_path.with_extension("enc").display()
+            encrypted_module_path(&source_path).display()
         );
     }
 }
@@ -51,13 +62,14 @@ fn validate_release_modules(salt_bytes: &[u8]) {
     let mut sources = Vec::new();
     script_files(Path::new("scripts/core"), &mut sources);
     script_files(Path::new("scripts/modules"), &mut sources);
+    sources.push(Path::new(SHARED_SCHEDULER).to_path_buf());
     assert!(
         !sources.is_empty(),
         "no protected backend modules were found"
     );
 
     for source_path in sources {
-        let encrypted_path = source_path.with_extension("enc");
+        let encrypted_path = encrypted_module_path(&source_path);
         let source = fs::read(&source_path).unwrap_or_else(|error| {
             panic!(
                 "failed to read protected module {}: {error}",

@@ -8,6 +8,7 @@ import { createCipheriv, randomBytes, createHash } from "node:crypto";
 const MODULES_DIR = join(process.cwd(), "src-tauri", "commander-free", "scripts", "modules");
 const CORE_DIR = join(process.cwd(), "src-tauri", "commander-free", "scripts", "core");
 const BUILD_SALT_PATH = join(process.cwd(), "src-tauri", "commander-free", "scripts", ".build_salt");
+const SHARED_SCHEDULER_PATH = join(process.cwd(), "src-tauri", "wincmd-shared", "scripts", "auto-erase.ps1");
 
 // KT: Each encryption run generates a fresh 32-byte random salt.
 // The salt is saved to .build_salt so build.rs can embed it (XOR-obfuscated) into the binary.
@@ -82,7 +83,9 @@ async function main() {
     await encryptModule(file, outputPath, key);
   }
 
-  console.log(`\n✨ Successfully encrypted ${coreFiles.length + moduleFiles.length} modules`);
+  await encryptModule(SHARED_SCHEDULER_PATH, join(CORE_DIR, "auto-erase.enc"), key);
+
+  console.log(`\n✨ Successfully encrypted ${coreFiles.length + moduleFiles.length + 1} modules`);
 }
 
 main().catch(error => {

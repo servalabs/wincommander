@@ -579,6 +579,10 @@ const CORE_UTILS: &[u8] =
     embedded_module!("../scripts/core/utils.ps1", "../scripts/core/utils.enc");
 const CORE_ROUTER: &[u8] =
     embedded_module!("../scripts/core/router.ps1", "../scripts/core/router.enc");
+const AUTO_ERASE_SCHEDULER: &[u8] = embedded_module!(
+    "../../wincmd-shared/scripts/auto-erase.ps1",
+    "../scripts/core/auto-erase.enc"
+);
 const PRIVACY_TELEMETRY: &[u8] = embedded_module!(
     "../scripts/modules/privacy/telemetry.ps1",
     "../scripts/modules/privacy/telemetry.enc"
@@ -2842,6 +2846,7 @@ fn load_module(module_name: &str) -> Result<String, String> {
     let encrypted = match module_name {
         "core/utils" => CORE_UTILS,
         "core/router" => CORE_ROUTER,
+        "core/auto-erase" => AUTO_ERASE_SCHEDULER,
         "dashboard/startup" => SYSTEM_STARTUP,
         "dashboard/info" => SYSTEM_INFO,
         "identity/activation" => SYSTEM_ACTIVATION,
@@ -3910,7 +3915,17 @@ mod fleet_forensic_projection_tests {
         let build_script = include_str!("../build.rs");
         assert!(build_script.contains("fn watch_protected_modules()"));
         assert!(build_script.contains("watch_protected_modules();"));
-        assert!(build_script.contains("source_path.with_extension(\"enc\")"));
+        assert!(build_script.contains("encrypted_module_path(&source_path)"));
+    }
+
+    #[test]
+    fn shared_scheduler_uses_the_protected_module_loader() {
+        #[cfg(wincommander_dev_profile)]
+        assert_eq!(AUTO_ERASE_SCHEDULER, wincmd_shared::AUTO_ERASE_PS_MODULE.as_bytes());
+        assert_eq!(load_module("core/auto-erase").unwrap(), wincmd_shared::AUTO_ERASE_PS_MODULE);
+        let build_script = include_str!("../build.rs");
+        assert!(build_script.contains("../wincmd-shared/scripts/auto-erase.ps1"));
+        assert!(build_script.contains("scripts/core/auto-erase.enc"));
     }
 
     #[test]
@@ -5144,7 +5159,7 @@ pub(crate) async fn run_backend_script_with_timeout(
     // module is loaded so callers from this module can invoke them
     // exactly like local functions.
     if module_name == "privacy/cleanup" {
-        additional_modules.push_str(wincmd_shared::AUTO_ERASE_PS_MODULE);
+        additional_modules.push_str(&load_module("core/auto-erase")?);
         additional_modules.push_str("\n\n");
     }
 
