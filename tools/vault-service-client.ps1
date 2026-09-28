@@ -1,7 +1,7 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'forget-entry-policy-only', 'mount', 'unmount', 'create-personal-probe', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'list-principals', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'forget-entry-policy-only', 'mount', 'unmount', 'create-personal-probe', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
@@ -34,7 +34,7 @@ function Test-ElevatedToken {
 }
 
 if ($Elevated -and -not (Test-ElevatedToken)) {
-    $readOnlyActions = @('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe')
+    $readOnlyActions = @('get-policy', 'get-status', 'get-access-directory', 'list-principals', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe')
     if ($Action -notin $readOnlyActions) {
         throw '-Elevated is restricted to read-only service probes.'
     }
@@ -161,6 +161,7 @@ $feature = switch ($Action) {
     'get-policy' { 'svc.vault.get_policy' }
     'get-status' { 'svc.vault.get_status' }
     'get-access-directory' { 'svc.vault.get_access_directory' }
+    'list-principals' { 'svc.vault.list_principals' }
     'personal-status' { 'svc.vault.personal_status' }
     'capabilities' { 'svc.vault.capabilities' }
     'list' { 'svc.vault.list_authorized' }

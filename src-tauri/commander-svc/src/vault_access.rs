@@ -3354,7 +3354,9 @@ pub fn local_administrator_principals() -> Result<Vec<VaultKnownPrincipal>, Vaul
     const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
     let group = lookup_account_by_sid(BUILTIN_ADMINISTRATORS_SID)
         .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
-    let members = local_group_members(&group.display_name)?
+    // NetLocalGroupGetMembers needs the local alias, not DOMAIN\alias.
+    let group_name = group.display_name.rsplit('\\').next().unwrap_or(&group.display_name);
+    let members = local_group_members(group_name)?
         .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
     let mut principals = members
         .into_iter()
@@ -4544,6 +4546,22 @@ fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn windows_administrator_directory_resolves_real_user_accounts() {
+        let principals = super::local_administrator_principals()
+            .expect("the built-in administrator group must be enumerable by its local alias");
+        assert!(!principals.is_empty(), "Windows must retain an administrator user");
+        for principal in principals {
+            assert!(principal.is_local_administrator);
+            assert!(super::valid_windows_sid(&principal.sid));
+            let account = super::lookup_account_by_sid(&principal.sid)
+                .expect("each offered owner must resolve to a Windows account");
+            assert_eq!(account.kind, super::PrincipalKind::User);
+            assert_eq!(account.display_name, principal.display_name);
+        }
+    }
+
     use super::*;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
