@@ -1012,7 +1012,7 @@ fn handle_vault_apply_owner_fragment(
         // protected policy.  The ordinary apply path now performs its normal
         // identity/ACL read-back and atomic persistence.
         validate_vault_apply_version(vault_access, &policy)?;
-        validate_vault_owner_mutation(vault_access, &policy, caller_sid, false)?;
+        validate_vault_owner_mutation(vault_access, &policy, caller_sid)?;
         vault_access
             .preflight_apply(policy.clone())
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
@@ -1041,7 +1041,11 @@ fn merge_owner_fragment(
     let previous = vault_access.policy();
     let mut incoming = HashMap::new();
     for owned in fragment.entries {
-        if owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) {
+        // Initial policy creation may nominate another valid Windows user as
+        // primary owner. The service resolves that SID against owner_account
+        // before persistence; once an entry exists, only its current owner
+        // may change or transfer it.
+        if previous.is_some() && owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) {
             return Err(denied());
         }
         if incoming.insert(owned.entry.id.clone(), owned).is_some() {
@@ -1108,7 +1112,6 @@ fn validate_vault_owner_mutation(
     vault_access: &VaultAccessStore,
     requested: &wincmd_shared::vault_access::VaultAccessPolicy,
     caller_sid: &str,
-    caller_privileged: bool,
 ) -> Result<(), VerbError> {
     let previous = vault_access.policy();
     let denied = || {
@@ -1118,12 +1121,9 @@ fn validate_vault_owner_mutation(
         )
     };
     let Some(previous) = previous else {
-        if requested.entries.iter().all(|entry| {
-            entry.primary_owner_sid.as_deref() == Some(caller_sid) || caller_privileged
-        }) {
-            return Ok(());
-        }
-        return Err(denied());
+        // The creator may select a different initial owner. Resolve-and-plan
+        // still proves it is a real user/SID before any ACL is written.
+        return Ok(());
     };
     let requested_by_id = requested
         .entries
@@ -1133,7 +1133,7 @@ fn validate_vault_owner_mutation(
     for existing in &previous.entries {
         let owns_existing = existing.primary_owner_sid.as_deref() == Some(caller_sid);
         match requested_by_id.get(existing.id.as_str()) {
-            None if owns_existing || caller_privileged => {}
+            None if owns_existing => {}
             None => return Err(denied()),
             Some(replacement) if !owns_existing => {
                 // A full policy draft may include another entry only when it
@@ -1153,7 +1153,6 @@ fn validate_vault_owner_mutation(
     for entry in &requested.entries {
         if previous.entries.iter().all(|old| old.id != entry.id)
             && entry.primary_owner_sid.as_deref() != Some(caller_sid)
-            && !caller_privileged
         {
             return Err(denied());
         }

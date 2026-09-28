@@ -34,9 +34,91 @@ pub struct VaultAccessEntry {
     pub container_identity: Option<String>,
     #[serde(default)]
     pub container_kind: VaultContainerKind,
+    /// The selected primary owner is persisted by immutable Windows SID.  The
+    /// renderer may propose it, but the service resolves and validates it
+    /// against the caller before accepting a policy change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_owner_sid: Option<String>,
+    /// A service-derived display label only.  It is never an authorization
+    /// input and must not be used in place of `primary_owner_sid`.
     pub owner_account: String,
     pub grants: Vec<VaultGrantInput>,
     pub mount: VaultMountPolicy,
+}
+
+/// A validated local principal which may be selected as a Fleet Vault primary
+/// owner.  The SID is the durable identifier; the label is presentation only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultKnownPrincipal {
+    pub sid: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultKnownPrincipalsResponse {
+    pub current_caller_sid: String,
+    pub principals: Vec<VaultKnownPrincipal>,
+}
+
+/// Truthful path state for the caller-filtered Vault projection.  A renderer
+/// must display `Unavailable` instead of manufacturing an inferred path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultContainerPathState {
+    Available,
+    Unavailable,
+}
+
+/// A caller-filtered saved-vault record.  It intentionally contains no grant
+/// list or other users' metadata.  `entry_id` is opaque: the service derives
+/// the backing container, target drive and permissions from its own record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultOwnedEntryProjection {
+    pub entry_id: String,
+    pub label: String,
+    pub primary_owner_sid: String,
+    pub owner_account: String,
+    pub container_path_state: VaultContainerPathState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_container_path: Option<String>,
+    pub container_kind: VaultContainerKind,
+    pub mount: VaultMountPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultPolicyCallerProjection {
+    pub policy_id: Option<String>,
+    pub version: u64,
+    pub entries: Vec<VaultOwnedEntryProjection>,
+}
+
+/// An editable, owner-scoped fragment of the one service-owned Fleet Vault
+/// policy.  It is deliberately not a second policy store: the service merges
+/// this fragment into its complete durable policy after authenticating the
+/// caller SID and checking mounted state.  Omitted entries belong to other
+/// owners and are never interpreted as deletions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultOwnerPolicyFragment {
+    pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    pub version: u64,
+    pub expected_previous_version: u64,
+    pub entries: Vec<VaultOwnedPolicyEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultOwnedPolicyEntry {
+    pub entry: VaultAccessEntry,
+    pub container_path_state: VaultContainerPathState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_container_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -774,7 +856,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wire_values_are_stable_and_do_not_include_sids() {
+    fn legacy_policy_wire_remains_compatible_when_owner_sid_is_absent() {
         let policy = VaultAccessPolicy {
             schema_version: VAULT_ACCESS_SCHEMA_VERSION,
             policy_id: "policy-a".into(),
@@ -786,6 +868,7 @@ mod tests {
                 container_path: "C:\\vault.hc".into(),
                 container_identity: None,
                 container_kind: VaultContainerKind::Standard,
+                primary_owner_sid: None,
                 owner_account: "Administrator".into(),
                 grants: vec![VaultGrantInput {
                     principal_name: "Partner".into(),

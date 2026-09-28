@@ -16,10 +16,12 @@ use zeroize::Zeroize;
 
 const GET_POLICY: &str = "svc.vault.get_policy";
 const APPLY_POLICY: &str = "svc.vault.apply_policy";
+const APPLY_OWNER_FRAGMENT: &str = "svc.vault.apply_owner_fragment";
 const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
+const LIST_PRINCIPALS: &str = "svc.vault.list_principals";
 const CAPABILITIES: &str = "svc.vault.capabilities";
 const RECONCILE_ACCESS_GROUPS: &str = "svc.vault.reconcile_access_groups";
 const GET_ACCESS_DIRECTORY: &str = "svc.vault.get_access_directory";
@@ -465,6 +467,22 @@ pub async fn vault_unmount_entry(
 #[tauri::command]
 pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
+}
+
+/// Applies an owner-scoped fragment to the one service-owned Fleet Vault
+/// policy.  The service authenticates the caller SID and merges only that
+/// owner's entries; a renderer cannot remove another owner's entry by
+/// omission.
+#[tauri::command]
+pub async fn apply_vault_owner_policy_fragment(policy: Value) -> Result<Value, String> {
+    crate::svc_client::call(APPLY_OWNER_FRAGMENT, policy).await
+}
+
+/// Lists service-validated local users for the Primary owner selector.  The
+/// SID is durable policy data; the renderer cannot manufacture a principal.
+#[tauri::command]
+pub async fn vault_list_known_principals() -> Result<Value, String> {
+    crate::svc_client::call(LIST_PRINCIPALS, json!({})).await
 }
 
 #[tauri::command]

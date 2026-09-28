@@ -195,8 +195,8 @@ describe("Fleet access-control panel contracts", () => {
   test("uses the service-owned Vault policy and makes old planner data opt-in only", () => {
     expect(vault).toContain("useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>()");
     expect(vault).not.toContain("invoke(");
-    expect(vaultHook).toContain('invoke<Policy | null>("get_vault_access_policy")');
-    expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
+    expect(vaultHook).toContain('invoke<VaultOwnerPolicyFragment>("get_vault_access_policy")');
+    expect(vaultHook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { ...fragment })');
     expect(vaultHook).toContain('invoke<void>("forget_vault_access_entry_policy_only"');
     expect(vaultHook).toContain("diagnosticOperationId: operationId");
     expect(vault).toContain("nextVaultAccessPolicy(policyToApply)");
@@ -211,7 +211,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Forget this degraded Vault policy?");
     expect(vault).toContain("Windows file permissions were left unchanged.");
     expect(vault).toContain("setAuthorizedEntries([])");
-    expect(vault).toContain("const current = await getPolicy();");
+    expect(vault).toContain("const current = await getOwnerPolicyFragment();");
     expect(vaultPresentation).toContain("needs to refresh this older Vault status");
     expect(vaultPresentation).toContain("pending_mount_broker");
     expect(vaultEditor).toContain("exact encrypted file");

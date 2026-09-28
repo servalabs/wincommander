@@ -101,6 +101,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.clipboard.set_enabled"
             | "svc.policy.install_epoch"
             | "svc.vault.get_policy"
+            | "svc.vault.list_principals"
+            | "svc.vault.apply_owner_fragment"
             | "svc.vault.get_status"
             | "svc.vault.apply_policy"
             | "svc.vault.forget_entry_policy_only"
@@ -324,6 +326,15 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
+        // Fleet policy lifecycle is authenticated for the exact interactive
+        // Windows SID.  The service performs the privileged ACL work only
+        // after it has applied its owner/mounted-state checks; administrator
+        // membership alone is deliberately not an owner bypass.
+        "svc.vault.get_policy"
+        | "svc.vault.list_principals"
+        | "svc.vault.apply_policy"
+        | "svc.vault.apply_owner_fragment" => CapabilityClass::InteractiveSession,
+
         // Creation is safe for a normal signed-in user only because the
         // service prepares a fixed driver and the Pro engine performs all
         // caller-controlled file I/O in the authenticated caller's token.
@@ -401,6 +412,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fleet_vault_policy_lifecycle_uses_authenticated_interactive_sid() {
+        for verb in [
+            "svc.vault.get_policy",
+            "svc.vault.list_principals",
+            "svc.vault.apply_policy",
+            "svc.vault.apply_owner_fragment",
+        ] {
+            assert_eq!(
+                classify_verb(verb),
+                CapabilityClass::InteractiveSession,
+                "expected InteractiveSession for {verb}",
+            );
+        }
+    }
+
     // ── classify_verb: privileged verbs ─────────────────────────────────────
 
     #[test]
@@ -465,6 +492,7 @@ mod tests {
             "svc.clipboard.set_enabled",
             "svc.policy.install_epoch",
             "svc.vault.get_policy",
+            "svc.vault.list_principals",
             "svc.vault.get_status",
             "svc.vault.apply_policy",
             "svc.vault.forget_entry_policy_only",

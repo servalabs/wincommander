@@ -64,7 +64,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         </div>
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
-      <Field label="Primary owner" help="Only this selected Windows account can manage or mount this Vault through WinCommander.">
+      <Field label="Primary owner" help="The Windows account responsible for this Vault. Only this selected account can manage or mount it through WinCommander.">
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
