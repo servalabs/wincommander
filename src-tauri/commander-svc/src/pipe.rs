@@ -888,7 +888,7 @@ fn validate_vault_apply_structure(
 
     let mut ids = HashSet::new();
     let mut container_paths = HashSet::new();
-    let mut machine_letters = HashSet::new();
+    let mut reserved_letters = HashSet::new();
     for entry in &policy.entries {
         if !valid_vault_entry_id(&entry.id)
             || entry.label.trim().is_empty()
@@ -914,9 +914,7 @@ fn validate_vault_apply_structure(
             if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
                 return Err(invalid());
             }
-            if entry.mount.presentation == VaultPresentation::Machine
-                && !machine_letters.insert(letter.to_ascii_uppercase())
-            {
+            if !reserved_letters.insert(letter.to_ascii_uppercase()) {
                 return Err(invalid());
             }
         }
@@ -2689,7 +2687,7 @@ fn handle_vault_list_authorized(
     let entries: Vec<wincmd_shared::vault_access::VaultAuthorizedEntry> = vault_access
         .entry_summaries()
         .into_iter()
-        .filter_map(|(entry_id, label, container_kind)| {
+        .filter_map(|(entry_id, label, container_kind, preferred_letter)| {
             let authorization = peer
                 .map(|peer| {
                     crate::vault_access::authorize_mount_for_token(
@@ -2711,6 +2709,7 @@ fn handle_vault_list_authorized(
                 container_kind,
                 mount_state,
                 drive_letter,
+                preferred_letter,
             })
         })
         .collect();

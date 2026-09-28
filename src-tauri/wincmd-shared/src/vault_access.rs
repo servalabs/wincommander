@@ -42,8 +42,20 @@ pub struct VaultAccessEntry {
     /// A service-derived display label only.  It is never an authorization
     /// input and must not be used in place of `primary_owner_sid`.
     pub owner_account: String,
+    /// Optional presentation label persisted only when it agrees with the
+    /// actual mount/grant policy. Authorization always derives from grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_pattern: Option<VaultAccessPattern>,
     pub grants: Vec<VaultGrantInput>,
     pub mount: VaultMountPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VaultAccessPattern {
+    Private,
+    SharedRead,
+    SharedWrite,
 }
 
 /// A validated local principal which may be selected as a Fleet Vault primary
@@ -731,6 +743,10 @@ pub struct VaultAuthorizedEntry {
     pub container_kind: VaultContainerKind,
     pub mount_state: VaultMountState,
     pub drive_letter: Option<String>,
+    /// Service-derived saved preference for this caller-authorized entry.
+    /// Unlike `drive_letter`, it is present even while the Vault is unmounted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_letter: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -875,6 +891,7 @@ mod tests {
                 container_kind: VaultContainerKind::Standard,
                 primary_owner_sid: None,
                 owner_account: "Administrator".into(),
+                access_pattern: None,
                 grants: vec![VaultGrantInput {
                     principal_name: "Partner".into(),
                     access: VaultAccess::Write,

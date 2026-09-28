@@ -2107,6 +2107,7 @@ impl VaultAccessStore {
         String,
         String,
         wincmd_shared::vault_access::VaultContainerKind,
+        Option<String>,
     )> {
         self.state
             .lock()
@@ -2120,7 +2121,12 @@ impl VaultAccessStore {
                                 .entries
                                 .iter()
                                 .map(|entry| {
-                                    (entry.id.clone(), entry.label.clone(), entry.container_kind)
+                                    (
+                                        entry.id.clone(),
+                                        entry.label.clone(),
+                                        entry.container_kind,
+                                        entry.mount.preferred_letter.clone(),
+                                    )
                                 })
                                 .collect()
                         })
@@ -4381,7 +4387,10 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
     }
     let mut ids = HashSet::new();
     let mut container_paths = HashSet::new();
-    let mut machine_letters = HashSet::new();
+    // A saved policy reserves its requested letter machine-wide, even for a
+    // per-user Vault while it is unmounted.  One policy is the source of
+    // truth; never expose this set to callers from another Vault.
+    let mut reserved_letters = HashSet::new();
     for entry in &policy.entries {
         if !valid_id(&entry.id)
             || entry.label.trim().is_empty()
@@ -4408,12 +4417,9 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
             if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
                 return Err(VaultError::Validation);
             }
-            if entry.mount.presentation == VaultPresentation::Machine
-                && !machine_letters.insert(letter.to_ascii_uppercase())
-            {
-                // A machine presentation uses one DOS drive letter for the
-                // whole device. Treat a collision as a save-time validation
-                // error instead of letting the second later fail at mount.
+            if !reserved_letters.insert(letter.to_ascii_uppercase()) {
+                // A collision is a save-time validation error rather than a
+                // later mount race, regardless of presentation or owner.
                 return Err(VaultError::Validation);
             }
         }
@@ -4430,8 +4436,35 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
         if entry.mount.presentation == VaultPresentation::Machine && entry.grants.len() < 2 {
             return Err(VaultError::Validation);
         }
+        if !access_pattern_matches_policy(entry) {
+            return Err(VaultError::Validation);
+        }
     }
     Ok(())
+}
+
+fn access_pattern_matches_policy(entry: &VaultAccessEntry) -> bool {
+    use wincmd_shared::vault_access::VaultAccessPattern;
+    let Some(pattern) = entry.access_pattern else {
+        return true;
+    };
+    let owner = entry.owner_account.trim();
+    let owner_grant = |grant: &wincmd_shared::vault_access::VaultGrantInput| {
+        grant.principal_name.trim().eq_ignore_ascii_case(owner)
+    };
+    match pattern {
+        VaultAccessPattern::Private => entry.mount.presentation == VaultPresentation::PerUser
+            && entry.grants.len() == 1
+            && owner_grant(&entry.grants[0])
+            && entry.grants[0].access == VaultAccess::Write,
+        VaultAccessPattern::SharedRead => entry.mount.presentation == VaultPresentation::Machine
+            && entry.grants.len() >= 2
+            && entry.grants.iter().any(|grant| owner_grant(grant) && grant.access == VaultAccess::Write)
+            && entry.grants.iter().all(|grant| owner_grant(grant) || grant.access == VaultAccess::Read),
+        VaultAccessPattern::SharedWrite => entry.mount.presentation == VaultPresentation::Machine
+            && entry.grants.len() >= 2
+            && entry.grants.iter().all(|grant| grant.access == VaultAccess::Write),
+    }
 }
 
 fn valid_id(value: &str) -> bool {
@@ -4895,6 +4928,7 @@ mod tests {
                 container_kind: wincmd_shared::vault_access::VaultContainerKind::Standard,
                 primary_owner_sid: None,
                 owner_account: "Admin".into(),
+                access_pattern: None,
                 grants: vec![
                     wincmd_shared::vault_access::VaultGrantInput {
                         principal_name: "Admin".into(),
