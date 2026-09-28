@@ -34,7 +34,7 @@ export default function useVaultAccess<Policy, Status>() {
       // This adapter accepts the fragment itself, not a renderer-defined
       // wrapper. Its service side authenticates the caller and derives every
       // authoritative path/identity observation.
-      invoke<Status>("apply_vault_owner_policy_fragment", fragment),
+      invoke<Status>("apply_vault_owner_policy_fragment", { ...fragment }),
     [],
   );
   // This is deliberately different from applying an empty policy. The

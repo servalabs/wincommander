@@ -27,7 +27,7 @@ describe("Vault Access service intent", () => {
 
     expect(roundTrip?.entries[0]?.primary_owner_sid).toBe("S-1-5-21-owner");
     expect(roundTrip?.entries[0]?.canonical_container_path).toBe("D:\\Vaults\\owner.hc");
-    expect(fragment.entries[0]?.entry).not.toHaveProperty("container_path_state");
+    expect(Object.hasOwn(fragment.entries[0]?.entry ?? {}, "container_path_state")).toBe(false);
   });
   test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
     expect(VAULT_MOUNT_REASONS).toEqual([

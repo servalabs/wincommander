@@ -165,7 +165,7 @@ describe("Vault path display", () => {
 
 test("gets owner choices from the native service adapter, never browser storage", () => {
   expect(vaultHookSource).toContain('invoke<VaultOwnerPrincipalList>("vault_list_known_principals")');
-  expect(vaultHookSource).toContain('invoke<Status>("apply_vault_owner_policy_fragment", fragment)');
+  expect(vaultHookSource).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { ...fragment })');
   expect(vaultHookSource).not.toContain("localStorage");
 });
 
