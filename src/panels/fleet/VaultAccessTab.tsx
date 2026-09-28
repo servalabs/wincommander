@@ -17,7 +17,7 @@ import {
   newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
-  type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultVolumeRole,
+  type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultOwnerPrincipal, type VaultVolumeRole,
 } from "./vaultAccessTypes";
 import { applyVaultAccessPreset, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessEditor from "./VaultAccessEditor";
@@ -128,11 +128,19 @@ interface MountTarget {
   access?: VaultAccess;
 }
 
+function newVaultEntryForOwner(kind: "shared" | "private", principals: readonly VaultOwnerPrincipal[], currentCallerSid: string | null): VaultAccessEntry {
+  const entry = newVaultEntry(kind);
+  const owner = principals.find(principal => principal.sid === currentCallerSid);
+  return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
+}
+
 export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
   const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
+  const [ownerPrincipals, setOwnerPrincipals] = useState<VaultOwnerPrincipal[]>([]);
+  const [currentCallerSid, setCurrentCallerSid] = useState<string | null>(null);
   const [canManagePolicy, setCanManagePolicy] = useState(false);
   // Only a successful service read can establish that a policy is saved.
   // A status object exists even for `never_applied`, so it must not be used
@@ -173,7 +181,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
-  const { getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const { getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
@@ -216,8 +224,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
         return getCapabilities();
       });
+      const ownerDirectory = await listOwnerPrincipals();
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries(entries);
+      setOwnerPrincipals(ownerDirectory.principals);
+      setCurrentCallerSid(ownerDirectory.current_caller_sid);
       setMountResults({});
       setCanManagePolicy(capabilities.can_manage_policy);
       setPolicyLoadUnavailable(false);
@@ -285,7 +296,20 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } finally {
       setLoading(false);
     }
-  }, [getCapabilities, getPolicy, getStatus, listAuthorizedEntries, replacePolicy]);
+  }, [getCapabilities, getPolicy, getStatus, listAuthorizedEntries, listOwnerPrincipals, replacePolicy]);
+
+  useEffect(() => {
+    if (draftBaseRef.current || !currentCallerSid || ownerPrincipals.length === 0) return;
+    const owner = ownerPrincipals.find(principal => principal.sid === currentCallerSid);
+    const current = policyRef.current;
+    if (!owner || !current || current.entries.every(entry => entry.primary_owner_sid)) return;
+    replacePolicy({
+      ...current,
+      entries: current.entries.map(entry => entry.primary_owner_sid
+        ? entry
+        : { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name }),
+    }, true);
+  }, [currentCallerSid, ownerPrincipals, replacePolicy]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -365,7 +389,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const addExistingVault = () => {
     const containerPath = existingVaultPath.trim();
     if (!containerPath) return void showError("Choose or enter the encrypted container file first.");
-    const entry = newVaultEntry("shared");
+    const entry = newVaultEntryForOwner("shared", ownerPrincipals, currentCallerSid);
     entry.container_path = containerPath;
     entry.label = existingVaultLabel.trim()
       || containerPath.replaceAll("/", "\\").split("\\").filter(Boolean).at(-1)
@@ -382,7 +406,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   };
 
   const addVaultEntryDraft = (kind: "shared" | "private") => {
-    const entry = newVaultEntry(kind);
+    const entry = newVaultEntryForOwner(kind, ownerPrincipals, currentCallerSid);
     editPolicy(current => {
       const source = current ?? newVaultPolicy();
       return { ...source, entries: [...source.entries, entry] };
@@ -424,13 +448,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     };
   });
 
-  const setOwnerAccount = (id: string, ownerAccount: string) => editPolicy(current => {
+  const setOwnerAccount = (id: string, owner: VaultOwnerPrincipal) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
     return {
       ...source,
       entries: source.entries.map(entry => {
         if (entry.id !== id) return entry;
-        const ownerChanged = { ...entry, owner_account: ownerAccount };
+        const ownerChanged = { ...entry, owner_account: owner.display_name, primary_owner_sid: owner.sid };
         const preset = vaultAccessPreset(entry);
         return preset === "private" || preset === "shared-read"
           ? applyVaultAccessPreset(ownerChanged, preset)
@@ -615,9 +639,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const replaceWithSharedDraft = () => {
     const source = newVaultPolicy();
-    const entry = newVaultEntry("shared");
-    entry.owner_account = "";
-    entry.grants = [{ principal_name: "", access: "write" }];
+    const entry = newVaultEntryForOwner("shared", ownerPrincipals, currentCallerSid);
     replacePolicy({ ...source, entries: [entry] }, true);
   };
 
@@ -936,6 +958,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 entry={entry}
                 entryIndex={entryIndex}
                 directory={directory}
+                ownerPrincipals={ownerPrincipals}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
                 onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
                 onPresetChange={preset => setAccessPreset(entry.id, preset)}

@@ -407,6 +407,13 @@ html.light .action-item[data-tip][data-tip-intent="danger"]::after {
 }
 
 /* ── Quick Mount overlay ── */
+.qm-fleet-vaults {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+}
 .qm-overlay {
     position: fixed;
     inset: 0;

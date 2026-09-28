@@ -21,6 +21,8 @@ import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
+import useVaultAccess from "../hooks/useVaultAccess";
+import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -182,6 +184,13 @@ export default function RightSidebar() {
     const [qmPartitions, setQmPartitions] = useState<EncryptionPartition[]>([]);
     const [qmPartitionsLoading, setQmPartitionsLoading] = useState(false);
     const [qmSaving, setQmSaving] = useState(false);
+    // Fleet Vaults never use this user-settings list: the secure service owns
+    // the caller-filtered projection and takes only an opaque entry id on mount.
+    const [fleetVaults, setFleetVaults] = useState<VaultAuthorizedEntry[]>([]);
+    const [fleetVaultEntryId, setFleetVaultEntryId] = useState('');
+    const [fleetVaultPassword, setFleetVaultPassword] = useState('');
+    const [fleetVaultMounting, setFleetVaultMounting] = useState(false);
+    const { listAuthorizedEntries, mountEntry: mountFleetVaultEntry } = useVaultAccess<unknown, unknown>();
     type QmSlot = QuickMountSlot;
     // useMemo so the array identity is stable across renders — otherwise the
     // `?? []` fallback minted a fresh [] every render, churning the deps of
@@ -190,6 +199,42 @@ export default function RightSidebar() {
         () => appSettings?.app?.vault?.quickMountSlots ?? [],
         [appSettings?.app?.vault?.quickMountSlots],
     );
+
+    const refreshFleetVaults = useCallback(async () => {
+        try {
+            const entries = await listAuthorizedEntries();
+            setFleetVaults(entries);
+            setFleetVaultEntryId(current => entries.some(entry => entry.entry_id === current) ? current : (entries[0]?.entry_id ?? ''));
+        } catch {
+            // The normal Quick Mount shortcuts remain usable if the secure
+            // Fleet service is briefly unavailable. Never substitute cached
+            // policy/path data for this caller-filtered list.
+            setFleetVaults([]);
+            setFleetVaultEntryId('');
+        }
+    }, [listAuthorizedEntries]);
+
+    useEffect(() => {
+        if (qmOpen) void refreshFleetVaults();
+    }, [qmOpen, refreshFleetVaults]);
+
+    const handleFleetVaultMount = useCallback(async () => {
+        if (!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting) return;
+        setFleetVaultMounting(true);
+        try {
+            const result = await mountFleetVaultEntry(fleetVaultEntryId, fleetVaultPassword, 'outer');
+            if (result.state === 'mounted') {
+                showSuccess(vaultMountResultLabel(result));
+                setFleetVaultPassword('');
+                setQmOpen(false);
+                await refreshFleetVaults();
+            } else showError(vaultMountResultLabel(result), undefined, { kind: 'notification' });
+        } catch {
+            showError('The Fleet Vault service could not complete this mount request.', undefined, { kind: 'notification' });
+        } finally {
+            setFleetVaultMounting(false);
+        }
+    }, [fleetVaultEntryId, fleetVaultMounting, fleetVaultPassword, mountFleetVaultEntry, refreshFleetVaults]);
 
     const nextFreeLetter = useCallback((excludeIdx?: number) => {
         const taken = new Set(
@@ -1074,6 +1119,50 @@ export default function RightSidebar() {
                         ) : (
                             /* ── Mount view — dropdown + path info + password ── */
                             <>
+                                <div className="qm-fleet-vaults">
+                                    <div className="qm-title-row">
+                                        <span className="qm-title">Saved Fleet Vaults</span>
+                                    </div>
+                                    {fleetVaults.length === 0 ? (
+                                        <div className="qm-empty">No Fleet Vault is assigned to this Windows account.</div>
+                                    ) : (
+                                        <>
+                                            <div className="qm-field">
+                                                <label className="qm-label" htmlFor="fleet-vault-mount-select">Vault</label>
+                                                <select
+                                                    id="fleet-vault-mount-select"
+                                                    className="qm-select"
+                                                    value={fleetVaultEntryId}
+                                                    onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); }}
+                                                >
+                                                    {fleetVaults.map(entry => <option key={entry.entry_id} value={entry.entry_id}>
+                                                        {entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
+                                                    </option>)}
+                                                </select>
+                                                <span className="qm-hint">This list is supplied by the Vault service for this Windows account. Container paths are never exposed here.</span>
+                                            </div>
+                                            <div className="qm-field">
+                                                <label className="qm-label" htmlFor="fleet-vault-mount-password">Password</label>
+                                                <input
+                                                    id="fleet-vault-mount-password"
+                                                    className="qm-input"
+                                                    type="password"
+                                                    placeholder="Enter password"
+                                                    value={fleetVaultPassword}
+                                                    onChange={(event) => setFleetVaultPassword(event.target.value)}
+                                                    onKeyDown={(event) => { if (event.key === 'Enter') void handleFleetVaultMount(); }}
+                                                />
+                                            </div>
+                                            <div className="qm-actions">
+                                                <button type="button" className="qm-btn qm-btn--primary"
+                                                    disabled={!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting}
+                                                    onClick={() => void handleFleetVaultMount()}>
+                                                    {fleetVaultMounting ? <Spinner size={14} /> : 'Mount inside'}
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
                                 <div className="qm-title-row">
                                     <span className="qm-title">Quick Mount</span>
                                     <button type="button" className="qm-add-btn"

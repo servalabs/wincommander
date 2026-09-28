@@ -33,6 +33,7 @@ const helpSource = readFileSync("src/panels/fleet/VaultAccessInfo.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/VaultAccessEditor.css", "utf8");
 const renderEditor = (value = entry) => renderToStaticMarkup(<VaultAccessEditor
   entry={value} entryIndex={0} directory={directory}
+  ownerPrincipals={[{ sid: "S-1-5-21-example", display_name: "Example user" }]}
   onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
 />);
 
@@ -49,8 +50,9 @@ describe("Vault access editor presentation", () => {
   test("keeps general help out of the default render, with named keyboard controls", () => {
     const html = renderEditor();
     expect(html).toContain('aria-label="About primary owner"');
+    expect(html).toContain('aria-label="Vault 1 primary owner"');
     expect(html).toContain('aria-label="About drive letter"');
-    expect(html).toContain('placeholder="ExampleUser"');
+    expect(html).toContain('value="S-1-5-21-example"');
     expect(html).not.toContain("The Windows account responsible for this Vault.");
     expect(html).not.toContain("The preferred letter in File Explorer.");
     expect(helpSource).toContain('TooltipTrigger type="button" aria-label={label}');
@@ -73,7 +75,7 @@ describe("Vault access editor presentation", () => {
     expect(html).toContain('aria-label="Browse for Vault 1 container file"');
     expect(editorSource).toContain('open as openFileDialog');
     expect(editorSource).toContain('title: "Select an existing encrypted Vault container"');
-    expect(editorSource).toContain('onEntryChange({ container_path: selected })');
+    expect(editorSource).toContain('onEntryChange({ container_path: selected, container_path_state: undefined, canonical_container_path: undefined })');
     expect(editorSource).not.toContain("applyPolicy");
     expect(editorSource).not.toContain("useVaultAccess");
   });
@@ -146,6 +148,17 @@ describe("Vault access editor presentation", () => {
     expect(/overflow(?:-[xy])?\s*:\s*(?:auto|scroll|hidden|clip)/.test(css)).toBe(false);
     expect(editorSource).not.toContain("ScrollArea");
     // Real bounding-box and scroll-owner assertions live in the browser check.
+  });
+});
+
+describe("Vault path display", () => {
+  test("uses only a service-confirmed drive-letter path and never renders an invented placeholder", () => {
+    const available = renderEditor({ ...entry, container_path: "???", container_path_state: "available", canonical_container_path: "D:\\Vaults\\example.hc" });
+    const unavailable = renderEditor({ ...entry, container_path: "???", container_path_state: "unavailable" });
+    expect(available).toContain('value="D:\\Vaults\\example.hc"');
+    expect(available).not.toContain('value="???"');
+    expect(unavailable).toContain('value="Path unavailable"');
+    expect(unavailable).not.toContain('value="???"');
   });
 });
 

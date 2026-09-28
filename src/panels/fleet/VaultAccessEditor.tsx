@@ -3,7 +3,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { FleetAccessDirectory } from "./accessControlTypes";
-import type { VaultAccessEntry } from "./vaultAccessTypes";
+import { vaultCanonicalPathDisplay, type VaultAccessEntry, type VaultOwnerPrincipal } from "./vaultAccessTypes";
 import { vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessInfo from "./VaultAccessInfo";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
@@ -14,8 +14,9 @@ interface VaultAccessEditorProps {
   entry: VaultAccessEntry;
   entryIndex: number;
   directory: FleetAccessDirectory;
+  ownerPrincipals: readonly VaultOwnerPrincipal[];
   onEntryChange: (patch: Partial<VaultAccessEntry>) => void;
-  onOwnerChange: (owner: string) => void;
+  onOwnerChange: (owner: VaultOwnerPrincipal) => void;
   onPresetChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
 }
 
@@ -26,12 +27,14 @@ function Field({ label, help, children }: { label: string; help: string; childre
   </div>;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
   const accessPreset = vaultAccessPreset(entry);
   const vaultNumber = entryIndex + 1;
   // Use the actually discovered signed-in account for guidance instead of
   // assuming every PC calls its administrator account "Administrator".
-  const currentWindowsAccount = directory.users.find(user => user.isCurrent && user.isAvailable !== false)?.username;
+  const displayPath = vaultCanonicalPathDisplay(entry);
+  const pathIsServiceUnavailable = entry.container_path_state === "unavailable"
+    || (entry.container_path_state === "available" && displayPath === "Path unavailable");
 
   const browseContainerFile = async () => {
     try {
@@ -43,7 +46,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
         directory: false,
         title: "Select an existing encrypted Vault container",
       });
-      if (typeof selected === "string") onEntryChange({ container_path: selected });
+      if (typeof selected === "string") onEntryChange({ container_path: selected, container_path_state: undefined, canonical_container_path: undefined });
     } catch {
       // The path input remains available if Windows cannot open its picker.
     }
@@ -56,19 +59,33 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
       </Field>
       <Field label="Container file" help="The encrypted container file on this PC. A filename extension is not required.">
         <div className="vault-access-container-path">
-          <Input aria-label={`Vault ${vaultNumber} container path`} value={entry.container_path} placeholder="Encrypted container file" onChange={event => onEntryChange({ container_path: event.target.value })} />
+          <Input aria-label={`Vault ${vaultNumber} container path`} value={displayPath} placeholder="Encrypted container file" onChange={event => onEntryChange({ container_path: event.target.value, container_path_state: undefined, canonical_container_path: undefined })} />
           <Button variant="outline" size="sm" type="button" aria-label={`Browse for Vault ${vaultNumber} container file`} onClick={() => void browseContainerFile()}>Browse</Button>
         </div>
         <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
-      <Field label="Primary owner" help="The Windows account responsible for this Vault.">
-        <Input aria-label={`Vault ${vaultNumber} owner`} value={entry.owner_account} placeholder={currentWindowsAccount ?? "PC\\username"} onChange={event => onOwnerChange(event.target.value)} />
-        <small>Use PC-or-domain\username.</small>
+      <Field label="Primary owner" help="Only this selected Windows account can manage or mount this Vault through WinCommander.">
+        <select
+          aria-label={`Vault ${vaultNumber} primary owner`}
+          value={entry.primary_owner_sid ?? ""}
+          onChange={event => {
+            const selected = ownerPrincipals.find(principal => principal.sid === event.target.value);
+            if (selected) onOwnerChange(selected);
+          }}
+        >
+          <option value="" disabled>Select a Windows user…</option>
+          {ownerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{principal.display_name}</option>)}
+        </select>
+        <small>The service saves this account by its Windows security ID, not by its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
         <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
       </Field>
     </div>
+
+    {entry.container_path_state && <p className="fleet-field-hint" role="status">
+      {pathIsServiceUnavailable ? "Path unavailable" : "Saved container path verified by the Vault service."}
+    </p>}
 
     <VaultAccessPatternPicker value={accessPreset} onChange={onPresetChange} />
 

@@ -80,6 +80,12 @@ export interface VaultAccessEntry {
   id: string;
   label: string;
   container_path: string;
+  /** Stable owner identity selected from the service directory. Never derive
+   * authorization from the display name in the renderer. */
+  primary_owner_sid?: string | null;
+  /** Service-confirmed path state. A renderer draft has neither field. */
+  container_path_state?: "available" | "unavailable";
+  canonical_container_path?: string | null;
   container_identity?: string | null;
   container_kind: VaultContainerKind;
   owner_account: string;
@@ -135,6 +141,30 @@ export interface VaultAuthorizedEntry {
 /** Service-derived caller capability; never infer this from cached machine state. */
 export interface VaultAccessCapabilities {
   can_manage_policy: boolean;
+}
+
+/** A service-discovered Windows account that may become a Vault owner. */
+export interface VaultOwnerPrincipal {
+  sid: string;
+  display_name: string;
+}
+
+/** The service owns both the caller SID and the safe owner-picker options. */
+export interface VaultOwnerPrincipalList {
+  current_caller_sid: string;
+  principals: VaultOwnerPrincipal[];
+}
+
+/** Never fall back to a draft or stale path. A saved unavailable path is
+ * intentionally rendered as this exact bounded status. */
+export function vaultCanonicalPathDisplay(entry: Pick<VaultAccessEntry, "container_path" | "container_path_state" | "canonical_container_path">): string {
+  if (entry.container_path_state === "unavailable") return "Path unavailable";
+  if (entry.container_path_state === "available") {
+    return entry.canonical_container_path?.match(/^[a-z]:\\/i)
+      ? entry.canonical_container_path
+      : "Path unavailable";
+  }
+  return entry.container_path;
 }
 
 export function vaultPresentationLabel(presentation: VaultPresentation | null | undefined): string {
