@@ -99,8 +99,11 @@ export default function useRdpIdleDisconnect(
     setWarningLeft(effectiveWarningSeconds);
     console.log("[RdpIdle] Snoozed for", effectiveWarningSeconds, "s");
     const operationId = beginRdpOperation("idle_disconnect");
-    recordRdpDiagnostic(operationId, "idle_disconnect", "user_action", "applied", "cancelled", "info");
-  }, [effectiveWarningSeconds, dropAlwaysOnTop]);
+    recordRdpDiagnostic(operationId, "idle_disconnect", "snoozed", "applied", "cancelled", "info", undefined, {
+      configured_timeout_seconds: timeoutSeconds,
+      state: "snoozed",
+    });
+  }, [effectiveWarningSeconds, timeoutSeconds, dropAlwaysOnTop]);
 
   useEffect(() => {
     if (!enabled) {
@@ -121,7 +124,10 @@ export default function useRdpIdleDisconnect(
 
     console.log("[RdpIdle] Starting — timeout:", timeoutSeconds, "s | warning:", effectiveWarningSeconds, "s");
     const monitorOperationId = beginRdpOperation("session_monitor");
-    recordRdpDiagnostic(monitorOperationId, "session_monitor", "start", "applying", "started", "info");
+    recordRdpDiagnostic(monitorOperationId, "session_monitor", "outgoing_monitor_enabled", "applying", "started", "info", undefined, {
+      configured_timeout_seconds: timeoutSeconds,
+      state: "outgoing_monitor_enabled",
+    });
 
     // ── PowerShell poll (5 s): does an RDP session exist right now? ──────────
     const poll = async () => {
@@ -144,6 +150,14 @@ export default function useRdpIdleDisconnect(
         if (!open) {
           // No mstsc → nothing to disconnect. Reset everything and idle the timer.
           if (rdpActiveRef.current) console.log("[RdpIdle] No mstsc.exe running — monitor idle");
+          if (rdpActiveRef.current) {
+            const operationId = beginRdpOperation("session_monitor");
+            recordRdpDiagnostic(operationId, "session_monitor", "outgoing_client_absent", "verified", "succeeded", "info", undefined, {
+              configured_timeout_seconds: timeoutSeconds,
+              session_count: 0,
+              state: "outgoing_client_absent",
+            });
+          }
           rdpActiveRef.current = false;
           baselineIdleRef.current = -1;
           if (!killInFlightRef.current) killedRef.current = false;
@@ -162,6 +176,12 @@ export default function useRdpIdleDisconnect(
             ? res.data.remoteHosts.join(", ")
             : (res.data.remoteHosts || "unknown");
           console.log("[RdpIdle] RDP session active — mstsc:", res.data.processCount ?? "?", "| hosts:", hosts);
+          const operationId = beginRdpOperation("session_monitor");
+          recordRdpDiagnostic(operationId, "session_monitor", "outgoing_client_present", "verified", "succeeded", "info", undefined, {
+            configured_timeout_seconds: timeoutSeconds,
+            session_count: 1,
+            state: "outgoing_client_present",
+          });
         }
         rdpActiveRef.current = true;
       } catch (e) {
@@ -200,9 +220,20 @@ export default function useRdpIdleDisconnect(
         // Re-anchor (this is the reset) and clear any active warning.
         if (idle < baselineIdleRef.current) {
           baselineIdleRef.current = idle;
+          const warningWasActive = nativeWarnedRef.current;
           nativeWarnedRef.current = false;
           dropAlwaysOnTop();
           console.log("[RdpIdle] Activity detected — counter reset");
+          // This is the useful recovery transition, not every keystroke. It
+          // confirms that a warning was cleared without retaining activity
+          // timing or any remote-session identity.
+          if (warningWasActive) {
+            const operationId = beginRdpOperation("idle_warning");
+            recordRdpDiagnostic(operationId, "idle_warning", "outgoing_activity_resumed", "verified", "cancelled", "info", undefined, {
+              configured_timeout_seconds: timeoutSeconds,
+              state: "outgoing_activity_resumed",
+            });
+          }
         }
 
         const effectiveIdle = Math.max(0, idle - baselineIdleRef.current);
@@ -225,7 +256,10 @@ export default function useRdpIdleDisconnect(
 
         if (inWarning && !nativeWarnedRef.current) {
           const operationId = beginRdpOperation("idle_warning");
-          recordRdpDiagnostic(operationId, "idle_warning", "threshold", "applying", "progress", "warn");
+          recordRdpDiagnostic(operationId, "idle_warning", "outgoing_idle_threshold_warning", "applying", "progress", "warn", undefined, {
+            configured_timeout_seconds: timeoutSeconds,
+            state: "outgoing_idle_threshold_warning",
+          });
           nativeWarnedRef.current = true;
           const mins = Math.floor(effectiveIdle / 60);
           const secs = effectiveIdle % 60;
@@ -256,7 +290,10 @@ export default function useRdpIdleDisconnect(
 
         if (shouldKill && !killedRef.current) {
           const operationId = beginRdpOperation("idle_disconnect");
-          recordRdpDiagnostic(operationId, "idle_disconnect", "requested", "requested", "started", "warn");
+          recordRdpDiagnostic(operationId, "idle_disconnect", "outgoing_idle_threshold_reached", "requested", "started", "warn", undefined, {
+            configured_timeout_seconds: timeoutSeconds,
+            state: "outgoing_idle_threshold_reached",
+          });
           killedRef.current = true;
           killInFlightRef.current = true; // keep the kill from being undone mid-flight
           setIsIdle(false);

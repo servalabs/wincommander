@@ -8,12 +8,14 @@ type LegacyRecord = { date: string; timestamp: string; level: string; source: st
 
 type SourceFilter = "all" | "desktop" | "service" | "pro" | "legacy";
 type SeverityFilter = "all" | "error" | "warn" | "info";
+type FeatureFilter = "all" | "rdp";
 
 type TimelineEvent = {
   id: string;
   occurredAt: string;
   source: "desktop" | "service" | "pro" | "legacy";
   sourceDetail?: string;
+  feature?: string;
   severity: "error" | "warn" | "info";
   summary: string;
   operationId?: string;
@@ -37,8 +39,23 @@ const SEVERITY_FILTERS: Array<{ value: SeverityFilter; label: string }> = [
   { value: "info", label: "Information" },
 ];
 
+const FEATURE_FILTERS: Array<{ value: FeatureFilter; label: string }> = [
+  { value: "all", label: "All features" },
+  { value: "rdp", label: "Remote Desktop" },
+];
+
 function readable(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function structuredSummary(event: DiagnosticEvent): string {
+  if (event.feature !== "rdp") {
+    return `${readable(event.feature)} · ${readable(event.action)} · ${readable(event.stage)}`;
+  }
+  const action = event.action === "idle_signoff" ? "incoming idle sign-out"
+    : event.action === "idle_disconnect" ? "outgoing idle disconnect"
+      : readable(event.action);
+  return `Remote Desktop · ${action} · ${readable(event.stage)}`;
 }
 
 function timestamp(value: string): string {
@@ -63,8 +80,9 @@ function structuredTimelineEvent(event: DiagnosticEvent, source: "desktop" | "se
     id: `${source}:${event.eventId}`,
     occurredAt: event.occurredAt,
     source,
+    feature: event.feature,
     severity: normalizeSeverity(event.severity),
-    summary: `${readable(event.feature)} · ${readable(event.action)} · ${readable(event.stage)}`,
+    summary: structuredSummary(event),
     operationId: event.operationId,
     detail: `${readable(event.lifecycle)} → ${readable(event.outcome)}${event.durationMs === undefined ? "" : ` · ${event.durationMs} ms`}`,
     errorCode: event.errorCode,
@@ -99,6 +117,7 @@ function copyPlaintext(events: TimelineEvent[]): string {
 export default function SupportConsole() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
+  const [featureFilter, setFeatureFilter] = useState<FeatureFilter>("all");
   const { structuredEvents, legacyRecords, health, loading, unavailable, refresh } = useDiagnosticCenter();
 
   const timeline = useMemo(() => [
@@ -109,7 +128,8 @@ export default function SupportConsole() {
   const filteredTimeline = useMemo(() => timeline.filter((event) => (
     (sourceFilter === "all" || event.source === sourceFilter)
     && (severityFilter === "all" || event.severity === severityFilter)
-  )), [severityFilter, sourceFilter, timeline]);
+    && (featureFilter === "all" || event.feature === featureFilter)
+  )), [featureFilter, severityFilter, sourceFilter, timeline]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -153,6 +173,7 @@ export default function SupportConsole() {
       <div className="flex flex-wrap gap-3" aria-label="Diagnostic filters">
         <FilterGroup label="Source" options={SOURCE_FILTERS} selected={sourceFilter} onSelect={setSourceFilter} />
         <FilterGroup label="Severity" options={SEVERITY_FILTERS} selected={severityFilter} onSelect={setSeverityFilter} />
+        <FilterGroup label="Feature" options={FEATURE_FILTERS} selected={featureFilter} onSelect={setFeatureFilter} />
       </div>
 
       {!loading && filteredTimeline.length === 0 && (

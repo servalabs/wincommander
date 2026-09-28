@@ -77,6 +77,10 @@ export default function useRdpIncomingDismount(
     }
 
     console.log("[RdpIncomingDismount] Starting session monitor");
+    const monitorOperationId = beginRdpOperation("session_monitor");
+    recordRdpDiagnostic(monitorOperationId, "session_monitor", "incoming_dismount_monitor_enabled", "applying", "started", "info", undefined, {
+      state: "incoming_dismount_monitor_enabled",
+    });
 
     const poll = async () => {
       if (!mountedRef.current || inFlightRef.current) return;
@@ -108,6 +112,14 @@ export default function useRdpIncomingDismount(
         const total = sessions.length;
         const prevAttended = prevAttendedRef.current;
         const prevTotal = prevTotalRef.current;
+        if (prevAttended !== attended || prevTotal !== total) {
+          const operationId = beginRdpOperation("session_monitor");
+          recordRdpDiagnostic(operationId, "session_monitor", total === 0 ? "incoming_sessions_absent" : "incoming_sessions_present", "verified", "succeeded", "info", undefined, {
+            attended_session_count: attended,
+            session_count: total,
+            state: total === 0 ? "incoming_sessions_absent" : "incoming_sessions_present",
+          });
+        }
         console.log(
           `[RdpIncomingDismount] Attended: ${attended} / ${total} total ` +
             `(prev attended: ${prevAttended ?? "unknown"}, prev total: ${prevTotal ?? "unknown"})`

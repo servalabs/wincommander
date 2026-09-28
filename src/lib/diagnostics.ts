@@ -32,7 +32,11 @@ export interface SafeDiagnosticInput {
 const SAFE_TOKEN = /^[A-Za-z0-9_-]{1,128}$/;
 const SAFE_IDENTIFIER = /^[a-z0-9_-]{1,128}$/;
 const SAFE_CODE = /^[A-Z0-9._-]{1,128}$/;
-const CONTEXT_KEYS = new Set(["attempt", "build_version", "capability", "driver_state", "health", "os_error_code", "policy_version", "reason_category", "retry_count", "state"]);
+const CONTEXT_KEYS = new Set([
+  "attempt", "attended_session_count", "build_version", "capability", "configured_timeout_seconds",
+  "driver_state", "health", "os_error_code", "policy_version", "reason_category", "retry_count",
+  "session_count", "state",
+]);
 
 
 function token(prefix: string): string {

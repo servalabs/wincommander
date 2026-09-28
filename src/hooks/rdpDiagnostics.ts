@@ -1,8 +1,9 @@
-import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
+import { newDiagnosticOperationId, recordDiagnostic, type SafeDiagnosticInput } from "../lib/diagnostics";
 
 type Lifecycle = "requested" | "applying" | "applied" | "verified";
 type Outcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "cancelled" | "timed_out";
 type Severity = "info" | "warn" | "error";
+type SafeRdpContext = SafeDiagnosticInput["context"];
 
 /**
  * Records only an opaque RDP state transition. Session identifiers, account
@@ -21,6 +22,7 @@ export function recordRdpDiagnostic(
   outcome: Outcome,
   severity: Severity,
   errorCode?: string,
+  context?: SafeRdpContext,
 ): void {
   recordDiagnostic({
     operationId,
@@ -34,5 +36,6 @@ export function recordRdpDiagnostic(
     retryability: outcome === "failed" || outcome === "timed_out" ? "automatic" : "never",
     suggestedNextAction: outcome === "failed" || outcome === "timed_out" ? "retry" : "none",
     privacyClass: "local_sensitive",
+    context,
   });
 }
