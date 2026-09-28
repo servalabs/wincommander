@@ -21,25 +21,45 @@ $Global:DesktopIconClsids = @{
 function _Set-DesktopIcon {
     param([string]$Clsid, [bool]$Visible)
     $value = if ($Visible) { 0 } else { 1 }
-    foreach ($root in @(
+    $roots = @(
         "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
         "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu"
-    )) {
+    )
+
+    # These are Windows shell-namespace icons, not .lnk files. Check both
+    # legacy visibility locations first so a repeated click never creates or
+    # adds another desktop item; it only repairs an inconsistent shell state.
+    $alreadyApplied = $true
+    foreach ($root in $roots) {
+        try {
+            $current = Get-ItemProperty -Path $root -Name $Clsid -ErrorAction Stop
+            if ($current.($Clsid) -ne $value) { $alreadyApplied = $false; break }
+        } catch {
+            $alreadyApplied = $false
+            break
+        }
+    }
+    if ($alreadyApplied) {
+        return @{ status = if ($Visible) { "already-shown" } else { "already-hidden" }; changed = $false }
+    }
+
+    foreach ($root in $roots) {
         if (!(Test-Path $root)) { New-Item -Path $root -Force | Out-Null }
         Set-ItemProperty -Path $root -Name $Clsid -Value $value -Type DWord -Force
     }
+    return @{ status = if ($Visible) { "shown" } else { "hidden" }; changed = $true }
 }
 
-function Show-DesktopIconThisPc      { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.thisPC       -Visible $true;  @{ status = "shown" } }
-function Hide-DesktopIconThisPc      { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.thisPC       -Visible $false; @{ status = "hidden" } }
-function Show-DesktopIconUserFiles   { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.userFiles    -Visible $true;  @{ status = "shown" } }
-function Hide-DesktopIconUserFiles   { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.userFiles    -Visible $false; @{ status = "hidden" } }
-function Show-DesktopIconNetwork     { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.network      -Visible $true;  @{ status = "shown" } }
-function Hide-DesktopIconNetwork     { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.network      -Visible $false; @{ status = "hidden" } }
-function Show-DesktopIconRecycleBin  { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.recycleBin   -Visible $true;  @{ status = "shown" } }
-function Hide-DesktopIconRecycleBin  { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.recycleBin   -Visible $false; @{ status = "hidden" } }
-function Show-DesktopIconControlPanel { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.controlPanel -Visible $true;  @{ status = "shown" } }
-function Hide-DesktopIconControlPanel { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.controlPanel -Visible $false; @{ status = "hidden" } }
+function Show-DesktopIconThisPc      { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.thisPC       -Visible $true }
+function Hide-DesktopIconThisPc      { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.thisPC       -Visible $false }
+function Show-DesktopIconUserFiles   { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.userFiles    -Visible $true }
+function Hide-DesktopIconUserFiles   { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.userFiles    -Visible $false }
+function Show-DesktopIconNetwork     { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.network      -Visible $true }
+function Hide-DesktopIconNetwork     { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.network      -Visible $false }
+function Show-DesktopIconRecycleBin  { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.recycleBin   -Visible $true }
+function Hide-DesktopIconRecycleBin  { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.recycleBin   -Visible $false }
+function Show-DesktopIconControlPanel { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.controlPanel -Visible $true }
+function Hide-DesktopIconControlPanel { _Set-DesktopIcon -Clsid $Global:DesktopIconClsids.controlPanel -Visible $false }
 
 # ── SHORTCUT ARROW OVERLAY ──────────────────────────────────────────────
 # HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons\29

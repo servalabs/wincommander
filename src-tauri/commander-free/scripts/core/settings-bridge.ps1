@@ -1032,7 +1032,9 @@ function Get-WCSystemProbe {
     catch {}
 
     # ── UI GRANULAR ────────────────────────────────────────────────────
-    # Per-icon desktop visibility (0 = visible, 1 = hidden).
+    # Per-icon desktop visibility (0 = visible, 1 = hidden). Windows can
+    # retain either of the legacy shell locations; read both so the UI has one
+    # reconciled state rather than treating them as separate desktop icons.
     $iconClsids = @{
         desktopIconThisPc       = '{20D04FE0-3AEA-1069-A2D8-08002B30309D}'
         desktopIconRecycleBin   = '{645FF040-5081-101B-9F08-00AA002F954E}'
@@ -1042,8 +1044,15 @@ function Get-WCSystemProbe {
     }
     foreach ($k in $iconClsids.Keys) {
         try {
-            $v = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" -Name $iconClsids[$k] -EA SilentlyContinue
-            if ($v -and ($v.($iconClsids[$k])) -eq 0) { $state.tweaks.ui.$k = $true }
+            $visible = $false
+            foreach ($root in @(
+                "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+                "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\ClassicStartMenu"
+            )) {
+                $v = Get-ItemProperty -Path $root -Name $iconClsids[$k] -EA SilentlyContinue
+                if ($v -and ($v.($iconClsids[$k])) -eq 0) { $visible = $true; break }
+            }
+            if ($visible) { $state.tweaks.ui.$k = $true }
         } catch {}
     }
     try {
