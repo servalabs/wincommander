@@ -352,7 +352,7 @@ All Argus collectors enforce the privacy invariant: window titles, exe paths, UR
 | Command | Purpose |
 |---------|---------|
 | `get_vault_access_capabilities` | Returns the current named-pipe client's bounded policy-management capability. The Fleet UI fails closed if it cannot obtain this response. |
-| `vault_list_authorized_entries` | Returns only entries authorized for the caller, with a safe label, access/presentation, container kind, mount state, and drive letter. It does not return container paths, Windows identities, or ACLs. |
+| `vault_list_authorized_entries` | Returns only entries authorized for the caller, with a safe label, access/presentation, container kind, mount state, current `drive_letter`, and optional saved `preferred_letter`. Quick Mount uses the saved preference while unmounted, without a separate manually added shortcut. It does not return container paths, Windows identities, ACLs, or another owner's reservations. |
 | `vault_mount_entry` | Requests a mount with `{ entryId, password, volumeRole?, hiddenProtectionPassword? }`. `volumeRole` is `outer` or `hidden` for a dual container and is chosen for that request only; omitted roles remain compatible with standard containers and mean `outer`. A writable dual outer mount requires `hiddenProtectionPassword`; the service forwards it only for that request and forces hidden-region protection. Hidden mounts are routed to the engine as `hidden`. The UI retains either password only in component/request memory and clears it immediately after dispatch. Dual containers can use Fleet-shared policy entries. Results are bounded to entry ID, lifecycle state, presentation, drive letter, and reason. |
 | `vault_unmount_entry` | Requests an authorized unmount by `{ entryId }`; the service rechecks authorization. |
 | `verify_vault_drive` | Checks whether a supplied drive letter is available to the signed-in Windows session; it returns only the letter and an accessibility result. |
@@ -367,6 +367,18 @@ The service, not a cached desktop administrator probe, decides whether the
 caller may edit policy. Non-administrators use the caller-filtered **My
 vaults** view and do not invoke privileged policy or status commands. This is
 a source-level interface contract; live mount acceptance is not claimed here.
+
+The optional policy entry `access_pattern` preserves the selected `private`,
+`shared-read`, or `shared-write` preset through save and reload. The service
+validates it against the actual grants and mount presentation; this field never
+grants access. The owner picker displays account names and marks the current
+user, while its persisted identity remains the Windows SID.
+
+Saved preferred letters are reserved across the machine within supported
+WinCommander mount workflows, including when a Vault is unmounted. Reservations
+come from the existing service-owned policy rather than a separate settings
+store. They do not create Windows drive mappings or reserve letters against
+external Windows tools.
 
 Secure Storage uses machine-wide unmanaged mounts while preserving existing
 filesystem permissions. Its authenticated service calls reuse

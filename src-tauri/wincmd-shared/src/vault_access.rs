@@ -877,6 +877,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn access_selection_round_trips_without_collapsing_shared_modes() {
+        let mut wire = serde_json::json!({
+            "id": "example", "label": "Example", "container_path": "D:\\example.ec",
+            "owner_account": "ExampleUser", "grants": [{"principal_name": "ExampleUser", "access": "write"}],
+            "mount": {"presentation": "machine", "preferred_letter": "J"}
+        });
+        let legacy: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(legacy.access_pattern, None);
+        for (label, pattern) in [
+            ("private", VaultAccessPattern::Private),
+            ("shared-read", VaultAccessPattern::SharedRead),
+            ("shared-write", VaultAccessPattern::SharedWrite),
+        ] {
+            wire["access_pattern"] = serde_json::json!(label);
+            let entry: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(entry.access_pattern, Some(pattern));
+            assert_eq!(serde_json::to_value(entry).unwrap()["access_pattern"], label);
+        }
+        wire["access_pattern"] = serde_json::json!("unsupported-mode");
+        assert!(serde_json::from_value::<VaultAccessEntry>(wire).is_err());
+    }
+
+    #[test]
+    fn unmounted_projection_preserves_preferred_letter_without_claiming_a_mount() {
+        let wire = serde_json::json!({
+            "entry_id": "example", "label": "Example", "access": "write", "presentation": "per-user",
+            "mount_state": "unmounted", "drive_letter": null, "preferred_letter": "J"
+        });
+        let entry: VaultAuthorizedEntry = serde_json::from_value(wire).unwrap();
+        assert_eq!(entry.drive_letter, None);
+        assert_eq!(entry.preferred_letter.as_deref(), Some("J"));
+        let encoded = serde_json::to_value(entry).unwrap();
+        assert!(encoded["drive_letter"].is_null());
+        assert_eq!(encoded["preferred_letter"], "J");
+    }
+
+    #[test]
     fn legacy_policy_wire_remains_compatible_when_owner_sid_is_absent() {
         let policy = VaultAccessPolicy {
             schema_version: VAULT_ACCESS_SCHEMA_VERSION,
