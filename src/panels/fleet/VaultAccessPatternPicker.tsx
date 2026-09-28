@@ -13,14 +13,16 @@ export default function VaultAccessPatternPicker({ value, onChange }: VaultAcces
   return (
     <fieldset className="vault-access-pattern-picker">
       <legend>Access pattern</legend>
-      <div className="vault-access-pattern-picker__options">
+      <div className="vault-access-pattern-picker__options" role="radiogroup" aria-label="Vault access pattern">
         {PATTERN_ORDER.map(pattern => {
           const definition = VAULT_ACCESS_PRESETS[pattern];
           return <div className={`vault-access-pattern-picker__choice${value === pattern ? " is-selected" : ""}`} key={pattern}>
             <button
               type="button"
               className="vault-access-pattern-picker__option"
-              aria-pressed={value === pattern}
+              role="radio"
+              aria-checked={value === pattern}
+              data-vault-access-preset={pattern}
               onClick={() => onChange(pattern)}
             >
               <strong>{definition.label}</strong>
