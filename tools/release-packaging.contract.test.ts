@@ -92,10 +92,15 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("configure-elevated-launchers.ps1");
     expect(hooks).toContain("WinCommander Elevated Launcher");
     expect(hooks).toContain("WinCommander Elevated Autostart");
+    expect(hooks).toContain('schtasks.exe /Delete /TN "WinCommander Autostart" /F');
     expect(elevatedLaunchers).toContain("$manualTaskName = 'WinCommander Elevated Launcher'");
     expect(elevatedLaunchers).toContain("$autostartTaskName = 'WinCommander Autostart'");
     expect(elevatedLaunchers).toContain("$obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'");
     expect(elevatedLaunchers).toContain("Register-LogonRouterTask");
+    expect(elevatedLaunchers).toContain("Remove-OwnedLegacyRunValues");
+    expect(elevatedLaunchers).toContain("WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run");
+    expect(elevatedLaunchers).toContain("$PreserveAutostartPreference");
+    expect(elevatedLaunchers).toContain("$Task.State -eq 'Disabled'");
     expect(elevatedLaunchers).toContain("-Argument '--autostart'");
     expect(elevatedLaunchers).not.toContain("--elevated-relaunch --autostart");
     expect(hooks).toContain("WC_SERVICE_STOP_TIMEOUT_SECONDS 135");
@@ -118,6 +123,7 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("NSIS_HOOK_PREINSTALL");
     expect(hooks).toContain("WinCommander-license_cache.upgrade-backup.json");
     expect(hooks).toContain("wincommander-migrate-legacy-user-launches.ps1");
+    expect(hooks).toContain("-PreserveAutostartPreference");
     expect(hooks).toContain("-SharedExecutable");
     expect(legacyLaunchMigration).toContain("ProfileList");
     expect(legacyLaunchMigration).toContain("wincommander-free.exe");
@@ -126,6 +132,9 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("file-search");
     expect(legacyLaunchMigration).toContain("HKEY_USERS");
     expect(legacyLaunchMigration).toContain("Join-Path $profile.Path 'Desktop'");
+    expect(legacyLaunchMigration).toContain("startupShortcutsRemoved");
+    expect(legacyLaunchMigration).toContain("Task Scheduler is now the one logon router");
+    expect(legacyLaunchMigration).toContain("$env:ProgramData 'Microsoft\\Windows\\Start Menu\\Programs\\Startup'");
     expect(legacyLaunchMigration).not.toContain("Remove-Item -LiteralPath $legacyRoot");
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");

@@ -40,7 +40,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Repair the machine-wide logon autostart task only when its identity or
 /// execution contract has drifted. A correct task is left untouched, avoiding
-/// a Scheduled Tasks write on every packaged launch.
+/// a Scheduled Tasks write on every packaged launch. A disabled canonical task
+/// is an explicit user choice and is never silently re-enabled by a manual app
+/// launch or update.
 #[cfg(windows)]
 #[tauri::command]
 pub fn ensure_autostart_task() -> Result<(), String> {
@@ -70,6 +72,7 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
         "$ErrorActionPreference='Stop'
 $task = Get-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue
 $needsRepair = $null -eq $task
+$disabledCanonical = $false
 if (-not $needsRepair) {{
   $action = @($task.Actions)
   $logonTrigger = @($task.Triggers | Where-Object {{ $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }})
@@ -77,7 +80,12 @@ if (-not $needsRepair) {{
   if ($groupSid -and $groupSid -notmatch '^S-1-') {{
     try {{ $groupSid = ([System.Security.Principal.NTAccount]$groupSid).Translate([System.Security.Principal.SecurityIdentifier]).Value }} catch {{ $groupSid = '' }}
   }}
-  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '{action_args}' -or $logonTrigger.Count -ne 1 -or $groupSid -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'Parallel' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+  # A disabled canonical task records the user's deliberate opt-out. Keep it
+  # disabled, but still clean competing legacy routes below.
+  $disabledCanonical = $task.State -eq 'Disabled'
+  if (-not $disabledCanonical) {{
+    $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '{action_args}' -or $logonTrigger.Count -ne 1 -or $groupSid -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'Parallel' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+  }}
 }}
 $staleTask = Get-ScheduledTask -TaskName '{stale_name}' -ErrorAction SilentlyContinue
 $obsoleteElevatedAutostart = Get-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -ErrorAction SilentlyContinue
@@ -86,11 +94,13 @@ $legacyRun = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\C
 if ($staleTask -or $obsoleteElevatedAutostart -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
 if ($needsRepair) {{
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {{ throw 'Autostart repair requires administrator approval; normal startup is still available.' }}
+if (-not $disabledCanonical) {{
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{action_args}'
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
 Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+}}
 Unregister-ScheduledTask -TaskName '{stale_name}' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'Sys Health Checker' -Confirm:$false -ErrorAction SilentlyContinue
@@ -151,8 +161,9 @@ pub fn ensure_autostart_task() -> Result<(), String> {
     Ok(())
 }
 
-/// Remove the autostart task (for a future "disable autostart" control; the
-/// Lockdown cascade already sweeps `*WinCommander*` tasks on self-destruct).
+/// Disable the canonical autostart task. Retaining its definition makes the
+/// user's opt-out durable: a later manual launch cannot mistake "absent" for
+/// "not installed" and silently turn autostart back on.
 #[cfg(windows)]
 #[tauri::command]
 pub fn remove_autostart_task() -> Result<(), String> {
@@ -160,8 +171,8 @@ pub fn remove_autostart_task() -> Result<(), String> {
     let normal_name_ps = task_name(false).replace('\'', "''");
     let covered_name_ps = task_name(true).replace('\'', "''");
     let script = format!(
-        "Unregister-ScheduledTask -TaskName '{normal}' -Confirm:$false -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName '{covered}' -Confirm:$false -ErrorAction SilentlyContinue",
+        "Disable-ScheduledTask -TaskName '{normal}' -ErrorAction SilentlyContinue | Out-Null
+Disable-ScheduledTask -TaskName '{covered}' -ErrorAction SilentlyContinue | Out-Null",
         normal = normal_name_ps,
         covered = covered_name_ps,
     );

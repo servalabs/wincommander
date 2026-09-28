@@ -67,7 +67,7 @@ trash = "5"
 # F-2 decoy file monitor — cross-platform filesystem watcher; uses
 # ReadDirectoryChangesW on Windows under the hood.
 notify = "8"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "=2.11.0"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 # F-1: Windows toast notifications for paste monitor detections — needed

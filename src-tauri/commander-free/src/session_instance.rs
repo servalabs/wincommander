@@ -176,6 +176,18 @@ pub fn acquire(cli_args: &[String]) -> bool {
         )
     };
 
+    if hmutex.is_null() {
+        crate::log_message_src(
+            "error",
+            "core",
+            &format!(
+                "[SessionInstance] CreateMutexW failed; refusing to create an unguarded GUI instance (error={})",
+                unsafe { GetLastError() }
+            ),
+        );
+        return false;
+    }
+
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         if crate::startup_elevation::should_handoff_existing_instance(cli_args) {
             unsafe { CloseHandle(hmutex) };
@@ -347,7 +359,11 @@ pub fn release() {
 /// liveness recovery path: a non-responsive primary is deliberately preserved.
 fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> bool {
     let handoff = ["--elevated-relaunch".to_string()];
-    let (delivered, primary_pid) = forward_args_with_liveness(sid, &handoff);
+    // At sign-in the normal router can acquire the mutex a little before the
+    // Tauri setup path creates its pipe listener.  Wait for that bounded
+    // readiness window instead of treating a slow cold start as a failed
+    // handoff and leaving a second elevation route to create a blank GUI.
+    let (delivered, primary_pid) = forward_args_with_attempts(sid, &handoff, 100);
     if !delivered {
         crate::log_message_src(
             "warn",
@@ -597,12 +613,17 @@ fn is_pid_alive(pid: u32) -> bool {
 /// Returns (delivered, stored_primary_pid).
 /// Delivered=false means the pipe never answered within ~3 000 ms.
 fn forward_args_with_liveness(sid: u32, args: &[String]) -> (bool, Option<u32>) {
+    forward_args_with_attempts(sid, args, 30)
+}
+
+fn forward_args_with_attempts(sid: u32, args: &[String], attempts: usize) -> (bool, Option<u32>) {
     use std::io::Write as _;
     let path = pipe_path(sid);
     let stored_pid = read_stored_primary_pid();
-    // KT: 30 × 100ms = 3 000ms so a busy-but-alive primary (e.g. loading a
-    // large dataset on startup) is not falsely declared dead.
-    for _ in 0..30 {
+    // Each attempt is 100ms. Ordinary forwards get 3 seconds; the controlled
+    // elevation handoff gets 10 seconds while the cold primary creates its
+    // listener. Both remain bounded and never replace a live pipe-silent app.
+    for _ in 0..attempts {
         match std::fs::OpenOptions::new().write(true).open(&path) {
             Ok(mut f) => {
                 let _ = f.write_all(args.join("|").as_bytes());

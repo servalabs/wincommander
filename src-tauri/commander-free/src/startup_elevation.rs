@@ -28,7 +28,12 @@ pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String]) -> bool {
         return false;
     }
 
-    !is_helper_launch(args)
+    // `--minimized` is the old Registry/Startup-folder background contract.
+    // It must never independently request elevation: if it survived an
+    // upgrade and fires beside the canonical `--autostart` task, an elevation
+    // request here can create a second launch race before either process owns
+    // the per-session mutex.  It is deliberately a quiet duplicate instead.
+    !is_helper_launch(args) && !is_legacy_background_launch(args)
 }
 
 fn is_helper_launch(args: &[String]) -> bool {
@@ -42,6 +47,10 @@ fn is_helper_launch(args: &[String]) -> bool {
 
 fn is_logon_router_launch(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--autostart")
+}
+
+fn is_legacy_background_launch(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--minimized") && !is_logon_router_launch(args)
 }
 
 fn should_continue_normal_logon(args: &[String], user_has_split_admin_token: bool) -> bool {
@@ -172,7 +181,7 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     // Never hand a dev/portable launch to an unrelated installed executable.
     // RunEx binds the task to this interactive session on multi-user machines.
     let task_script = std::env::current_exe().ok().map(|path| format!(
-        "$ErrorActionPreference='Stop'; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if ($d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0) {{ exit 1 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 1 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId; $null=$task.RunEx($null,4,$session,$null)",
+        "$ErrorActionPreference='Stop'; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0) {{ exit 1 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 1 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId; $null=$task.RunEx($null,4,$session,$null)",
         path.to_string_lossy().replace('\'', "''")
     ));
     let task_status = if !cfg!(debug_assertions) && current_user_has_split_admin_token() {
@@ -285,6 +294,10 @@ mod tests {
             false,
             &["app.exe".into(), "--autostart".into()]
         ));
+        assert!(!should_offer_startup_elevation(
+            false,
+            &["app.exe".into(), "--minimized".into()]
+        ));
         assert!(!should_offer_startup_elevation(true, &["app.exe".into()]));
     }
 
@@ -295,6 +308,15 @@ mod tests {
             "--autostart".into()
         ]));
         assert!(!is_logon_router_launch(&["app.exe".into()]));
+        assert!(is_legacy_background_launch(&[
+            "app.exe".into(),
+            "--minimized".into()
+        ]));
+        assert!(!is_legacy_background_launch(&[
+            "app.exe".into(),
+            "--autostart".into(),
+            "--minimized".into()
+        ]));
     }
 
     #[test]

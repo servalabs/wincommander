@@ -13,14 +13,15 @@ Invoke-Expression $function.Extent.Text
 $targetPath='C:\\Program Files\\WinCommander\\wincommander-free.exe'
 $group=([Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value
 function Fixture {
-  [pscustomobject]@{Principal=[pscustomobject]@{GroupId=$group;RunLevel='Highest'};Settings=[pscustomobject]@{MultipleInstances='Parallel'};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--elevated-relaunch'})}
+  [pscustomobject]@{State='Ready';Triggers=@();Principal=[pscustomobject]@{GroupId=$group;RunLevel='Highest'};Settings=[pscustomobject]@{MultipleInstances='Parallel'};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--elevated-relaunch'})}
 }
 Assert-TaskContract (Fixture) 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
 $sidFixture=Fixture; $sidFixture.Principal.GroupId='S-1-5-32-544'
 Assert-TaskContract $sidFixture 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
-foreach ($case in @('group','level','instances','path','arguments')) {
+foreach ($case in @('disabled','group','level','instances','path','arguments')) {
   $t=Fixture
   switch ($case) {
+    disabled { $t.State='Disabled' }
     group { $t.Principal.GroupId='S-1-5-32-545' }
     level { $t.Principal.RunLevel='Limited' }
     instances { $t.Settings.MultipleInstances='IgnoreNew' }

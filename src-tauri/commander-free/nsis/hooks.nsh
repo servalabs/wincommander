@@ -77,7 +77,11 @@ ${Using:StrFunc} UnStrStr
 !macro WC_CONFIGURE_ELEVATED_LAUNCHERS
   InitPluginsDir
   File /oname=$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1 "${WC_CONFIGURE_ELEVATED_LAUNCHERS}"
-  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe"'
+  ${If} $UpdateMode = 1
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
+  ${Else}
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe"'
+  ${EndIf}
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "elevated-launchers-configure" "$0" "$1"
@@ -345,6 +349,16 @@ ${Using:StrFunc} UnStrStr
   nsExec::ExecToStack 'schtasks.exe /Delete /TN "WinCommander Elevated Autostart" /F'
   Pop $0
   Pop $1
+
+  ; The normal router is retained across an in-place update so POSTINSTALL can
+  ; preserve the user's autostart preference. A real uninstall removes it.
+  ClearErrors
+  ${GetOptions} $CMDLINE "/UPDATE" $R7
+  ${If} ${Errors}
+    nsExec::ExecToStack 'schtasks.exe /Delete /TN "WinCommander Autostart" /F'
+    Pop $0
+    Pop $1
+  ${EndIf}
 
   ; Tauri marks an in-place replacement with /UPDATE. An update must retain
   ; every user and machine data file (preferences, encrypted settings, licence,

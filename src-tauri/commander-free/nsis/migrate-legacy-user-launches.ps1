@@ -29,7 +29,7 @@ $profiles = Get-ItemProperty -Path $profileList -ErrorAction Stop |
     Sort-Object -Property Path -Unique
 
 $shell = New-Object -ComObject WScript.Shell
-$summary = [ordered]@{ profiles = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; failures = 0 }
+$summary = [ordered]@{ profiles = 0; shortcutsUpdated = 0; startupShortcutsRemoved = 0; staleFilesRemoved = 0; failures = 0 }
 
 foreach ($profile in $profiles) {
     $summary.profiles++
@@ -46,7 +46,15 @@ foreach ($profile in $profiles) {
         try {
             Get-ChildItem -LiteralPath $root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
                 $shortcut = $shell.CreateShortcut($_.FullName)
-                if ([string]::Equals($shortcut.TargetPath, $legacyExe, [StringComparison]::OrdinalIgnoreCase)) {
+                if ($root -like '*\Programs\Startup' -and
+                    ([string]::Equals($shortcut.TargetPath, $legacyExe, [StringComparison]::OrdinalIgnoreCase) -or
+                     [string]::Equals($shortcut.TargetPath, $shared, [StringComparison]::OrdinalIgnoreCase))) {
+                    # Task Scheduler is now the one logon router. Do not
+                    # retarget an old Startup-folder shortcut into a second
+                    # route, but do not touch shortcuts to anything else.
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                    $summary.startupShortcutsRemoved++
+                } elseif ([string]::Equals($shortcut.TargetPath, $legacyExe, [StringComparison]::OrdinalIgnoreCase)) {
                     $shortcut.TargetPath = $shared
                     $shortcut.WorkingDirectory = Split-Path -Parent $shared
                     $shortcut.IconLocation = "$shared,0"
@@ -99,4 +107,22 @@ foreach ($profile in $profiles) {
     }
 }
 
-"WinCommander legacy launch migration: profiles=$($summary.profiles) shortcuts=$($summary.shortcutsUpdated) files=$($summary.staleFilesRemoved) failures=$($summary.failures)"
+# A machine-wide Startup folder is also a second logon route. It normally only
+# contains shortcuts to the shared Program Files payload, so remove exactly
+# those WinCommander links and leave every other vendor's startup item alone.
+$commonStartup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup'
+if (Test-Path -LiteralPath $commonStartup -PathType Container) {
+    try {
+        Get-ChildItem -LiteralPath $commonStartup -Filter '*.lnk' -File -Force -ErrorAction Stop | ForEach-Object {
+            $shortcut = $shell.CreateShortcut($_.FullName)
+            if ([string]::Equals($shortcut.TargetPath, $shared, [StringComparison]::OrdinalIgnoreCase)) {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+                $summary.startupShortcutsRemoved++
+            }
+        }
+    } catch {
+        $summary.failures++
+    }
+}
+
+"WinCommander legacy launch migration: profiles=$($summary.profiles) shortcuts=$($summary.shortcutsUpdated) startupShortcuts=$($summary.startupShortcutsRemoved) files=$($summary.staleFilesRemoved) failures=$($summary.failures)"

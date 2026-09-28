@@ -449,8 +449,11 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         // Tray and peek-hotkey reveals are the primary way a hidden app is
         // reopened. Match the normal startup experience instead of leaving a
         // small/restored window behind after an update relaunch.
-        let _ = window.maximize();
+        // A hidden WebView2 window must become visible before it is maximized.
+        // Windows can otherwise calculate its bounds against the full display
+        // instead of the work area, covering the taskbar on scaled desktops.
         let _ = window.show();
+        let _ = window.maximize();
         // A hide/show transition forces a new native visibility transition if
         // Windows still reports the HWND hidden after Tauri's show request.
         if !window.is_visible().unwrap_or(false) {
