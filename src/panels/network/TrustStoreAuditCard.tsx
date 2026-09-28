@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useMemo, useState } from "react";
+import { useTrustStoreAudit, type TrustCertificate } from "@/hooks/useTrustStoreAudit";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -7,27 +7,6 @@ import { Icon } from "../../components/ui/icon";
 import EmptyState from "../../components/shared/EmptyState";
 import { InfoPopover, InfoTip } from "./InfoTip";
 import { MaintenanceNotice, TableSkeleton } from "./MaintenanceNotice";
-
-type TrustCertificate = {
-  scope: string;
-  store: string;
-  thumbprint: string;
-  subject: string;
-  issuer: string;
-  serialNumber: string;
-  notBefore: string;
-  notAfter: string;
-  signatureAlgorithm: string;
-  publicKeyAlgorithm: string;
-  hasPrivateKey: boolean;
-  inWindowsAuthRoot: boolean;
-};
-
-type TrustStoreAudit = {
-  certificates: TrustCertificate[];
-  referenceAvailable: boolean;
-  windowsAuthRootCount: number;
-};
 
 type BaselineEntry = Pick<TrustCertificate, "scope" | "store" | "thumbprint" | "subject">;
 const BASELINE_KEY = "wincommander.trust-store-baseline.v1";
@@ -62,23 +41,9 @@ function simpleName(subject: string): string {
 }
 
 export function TrustStoreAuditCard() {
-  const [audit, setAudit] = useState<TrustStoreAudit | null>(null);
+  const { audit, busy, error, inspect } = useTrustStoreAudit();
   const [baseline, setBaseline] = useState<BaselineEntry[] | null>(() => loadBaseline());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
-
-  const inspect = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setAudit(await invoke<TrustStoreAudit>("trust_store_audit"));
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
 
   const roots = useMemo(
     () => (audit?.certificates ?? []).filter((cert) => cert.store === "Root"),

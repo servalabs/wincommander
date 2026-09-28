@@ -38,6 +38,9 @@ the backend and private component before execution.
   coverage, armed state, recent-event counts, cadence, stale/degraded health,
   unavailable services, and entitlement-locked capabilities.
 - Local security and application status surfaces.
+- Read-only trust-store audit for machine and current-user certificates, with a
+  locally saved baseline and Windows AuthRoot comparison. Differences are
+  review signals; they do not identify a certificate as malicious.
 - Local productivity view backed by the user's local ActivityWatch instance
   when installed and enabled.
 

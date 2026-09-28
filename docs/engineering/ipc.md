@@ -212,6 +212,7 @@ automations (that's v2, above).
 | `kill_mstsc_processes` | Free | Terminate active `mstsc` RDP client processes. |
 | `kill_privacy_shield_process` | Free | Terminate the Privacy Shield child process. |
 | `get_system_idle_seconds` | Free | Seconds since last user input (idle detection). |
+| `trust_store_audit` | Free | Read-only machine/current-user certificate inventory with a Windows AuthRoot reference and no trust-store mutations. |
 
 ### Privacy Shield quota (Free tier, 15 min/day)
 

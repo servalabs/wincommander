@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Network maintenance can inspect machine and current-user certificate stores,
+  compare roots with the Windows AuthRoot reference, and save a local baseline.
+  Differences are transparency signals, not malware findings; nothing is
+  removed or changed.
+
 - Secure Storage and Quick Mount now request machine-wide writable drives,
   preserve existing file permissions, and retain explicit read-only mounting.
   The service checks the caller's access to containers and keyfiles before
