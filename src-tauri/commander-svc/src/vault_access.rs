@@ -17,6 +17,8 @@ use wincmd_shared::vault_access::{
 
 #[cfg(windows)]
 use wincmd_shared::vault_access::VaultKnownPrincipal;
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
 
 const POLICY_FILE: &str = "vault-access-v1.json";
 const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
@@ -2134,6 +2136,58 @@ impl VaultAccessStore {
                     .flatten()
             })
             .unwrap_or_default()
+    }
+
+    /// Returns only whether a preferred letter is reserved by a *different*
+    /// managed container. The caller never receives the reserving Vault's
+    /// owner, path, label, or letter list.
+    pub fn reserved_letter_conflicts_with_container(
+        &self,
+        preferred_letter: &str,
+        container_identity: &str,
+    ) -> bool {
+        let requested = preferred_letter.trim().trim_end_matches(':');
+        let Ok(state) = self.state.lock() else { return true; };
+        let Some(active) = state.active.as_ref() else { return false; };
+        active.policy.entries.iter().any(|entry| {
+            entry.mount.preferred_letter.as_deref().is_some_and(|letter| {
+                letter.eq_ignore_ascii_case(requested)
+                    && !active.resolved.iter().any(|resolved| {
+                        resolved.id == entry.id
+                            && !resolved.identity.is_empty()
+                            && resolved.identity == container_identity
+                    })
+            })
+        })
+    }
+
+    /// Pick from the engine's ordinary high-to-low letter range while
+    /// excluding every durable Fleet reservation.  Availability is still
+    /// confirmed by the native engine at mount time; this helper's security
+    /// job is solely to ensure auto-selection cannot consume a saved Vault's
+    /// letter.
+    pub fn auto_pick_unreserved_letter(
+        &self,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        service_active_letters: &HashSet<String>,
+    ) -> Option<String> {
+        let state = self.state.lock().ok()?;
+        let reserved = state.active.as_ref().map(|active| {
+            active
+                .policy
+                .entries
+                .iter()
+                .filter_map(|entry| entry.mount.preferred_letter.as_deref())
+                .map(|letter| letter.to_ascii_uppercase())
+                .collect::<HashSet<_>>()
+        }).unwrap_or_default();
+        let mut occupied = occupied_logical_drive_letters()?;
+        let caller_occupied = with_caller_impersonation(caller_token, || {
+            occupied_logical_drive_letters().ok_or(VaultError::AclReadback)
+        }).ok()?;
+        occupied.extend(caller_occupied);
+        occupied.extend(service_active_letters.iter().cloned());
+        first_unreserved_letter(&reserved, &occupied)
     }
 
     /// The policy directory is already created and ACL-verified by the
@@ -4473,6 +4527,30 @@ fn valid_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn first_unreserved_letter(
+    reserved: &HashSet<String>,
+    occupied: &HashSet<String>,
+) -> Option<String> {
+    (b'D'..=b'Z')
+        .rev()
+        .map(|letter| (letter as char).to_string())
+        .find(|letter| !reserved.contains(letter) && !occupied.contains(letter))
+}
+
+fn occupied_logical_drive_letters() -> Option<HashSet<String>> {
+    #[cfg(windows)]
+    {
+        let mask = unsafe { GetLogicalDrives() };
+        if mask == 0 { return None; }
+        Some((0..26)
+            .filter(|bit| mask & (1 << bit) != 0)
+            .map(|bit| ((b'A' + bit) as char).to_string())
+            .collect::<HashSet<_>>())
+    }
+    #[cfg(not(windows))]
+    { Some(HashSet::new()) }
 }
 
 /// Stable, opaque, NetBIOS-safe service group name. The entry ID never
@@ -7058,6 +7136,7 @@ mod tests {
         second.id = "private".into();
         second.container_path = "C:\\vaults\\private.hc".into();
         second.mount.presentation = VaultPresentation::PerUser;
+        second.mount.preferred_letter = Some("W".into());
         second.grants.truncate(1);
         p.entries.push(second);
         assert_eq!(validate_policy(&p), Ok(()));
@@ -7082,6 +7161,71 @@ mod tests {
                 .access,
             VaultAccess::Write
         );
+    }
+
+    #[test]
+    fn auto_pick_skips_saved_fleet_reservations() {
+        let reserved = HashSet::from(["Z".to_owned(), "Y".to_owned()]);
+        assert_eq!(
+            first_unreserved_letter(&reserved, &HashSet::from(["X".to_owned()])),
+            Some("W".to_owned())
+        );
+        assert_eq!(
+            first_unreserved_letter(&HashSet::new(), &HashSet::new()),
+            Some("Z".to_owned())
+        );
+        let all = (b'D'..=b'Z').map(|letter| (letter as char).to_string()).collect();
+        assert_eq!(first_unreserved_letter(&all, &HashSet::new()), None);
+    }
+
+    #[test]
+    fn saved_letter_is_reserved_after_restart_but_not_against_its_own_container() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let first = store(Arc::clone(&files));
+        first.apply(policy(1, 0), 7).unwrap();
+        let identity = first.mount_plan("shared").unwrap().3;
+        assert!(first.reserved_letter_conflicts_with_container("V", "different-container"));
+        assert!(first.reserved_letter_conflicts_with_container("v:", "different-container"));
+        assert!(!first.reserved_letter_conflicts_with_container("V", &identity));
+        assert!(!first.reserved_letter_conflicts_with_container("W", "different-container"));
+        drop(first);
+        let restarted = store(files);
+        restarted.load_at_startup();
+        assert!(restarted.reserved_letter_conflicts_with_container("V", "different-container"));
+        assert!(!restarted.reserved_letter_conflicts_with_container("V", &identity));
+    }
+
+    #[test]
+    fn different_owners_cannot_reserve_the_same_letter_for_private_or_shared_vaults() {
+        for presentation in [VaultPresentation::PerUser, VaultPresentation::Machine] {
+            let mut requested = policy(1, 0);
+            requested.entries[0].primary_owner_sid = Some("S-1-5-21-1-2-3-1001".into());
+            let mut second = requested.entries[0].clone();
+            second.id = "other-vault".into();
+            second.container_path = "C:\\vaults\\other.hc".into();
+            second.primary_owner_sid = Some("S-1-5-21-1-2-3-1002".into());
+            second.owner_account = "OtherAdmin".into();
+            second.grants[0].principal_name = "OtherAdmin".into();
+            second.mount.presentation = presentation;
+            second.mount.preferred_letter = Some("v".into());
+            if presentation == VaultPresentation::PerUser { second.grants.truncate(1); }
+            requested.entries.push(second);
+            assert_eq!(validate_policy(&requested), Err(VaultError::Validation));
+            requested.entries[1].mount.preferred_letter = Some("W".into());
+            assert_eq!(validate_policy(&requested), Ok(()));
+        }
+    }
+
+    #[test]
+    fn access_pattern_cannot_claim_write_while_native_grants_are_read_only() {
+        use wincmd_shared::vault_access::VaultAccessPattern;
+        let mut requested = policy(1, 0);
+        requested.entries[0].access_pattern = Some(VaultAccessPattern::SharedWrite);
+        assert_eq!(validate_policy(&requested), Ok(()));
+        requested.entries[0].grants[1].access = VaultAccess::Read;
+        assert_eq!(validate_policy(&requested), Err(VaultError::Validation));
+        requested.entries[0].access_pattern = Some(VaultAccessPattern::SharedRead);
+        assert_eq!(validate_policy(&requested), Ok(()));
     }
 
     #[test]
@@ -7148,6 +7292,7 @@ mod tests {
         private.id = "private".into();
         private.container_path = "C:\\private-vault\\private.hc".into();
         private.mount.presentation = VaultPresentation::PerUser;
+        private.mount.preferred_letter = Some("W".into());
         private.grants.truncate(1);
         requested.entries.push(private);
 

@@ -566,6 +566,15 @@ impl VaultMountBroker {
             request.zeroize_secrets();
             return Err(VaultMountReason::InvalidRequest);
         }
+        request.preferred_letter = match self.select_mount_letter(
+            store, request.preferred_letter.as_deref(), &record.container_identity, caller_token,
+        ) {
+            Ok(letter) => Some(letter),
+            Err(reason) => {
+                request.zeroize_secrets();
+                return Err(reason);
+            }
+        };
         if let Some(existing) = self
             .active
             .lock()
@@ -810,6 +819,15 @@ impl VaultMountBroker {
             zeroize_mount_secrets(password, hidden_protection_password);
             return denied(entry_id, VaultMountReason::NotAuthorized);
         }
+        let preferred_letter = match self.select_mount_letter(
+            store, preferred_letter.as_deref(), &container_identity, caller_token,
+        ) {
+            Ok(letter) => Some(letter),
+            Err(reason) => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(entry_id, Some(presentation), reason);
+            }
+        };
         let caller_sid = caller_sid.to_owned();
         if let Some(existing) = self
             .active
@@ -1263,6 +1281,30 @@ impl VaultMountBroker {
             .and_then(|active| active.get(entry_id).cloned())
             .map(|mount| (VaultMountState::Mounted, Some(mount.drive_letter)))
             .unwrap_or((VaultMountState::Unmounted, None))
+    }
+
+    fn select_mount_letter(
+        &self,
+        store: &VaultAccessStore,
+        preferred_letter: Option<&str>,
+        container_identity: &str,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<String, VaultMountReason> {
+        let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
+        let letter = match preferred_letter {
+            Some(letter) => letter.to_owned(),
+            None => {
+                let occupied = self.active.lock().map_err(|_| unavailable)?
+                    .values().map(|mount| mount.drive_letter.trim_end_matches(':').to_ascii_uppercase())
+                    .collect::<HashSet<_>>();
+                store.auto_pick_unreserved_letter(caller_token, &occupied).ok_or(unavailable)?
+            }
+        };
+        // A generic refusal discloses no identity or details of the reserving Vault.
+        if store.reserved_letter_conflicts_with_container(&letter, container_identity) {
+            return Err(unavailable);
+        }
+        Ok(letter)
     }
 
     pub(crate) fn personal_mounts_for_caller(
@@ -2593,6 +2635,44 @@ mod tests {
         broker.dismount_session(&store, 7);
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
         assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn ordinary_mount_cannot_take_a_saved_letter_and_owner_identity_is_still_checked() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let policy = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "policy_id": "reserved", "version": 1, "expected_previous_version": 0,
+            "entries": [{ "id": "reserved", "label": "Reserved", "container_path": "C:\\vaults\\reserved.hc",
+                "owner_account": "Owner", "grants": [{"principal_name": "Owner", "access": "write"}],
+                "mount": {"presentation": "per-user", "preferred_letter": "P"} }]
+        })).unwrap();
+        store.apply(policy, 1).unwrap();
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let mut record = personal_record();
+        record.container_identity = "another-file".into();
+        let mut request = personal_request();
+        assert_eq!(broker.mount_personal_authorized(
+            41, &store, &record, &mut request, std::ptr::null_mut(), 7, &record.owner_sid, (0, 0),
+        ), Err(VaultMountReason::EngineDriveLetterUnavailable));
+        assert!(request.password.is_empty());
+        assert_eq!(events.lock().unwrap().mounted, 0, "reserved request must never reach the engine");
+
+        record.container_identity = "v:1:i:2".into();
+        let mut request = personal_request();
+        assert_eq!(broker.mount_personal_authorized(
+            42, &store, &record, &mut request, std::ptr::null_mut(), 7, "another-user", (0, 0),
+        ), Err(VaultMountReason::NotAuthorized));
+        assert_eq!(events.lock().unwrap().mounted, 0);
+
+        let mut request = personal_request();
+        assert_eq!(broker.mount_personal_authorized(
+            43, &store, &record, &mut request, std::ptr::null_mut(), 7, &record.owner_sid, (0, 0),
+        ), Ok(("P:".into(), 12, true)));
+        assert_eq!(events.lock().unwrap().mounted, 1);
     }
 
     #[test]
