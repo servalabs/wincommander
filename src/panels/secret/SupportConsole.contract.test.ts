@@ -17,6 +17,8 @@ describe("Diagnostic Center privacy boundary", () => {
     expect(source).toContain("sanitizeLegacyDiagnosticMessage(record.message");
     expect(source).toContain("Copy safe text");
     expect(source).toContain("aria-label=\"Unified diagnostic timeline\"");
+    expect(source).toContain("function uniqueTimeline");
+    expect(source).toContain("const byId = new Map<string, TimelineEvent>()");
     expect(source).toContain('label: "Remote Desktop"');
     expect(source).toContain("Remote Desktop · ${action}");
     expect(source).toContain('event.feature === featureFilter');

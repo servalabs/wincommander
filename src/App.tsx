@@ -17,7 +17,6 @@ import { listen } from "@tauri-apps/api/event";
 import { motion, MotionConfig } from "framer-motion";
 import { showError, showInfo, showWarning } from "./utils/toast";
 import { reportSettingsWriteFailure } from "./lib/settingsWriteRecovery";
-import { shouldAllowDeveloperContextMenu } from "./lib/developerContextMenu";
 import useMotionPreference, { MotionPreferenceProvider } from "./hooks/useMotionPreference";
 import useLowPerformanceMode from "./hooks/useLowPerformanceMode";
 import { panelVariants, panelTransition } from "./components/shared/motion";
@@ -201,6 +200,14 @@ function AppContent({ splashDone, onSplashComplete }: {
   onSplashComplete: () => void;
 }) {
   const tourActive = useTourActive();
+  // Chromium's stock menu exposes developer tooling in packaged builds. Keep
+  // it available to the dev server, but suppress the browser menu in releases.
+  useEffect(() => {
+    if (import.meta.env.DEV) return;
+    const suppressBrowserContextMenu = (event: MouseEvent) => event.preventDefault();
+    window.addEventListener("contextmenu", suppressBrowserContextMenu);
+    return () => window.removeEventListener("contextmenu", suppressBrowserContextMenu);
+  }, []);
   const [activePanel, setActivePanel] = useState<PanelId>(() => {
     if (!import.meta.env.DEV) return "dashboard";
     const requested = new URLSearchParams(window.location.search).get("panel") as PanelId | null;
@@ -232,30 +239,6 @@ function AppContent({ splashDone, onSplashComplete }: {
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
   const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupError, retryStartup, startupDataState, runStartupJob, systemInfo } = appState;
-  // `import.meta.env.DEV` describes Vite, not the shipped native binary. The
-  // Rust sentinel is the authority so a debug web bundle cannot weaken a
-  // release build's context-menu posture.
-  const [isNativeDebugBuild, setIsNativeDebugBuild] = useState(false);
-  useEffect(() => {
-    let active = true;
-    void invoke<boolean>("is_dev_build")
-      .then((value) => { if (active) setIsNativeDebugBuild(value === true); })
-      .catch(() => { if (active) setIsNativeDebugBuild(false); });
-    return () => { active = false; };
-  }, []);
-  const developerContextMenuAllowed = shouldAllowDeveloperContextMenu(
-    isNativeDebugBuild,
-    appSettings?.app?.developerContextMenuEnabled,
-  );
-  // Block first, then allow only after the native debug check AND this user's
-  // explicit Diagnostics opt-in both succeed. This is intentionally capture
-  // phase so child components cannot accidentally re-expose Chromium's menu.
-  useEffect(() => {
-    if (developerContextMenuAllowed) return;
-    const suppressBrowserContextMenu = (event: MouseEvent) => event.preventDefault();
-    window.addEventListener("contextmenu", suppressBrowserContextMenu, true);
-    return () => window.removeEventListener("contextmenu", suppressBrowserContextMenu, true);
-  }, [developerContextMenuAllowed]);
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   const [processElevated, setProcessElevated] = useState<boolean | null>(null);
@@ -594,6 +577,9 @@ function AppContent({ splashDone, onSplashComplete }: {
   const rdpIdleWarningSeconds = Math.max(5, appSettings?.ideal?.privacy?.tracking?.rdpIdleWarningSeconds ?? 5);
   const rdpClearCache    = appSettings?.ideal?.privacy?.tracking?.rdpClearCacheOnDisconnect ?? true;
   const rdpRemoveCreds   = appSettings?.ideal?.privacy?.tracking?.rdpRemoveCredsOnDisconnect ?? false;
+  // One opt-in covers the safe RDP timeline for outgoing and incoming
+  // monitors. It never enables or changes an RDP protection action.
+  const rdpDiagnosticLoggingEnabled = appSettings?.ideal?.privacy?.tracking?.rdpSaveLog === true;
   const rdpDismountVaultsCfg = appSettings?.ideal?.privacy?.tracking?.rdpDismountVaultsOnDisconnect ?? false;
   const rdpIncomingDismountCfg = appSettings?.ideal?.tweaks?.rdp?.incomingDismountOnEmpty ?? false;
   const rdpIncomingSignOffOnDisconnectCfg = appSettings?.ideal?.tweaks?.rdp?.incomingSignOffOnDisconnect ?? false;
@@ -610,7 +596,7 @@ function AppContent({ splashDone, onSplashComplete }: {
     rdpIdleWarningSeconds,
     rdpClearCache,
     rdpRemoveCreds,
-    false,
+    rdpDiagnosticLoggingEnabled,
     rdpDismountVaultsCfg,
     rdpIdleDisabledReason,
   );
@@ -624,8 +610,14 @@ function AppContent({ splashDone, onSplashComplete }: {
     hasPaid && rdpIncomingIdleEnabledCfg && (rdpIncomingDismountCfg || rdpIncomingSignOffOnDisconnectCfg),
     rdpIncomingDismountCfg,
     rdpIncomingSignOffOnDisconnectCfg,
+    rdpDiagnosticLoggingEnabled,
   );
-  useRdpIncomingIdleSignout(hasPaid && rdpIncomingIdleEnabledCfg, rdpIncomingIdleSeconds, rdpIncomingDismountCfg);
+  useRdpIncomingIdleSignout(
+    hasPaid && rdpIncomingIdleEnabledCfg,
+    rdpIncomingIdleSeconds,
+    rdpIncomingDismountCfg,
+    rdpDiagnosticLoggingEnabled,
+  );
 
   useEffect(() => {
     console.log("[RdpIdle] Gate", {

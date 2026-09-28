@@ -23,12 +23,12 @@
  * there, so opening WinCommander after walking away can't trigger an immediate
  * kill.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { clearCommand } from "../lib/commandIds";
 import { executeBackendCommand } from "./useBackend";
-import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 5_000; // PowerShell: is mstsc running? (rdpOpen + remote hosts)
 const TICK_MS = 1_000; // native: system-wide idle seconds
@@ -47,7 +47,7 @@ export default function useRdpIdleDisconnect(
   warningSeconds: number = 5,
   clearCacheOnDisconnect: boolean = false,
   removeCredsOnDisconnect: boolean = false,
-  saveLog: boolean = false,
+  diagnosticLoggingEnabled: boolean = false,
   dismountVaultsOnDisconnect: boolean = false,
   disabledReason: string = "disabled",
 ): RdpIdleState {
@@ -63,6 +63,10 @@ export default function useRdpIdleDisconnect(
   // re-anchored whenever the native idle drops (i.e. the user did something).
   const baselineIdleRef = useRef(-1);
   const effectiveWarningSeconds = Math.max(5, warningSeconds || 5);
+  const recordRdpDiagnostic = useMemo(
+    () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
+    [diagnosticLoggingEnabled],
+  );
 
   const [seconds, setSeconds] = useState(0);
   const [warningActive, setWarning] = useState(false);
@@ -336,7 +340,7 @@ export default function useRdpIdleDisconnect(
           if (removeCredsOnDisconnect || clearCacheOnDisconnect) {
             executeBackendCommand(clearCommand("RDPPasswords"), {}).catch(() => {});
           }
-          if (saveLog) {
+          if (diagnosticLoggingEnabled) {
             console.info("[RdpIdle] Disconnect logged at", new Date().toISOString());
           }
         }
@@ -358,10 +362,11 @@ export default function useRdpIdleDisconnect(
     effectiveWarningSeconds,
     clearCacheOnDisconnect,
     removeCredsOnDisconnect,
-    saveLog,
+    diagnosticLoggingEnabled,
     dismountVaultsOnDisconnect,
     disabledReason,
     dropAlwaysOnTop,
+    recordRdpDiagnostic,
   ]);
 
   return {

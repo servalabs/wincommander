@@ -24,10 +24,10 @@
  * post-sign-off dismount (handled by useRdpIncomingDismount while the app is
  * still alive) could never run for the app's own session.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
 import { showError } from "../utils/toast";
-import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -51,6 +51,7 @@ export default function useRdpIncomingIdleSignout(
   enabled: boolean,
   timeoutSeconds: number,
   dismountOnEmpty: boolean = false,
+  diagnosticLoggingEnabled: boolean = false,
 ) {
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
@@ -58,6 +59,10 @@ export default function useRdpIncomingIdleSignout(
   // Sessions we've already issued a logoff for — avoids re-firing every poll
   // while the session winds down. Entries are cleared once the session is gone.
   const signedOffRef = useRef<Set<number>>(new Set());
+  const recordRdpDiagnostic = useMemo(
+    () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
+    [diagnosticLoggingEnabled],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -208,5 +213,5 @@ export default function useRdpIncomingIdleSignout(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, timeoutSeconds, dismountOnEmpty]);
+  }, [enabled, timeoutSeconds, dismountOnEmpty, recordRdpDiagnostic]);
 }

@@ -27,9 +27,9 @@
  * attended session, so a mislabelled STATE can never cause a premature dismount
  * while a user is still connected.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
-import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
+import { beginRdpOperation, createRdpDiagnosticRecorder } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -55,12 +55,17 @@ export default function useRdpIncomingDismount(
   enabled: boolean,
   dismountOnEmpty: boolean = true,
   signOffOnDisconnect: boolean = false,
+  diagnosticLoggingEnabled: boolean = false,
 ) {
   const mountedRef = useRef(true);
   const prevAttendedRef = useRef<number | null>(null);
   const prevTotalRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const signOffInFlightRef = useRef<Set<number>>(new Set());
+  const recordRdpDiagnostic = useMemo(
+    () => createRdpDiagnosticRecorder(diagnosticLoggingEnabled),
+    [diagnosticLoggingEnabled],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -193,5 +198,5 @@ export default function useRdpIncomingDismount(
     poll();
     const timer = setInterval(poll, POLL_MS);
     return () => clearInterval(timer);
-  }, [enabled, dismountOnEmpty, signOffOnDisconnect]);
+  }, [enabled, dismountOnEmpty, signOffOnDisconnect, recordRdpDiagnostic]);
 }

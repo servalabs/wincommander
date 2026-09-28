@@ -101,6 +101,20 @@ function legacyTimelineEvent(record: LegacyRecord, index: number): TimelineEvent
   };
 }
 
+/**
+ * Event ids are the diagnostic-store identity. A storage recovery can surface
+ * the same desktop event more than once; keep the newest copy so React keys
+ * remain unique and the timeline does not imply two separate incidents.
+ */
+function uniqueTimeline(events: TimelineEvent[]): TimelineEvent[] {
+  const byId = new Map<string, TimelineEvent>();
+  for (const event of events) {
+    const existing = byId.get(event.id);
+    if (!existing || event.occurredAt > existing.occurredAt) byId.set(event.id, event);
+  }
+  return [...byId.values()].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
+}
+
 function copyPlaintext(events: TimelineEvent[]): string {
   return events.map((event) => [
     timestamp(event.occurredAt),
@@ -120,10 +134,10 @@ export default function SupportConsole() {
   const [featureFilter, setFeatureFilter] = useState<FeatureFilter>("all");
   const { structuredEvents, legacyRecords, health, loading, unavailable, refresh } = useDiagnosticCenter();
 
-  const timeline = useMemo(() => [
+  const timeline = useMemo(() => uniqueTimeline([
     ...structuredEvents.map((event) => structuredTimelineEvent(event, event.source ?? "desktop")),
     ...legacyRecords.map(legacyTimelineEvent),
-  ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)), [legacyRecords, structuredEvents]);
+  ]), [legacyRecords, structuredEvents]);
 
   const filteredTimeline = useMemo(() => timeline.filter((event) => (
     (sourceFilter === "all" || event.source === sourceFilter)
