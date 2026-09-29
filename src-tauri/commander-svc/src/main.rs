@@ -61,6 +61,9 @@ mod vault_access;
 mod vault_mount;
 
 #[cfg(windows)]
+mod vault_drive_letters;
+
+#[cfg(windows)]
 mod pipe;
 #[cfg(windows)]
 mod pipe_transport;

@@ -749,6 +749,12 @@ fn reason_fields(
             true,
             "select_another_drive_letter",
         ),
+        Some(VaultMountReason::AlreadyMounted) => (
+            "VLT.MOUNT.ALREADY_MOUNTED",
+            DiagnosticSeverity::Warn,
+            false,
+            "open_existing_drive",
+        ),
         Some(VaultMountReason::EngineMountFailed) => (
             "VLT.MOUNT.ENGINE_FAILED",
             DiagnosticSeverity::Error,

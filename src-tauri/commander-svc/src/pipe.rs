@@ -684,6 +684,9 @@ async fn dispatch_verb(
         "svc.vault.capabilities" => {
             Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
         }
+        "svc.vault.drive_letters" => {
+            handle_vault_drive_letters(vault_access, vault_mount, args, peer, caller_privileged)
+        }
         "svc.vault.reconcile_access_groups" => {
             handle_vault_reconcile_access_groups(vault_access, vault_mount, args)
         }
@@ -1038,10 +1041,92 @@ fn handle_vault_apply_owner_fragment(
         // identity/ACL read-back and atomic persistence.
         validate_vault_apply_version(vault_access, &policy)?;
         validate_vault_owner_mutation(vault_access, &policy, caller_sid, caller_privileged)?;
+        let occupied = vault_mount.occupied_letters_locked().map_err(|_| {
+            VerbError::new(
+                "vault_drive_letters_unavailable",
+                "Windows drive availability could not be checked. Refresh and try again.",
+            )
+        })?;
+        validate_policy_drive_letters(&policy, vault_access.policy().as_ref(), &occupied)?;
         vault_access
             .preflight_apply(policy.clone())
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
         handle_vault_apply(vault_access, policy)
+    })
+}
+
+fn validate_policy_drive_letters(
+    policy: &wincmd_shared::vault_access::VaultAccessPolicy,
+    previous: Option<&wincmd_shared::vault_access::VaultAccessPolicy>,
+    occupied: &HashSet<String>,
+) -> Result<(), VerbError> {
+    if policy
+        .entries
+        .iter()
+        .filter(|entry| {
+            !previous.is_some_and(|policy| policy.entries.iter().any(|old| old == *entry))
+        })
+        .filter_map(|entry| entry.mount.preferred_letter.as_ref())
+        .any(|letter| occupied.contains(&letter.to_ascii_uppercase()))
+    {
+        return Err(VerbError::new("vault_engine_drive_letter_unavailable",
+            "A selected drive letter is already in use on this PC. Choose a free letter before saving."));
+    }
+    Ok(())
+}
+
+fn handle_vault_drive_letters(
+    store: &VaultAccessStore,
+    broker: &VaultMountBroker,
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+    caller_privileged: bool,
+) -> Result<serde_json::Value, VerbError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Query {
+        exclude_entry_id: Option<String>,
+    }
+    let query: Query = serde_json::from_value(args).map_err(|_| {
+        VerbError::new(
+            "vault_validation_failed",
+            "drive availability request is invalid",
+        )
+    })?;
+    let peer = require_personal_mount_peer(peer)?;
+    broker.with_exclusive_operation(|| {
+        let mut exclude_entry_id = None;
+        if let Some(entry_id) = query.exclude_entry_id.as_deref() {
+            if !valid_vault_entry_id(entry_id) {
+                return Err(VerbError::new(
+                    "vault_validation_failed",
+                    "drive availability request is invalid",
+                ));
+            }
+            let projection = if caller_privileged {
+                store.administrator_projection()
+            } else {
+                store.caller_projection(peer.caller_sid())
+            };
+            // A new draft has no reservation. Unknown and foreign opaque IDs both
+            // exclude nothing, so this query cannot reveal whether either exists.
+            if projection
+                .entries
+                .iter()
+                .any(|entry| entry.entry.id == entry_id)
+            {
+                exclude_entry_id = Some(entry_id);
+            }
+        }
+        let letters = broker
+            .unavailable_letters_locked(store, exclude_entry_id)
+            .map_err(|_| {
+                VerbError::new(
+                    "vault_drive_letters_unavailable",
+                    "Windows drive availability could not be checked. Refresh and try again.",
+                )
+            })?;
+        Ok(serde_json::json!({ "unavailable_letters": letters }))
     })
 }
 
@@ -3809,6 +3894,24 @@ mod tests {
                 "mount": { "presentation": "per-user", "preferred_letter": "V" }
             }]
         })
+    }
+
+    #[test]
+    fn policy_save_rejects_an_occupied_letter_but_retains_unedited_reservations() {
+        let mut policy = prepare_vault_apply_policy(valid_vault_policy_args()).unwrap();
+        let occupied = HashSet::from(["V".to_owned()]);
+        assert_eq!(
+            validate_policy_drive_letters(&policy, None, &occupied)
+                .unwrap_err()
+                .kind,
+            "vault_engine_drive_letter_unavailable"
+        );
+        let previous = policy.clone();
+        assert!(validate_policy_drive_letters(&policy, Some(&previous), &occupied).is_ok());
+        policy.entries[0].label = "Changed label".into();
+        assert!(validate_policy_drive_letters(&policy, Some(&previous), &occupied).is_err());
+        policy.entries[0].mount.preferred_letter = Some("W".into());
+        assert!(validate_policy_drive_letters(&policy, Some(&previous), &occupied).is_ok());
     }
 
     fn removal_test_policy() -> wincmd_shared::vault_access::VaultAccessPolicy {

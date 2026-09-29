@@ -17,8 +17,6 @@ use wincmd_shared::vault_access::{
 
 #[cfg(windows)]
 use wincmd_shared::vault_access::VaultKnownPrincipal;
-#[cfg(windows)]
-use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
 
 const POLICY_FILE: &str = "vault-access-v1.json";
 const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
@@ -2176,28 +2174,43 @@ impl VaultAccessStore {
     /// confirmed by the native engine at mount time; this helper's security
     /// job is solely to ensure auto-selection cannot consume a saved Vault's
     /// letter.
-    pub fn auto_pick_unreserved_letter(
-        &self,
-        caller_token: windows_sys::Win32::Foundation::HANDLE,
-        service_active_letters: &HashSet<String>,
-    ) -> Option<String> {
+    pub fn auto_pick_unreserved_letter(&self, occupied: &HashSet<String>) -> Option<String> {
         let state = self.state.lock().ok()?;
-        let reserved = state.active.as_ref().map(|active| {
-            active
-                .policy
-                .entries
-                .iter()
-                .filter_map(|entry| entry.mount.preferred_letter.as_deref())
-                .map(|letter| letter.to_ascii_uppercase())
-                .collect::<HashSet<_>>()
-        }).unwrap_or_default();
-        let mut occupied = occupied_logical_drive_letters()?;
-        let caller_occupied = with_caller_impersonation(caller_token, || {
-            occupied_logical_drive_letters().ok_or(VaultError::AclReadback)
-        }).ok()?;
-        occupied.extend(caller_occupied);
-        occupied.extend(service_active_letters.iter().cloned());
-        first_unreserved_letter(&reserved, &occupied)
+        let reserved = state
+            .active
+            .as_ref()
+            .map(|active| {
+                active
+                    .policy
+                    .entries
+                    .iter()
+                    .filter_map(|entry| entry.mount.preferred_letter.as_deref())
+                    .map(|letter| letter.to_ascii_uppercase())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        first_unreserved_letter(&reserved, occupied)
+    }
+
+    pub(crate) fn reserved_letters(
+        &self,
+        exclude_entry_id: Option<&str>,
+    ) -> Result<HashSet<String>, VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        Ok(state
+            .active
+            .as_ref()
+            .map(|active| {
+                active
+                    .policy
+                    .entries
+                    .iter()
+                    .filter(|entry| Some(entry.id.as_str()) != exclude_entry_id)
+                    .filter_map(|entry| entry.mount.preferred_letter.as_ref())
+                    .map(|letter| letter.to_ascii_uppercase())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// The policy directory is already created and ACL-verified by the
@@ -4517,17 +4530,32 @@ fn access_pattern_matches_policy(entry: &VaultAccessEntry) -> bool {
         grant.principal_name.trim().eq_ignore_ascii_case(owner)
     };
     match pattern {
-        VaultAccessPattern::Private => entry.mount.presentation == VaultPresentation::PerUser
-            && entry.grants.len() == 1
-            && owner_grant(&entry.grants[0])
-            && entry.grants[0].access == VaultAccess::Write,
-        VaultAccessPattern::SharedRead => entry.mount.presentation == VaultPresentation::Machine
-            && entry.grants.len() >= 2
-            && entry.grants.iter().any(|grant| owner_grant(grant) && grant.access == VaultAccess::Write)
-            && entry.grants.iter().all(|grant| owner_grant(grant) || grant.access == VaultAccess::Read),
-        VaultAccessPattern::SharedWrite => entry.mount.presentation == VaultPresentation::Machine
-            && entry.grants.len() >= 2
-            && entry.grants.iter().all(|grant| grant.access == VaultAccess::Write),
+        VaultAccessPattern::Private => {
+            entry.mount.presentation == VaultPresentation::PerUser
+                && entry.grants.len() == 1
+                && owner_grant(&entry.grants[0])
+                && entry.grants[0].access == VaultAccess::Write
+        }
+        VaultAccessPattern::SharedRead => {
+            entry.mount.presentation == VaultPresentation::Machine
+                && entry.grants.len() >= 2
+                && entry
+                    .grants
+                    .iter()
+                    .any(|grant| owner_grant(grant) && grant.access == VaultAccess::Write)
+                && entry
+                    .grants
+                    .iter()
+                    .all(|grant| owner_grant(grant) || grant.access == VaultAccess::Read)
+        }
+        VaultAccessPattern::SharedWrite => {
+            entry.mount.presentation == VaultPresentation::Machine
+                && entry.grants.len() >= 2
+                && entry
+                    .grants
+                    .iter()
+                    .all(|grant| grant.access == VaultAccess::Write)
+        }
     }
 }
 
@@ -4547,20 +4575,6 @@ fn first_unreserved_letter(
         .rev()
         .map(|letter| (letter as char).to_string())
         .find(|letter| !reserved.contains(letter) && !occupied.contains(letter))
-}
-
-fn occupied_logical_drive_letters() -> Option<HashSet<String>> {
-    #[cfg(windows)]
-    {
-        let mask = unsafe { GetLogicalDrives() };
-        if mask == 0 { return None; }
-        Some((0..26)
-            .filter(|bit| mask & (1 << bit) != 0)
-            .map(|bit| ((b'A' + bit) as char).to_string())
-            .collect::<HashSet<_>>())
-    }
-    #[cfg(not(windows))]
-    { Some(HashSet::new()) }
 }
 
 /// Stable, opaque, NetBIOS-safe service group name. The entry ID never

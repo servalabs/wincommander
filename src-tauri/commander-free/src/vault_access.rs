@@ -21,6 +21,7 @@ const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
+const DRIVE_LETTERS: &str = "svc.vault.drive_letters";
 const LIST_PRINCIPALS: &str = "svc.vault.list_principals";
 const CAPABILITIES: &str = "svc.vault.capabilities";
 const RECONCILE_ACCESS_GROUPS: &str = "svc.vault.reconcile_access_groups";
@@ -469,6 +470,40 @@ pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
 }
 
+fn available_drive_letters(response: Value) -> Result<Value, String> {
+    let unavailable = response
+        .get("unavailable_letters")
+        .and_then(Value::as_array)
+        .ok_or("The Vault service could not verify free drive letters. Refresh and try again.")?;
+    let mut occupied = std::collections::BTreeSet::new();
+    for item in unavailable {
+        let letter = item.as_str().ok_or("Invalid drive availability response")?;
+        if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
+            return Err("Invalid drive availability response".into());
+        }
+        occupied.insert(letter.as_bytes()[0]);
+    }
+    let letters: Vec<String> = (b'D'..=b'Z')
+        .filter(|letter| !occupied.contains(letter))
+        .map(|letter| (letter as char).to_string())
+        .collect();
+    Ok(json!({ "letters": letters }))
+}
+
+/// The service aggregates machine/session drives and saved policy reservations.
+/// An exclusion is an opaque entry ID; the service authorizes it, never the UI.
+#[tauri::command]
+pub async fn get_vault_available_drive_letters(
+    exclude_entry_id: Option<String>,
+) -> Result<Value, String> {
+    let response = crate::svc_client::call(
+        DRIVE_LETTERS,
+        json!({ "exclude_entry_id": exclude_entry_id }),
+    )
+    .await?;
+    available_drive_letters(response)
+}
+
 /// Applies an owner-scoped fragment to the one service-owned Fleet Vault
 /// policy.  The service authenticates the caller SID and merges only that
 /// owner's entries; a renderer cannot remove another owner's entry by
@@ -564,11 +599,45 @@ mod tests {
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
+        assert_eq!(DRIVE_LETTERS, "svc.vault.drive_letters");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
         assert_eq!(RECONCILE_ACCESS_GROUPS, "svc.vault.reconcile_access_groups");
         assert_eq!(GET_ACCESS_DIRECTORY, "svc.vault.get_access_directory");
         assert_eq!(SAVE_ACCESS_DIRECTORY, "svc.vault.save_access_directory");
         assert_eq!(QUERY_SERVICE_DIAGNOSTICS, "svc.diagnostics.query");
+    }
+
+    #[test]
+    fn drive_availability_excludes_occupied_and_reserved_letters() {
+        let result =
+            available_drive_letters(json!({ "unavailable_letters": ["C", "D", "J", "Z"] }))
+                .unwrap();
+        let letters = result["letters"].as_array().unwrap();
+        assert_eq!(letters.len(), 20);
+        assert!(letters.contains(&json!("E")));
+        for excluded in ["C", "D", "J", "Z"] {
+            assert!(!letters.contains(&json!(excluded)));
+        }
+    }
+
+    #[test]
+    fn drive_availability_never_invents_letters_from_invalid_service_state() {
+        for response in [
+            json!({}),
+            json!({ "unavailable_letters": null }),
+            json!({ "unavailable_letters": ["j"] }),
+            json!({ "unavailable_letters": ["J:"] }),
+            json!({ "unavailable_letters": [1] }),
+        ] {
+            assert!(available_drive_letters(response).is_err());
+        }
+        let all: Vec<String> = (b'A'..=b'Z')
+            .map(|letter| (letter as char).to_string())
+            .collect();
+        assert_eq!(
+            available_drive_letters(json!({ "unavailable_letters": all })).unwrap(),
+            json!({ "letters": [] })
+        );
     }
 
     #[test]

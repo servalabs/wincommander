@@ -9472,6 +9472,16 @@
       ]
     },
     {
+      "id": "tauri:get_vault_available_drive_letters",
+      "name": "get_vault_available_drive_letters",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:get_vulnerable_drivers",
       "name": "get_vulnerable_drivers",
       "transport": "tauri",

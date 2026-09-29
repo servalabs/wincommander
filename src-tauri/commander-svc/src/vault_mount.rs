@@ -146,10 +146,9 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     }
     fn dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
         let result = tokio::task::block_in_place(|| {
-            let _volume_operation = wincmd_volume::VolumeOperationGuard::acquire_slot(
-                request.internal_drive,
-            )
-            .map_err(|_| VaultMountReason::DismountFailed)?;
+            let _volume_operation =
+                wincmd_volume::VolumeOperationGuard::acquire_slot(request.internal_drive)
+                    .map_err(|_| VaultMountReason::DismountFailed)?;
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                 crate::pro_broker::VaultCall {
                     request_id: request.operation_id,
@@ -330,6 +329,7 @@ pub struct VaultMountBroker {
     operation: Mutex<()>,
     broker: Box<dyn AuthenticatedVaultBroker>,
     caller_mount_attestor: CallerMountAttestor,
+    drive_letter_probe: fn() -> Result<HashSet<String>, ()>,
     recovery: Mutex<RecoveryState>,
 }
 
@@ -347,6 +347,7 @@ impl VaultMountBroker {
     pub(crate) fn personal_mount_failure_code(reason: VaultMountReason) -> &'static str {
         match reason {
             VaultMountReason::NotAuthorized => "vault_not_authorized",
+            VaultMountReason::AlreadyMounted => "vault_already_mounted",
             VaultMountReason::SessionUnavailable => "vault_session_unavailable",
             VaultMountReason::EngineUnlockFailed => "vault_engine_unlock_failed",
             VaultMountReason::EngineDriveLetterUnavailable => {
@@ -371,7 +372,9 @@ impl VaultMountBroker {
     }
 
     pub fn new() -> Self {
-        Self::with_broker(Box::new(ProEnvelopeBroker))
+        let mut broker = Self::with_broker(Box::new(ProEnvelopeBroker));
+        broker.drive_letter_probe = crate::vault_drive_letters::occupied_letters;
+        broker
     }
 
     fn with_broker(broker: Box<dyn AuthenticatedVaultBroker>) -> Self {
@@ -387,6 +390,16 @@ impl VaultMountBroker {
             operation: Mutex::new(()),
             broker,
             caller_mount_attestor,
+            drive_letter_probe: {
+                #[cfg(test)]
+                {
+                    || Ok(HashSet::new())
+                }
+                #[cfg(not(test))]
+                {
+                    crate::vault_drive_letters::occupied_letters
+                }
+            },
             recovery: Mutex::new(RecoveryState::default()),
         }
     }
@@ -566,15 +579,6 @@ impl VaultMountBroker {
             request.zeroize_secrets();
             return Err(VaultMountReason::InvalidRequest);
         }
-        request.preferred_letter = match self.select_mount_letter(
-            store, request.preferred_letter.as_deref(), &record.container_identity, caller_token,
-        ) {
-            Ok(letter) => Some(letter),
-            Err(reason) => {
-                request.zeroize_secrets();
-                return Err(reason);
-            }
-        };
         if let Some(existing) = self
             .active
             .lock()
@@ -585,20 +589,24 @@ impl VaultMountBroker {
                 request.zeroize_secrets();
                 return Err(VaultMountReason::NotAuthorized);
             }
-            if self
-                .dismount_entry_locked_for_client(
-                    operation_id,
-                    store,
-                    &entry_id,
-                    Some(caller_token),
-                )
-                .state
-                != VaultMountState::Unmounted
-            {
-                request.zeroize_secrets();
+            request.zeroize_secrets();
+            if existing.cleanup_required {
                 return Err(VaultMountReason::DismountFailed);
             }
+            self.attest_existing_mount(&existing, caller_token)?;
+            return Err(VaultMountReason::AlreadyMounted);
         }
+        request.preferred_letter = match self.select_mount_letter(
+            store,
+            request.preferred_letter.as_deref(),
+            &record.container_identity,
+        ) {
+            Ok(letter) => Some(letter),
+            Err(reason) => {
+                request.zeroize_secrets();
+                return Err(reason);
+            }
+        };
         let has_capacity = self
             .active
             .lock()
@@ -819,15 +827,6 @@ impl VaultMountBroker {
             zeroize_mount_secrets(password, hidden_protection_password);
             return denied(entry_id, VaultMountReason::NotAuthorized);
         }
-        let preferred_letter = match self.select_mount_letter(
-            store, preferred_letter.as_deref(), &container_identity, caller_token,
-        ) {
-            Ok(letter) => Some(letter),
-            Err(reason) => {
-                zeroize_mount_secrets(password, hidden_protection_password);
-                return failed(entry_id, Some(presentation), reason);
-            }
-        };
         let caller_sid = caller_sid.to_owned();
         if let Some(existing) = self
             .active
@@ -835,25 +834,39 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(entry_id).cloned())
         {
-            // A second authorized session must never evict a per-user mount.
-            // Only the same authenticated user in the same session may remount.
+            // A repeated click must not dismount a live volume or disrupt open files.
             if existing.session_id != session_id || existing.caller_sid != caller_sid {
                 zeroize_mount_secrets(password, hidden_protection_password);
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
-            if self
-                .dismount_entry_locked_for_client(operation_id, store, entry_id, Some(caller_token))
-                .state
-                != VaultMountState::Unmounted
-            {
-                zeroize_mount_secrets(password, hidden_protection_password);
+            zeroize_mount_secrets(password, hidden_protection_password);
+            if existing.cleanup_required {
                 return failed(
                     entry_id,
                     Some(presentation),
                     VaultMountReason::DismountFailed,
                 );
             }
+            if let Err(reason) = self.attest_existing_mount(&existing, caller_token) {
+                return failed(entry_id, Some(presentation), reason);
+            }
+            return VaultMountResult {
+                entry_id: entry_id.to_owned(),
+                state: VaultMountState::Failed,
+                presentation: Some(existing.presentation),
+                drive_letter: Some(existing.drive_letter),
+                reason: Some(VaultMountReason::AlreadyMounted),
+            };
         }
+        let preferred_letter =
+            match self.select_mount_letter(store, preferred_letter.as_deref(), &container_identity)
+            {
+                Ok(letter) => Some(letter),
+                Err(reason) => {
+                    zeroize_mount_secrets(password, hidden_protection_password);
+                    return failed(entry_id, Some(presentation), reason);
+                }
+            };
         let has_capacity = self
             .active
             .lock()
@@ -1288,23 +1301,76 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         preferred_letter: Option<&str>,
         container_identity: &str,
-        caller_token: windows_sys::Win32::Foundation::HANDLE,
     ) -> Result<String, VaultMountReason> {
         let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
+        let occupied = self.occupied_letters_locked()?;
         let letter = match preferred_letter {
-            Some(letter) => letter.to_owned(),
-            None => {
-                let occupied = self.active.lock().map_err(|_| unavailable)?
-                    .values().map(|mount| mount.drive_letter.trim_end_matches(':').to_ascii_uppercase())
-                    .collect::<HashSet<_>>();
-                store.auto_pick_unreserved_letter(caller_token, &occupied).ok_or(unavailable)?
-            }
+            Some(letter) => letter.trim_end_matches(':').to_ascii_uppercase(),
+            None => store
+                .auto_pick_unreserved_letter(&occupied)
+                .ok_or(unavailable)?,
         };
         // A generic refusal discloses no identity or details of the reserving Vault.
-        if store.reserved_letter_conflicts_with_container(&letter, container_identity) {
+        if occupied.contains(&letter)
+            || store.reserved_letter_conflicts_with_container(&letter, container_identity)
+        {
             return Err(unavailable);
         }
         Ok(letter)
+    }
+
+    pub(crate) fn occupied_letters_locked(&self) -> Result<HashSet<String>, VaultMountReason> {
+        let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
+        let mut occupied = (self.drive_letter_probe)().map_err(|_| unavailable)?;
+        occupied.extend(
+            self.active
+                .lock()
+                .map_err(|_| unavailable)?
+                .values()
+                .map(|mount| {
+                    mount
+                        .drive_letter
+                        .trim_end_matches(':')
+                        .to_ascii_uppercase()
+                }),
+        );
+        Ok(occupied)
+    }
+
+    fn attest_existing_mount(
+        &self,
+        mount: &ActiveMount,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<(), VaultMountReason> {
+        match (self.caller_mount_attestor)(
+            caller_token,
+            &mount.drive_letter,
+            mount.internal_drive,
+            mount.access == wincmd_shared::vault_access::VaultAccess::Write,
+        ) {
+            CallerPresentationAttestation::Available => Ok(()),
+            CallerPresentationAttestation::RootAccessDenied
+            | CallerPresentationAttestation::RootWriteAccessDenied => {
+                Err(VaultMountReason::CallerAccessDenied)
+            }
+            _ => Err(VaultMountReason::PresentationRejected),
+        }
+    }
+
+    pub(crate) fn unavailable_letters_locked(
+        &self,
+        store: &VaultAccessStore,
+        exclude_entry_id: Option<&str>,
+    ) -> Result<Vec<String>, VaultMountReason> {
+        let mut letters = self.occupied_letters_locked()?;
+        letters.extend(
+            store
+                .reserved_letters(exclude_entry_id)
+                .map_err(|_| VaultMountReason::BrokerRejected)?,
+        );
+        let mut letters = letters.into_iter().collect::<Vec<_>>();
+        letters.sort_unstable();
+        Ok(letters)
     }
 
     pub(crate) fn personal_mounts_for_caller(
@@ -2599,6 +2665,207 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_mounts_never_claim_a_new_read_only_or_hidden_mode_was_applied() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
+        let record = personal_record();
+        for operation_id in [41, 42, 43, 44] {
+            let mut request = personal_request();
+            if operation_id == 43 { request.read_only = true; }
+            if operation_id == 44 {
+                request.volume_kind = VaultContainerKind::Dual;
+                request.volume_role = VaultVolumeRole::Hidden;
+            }
+            let result = broker.mount_personal_authorized(
+                operation_id,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                &record.owner_sid,
+                (0, 0),
+            );
+            if operation_id == 41 {
+                assert_eq!(result, Ok(("P:".into(), 12, true)));
+            } else {
+                assert_eq!(result, Err(VaultMountReason::AlreadyMounted));
+            }
+            assert!(request.password.is_empty());
+        }
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 1);
+        assert!(events.dismounted.is_empty());
+    }
+
+    #[test]
+    fn explicit_letter_rejects_foreign_session_mapping_before_engine_dispatch() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        broker.drive_letter_probe = || Ok(HashSet::from(["P".into()]));
+        let record = personal_record();
+        let mut request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                &record.owner_sid,
+                (0, 0)
+            ),
+            Err(VaultMountReason::EngineDriveLetterUnavailable)
+        );
+        assert!(request.password.is_empty());
+        assert_eq!(events.lock().unwrap().mounted, 0);
+    }
+
+    #[test]
+    fn duplicate_mount_with_a_missing_mapping_fails_without_replacing_the_volume() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_cannot_resolve_drive,
+        );
+        let record = personal_record();
+        let mut existing = active_mount_for_owner(7, &record.owner_sid);
+        existing.drive_letter = "P:".into();
+        broker
+            .active
+            .lock()
+            .unwrap()
+            .insert(personal_mount_entry_id(&record), existing);
+        let mut request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                &record.owner_sid,
+                (0, 0)
+            ),
+            Err(VaultMountReason::PresentationRejected)
+        );
+        assert!(request.password.is_empty());
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 0);
+        assert!(events.dismounted.is_empty());
+    }
+
+    #[test]
+    fn duplicate_mount_from_a_different_session_is_denied_without_disruption() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
+        let record = personal_record();
+        broker.active.lock().unwrap().insert(
+            personal_mount_entry_id(&record),
+            active_mount_for_owner(9, &record.owner_sid),
+        );
+        let mut request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                &record.owner_sid,
+                (0, 0)
+            ),
+            Err(VaultMountReason::NotAuthorized)
+        );
+        assert!(request.password.is_empty());
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 0);
+        assert!(events.dismounted.is_empty());
+    }
+
+    #[test]
+    fn unavailable_drive_inventory_fails_closed_before_engine_dispatch() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        broker.drive_letter_probe = || Err(());
+        let record = personal_record();
+        let mut request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                41,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                &record.owner_sid,
+                (0, 0)
+            ),
+            Err(VaultMountReason::EngineDriveLetterUnavailable)
+        );
+        assert!(request.password.is_empty());
+        assert_eq!(events.lock().unwrap().mounted, 0);
+    }
+
+    #[test]
+    fn another_private_mount_reserves_its_letter_machine_wide() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
+        broker.active.lock().unwrap().insert(
+            "foreign-private".into(),
+            active_mount_for_owner(99, "another-sid"),
+        );
+        assert_eq!(
+            broker.select_mount_letter(&store, Some("v"), "another-container"),
+            Err(VaultMountReason::EngineDriveLetterUnavailable)
+        );
+        assert_eq!(
+            broker.unavailable_letters_locked(&store, None).unwrap(),
+            vec!["V"]
+        );
+        assert_eq!(
+            broker
+                .select_mount_letter(&store, None, "another-container")
+                .unwrap(),
+            "Z"
+        );
+    }
+
+    #[test]
     fn personal_mount_uses_durable_registry_and_session_cleanup() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let store = mount_store(files, Arc::new(AtomicBool::new(false)));
@@ -2652,6 +2919,8 @@ mod tests {
         store.apply(policy, 1).unwrap();
         let events = Arc::new(Mutex::new(BrokerEvents::default()));
         let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        assert_eq!(broker.unavailable_letters_locked(&store, None).unwrap(), vec!["P"]);
+        assert!(broker.unavailable_letters_locked(&store, Some("reserved")).unwrap().is_empty());
         let mut record = personal_record();
         record.container_identity = "another-file".into();
         let mut request = personal_request();
@@ -2673,6 +2942,8 @@ mod tests {
             43, &store, &record, &mut request, std::ptr::null_mut(), 7, &record.owner_sid, (0, 0),
         ), Ok(("P:".into(), 12, true)));
         assert_eq!(events.lock().unwrap().mounted, 1);
+        assert_eq!(broker.unavailable_letters_locked(&store, Some("reserved")).unwrap(), vec!["P"],
+            "excluding a saved reservation cannot hide a live occupied letter");
     }
 
     #[test]

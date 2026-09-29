@@ -4961,6 +4961,12 @@ pub(crate) async fn run_backend_script_with_timeout(
     timeout_override: Option<std::time::Duration>,
 ) -> Result<serde_json::Value, String> {
     let machine_wide = take_machine_wide_param(&mut params)?;
+    // Keep legacy command/CLI callers on the same service-owned availability
+    // snapshot as the UI. A per-process PowerShell probe misses other sessions
+    // and saved Fleet reservations. Failure must never mean every letter is free.
+    if command == "Get-AvailableDriveLetters" {
+        return crate::vault_access::get_vault_available_drive_letters(None).await;
+    }
     if machine_wide && !is_machine_wide_fix_command(&command) {
         return Ok(machine_wide_status(
             &command,

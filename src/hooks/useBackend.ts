@@ -1960,8 +1960,16 @@ export function useBackend() {
       execute<VolumeInfo>("Get-VolumeInfo", { DriveLetter: letter }),
     getEncryptionPartitions: () =>
       execute<{ partitions: EncryptionPartition[] }>("Get-EncryptionPartitions"),
-    getAvailableDriveLetters: () =>
-      execute<{ letters: string[] }>("Get-AvailableDriveLetters"),
+    getAvailableDriveLetters: async (excludeEntryId?: string): Promise<BackendResponse<{ letters: string[] }>> => {
+      try {
+        const data = await invoke<{ letters: string[] }>("get_vault_available_drive_letters", {
+          excludeEntryId: excludeEntryId ?? null,
+        });
+        return { success: true, data };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
     getBitLockerVolumes: () =>
       execute<BitLockerVolume[]>("Get-BitLockerVolumes"),
     eraseEncryptedContainer: async (input: EraseInput): Promise<BackendResponse<EraseReceipt>> => {

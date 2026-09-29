@@ -27,6 +27,7 @@ export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
 export const VAULT_MOUNT_REASONS = [
   "not_authorized",
   "invalid_request",
+  "already_mounted",
   "broker_unavailable",
   "broker_rejected",
   "broker_identity_rejected",
@@ -50,6 +51,7 @@ export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   not_authorized: "Mount denied by the secure service",
   invalid_request: "The Vault request is invalid",
+  already_mounted: "This Vault is already mounted. Open the existing drive, or dismount it before changing its mount settings",
   broker_unavailable: "The secure Vault service is unavailable",
   broker_rejected: "The secure Vault service rejected the request",
   broker_identity_rejected: "The secure Vault helper identity could not be verified",

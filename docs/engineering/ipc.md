@@ -52,6 +52,22 @@ Source contracts are in
 The [settings storage reference](../frontend/settings-reference.md#where-settings-live)
 owns migration, password-reset recovery and unavailable-service behavior.
 
+## Vault drive availability
+
+`get_vault_available_drive_letters({ excludeEntryId?: string })` returns
+`{ letters: string[] }` (D–Z). The legacy `Get-AvailableDriveLetters` backend
+command uses the same service query, without an exclusion. Neither path falls
+back to guessed letters when the service is unavailable.
+
+The authenticated `svc.vault.drive_letters` read accepts
+`{ exclude_entry_id?: string }` and returns `{ unavailable_letters: string[] }`.
+It unions machine and logon-session DOS drive names, active broker mounts, and
+saved policy reservations. It exposes no owner, container name, path, or mapping
+target. An authorized policy editor may exclude that entry's saved reservation;
+occupied letters remain excluded. Unknown and unauthorized IDs exclude nothing.
+Availability is only a snapshot: policy saves and mounts recheck in the service
+under its operation lock, and the mount engine must still reject external races.
+
 ## Tauri command catalog (frontend ↔ backend)
 
 Tier column: **Free** runs in-process in `commander-free`; **Paid** is gated by `require_paid` and (for execution-bearing work) dispatched to the Pro sidecar. Detector/monitor commands marked Paid gate their start/configure verbs but generally leave read/clear ungated.
