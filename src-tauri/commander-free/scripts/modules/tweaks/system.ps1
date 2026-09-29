@@ -343,6 +343,38 @@ function Enable-SmbBandwidthThrottling {
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
+function Get-BitLockerAutoEncryptPolicyStatus {
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\BitLocker', $false)
+        if ($null -eq $key) { return @{ disabled = $false; verified = $true } }
+        $value = $key.GetValue('PreventDeviceEncryption', $null)
+        if ($null -eq $value) { return @{ disabled = $false; verified = $true } }
+        if ($key.GetValueKind('PreventDeviceEncryption') -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
+            return @{ disabled = $null; verified = $false }
+        }
+        if ($value -ne 0 -and $value -ne 1) { return @{ disabled = $null; verified = $false } }
+        return @{ disabled = ($value -eq 1); verified = $true }
+    } catch {
+        return @{ disabled = $null; verified = $false }
+    } finally {
+        if ($null -ne $key) { $key.Dispose() }
+    }
+}
+
+function Get-DashboardPrivacyPolicyStatus {
+    $recall = Get-RecallSnapshotsStatus
+    $office = Get-OfficeLoggingStatus
+    $internet = Get-InternetCommunicationStatus
+    $bitlocker = Get-BitLockerAutoEncryptPolicyStatus
+    @{
+        recallSnapshotsDisabled = $(if ($recall.verified) { $recall.disabled } else { $null })
+        officeLoggingDisabled = $(if ($office.verified) { $office.disabled } else { $null })
+        internetCommRestricted = $(if ($internet.verified) { $internet.restricted } else { $null })
+        bitlockerAutoEncryptDisabled = $(if ($bitlocker.verified) { $bitlocker.disabled } else { $null })
+    }
+}
+
 function Get-HardeningStatus {
     $defender = Get-DefenderStatus
     $updates = Get-UpdateStatus
@@ -389,8 +421,7 @@ function Get-HardeningStatus {
     $hubMode = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' -Name 'HubMode' -ErrorAction SilentlyContinue
 
     # Recall & Transparency & Typing
-    $recall = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis" -ErrorAction SilentlyContinue
-    $urecall = Get-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis" -ErrorAction SilentlyContinue
+    $dashboardPrivacy = Get-DashboardPrivacyPolicyStatus
     $trans = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -ErrorAction SilentlyContinue
     $typing = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Input\Settings" -Name "InsightsEnabled" -ErrorAction SilentlyContinue
 
@@ -474,11 +505,6 @@ function Get-HardeningStatus {
     # so `$null -ne 0` (which is $true in PowerShell) is the wrong test.
     $diagEventTracingState = Get-DiagnosticEventTracingStatus
     $diagEventTracingDisabled = if ($diagEventTracingState.error) { $null } else { [bool]$diagEventTracingState.disabled }
-    # KT: Delegate to the canonical probe in privacy/telemetry.ps1 (same file
-    # that owns Disable-InternetCommunication) so Apply and the radar finding
-    # can never disagree about which keys count as "restricted".
-    $internetCommRestricted = [bool](Get-InternetCommunicationStatus).restricted
-
     @{
         defenderDisabled         = (-not $defender.serviceRunning -or -not $defender.realtimeEnabled)
         updatesPaused            = ($updates.paused -or -not $updates.serviceRunning)
@@ -511,22 +537,17 @@ function Get-HardeningStatus {
         detailedBSOD             = ((Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -Name 'DisplayParameters' -ErrorAction SilentlyContinue).DisplayParameters -eq 1)
         usbWriteProtect          = ($usbWp.WriteProtect -eq 1)
         usbStorageLockdown       = ($usbStorStart -eq 4)
-        recallSnapshotsDisabled  = ($recall.DisableAIDataAnalysis -eq 1 -or $urecall.DisableAIDataAnalysis -eq 1)
+        recallSnapshotsDisabled  = $dashboardPrivacy.recallSnapshotsDisabled
+        bitlockerAutoEncryptDisabled = $dashboardPrivacy.bitlockerAutoEncryptDisabled
         transparencyDisabled     = ($trans.EnableTransparency -eq 0)
         typingInsightsDisabled   = ($typing.InsightsEnabled -eq 0)
 
         # Privacy
         advertisingIdDisabled    = ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' -Name 'DisabledByGroupPolicy' -ErrorAction SilentlyContinue).DisabledByGroupPolicy -eq 1)
         tailoredExperiencesDisabled = ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent' -Name 'DisableTailoredExperiencesWithDiagnosticData' -ErrorAction SilentlyContinue).DisableTailoredExperiencesWithDiagnosticData -eq 1)
-        officeLoggingDisabled    = (
-            ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration' -Name 'DisableLogManagement' -ErrorAction SilentlyContinue).DisableLogManagement -eq 1) -or
-            (((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm' -ErrorAction SilentlyContinue).Enablelogging -eq 0) -and
-             ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm' -ErrorAction SilentlyContinue).EnableUpload -eq 0)) -or
-            (((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm' -ErrorAction SilentlyContinue).Enablelogging -eq 0) -and
-             ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm' -ErrorAction SilentlyContinue).EnableUpload -eq 0))
-        )
+        officeLoggingDisabled    = $dashboardPrivacy.officeLoggingDisabled
         diagnosticEventTracingDisabled = $diagEventTracingDisabled
-        internetCommRestricted   = $internetCommRestricted
+        internetCommRestricted   = $dashboardPrivacy.internetCommRestricted
 
         # Phase E — hide-recent MRU surfaces. Cheap HKCU reads delegated to the
         # cleanup module getters so probe + Apply share one source of truth.
@@ -542,14 +563,14 @@ function Get-HardeningStatus {
         rdpQosPriority  = [bool]$rdpQosPriority
 
         # Host hardening (Feature 4)
-        systemRestoreOff  = [bool]((Get-Service VSS -ErrorAction SilentlyContinue)?.StartType -eq 'Disabled')
-        crashDumpsOff     = [bool]((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -Name CrashDumpEnabled -ErrorAction SilentlyContinue)?.CrashDumpEnabled -eq 0)
+        systemRestoreOff  = [bool]((Get-Service VSS -ErrorAction SilentlyContinue).StartType -eq 'Disabled')
+        crashDumpsOff     = [bool]((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -Name CrashDumpEnabled -ErrorAction SilentlyContinue).CrashDumpEnabled -eq 0)
         clipboardHistoryOff = [bool](
-            ((Get-ItemProperty 'HKCU:\Software\Microsoft\Clipboard' -Name EnableClipboardHistory -ErrorAction SilentlyContinue)?.EnableClipboardHistory -eq 0) -or
-            ((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowClipboardHistory -ErrorAction SilentlyContinue)?.AllowClipboardHistory -eq 0)
+            ((Get-ItemProperty 'HKCU:\Software\Microsoft\Clipboard' -Name EnableClipboardHistory -ErrorAction SilentlyContinue).EnableClipboardHistory -eq 0) -or
+            ((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowClipboardHistory -ErrorAction SilentlyContinue).AllowClipboardHistory -eq 0)
         )
-        requirePwOnResume = [bool]((Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name ScreenSaverIsSecure -ErrorAction SilentlyContinue)?.ScreenSaverIsSecure -eq "1")
-        kernelDmaProtect  = [bool]((Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue)?.KernelDMAProtection -eq 2)
+        requirePwOnResume = [bool]((Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name ScreenSaverIsSecure -ErrorAction SilentlyContinue).ScreenSaverIsSecure -eq "1")
+        kernelDmaProtect  = [bool]((Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue).KernelDMAProtection -eq 2)
         acquisitionDriverBlocklist = [bool]$acqBlocklist
         forensicToolBlock          = [bool]$forensicToolBlock
         depEnabled                 = [bool]$depEnabled
@@ -565,9 +586,9 @@ function Get-HardeningStatus {
         # RAM-spill control (Feature 3): all three conditions must hold.
         # ClearPageFileAtShutdown=1, hibernation off, fast-startup off.
         ramSpillControl = [bool](
-            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name ClearPageFileAtShutdown -ErrorAction SilentlyContinue)?.ClearPageFileAtShutdown -eq 1) -and
-            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name HibernateEnabled -ErrorAction SilentlyContinue)?.HibernateEnabled -eq 0) -and
-            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction SilentlyContinue)?.HiberbootEnabled -eq 0)
+            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name ClearPageFileAtShutdown -ErrorAction SilentlyContinue).ClearPageFileAtShutdown -eq 1) -and
+            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name HibernateEnabled -ErrorAction SilentlyContinue).HibernateEnabled -eq 0) -and
+            ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled -eq 0)
         )
     }
 }
@@ -1457,34 +1478,7 @@ function Enable-TailoredExperiences {
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
-# --- Office Logging ---
-function Disable-OfficeLogging {
-    Assert-IsAdmin
-    try {
-        foreach ($ver in @('15.0', '16.0')) {
-            Set-RegistryValueSafe -Path "HKCU:\Software\Policies\Microsoft\office\$ver\osm" -Name "Enablelogging" -Value 0 -Type DWord
-            Set-RegistryValueSafe -Path "HKCU:\Software\Policies\Microsoft\office\$ver\osm" -Name "EnableUpload" -Value 0 -Type DWord
-        }
-        Set-RegistryValueSafe -Path "HKCU:\Software\Policies\Microsoft\office\common\clienttelemetry" -Name "DisableTelemetry" -Value 1 -Type DWord
-        Set-RegistryValueSafe -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "ClientTelemetry" -Value 0 -Type DWord
-        @{ status = "disabled" }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
-}
-
-function Enable-OfficeLogging {
-    Assert-IsAdmin
-    try {
-        foreach ($ver in @('15.0', '16.0')) {
-            Remove-ItemSecure -Path "HKCU:\Software\Policies\Microsoft\office\$ver\osm" -Name "Enablelogging" -ErrorAction SilentlyContinue
-            Remove-ItemSecure -Path "HKCU:\Software\Policies\Microsoft\office\$ver\osm" -Name "EnableUpload" -ErrorAction SilentlyContinue
-        }
-        Remove-ItemSecure -Path "HKCU:\Software\Policies\Microsoft\office\common\clienttelemetry" -Name "DisableTelemetry" -ErrorAction SilentlyContinue
-        Remove-ItemSecure -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "ClientTelemetry" -ErrorAction SilentlyContinue
-        @{ status = "enabled" }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
-}
+# Office logging mutations and readback belong to privacy/telemetry.ps1.
 
 # KT: Removed dead Disable-DiagnosticTracing / Enable-DiagnosticTracing.
 # These were never wired into the dispatcher (registry calls

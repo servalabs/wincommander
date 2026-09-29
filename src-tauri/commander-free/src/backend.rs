@@ -2916,6 +2916,24 @@ fn get_settings_sync_patch(
     result: Option<&serde_json::Value>,
 ) -> Option<serde_json::Value> {
     use serde_json::json;
+    if matches!(command,
+        "Disable-RecallSnapshots" | "Enable-RecallSnapshots"
+        | "Disable-OfficeLogging" | "Enable-OfficeLogging"
+        | "Disable-InternetCommunication" | "Enable-InternetCommunication"
+        | "Disable-BitLockerAutoEncrypt" | "Enable-BitLockerAutoEncrypt"
+    ) {
+        let result = result?;
+        let expected_status = if command.starts_with("Disable-") { "disabled" } else { "enabled" };
+        let observed_status = result.get("operationStatus").or_else(|| result.get("status")).and_then(serde_json::Value::as_str);
+        if result.get("verified").and_then(serde_json::Value::as_bool) != Some(true)
+            || result.get("error").and_then(serde_json::Value::as_bool) == Some(true)
+            || result.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+            || !matches!(result.get("status").and_then(serde_json::Value::as_str), Some("disabled" | "enabled" | "applied"))
+            || observed_status != Some(expected_status)
+        {
+            return None;
+        }
+    }
     if matches_parts(command, &["Disable~-", "Windows~", "Defender~"]) {
         return Some(json!({"tweaks":{"security":{"defenderDisabled": true}}}));
     }
@@ -3705,6 +3723,34 @@ mod settings_sync_patch_tests {
     use super::*;
 
     #[test]
+    fn dashboard_privacy_fixes_require_verified_matching_receipts_before_sync() {
+        for suffix in ["RecallSnapshots", "OfficeLogging", "InternetCommunication", "BitLockerAutoEncrypt"] {
+            for (verb, status) in [("Disable", "disabled"), ("Enable", "enabled")] {
+                let command = format!("{verb}-{suffix}");
+                let params = HashMap::new();
+                assert!(get_settings_sync_patch(&command, &params, None).is_none());
+                for result in [
+                    serde_json::json!({"status": status}),
+                    serde_json::json!({"status": status, "verified": false}),
+                    serde_json::json!({"status": status, "verified": true, "error": true}),
+                    serde_json::json!({"status": status, "verified": true, "ok": false}),
+                    serde_json::json!({"status": "failed", "operationStatus": status, "verified": true}),
+                    serde_json::json!({"status": "partial", "verified": true}),
+                    serde_json::json!({"status": if status == "disabled" {"enabled"} else {"disabled"}, "verified": true}),
+                ] {
+                    assert!(get_settings_sync_patch(&command, &params, Some(&result)).is_none(), "{command} cannot invent a saved success");
+                }
+                for result in [
+                    serde_json::json!({"status": status, "verified": true}),
+                    with_machine_wide_status(&command, serde_json::json!({"status": status, "verified": true})),
+                ] {
+                    assert!(get_settings_sync_patch(&command, &params, Some(&result)).is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn enthusiast_mode_syncs_to_its_performance_setting_path() {
         for (command, expected) in [
             ("Enable-EnthusiastMode", true),
@@ -4227,6 +4273,10 @@ fn with_machine_wide_status(command: &str, result: serde_json::Value) -> serde_j
             if matches!(
                 command,
                 "Disable-DiagnosticEventTracing" | "Enable-DiagnosticEventTracing"
+                | "Disable-RecallSnapshots" | "Enable-RecallSnapshots"
+                | "Disable-OfficeLogging" | "Enable-OfficeLogging"
+                | "Disable-InternetCommunication" | "Enable-InternetCommunication"
+                | "Disable-BitLockerAutoEncrypt" | "Enable-BitLockerAutoEncrypt"
             ) {
                 if let Some(operation_status) = object.get("status").cloned() {
                     object.insert("operationStatus".to_string(), operation_status);

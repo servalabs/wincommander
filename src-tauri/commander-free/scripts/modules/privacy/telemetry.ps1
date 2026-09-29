@@ -894,31 +894,70 @@ function Get-TelemetryStatus {
 # NEW: Recall Snapshots (Windows 11 24H2+)
 # ============================================================================
 
-function Disable-RecallSnapshots {
-    Assert-IsAdmin
-    try {
-        # Disable Windows Recall (AI Snapshots)
-        $path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI"
-        if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        Set-ItemProperty -Path $path -Name "DisableAIDataAnalysis" -Value 1 -Type DWord -Force
+$Script:WC_RECALL_POLICY_KEYS = @(
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 },
+    @{ Path = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 }
+)
 
-        # Also disable for current user
-        $upath = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI"
-        if (!(Test-Path $upath)) { New-Item -Path $upath -Force | Out-Null }
-        Set-ItemProperty -Path $upath -Name "DisableAIDataAnalysis" -Value 1 -Type DWord -Force
-
-        @{ status = "disabled" }
+function Get-PrivacyPolicyReadback {
+    param([Parameter(Mandatory = $true)][array]$Keys)
+    $matched = 0
+    $absent = 0
+    foreach ($key in $Keys) {
+        try { $values = Get-ItemProperty -LiteralPath $key.Path -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $absent++; continue }
+        $property = $values.PSObject.Properties[$key.Name]
+        if ($null -eq $property) { $absent++; continue }
+        if (($property.Value -is [int] -or $property.Value -is [uint32]) -and $property.Value -eq $key.Value) { $matched++ }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    @{ keysMatched = $matched; keysAbsent = $absent; keysTotal = $Keys.Count; verified = $true }
+}
+
+function Set-PrivacyPolicyValuesVerified {
+    param([Parameter(Mandatory = $true)][array]$Keys, [Parameter(Mandatory = $true)][bool]$Disable)
+    foreach ($key in $Keys) {
+        if ($Disable) {
+            if (-not (Test-Path -LiteralPath $key.Path -ErrorAction Stop)) {
+                New-Item -Path $key.Path -Force -ErrorAction Stop | Out-Null
+            }
+            Set-ItemProperty -LiteralPath $key.Path -Name $key.Name -Value $key.Value -Type DWord -Force -ErrorAction Stop
+        } elseif (Test-Path -LiteralPath $key.Path -ErrorAction Stop) {
+            $values = Get-ItemProperty -LiteralPath $key.Path -ErrorAction Stop
+            if ($null -ne $values.PSObject.Properties[$key.Name]) {
+                Remove-ItemProperty -LiteralPath $key.Path -Name $key.Name -ErrorAction Stop
+            }
+        }
+    }
+    $readback = Get-PrivacyPolicyReadback -Keys $Keys
+    if (($Disable -and $readback.keysMatched -ne $Keys.Count) -or
+        (-not $Disable -and $readback.keysAbsent -ne $Keys.Count)) {
+        throw 'Windows policy readback did not match the requested change.'
+    }
+}
+
+function Get-RecallSnapshotsStatus {
+    try {
+        $readback = Get-PrivacyPolicyReadback -Keys $Script:WC_RECALL_POLICY_KEYS
+        @{ disabled = ($readback.keysMatched -gt 0); verified = $true }
+    } catch { @{ disabled = $null; verified = $false } }
+}
+
+function Disable-RecallSnapshots {
+    try {
+        Assert-IsAdmin
+        Set-PrivacyPolicyValuesVerified -Keys $Script:WC_RECALL_POLICY_KEYS -Disable $true
+        @{ status = 'disabled'; verified = $true }
+    }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm the Recall policy change. Administrator permission is required; refresh status before retrying.' } }
 }
 
 function Enable-RecallSnapshots {
     try {
-        Remove-RegistryValueSafe -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis"
-        Remove-RegistryValueSafe -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" -Name "DisableAIDataAnalysis"
-        @{ status = "enabled" }
+        Assert-IsAdmin
+        Set-PrivacyPolicyValuesVerified -Keys $Script:WC_RECALL_POLICY_KEYS -Disable $false
+        @{ status = 'enabled'; verified = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm the Recall policy change. Administrator permission is required; refresh status before retrying.' } }
 }
 
 # ============================================================================
@@ -999,43 +1038,28 @@ $Script:WC_INTERNET_COMM_KEYS = @(
 )
 
 function Disable-InternetCommunication {
-    Assert-IsAdmin
     try {
-        foreach ($k in $Script:WC_INTERNET_COMM_KEYS) {
-            Set-RegistryValueSafe -Path $k.Path -Name $k.Name -Value $k.Value -Type DWord
-        }
-        @{ status = "disabled" }
+        Assert-IsAdmin
+        Set-PrivacyPolicyValuesVerified -Keys $Script:WC_INTERNET_COMM_KEYS -Disable $true
+        @{ status = 'disabled'; verified = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm all Internet communication restrictions. Administrator permission is required; refresh status before retrying.' } }
 }
 
 function Enable-InternetCommunication {
-    Assert-IsAdmin
     try {
-        # Reverse EVERY key Disable-InternetCommunication set, from the same
-        # single source of truth — the old hand-picked 11-entry removal list
-        # left ~19 of the 30 restrictions (PCHealth, Error Reporting, Internet
-        # Connection Wizard, EventViewer, Registration/Search, Printers,
-        # Handwriting/TabletPC, Assistance-Client) permanently applied.
-        foreach ($k in $Script:WC_INTERNET_COMM_KEYS) {
-            Remove-RegistryValueSafe -Path $k.Path -Name $k.Name
-        }
-        @{ status = "enabled" }
+        Assert-IsAdmin
+        Set-PrivacyPolicyValuesVerified -Keys $Script:WC_INTERNET_COMM_KEYS -Disable $false
+        @{ status = 'enabled'; verified = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm removal of all Internet communication restrictions. Administrator permission is required; refresh status before retrying.' } }
 }
 
 function Get-InternetCommunicationStatus {
-    $matched = 0
-    foreach ($k in $Script:WC_INTERNET_COMM_KEYS) {
-        $val = (Get-ItemProperty -Path $k.Path -Name $k.Name -ErrorAction SilentlyContinue).($k.Name)
-        if ($val -eq $k.Value) { $matched++ }
-    }
-    @{
-        restricted     = ($matched -eq $Script:WC_INTERNET_COMM_KEYS.Count)
-        keysMatched    = $matched
-        keysTotal      = $Script:WC_INTERNET_COMM_KEYS.Count
-    }
+    try {
+        $readback = Get-PrivacyPolicyReadback -Keys $Script:WC_INTERNET_COMM_KEYS
+        @{ restricted = ($readback.keysMatched -eq $readback.keysTotal); keysMatched = $readback.keysMatched; keysTotal = $readback.keysTotal; verified = $true }
+    } catch { @{ restricted = $null; keysMatched = $null; keysTotal = $Script:WC_INTERNET_COMM_KEYS.Count; verified = $false } }
 }
 
 # ============================================================================
@@ -1504,48 +1528,66 @@ function Enable-TailoredExperiences {
 # Privacy: Office Click-to-Run Logging Disable
 # ============================================================================
 
-function Disable-OfficeLogging {
-    Assert-IsAdmin
+$Script:WC_OFFICE_LOGGING_KEYS = @(
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm'; Name = 'Enablelogging'; Value = 0 },
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm'; Name = 'EnableUpload'; Value = 0 },
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm'; Name = 'Enablelogging'; Value = 0 },
+    @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm'; Name = 'EnableUpload'; Value = 0 },
+    @{ Path = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration'; Name = 'DisableLogManagement'; Value = 1 }
+)
+
+function Get-OfficeTelemetryTasks {
+    @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+        $_.TaskPath -eq '\Microsoft\Office\' -and $_.TaskName -match 'OfficeTelemetry|Telemetry'
+    })
+}
+
+function Get-OfficeLoggingStatus {
     try {
-        $officePaths = @(
-            "HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm",
-            "HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm"
-        )
-        foreach ($p in $officePaths) {
-            Set-RegistryValueSafe -Path $p -Name "Enablelogging" -Value 0 -Type DWord
-            Set-RegistryValueSafe -Path $p -Name "EnableUpload" -Value 0 -Type DWord
+        $readback = Get-PrivacyPolicyReadback -Keys $Script:WC_OFFICE_LOGGING_KEYS
+        $enabledTasks = @(Get-OfficeTelemetryTasks | Where-Object { $_.State -ne 'Disabled' })
+        @{ disabled = ($readback.keysMatched -eq $readback.keysTotal -and $enabledTasks.Count -eq 0); verified = $true }
+    } catch { @{ disabled = $null; verified = $false } }
+}
+
+function Set-OfficeLoggingVerified {
+    param([Parameter(Mandatory = $true)][bool]$Disable)
+    $tasks = @(Get-OfficeTelemetryTasks)
+    Set-PrivacyPolicyValuesVerified -Keys $Script:WC_OFFICE_LOGGING_KEYS -Disable $Disable
+    foreach ($task in $tasks) {
+        if ($Disable) {
+            Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
+        } else {
+            Enable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
         }
-        # Disable Office telemetry agent scheduled tasks
-        Get-ScheduledTask -TaskPath "\Microsoft\Office\*" -ErrorAction SilentlyContinue |
-            Where-Object { $_.TaskName -match 'OfficeTelemetry|Telemetry' } |
-            Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
-        # Click-to-Run logging management
-        Set-RegistryValueSafe -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "DisableLogManagement" -Value 1 -Type DWord
-        @{ status = "disabled" }
+        $readback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+        if ($null -eq $readback -or (($readback.State -eq 'Disabled') -ne $Disable)) {
+            throw 'Windows did not confirm the Office telemetry task change.'
+        }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $registry = Get-PrivacyPolicyReadback -Keys $Script:WC_OFFICE_LOGGING_KEYS
+    if (($Disable -and $registry.keysMatched -ne $registry.keysTotal) -or
+        (-not $Disable -and $registry.keysAbsent -ne $registry.keysTotal)) {
+        throw 'Windows did not retain the Office logging policy change.'
+    }
+}
+
+function Disable-OfficeLogging {
+    try {
+        Assert-IsAdmin
+        Set-OfficeLoggingVerified -Disable $true
+        @{ status = 'disabled'; verified = $true }
+    }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm all Office logging settings and telemetry tasks. Administrator permission is required; refresh status before retrying.' } }
 }
 
 function Enable-OfficeLogging {
-    Assert-IsAdmin
     try {
-        $officePaths = @(
-            "HKLM:\SOFTWARE\Policies\Microsoft\Office\16.0\osm",
-            "HKLM:\SOFTWARE\Policies\Microsoft\Office\15.0\osm"
-        )
-        foreach ($p in $officePaths) {
-            Remove-ItemSecure -Path $p -Name "Enablelogging" -ErrorAction SilentlyContinue
-            Remove-ItemSecure -Path $p -Name "EnableUpload" -ErrorAction SilentlyContinue
-        }
-        Remove-ItemSecure -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "DisableLogManagement" -ErrorAction SilentlyContinue
-        # Re-enable the Office telemetry scheduled tasks Disable-OfficeLogging
-        # turned off (registry-only reversal previously left them disabled).
-        Get-ScheduledTask -TaskPath "\Microsoft\Office\*" -ErrorAction SilentlyContinue |
-            Where-Object { $_.TaskName -match 'OfficeTelemetry|Telemetry' } |
-            Enable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
-        @{ status = "enabled" }
+        Assert-IsAdmin
+        Set-OfficeLoggingVerified -Disable $false
+        @{ status = 'enabled'; verified = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; verified = $false; message = 'Windows could not confirm restoration of Office logging settings and telemetry tasks. Administrator permission is required; refresh status before retrying.' } }
 }
 
 # ============================================================================
