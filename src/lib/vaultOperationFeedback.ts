@@ -34,6 +34,7 @@ export function vaultOperationError(error: unknown, operation: "mount" | "dismou
     if (Number.isSafeInteger(dismounted) && Number.isSafeInteger(blocked)) return `${dismounted} encrypted volume(s) dismounted; ${blocked} not confirmed dismounted. ${vaultOperationError(`vault_${partial[1]}`, "dismount")}`;
   }
   if (detail.includes("pro_not_installed")) return "The Pro module is not installed. Open License / Pro and install it before mounting. Activating a licence alone does not install the encryption engine.";
+  if (detail.includes("vault_fleet_group_required")) return "Your Windows account does not belong to this Vault's Fleet group. You cannot mount, dismount, edit or remove it. Being a Windows administrator does not grant access.";
   if (detail.includes("vault_owner_required")) return "Only the primary owner can edit this private Vault. Ask its owner to make changes. An administrator may remove the policy only while the Vault is unmounted; this does not unlock its contents.";
   if (detail.includes("vault_mount_readback_unconfirmed")) return "The service has not confirmed that this Vault is mounted for your account. Refresh its status before using the drive. No successful mount was reported.";
   if (detail.includes("vault_dismount_readback_unconfirmed")) return "The service has not confirmed that this Vault was dismounted. Refresh its status before removing the device or changing its policy.";

@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { vaultPolicySaveFailure } from "./VaultAccessTab";
 
 describe("Vault policy save failures", () => {
+  test("outsider administrator denial explains the group boundary before generic errors", () => {
+    const failure = vaultPolicySaveFailure("vault_fleet_group_required: forbidden version conflict");
+    expect(failure.code).toBe("VLT.POLICY.GROUP_REQUIRED");
+    expect(failure.message).toContain("does not belong");
+    expect(failure.message).toContain("administrator does not grant access");
+    expect(failure.message).not.toContain("Refresh");
+  });
   test("owner denial takes precedence over generic admin or stale-version wording", () => {
     const failure = vaultPolicySaveFailure("vault_owner_required: forbidden after version conflict");
     expect(failure.code).toBe("VLT.POLICY.OWNER_REQUIRED");

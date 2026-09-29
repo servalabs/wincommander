@@ -16,6 +16,7 @@ import {
 import type { FleetAccessDirectory, FleetAccessGroup, VaultSaveAccessDirectoryResponse } from "./accessControlTypes";
 import FleetField from "./FleetField";
 import FleetInfoPopover from "./FleetInfoPopover";
+import { accessGroupSaveFailure } from "./accessGroupSaveFailure";
 
 interface AccessControlTabProps {
   directory: FleetAccessDirectory;
@@ -84,7 +85,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const addGroup = () => {
     // Functional form: a discovery response landing after this must not
     // clobber it (and vice versa) — both update from the latest state.
-    const group = createAccessGroup(directory.groups);
+    const group = createAccessGroup(directory.groups, directory.users);
     onChange(current => ({ ...current, groups: [...current.groups, group] }));
     setSelectedGroupId(group.id);
   };
@@ -146,8 +147,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       else if (outcome.intent === "danger") void showError(outcome.message);
       else void showSuccess(outcome.message);
     } catch (cause) {
-      const detail = cause instanceof Error ? cause.message : String(cause);
-      void showError(`Access groups were not saved to the Windows security service. ${detail}`);
+      void showError(accessGroupSaveFailure(cause));
     } finally {
       setSaving(false);
     }
@@ -195,6 +195,8 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
               >
                 <ul>
                   <li>A user can belong to more than one group.</li>
+                  <li>The person who creates a group is automatically included when it is saved.</li>
+                  <li>Being a Windows administrator does not grant access to another Fleet group.</li>
                   <li>Group membership alone does not grant Vault or feature access.</li>
                   <li>Each feature decides how overlapping group settings are resolved.</li>
                   <li>Checked users appear first so membership is easy to review.</li>

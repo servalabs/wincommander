@@ -58,7 +58,8 @@ describe("Save groups persists through the protected Vault access service", () =
   });
 
   test("a rejected call is classified instead of surfacing a raw or silent failure", () => {
-    expect(source).toContain("Access groups were not saved to the Windows security service.");
+    expect(source).toContain("showError(accessGroupSaveFailure(cause))");
+    expect(source).not.toContain("${detail}");
   });
 
   test("does not invent a manual account row (that regression is Access Control's other rule)", () => {

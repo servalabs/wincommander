@@ -64,7 +64,7 @@ function vaultListFailure(cause: unknown, request: "authorized vault list" | "Va
   };
 }
 
-export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -72,6 +72,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.OWNE
   // Treat both forms identically so an administrator sees the service's safe
   // category instead of every failure becoming the opaque generic fallback.
   const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
+  if (detail.includes("vault_fleet_group_required")) return { code: "VLT.POLICY.GROUP_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_owner_required")) return { code: "VLT.POLICY.OWNER_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_policy_readback_unconfirmed")) return { code: "VLT.POLICY.READBACK_FAILED", message: "The service has not confirmed the saved change. Refresh and review the Vault policy before trying again. No success was reported." };
   if (/drive[_ ]letter.*(?:occupied|reserved|unavailable|in use)/.test(detail)) {
@@ -937,7 +938,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <CardTitle>{canManagePolicy ? "Saved vaults" : "My vaults"}</CardTitle>
           <CardDescription>
             {canManagePolicy
-              ? "Local administrators can review saved Vault permissions. Only the primary owner can mount or use a private Vault."
+              ? "Shared Vault permissions require Fleet group membership. Only the primary owner can mount or use a private Vault."
               : "Only Vaults that the service has authorized for this Windows account appear here; mounting asks only for the password."}
           </CardDescription>
         </CardHeader>
@@ -1004,7 +1005,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <div className="fleet-vault-management-header">
             <div>
               <CardTitle>Manage saved Vaults</CardTitle>
-              <CardDescription>Local administrators can review permissions. Transfer ownership or remove a policy only while that Vault is unmounted. Removing a policy never deletes its encrypted container file.</CardDescription>
+              <CardDescription>Administrators must belong to a shared Vault's Fleet group to manage it. Transfer ownership or remove a policy only while that Vault is unmounted. Removing a policy never deletes its encrypted container file.</CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={() => {
               setExistingVaultPath("");

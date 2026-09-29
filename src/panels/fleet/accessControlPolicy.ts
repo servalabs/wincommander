@@ -207,7 +207,7 @@ export function validateAccessDirectory(directory: FleetAccessDirectory): string
   return errors;
 }
 
-export function createAccessGroup(groups: FleetAccessGroup[]): FleetAccessGroup {
+export function createAccessGroup(groups: FleetAccessGroup[], users: readonly FleetAccessUser[] = []): FleetAccessGroup {
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `group-${Date.now().toString(36)}`;
@@ -217,7 +217,10 @@ export function createAccessGroup(groups: FleetAccessGroup[]): FleetAccessGroup 
     index += 1;
     name = `New group ${index}`;
   }
-  return { id, name, localGroup: `WC_Group_${index}`, userIds: [] };
+  // This is a draft convenience only. The service independently adds the
+  // authenticated creator SID, even if discovery has not finished yet.
+  const creator = users.find(user => user.isCurrent && user.isAvailable !== false && user.sid);
+  return { id, name, localGroup: `WC_Group_${index}`, userIds: creator ? [creator.id] : [] };
 }
 
 export function membershipCount(groups: FleetAccessGroup[], userIdToFind: string) {

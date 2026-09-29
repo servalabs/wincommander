@@ -2,11 +2,20 @@ import { describe, expect, test } from "bun:test";
 import {
   buildAccessGroupReconcilePlan, describeReconcileFailure, fromVaultAccessDirectory, mergeAccessUsers,
   reconcileAccessDirectoryUsers, summarizeReconcileResults, validateAccessDirectory,
-  toVaultAccessDirectory,
+  toVaultAccessDirectory, createAccessGroup,
 } from "./accessControlPolicy";
 import type { AccessGroupReconcileResult, FleetAccessDirectory } from "./accessControlTypes";
 
 describe("Fleet universal access groups", () => {
+  test("preselects the discovered creator in a new group without copying other memberships", () => {
+    const group = createAccessGroup([], [
+      { id: "other", username: "Other", sid: "S-1-5-21-2" },
+      { id: "me", username: "Creator", sid: "S-1-5-21-1", isCurrent: true },
+    ]);
+    expect(group.userIds).toEqual(["me"]);
+    expect(createAccessGroup([], [{ id: "old", username: "Old", sid: "S-1-5-21-1", isCurrent: true, isAvailable: false }]).userIds).toEqual([]);
+    expect(createAccessGroup([]).userIds).toEqual([]);
+  });
   test("allows one Windows user in several groups", () => {
     const directory: FleetAccessDirectory = {
       schema: 1,
