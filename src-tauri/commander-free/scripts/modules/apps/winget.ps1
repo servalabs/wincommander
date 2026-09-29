@@ -96,6 +96,126 @@ function Read-AppsManifest {
     return $apps
 }
 
+# Normalise a product name for exact, whitespace-insensitive comparisons.  This
+# deliberately does not use a loose publisher-only or substring match: "Google"
+# alone must never make Google Drive look like Google Quick Share, for example.
+function ConvertTo-AppMatchText {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    $spaced = [regex]::Replace($Value.Trim(), '([a-z])([A-Z])', '$1 $2')
+    return [regex]::Replace($spaced.ToLowerInvariant(), '[^a-z0-9]+', '')
+}
+
+function Get-ManifestDisplayNames {
+    param($App)
+
+    $names = @()
+    if ($null -ne $App) {
+        $names += [string]$App.name
+        $id = [string]$App.id
+        if ($id.Contains('.')) { $names += $id.Split('.')[-1] }
+
+        $aliases = @()
+        if ($App -is [hashtable] -and $App.ContainsKey('aliases')) {
+            $aliases = @($App['aliases'])
+        }
+        elseif ($null -ne $App.PSObject.Properties['aliases']) {
+            $aliases = @($App.aliases)
+        }
+        $names += $aliases
+    }
+
+    $seen = @{}
+    return @($names | Where-Object {
+        $normalised = ConvertTo-AppMatchText ([string]$_)
+        if ($normalised.Length -lt 3 -or $seen.ContainsKey($normalised)) { return $false }
+        $seen[$normalised] = $true
+        return $true
+    })
+}
+
+function Test-ManifestDisplayNameMatch {
+    param($App, [AllowNull()][string]$CandidateName)
+
+    $candidate = ConvertTo-AppMatchText $CandidateName
+    if ($candidate.Length -lt 3) { return $false }
+    # ARP often appends a version (for example "Free Download Manager 6.24").
+    # Removing only a trailing numeric version retains a strict product-name
+    # comparison and avoids unrelated substring matches.
+    $candidateWithoutVersion = [regex]::Replace($candidate, '(?:(?:version|ver|v))?\d+(?:\d+)*$', '')
+
+    foreach ($name in Get-ManifestDisplayNames $App) {
+        $expected = ConvertTo-AppMatchText $name
+        if ($candidate -eq $expected -or $candidateWithoutVersion -eq $expected) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Find-ManifestInstallationMatch {
+    param(
+        $App,
+        [object[]]$WingetItems = @(),
+        [object[]]$RegistryItems = @()
+    )
+
+    $manifestId = [string]$App.id
+    foreach ($item in @($WingetItems)) {
+        if ($item -and -not [string]::IsNullOrWhiteSpace([string]$item.Id) -and ([string]$item.Id -ieq $manifestId)) {
+            return $item
+        }
+    }
+    foreach ($item in @($WingetItems)) {
+        if ($item -and (Test-ManifestDisplayNameMatch $App ([string]$item.Name))) {
+            return $item
+        }
+    }
+    foreach ($item in @($RegistryItems)) {
+        if ($item -and (Test-ManifestDisplayNameMatch $App ([string]$item.Name))) {
+            return $item
+        }
+    }
+    return $null
+}
+
+# Winget's list is useful but it does not enumerate every ordinary Windows
+# installer.  Read Add/Remove Programs directly as a bounded fallback so a
+# manually installed catalog app moves to Installed instead of being shown as
+# missing.  This is read-only and never treats the publisher name by itself as
+# proof of a product match.
+function Get-WindowsUninstallInventory {
+    $roots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $items = @()
+    $seen = @{}
+    foreach ($root in $roots) {
+        foreach ($key in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+            $entry = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+            if (-not $entry) { continue }
+            $name = [string]$entry.DisplayName
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            $version = [string]$entry.DisplayVersion
+            $publisher = [string]$entry.Publisher
+            $dedupeKey = "$(ConvertTo-AppMatchText $name)|$version|$(ConvertTo-AppMatchText $publisher)"
+            if ($seen.ContainsKey($dedupeKey)) { continue }
+            $seen[$dedupeKey] = $true
+            $items += [pscustomobject]@{
+                Id        = "ARP\Registry\$($key.PSChildName)"
+                Name      = $name
+                Version   = if ([string]::IsNullOrWhiteSpace($version)) { $null } else { $version }
+                Publisher = if ([string]::IsNullOrWhiteSpace($publisher)) { $null } else { $publisher }
+                Source    = 'registry'
+            }
+        }
+    }
+    return @($items)
+}
+
 function Get-AppManifest {
     param([string]$Category)
 
@@ -739,10 +859,16 @@ function Get-AppInventory {
         catch { }
     }
 
-    # -- 3b. Filesystem fallback detection for apps that hide from winget --
+    # -- 3b. Windows uninstall fallback detection --
+    # Winget intentionally does not know every MSI/EXE installation.  Keep its
+    # package identities for upgrades, but also collect the ordinary ARP
+    # records so the catalog does not call a manually installed app missing.
+    $registryInstalled = Get-WindowsUninstallInventory
+
+    # -- 3c. Filesystem fallback detection for apps that hide from winget --
     # LEARNING: Some apps are intentionally installed outside winget's
-    # view (portable, stealth, or manual installs). We detect them via filesystem/registry
-    # so step 4 can mark them installed even if winget doesn't list them.
+    # view (portable, stealth, or manual installs). We detect them via filesystem
+    # so step 4 can mark them installed even if neither package source lists them.
     # Maps manifest ID -> { installed: bool, version: string|null }
     $filesystemOverrides = @{}
 
@@ -802,44 +928,23 @@ function Get-AppInventory {
     }
 
     # -- 4. Classify manifest apps (installed/not, update available) --
-    # LEARNING: Fuzzy matching detects apps registered under ARP (Add/Remove Programs)
-    # IDs that differ from the winget manifest ID. When a fuzzy match hits, we must
-    # capture the ACTUAL installed ID so we can look up version info from allInstalledMap.
+    # Match exact package IDs first, then strictly compare the display product
+    # names supplied by Winget and Add/Remove Programs.  Do not match solely on
+    # a publisher: one vendor can have many unrelated products.
     $manifestApps = @()
     $manifestInstalledCount = 0
     $fuzzyMatchedIds = @{}  # Track ARP IDs consumed by fuzzy matching (for step 5 dedup)
     foreach ($app in $manifest) {
         # Check if installed - exact match first
-        $isInstalled = $allInstalled -contains $app.id
+        $isInstalled = $allInstalledMap.ContainsKey($app.id)
         $matchedInstId = if ($isInstalled) { $app.id } else { $null }
+        $matchedInstItem = if ($isInstalled) { $allInstalledMap[$app.id] } else { $null }
 
-        # Fuzzy match for ARP-style IDs
         if (-not $isInstalled) {
-            $idParts = $app.id -split '\.'
-            $publisher = $idParts[0]
-            $appName = $idParts[-1]
-            foreach ($instId in $allInstalled) {
-                if ($instId -match '^ARP\\') {
-                    if ($instId -match [regex]::Escape($appName)) { $isInstalled = $true; $matchedInstId = $instId; break }
-                    if ($instId -match [regex]::Escape($publisher)) { $isInstalled = $true; $matchedInstId = $instId; break }
-                }
-            }
-        }
-
-        # Special cases for common apps with non-standard ARP names
-        if (-not $isInstalled) {
-            $specialCases = @{
-                'OpenJS.NodeJS'         = 'Node\.js|NodeJS'
-                'Git.Git'               = 'Git_is1|\\Git\b'
-                'Ablaze.Floorp'         = 'Floorp'
-                'AutoHotkey.AutoHotkey' = 'AutoHotkey'
-                'Balena.Etcher'         = 'Etcher|balenaEtcher'
-            }
-            if ($specialCases.ContainsKey($app.id)) {
-                $pattern = $specialCases[$app.id]
-                foreach ($instId in $allInstalled) {
-                    if ($instId -match $pattern) { $isInstalled = $true; $matchedInstId = $instId; break }
-                }
+            $matchedInstItem = Find-ManifestInstallationMatch -App $app -WingetItems @($allInstalledMap.Values) -RegistryItems $registryInstalled
+            if ($matchedInstItem) {
+                $isInstalled = $true
+                $matchedInstId = [string]$matchedInstItem.Id
             }
         }
 
@@ -852,7 +957,7 @@ function Get-AppInventory {
         if ($isInstalled) {
             $manifestInstalledCount++
             # Track fuzzy-matched IDs so step 5 doesn't double-count them as "other apps"
-            if ($matchedInstId -and $matchedInstId -ne $app.id) {
+            if ($matchedInstId -and $matchedInstId -ne $app.id -and $allInstalledMap.ContainsKey($matchedInstId)) {
                 $fuzzyMatchedIds[$matchedInstId] = $true
             }
         }
@@ -875,6 +980,9 @@ function Get-AppInventory {
             # No update - pull installed version from whichever ID matched
             if ($allInstalledMap.ContainsKey($app.id)) {
                 $installedVersion = $allInstalledMap[$app.id].Version
+            }
+            elseif ($matchedInstItem) {
+                $installedVersion = $matchedInstItem.Version
             }
             elseif ($matchedInstId -and $matchedInstId -ne '__filesystem__' -and $allInstalledMap.ContainsKey($matchedInstId)) {
                 $installedVersion = $allInstalledMap[$matchedInstId].Version

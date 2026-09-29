@@ -8,8 +8,6 @@ import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../..
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
 import { releasePackageOperation, runQueuedPackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
-import { isAppInventoryRefreshDue } from "../../../lib/appInventoryStartup";
-import { getPackageUpdateInventorySnapshot } from "../../../lib/packageUpdateInventoryStore";
 import { recordPackageActivity, setPackageActivityStatus, usePackageActivities } from "../../../lib/packageActivityStore";
 import { showWarning, showError, showSuccess, showInfo } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
@@ -501,24 +499,16 @@ function AppInstallerPanel({
     };
 
     // Entering Packages & Apps is an explicit request for the current machine
-    // inventory. Cached data remains visible while this refresh runs, but it
-    // is not authoritative: software can change outside WinCommander between
-    // visits. The context coalesces concurrent scans with package completion.
+    // inventory. Keep the cached cards visible while the scan runs, but always
+    // re-check after package work has drained: an app can be installed or
+    // removed outside WinCommander moments after the last scan.
     if (!inventoryScanRequestedRef.current) {
       inventoryScanRequestedRef.current = true;
       void waitForPackageOperation().then(async () => {
         try {
-          // A startup update check may have refreshed the catalog while this
-          // effect was waiting for the shared package lock. Recheck freshness
-          // after acquiring it so entering this panel does not launch Winget
-          // inventory a second time.
           await waitForAppInventoryScan();
-          const catalogIsFresh = getPackageUpdateInventorySnapshot().catalogInventoryFresh
-            || !isAppInventoryRefreshDue(appInventory?.lastScanAt);
-          if (!catalogIsFresh) {
-            await runAppInventoryScan(true);
-            await waitForAppInventoryScan();
-          }
+          await runAppInventoryScan(true);
+          await waitForAppInventoryScan();
         }
         finally { releasePackageOperation(); }
       });
