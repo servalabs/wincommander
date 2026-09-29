@@ -2561,6 +2561,7 @@ pub fn run() {
             backend::get_system_idle_seconds,
             license::get_license_status,
             license::activate_license,
+            license::refresh_license_if_due,
             license::refresh_license,
             license::clear_license_cache,
             license::deactivate_license,

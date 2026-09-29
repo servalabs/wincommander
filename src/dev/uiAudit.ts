@@ -796,6 +796,7 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "is_dev_build":
       return true;
     case "get_license_status":
+    case "refresh_license_if_due":
     case "refresh_license":
     case "activate_license":
     case "start_trial":
@@ -1186,7 +1187,7 @@ export function installUiAuditMocks(): void {
       ? payload as Record<string, unknown>
       : {};
     if (command === "get_settings") return structuredClone(settings);
-    if (command === "get_license_status" || command === "refresh_license") return structuredClone(licenseStatus);
+    if (command === "get_license_status" || command === "refresh_license_if_due" || command === "refresh_license") return structuredClone(licenseStatus);
     if (command === "activate_license") {
       licenseStatus = createUiAuditLicenseStatus();
       return structuredClone(licenseStatus);

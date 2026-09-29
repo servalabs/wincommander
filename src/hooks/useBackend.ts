@@ -2320,6 +2320,7 @@ export function useBackend() {
     getLicenseStatus: () => invoke<AppLicenseStatus>("get_license_status"),
     activateAppLicense: (licenseKey: string) =>
       invoke<AppLicenseStatus>("activate_license", { licenseKey }),
+    refreshAppLicenseIfDue: () => invoke<AppLicenseStatus>("refresh_license_if_due"),
     refreshAppLicense: () => invoke<AppLicenseStatus>("refresh_license"),
     clearAppLicenseCache: () => invoke<void>("clear_license_cache"),
     deactivateAppLicense: () => invoke<void>("deactivate_license"),

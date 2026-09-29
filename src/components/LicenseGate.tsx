@@ -5,7 +5,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useBackend from "../hooks/useBackend";
 import { useAppState } from "../context/AppContext";
 import { useInvalidateLicense, useLicenseQuery } from "../hooks/queries/useLicenseQuery";
-import { nextLicenseRefreshDelay } from "../lib/licenseRefreshSchedule";
+import {
+  nextLicenseRefreshDueDelay,
+  nextLicenseRefreshRetryDelay,
+} from "../lib/licenseRefreshSchedule";
 import { fireLicenseCelebration } from "./shared/LicenseCelebrationListener";
 import LicensePurchasePanel from "./LicensePurchasePanel";
 import { DURATION_S, EASE } from "./shared/motion";
@@ -59,7 +62,12 @@ export default function LicenseGate({
 
   const { data: licenseStatus } = useLicenseQuery();
   const invalidateLicense = useInvalidateLicense();
-  const { activateAppLicense, refreshAppLicense, startTrial } = useBackend();
+  const {
+    activateAppLicense,
+    refreshAppLicense,
+    refreshAppLicenseIfDue,
+    startTrial,
+  } = useBackend();
   const {
     refreshAll,
     refreshDashboard,
@@ -104,6 +112,8 @@ export default function LicenseGate({
   }, [activeTab, openOnDemand]);
 
   useEffect(() => {
+    if (!licenseStatus?.licensed || licenseStatus.plan === "trial") return;
+
     let cancelled = false;
     let failures = 0;
     let timer: ReturnType<typeof window.setTimeout> | null = null;
@@ -112,24 +122,33 @@ export default function LicenseGate({
     };
     const refresh = async () => {
       try {
-        await refreshAppLicense();
+        const refreshed = await refreshAppLicenseIfDue();
         invalidateLicense();
         failures = 0;
+        if (!cancelled && refreshed.licensed && refreshed.plan !== "trial") {
+          schedule(nextLicenseRefreshDueDelay(refreshed.last_verified_at));
+        }
       } catch {
         // The signed local token remains authoritative through its offline grace.
         failures += 1;
-      } finally {
-        if (!cancelled) schedule(nextLicenseRefreshDelay(failures));
+        if (!cancelled) schedule(nextLicenseRefreshRetryDelay(failures));
       }
     };
-    // One launch check plus jittered twice-daily validation keeps entitlement
-    // current without repeatedly calling the licensing service.
-    schedule(1_500);
+    // The native command makes a network call only after its persisted
+    // verification deadline or a seat heartbeat is due. Recalculate when the
+    // status changes so a restart near the deadline doesn't wait another 12h.
+    schedule(nextLicenseRefreshDueDelay(licenseStatus.last_verified_at));
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [invalidateLicense, refreshAppLicense]);
+  }, [
+    invalidateLicense,
+    licenseStatus?.last_verified_at,
+    licenseStatus?.licensed,
+    licenseStatus?.plan,
+    refreshAppLicenseIfDue,
+  ]);
 
   const refreshPaidData = useCallback(async () => {
     await refreshAll();

@@ -15,6 +15,14 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const OFFLINE_GRACE_SECONDS: u64 = 7 * 24 * 60 * 60;
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+const DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 12 * 60 * 60;
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+const MIN_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 60 * 60;
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
+const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 12 * 60 * 60;
+const SEAT_HEARTBEAT_INTERVAL_SECONDS: u64 = 14 * 24 * 60 * 60;
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[cfg(test)]
 const TRIAL_DURATION_SECONDS: u64 = 16 * 24 * 60 * 60; // 16 days
                                                        // Mainline ServaLabs verification material. The Ed25519 public key is public
@@ -68,6 +76,11 @@ struct SignedTokenEnvelope {
 struct CachedLicense {
     token: SignedTokenEnvelope,
     last_verified_at: u64,
+    /// The next time this device should ask the worker to persist a seat
+    /// heartbeat. Older cache files lack this value; their next normal,
+    /// read-only refresh learns it from the worker before a heartbeat is due.
+    #[serde(default)]
+    seat_heartbeat_due_at: Option<u64>,
     #[serde(default)]
     seats_used: Option<u32>,
     #[serde(default)]
@@ -155,12 +168,34 @@ struct WorkerTokenResponse {
     seats_used: Option<u32>,
     #[serde(rename = "seatLimit")]
     seat_limit: Option<u32>,
+    #[serde(rename = "seatHeartbeatDueAt")]
+    seat_heartbeat_due_at: Option<u64>,
 }
 
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[derive(Debug, Deserialize)]
 struct WorkerTrialStatusResponse {
     ok: bool,
     available: Option<bool>,
+    #[serde(rename = "cacheTtlSeconds", alias = "cache_ttl_seconds")]
+    cache_ttl_seconds: Option<u64>,
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrialEligibilityCache {
+    version: u8,
+    device_hash: String,
+    checked_at: u64,
+    ttl_seconds: u64,
+    available: bool,
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+#[derive(Debug, Clone, Copy)]
+struct TrialAvailability {
+    available: bool,
+    cache_ttl_seconds: u64,
 }
 
 fn worker_rejection(payload: &WorkerTokenResponse, fallback: &str) -> (bool, String) {
@@ -202,6 +237,8 @@ struct WorkerRefreshRequest<'a> {
     app_version: &'a str,
     #[serde(rename = "isPortable")]
     is_portable: bool,
+    #[serde(rename = "seatHeartbeat", skip_serializing_if = "Option::is_none")]
+    seat_heartbeat: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -242,30 +279,8 @@ fn now_unix() -> u64 {
 /// load would refuse to parse, locking the user out of their
 /// licence/trial state until they re-activated.
 fn atomic_write(path: &PathBuf, data: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Path has no parent directory: {}", path.display()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("Path has no file name: {}", path.display()))?;
-    let tmp_path = parent.join(format!(".{}.tmp", file_name));
-
-    {
-        let mut tmp = fs::File::create(&tmp_path)
-            .map_err(|e| format!("Failed to open temp file {}: {}", tmp_path.display(), e))?;
-        tmp.write_all(data)
-            .map_err(|e| format!("Failed to write temp file {}: {}", tmp_path.display(), e))?;
-        tmp.sync_all()
-            .map_err(|e| format!("Failed to fsync temp file {}: {}", tmp_path.display(), e))?;
-    }
-
-    fs::rename(&tmp_path, path).map_err(|e| {
-        // Clean up the temp file if rename failed so we don't leak it.
-        let _ = fs::remove_file(&tmp_path);
-        format!("Failed to atomically replace {}: {}", path.display(), e)
-    })
+    // Licence refreshes from different Windows sessions must own separate staging files.
+    crate::datastore_io::atomic_write(path, data)
 }
 
 // ── Windows To Go (WTG) detection ────────────────────────────────────
@@ -743,7 +758,10 @@ pub(crate) fn license_api_base() -> Result<String, String> {
 }
 
 #[cfg(not(feature = "portable"))]
-async fn trial_available_from_worker(api_base: &str, device_hash: &str) -> Option<bool> {
+async fn trial_available_from_worker(
+    api_base: &str,
+    device_hash: &str,
+) -> Option<TrialAvailability> {
     let client = crate::net::doh_http_client().ok()?;
     let response = client
         .post(format!("{}/trial/status", api_base))
@@ -757,7 +775,129 @@ async fn trial_available_from_worker(api_base: &str, device_hash: &str) -> Optio
         .await
         .ok()?;
     let body = response.json::<WorkerTrialStatusResponse>().await.ok()?;
-    body.ok.then_some(body.available.unwrap_or(false))
+    body.ok.then_some(TrialAvailability {
+        available: body.available.unwrap_or(false),
+        cache_ttl_seconds: bounded_trial_eligibility_cache_ttl(body.cache_ttl_seconds),
+    })
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn bounded_trial_eligibility_cache_ttl(worker_ttl_seconds: Option<u64>) -> u64 {
+    match worker_ttl_seconds {
+        Some(ttl)
+            if (MIN_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS
+                ..=MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS)
+                .contains(&ttl) =>
+        {
+            ttl
+        }
+        _ => DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
+    }
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn trial_eligibility_cache_path() -> Result<PathBuf, String> {
+    // This is an advisory UI cache, never an entitlement decision. Keep it in
+    // the current user's writable data directory so a standard-user launch can
+    // suppress redundant status requests without weakening machine-wide token
+    // protection or trial enforcement at the worker.
+    Ok(crate::paths::user_data_dir()?.join("trial_eligibility_cache.json"))
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn cached_trial_availability(
+    cached: &TrialEligibilityCache,
+    device_hash: &str,
+    now: u64,
+) -> Option<bool> {
+    let ttl = (MIN_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS..=MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS)
+        .contains(&cached.ttl_seconds)
+        .then_some(cached.ttl_seconds)?;
+    (cached.version == 1
+        && cached.device_hash == device_hash
+        && cached.checked_at <= now
+        && now.saturating_sub(cached.checked_at) < ttl)
+        .then_some(cached.available)
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn cached_trial_availability_from_json(raw: &str, device_hash: &str, now: u64) -> Option<bool> {
+    let cached = serde_json::from_str::<TrialEligibilityCache>(raw).ok()?;
+    cached_trial_availability(&cached, device_hash, now)
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn load_trial_eligibility_cache(device_hash: &str, now: u64) -> Option<bool> {
+    let path = trial_eligibility_cache_path().ok()?;
+    let raw = fs::read_to_string(path).ok()?;
+    cached_trial_availability_from_json(&raw, device_hash, now)
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn save_trial_eligibility_cache(device_hash: &str, availability: TrialAvailability) {
+    let cached = TrialEligibilityCache {
+        version: 1,
+        device_hash: device_hash.to_string(),
+        checked_at: now_unix(),
+        ttl_seconds: bounded_trial_eligibility_cache_ttl(Some(availability.cache_ttl_seconds)),
+        available: availability.available,
+    };
+    let Ok(data) = serde_json::to_string(&cached) else {
+        return;
+    };
+    let Some(path) = trial_eligibility_cache_path().ok() else {
+        return;
+    };
+    let _ = atomic_write(&path, data.as_bytes());
+}
+
+#[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+fn clear_trial_eligibility_cache() {
+    if let Ok(path) = trial_eligibility_cache_path() {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn seat_heartbeat_is_due(cached: &CachedLicense, now: u64) -> bool {
+    match cached.seat_heartbeat_due_at {
+        Some(due_at) => due_at <= now,
+        // Do not turn every existing installation into an immediate D1 write
+        // during rollout. The next ordinary 12-hour refresh is read-only and
+        // supplies the authoritative due time for legacy cache files.
+        None => false,
+    }
+}
+
+fn license_service_refresh_is_due(last_verified_at: u64, now: u64) -> bool {
+    last_verified_at > now
+        || now.saturating_sub(last_verified_at) >= LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS
+}
+
+fn paid_license_refresh_is_due(cached: &CachedLicense, claims: &LicenseClaims, now: u64) -> bool {
+    claims.plan != "trial"
+        && (license_service_refresh_is_due(cached.last_verified_at, now)
+            || seat_heartbeat_is_due(cached, now))
+}
+
+fn next_seat_heartbeat_due_at(now: u64) -> u64 {
+    now.saturating_add(SEAT_HEARTBEAT_INTERVAL_SECONDS)
+}
+
+fn seat_heartbeat_due_from_worker(worker_due_at: Option<u64>, now: u64) -> u64 {
+    worker_due_at.unwrap_or_else(|| next_seat_heartbeat_due_at(now))
+}
+
+fn refreshed_seat_heartbeat_due_at(
+    previous_due_at: Option<u64>,
+    seat_heartbeat_requested: bool,
+    worker_due_at: Option<u64>,
+    refreshed_at: u64,
+) -> Option<u64> {
+    if seat_heartbeat_requested || previous_due_at.is_none() {
+        Some(seat_heartbeat_due_from_worker(worker_due_at, refreshed_at))
+    } else {
+        previous_due_at
+    }
 }
 
 fn license_file_path() -> Result<PathBuf, String> {
@@ -1143,14 +1283,23 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
     }
 
     let (api_base, public_key_b64) = config?;
+    #[cfg(feature = "portable")]
+    let _ = api_base;
     let cached = load_cached_license()?;
     let Some(cached) = cached else {
         #[cfg(feature = "portable")]
         let trial_available = false;
         #[cfg(not(feature = "portable"))]
-        let trial_available = trial_available_from_worker(&api_base, &device_hash)
-            .await
-            .unwrap_or(false);
+        let trial_available = match load_trial_eligibility_cache(&device_hash, now_unix()) {
+            Some(available) => available,
+            None => match trial_available_from_worker(&api_base, &device_hash).await {
+                Some(availability) => {
+                    save_trial_eligibility_cache(&device_hash, availability);
+                    availability.available
+                }
+                None => false,
+            },
+        };
         let status = LicenseStatus {
             configured: true,
             licensed: false,
@@ -1298,18 +1447,60 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         return Err("Activation token device hash mismatch.".to_string());
     }
 
+    let activated_at = now_unix();
     let cached = CachedLicense {
         token: SignedTokenEnvelope {
             payload: signed_payload,
             signature,
         },
-        last_verified_at: now_unix(),
+        last_verified_at: activated_at,
+        seat_heartbeat_due_at: Some(seat_heartbeat_due_from_worker(
+            payload.seat_heartbeat_due_at,
+            activated_at,
+        )),
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
     save_cached_license(&cached)?;
 
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
+    serde_json::to_value(status).map_err(|e| e.to_string())
+}
+
+/// Background refresh path. A fresh, verified paid token is returned locally;
+/// only an overdue verification or persisted seat heartbeat reaches the worker.
+/// Trial tokens are signed once and deliberately never sent to the paid
+/// `/license/refresh` endpoint.
+#[tauri::command]
+pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
+    let (_, public_key_b64) = match get_config() {
+        Ok(config) => config,
+        Err(_) => return get_license_status_inner().await,
+    };
+    let Some(cached) = load_cached_license()? else {
+        return get_license_status_inner().await;
+    };
+    let claims = parse_and_verify_claims(
+        &cached.token.payload,
+        &cached.token.signature,
+        &public_key_b64,
+    )?;
+    if !device_hash_matches(&claims.device_hash) {
+        return Err(
+            "License token does not match this device. Reactivate this device.".to_string(),
+        );
+    }
+
+    let status = status_from_cached(&cached, &claims, None);
+    if claims.plan == "trial" {
+        return serde_json::to_value(status).map_err(|e| e.to_string());
+    }
+
+    let now = now_unix();
+    if paid_license_refresh_is_due(&cached, &claims, now) || !status.valid {
+        return refresh_license().await;
+    }
+
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
 
@@ -1333,6 +1524,15 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     // refresh request to carry the exact hash it originally issued.
     let device_hash = cached_claims.device_hash.clone();
 
+    // A trial is a fixed, worker-signed 16-day token. It does not consume a
+    // paid licence seat and must never hit the paid refresh endpoint.
+    if cached_claims.plan == "trial" {
+        let status = status_from_cached(&cached, &cached_claims, None);
+        return serde_json::to_value(status).map_err(|e| e.to_string());
+    }
+
+    let seat_heartbeat_requested = seat_heartbeat_is_due(&cached, now_unix());
+
     let client = crate::net::doh_http_client()?;
 
     let response = client
@@ -1344,6 +1544,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
             app_id: APP_ID,
             app_version: env!("CARGO_PKG_VERSION"),
             is_portable: is_portable_os(),
+            seat_heartbeat: seat_heartbeat_requested.then_some(true),
         })
         .send()
         .await
@@ -1378,12 +1579,19 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         return Err("Refreshed token does not match this device.".to_string());
     }
 
+    let refreshed_at = now_unix();
     let updated = CachedLicense {
         token: SignedTokenEnvelope {
             payload: signed_payload,
             signature,
         },
-        last_verified_at: now_unix(),
+        last_verified_at: refreshed_at,
+        seat_heartbeat_due_at: refreshed_seat_heartbeat_due_at(
+            cached.seat_heartbeat_due_at,
+            seat_heartbeat_requested,
+            payload.seat_heartbeat_due_at,
+            refreshed_at,
+        ),
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
@@ -1453,6 +1661,10 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
         let device_hash = current_device_hash();
         let client = crate::net::doh_http_client()?;
 
+        // A prior advisory result must not outlive an actual trial request.
+        // The worker remains the sole once-per-device authority.
+        clear_trial_eligibility_cache();
+
         let response = client
             .post(format!("{}/trial", api_base))
             .json(&WorkerTrialRequest {
@@ -1491,12 +1703,24 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             return Err("Trial token device hash mismatch.".to_string());
         }
 
+        // The worker has now accepted this device's one-time trial. Persist a
+        // negative advisory result before the local signed-token write so a
+        // disk error cannot cause repeated trial attempts.
+        save_trial_eligibility_cache(
+            &device_hash,
+            TrialAvailability {
+                available: false,
+                cache_ttl_seconds: DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
+            },
+        );
+
         let cached = CachedLicense {
             token: SignedTokenEnvelope {
                 payload: signed_payload,
                 signature,
             },
             last_verified_at: now_unix(),
+            seat_heartbeat_due_at: None,
             seats_used: None,
             seat_limit: None,
         };
@@ -1581,6 +1805,46 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     #[test]
+    fn license_write_preserves_another_sessions_staging_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("license_cache.json");
+        let other_staging = directory.path().join(".license_cache.json.tmp");
+        fs::write(&other_staging, b"another session's pending token").unwrap();
+
+        atomic_write(&path, b"this session's complete token").unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"this session's complete token");
+        assert_eq!(
+            fs::read(other_staging).unwrap(),
+            b"another session's pending token"
+        );
+    }
+
+    #[test]
+    fn concurrent_license_writes_publish_complete_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("license_cache.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let writers: Vec<_> = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let payload = vec![index as u8; 32_768 + index * 8_191];
+                    barrier.wait();
+                    atomic_write(&path, &payload).unwrap();
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let saved = fs::read(path).unwrap();
+        assert!((0..8).any(|index| saved == vec![index as u8; 32_768 + index * 8_191]));
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn ordinary_pro_cannot_satisfy_investigator_entitlement() {
         let ordinary_pro = vec!["paid".to_string()];
         assert!(!has_entitlement_in_features(&ordinary_pro, "advanced"));
@@ -1617,6 +1881,204 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fresh_trial_eligibility_cache_is_device_bound_and_uses_worker_ttl() {
+        let now = 1_000_000;
+        let cache = TrialEligibilityCache {
+            version: 1,
+            device_hash: "device-a".to_string(),
+            checked_at: now - 1,
+            ttl_seconds: 43_200,
+            available: true,
+        };
+        let raw = serde_json::to_string(&cache).expect("serialize trial cache");
+
+        assert_eq!(
+            cached_trial_availability_from_json(&raw, "device-a", now),
+            Some(true),
+            "a fresh cache for this device avoids another trial-status lookup"
+        );
+        assert_eq!(
+            cached_trial_availability_from_json(&raw, "device-b", now),
+            None,
+            "a cache copied from another device must not be used"
+        );
+    }
+
+    #[test]
+    fn invalid_or_expired_trial_eligibility_cache_forces_a_normal_lookup() {
+        let now = 1_000_000;
+        let cache = TrialEligibilityCache {
+            version: 1,
+            device_hash: "device-a".to_string(),
+            checked_at: now - DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
+            ttl_seconds: DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
+            available: true,
+        };
+
+        assert_eq!(
+            cached_trial_availability(&cache, "device-a", now),
+            None,
+            "the cache expires exactly at its TTL"
+        );
+
+        let mut future = cache.clone();
+        future.checked_at = now + 1;
+        assert_eq!(
+            cached_trial_availability(&future, "device-a", now),
+            None,
+            "a future timestamp must not suppress a server lookup"
+        );
+
+        let mut invalid_ttl = cache.clone();
+        invalid_ttl.checked_at = now - 1;
+        invalid_ttl.ttl_seconds = 0;
+        assert_eq!(
+            cached_trial_availability(&invalid_ttl, "device-a", now),
+            None,
+            "an invalid TTL must not be trusted"
+        );
+        assert_eq!(
+            cached_trial_availability_from_json("not JSON", "device-a", now),
+            None,
+            "a corrupt cache must fall back to the normal worker lookup"
+        );
+    }
+
+    #[test]
+    fn trial_eligibility_ttl_is_bounded_with_a_twelve_hour_default() {
+        assert_eq!(bounded_trial_eligibility_cache_ttl(Some(43_200)), 43_200);
+        assert_eq!(
+            bounded_trial_eligibility_cache_ttl(None),
+            DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS
+        );
+        assert_eq!(
+            bounded_trial_eligibility_cache_ttl(Some(0)),
+            DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS
+        );
+        assert_eq!(
+            bounded_trial_eligibility_cache_ttl(Some(7 * 24 * 60 * 60)),
+            DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS
+        );
+    }
+
+    #[test]
+    fn ordinary_refresh_omits_seat_heartbeat_and_due_refresh_includes_it() {
+        let ordinary = WorkerRefreshRequest {
+            payload: "payload",
+            signature: "signature",
+            device_hash: "device-a",
+            app_id: APP_ID,
+            app_version: "test",
+            is_portable: false,
+            seat_heartbeat: None,
+        };
+        let due = WorkerRefreshRequest {
+            payload: "payload",
+            signature: "signature",
+            device_hash: "device-a",
+            app_id: APP_ID,
+            app_version: "test",
+            is_portable: false,
+            seat_heartbeat: Some(true),
+        };
+
+        let ordinary_json = serde_json::to_value(ordinary).expect("serialize ordinary refresh");
+        let due_json = serde_json::to_value(due).expect("serialize due refresh");
+        assert!(
+            ordinary_json.get("seatHeartbeat").is_none(),
+            "ordinary twice-daily refreshes must remain read-only"
+        );
+        assert_eq!(due_json["seatHeartbeat"], true);
+    }
+
+    #[test]
+    fn seat_heartbeat_due_time_moves_only_for_a_heartbeat_or_legacy_cache_migration() {
+        let now = 1_000_000;
+        let original_due = now + 60;
+        let cached = CachedLicense {
+            token: SignedTokenEnvelope {
+                payload: "payload".to_string(),
+                signature: "signature".to_string(),
+            },
+            last_verified_at: now,
+            seat_heartbeat_due_at: Some(original_due),
+            seats_used: None,
+            seat_limit: None,
+        };
+
+        assert!(!seat_heartbeat_is_due(&cached, now));
+        assert!(seat_heartbeat_is_due(&cached, original_due));
+        assert!(!seat_heartbeat_is_due(
+            &CachedLicense {
+                seat_heartbeat_due_at: None,
+                ..cached.clone()
+            },
+            now
+        ), "a legacy cache must first receive a read-only refresh deadline");
+        assert_eq!(
+            refreshed_seat_heartbeat_due_at(Some(original_due), false, Some(now + 1), now),
+            Some(original_due),
+            "a normal successful refresh must not extend the next write deadline"
+        );
+        assert_eq!(
+            refreshed_seat_heartbeat_due_at(Some(original_due), true, None, now),
+            Some(now + SEAT_HEARTBEAT_INTERVAL_SECONDS),
+            "only a successful requested heartbeat sets the next deadline"
+        );
+        assert_eq!(
+            refreshed_seat_heartbeat_due_at(Some(original_due), true, Some(now + 123), now),
+            Some(now + 123),
+            "a successful requested heartbeat must prefer the worker's policy deadline"
+        );
+        assert_eq!(
+            refreshed_seat_heartbeat_due_at(None, false, Some(now + 456), now),
+            Some(now + 456),
+            "a legacy cache adopts the worker deadline without writing a heartbeat"
+        );
+    }
+
+    #[test]
+    fn background_paid_refresh_uses_the_persisted_twelve_hour_deadline() {
+        let now = 1_000_000;
+        let mut claims = trial_claims(now + 100_000);
+        claims.plan = "pro".to_string();
+        let mut cached = CachedLicense {
+            token: SignedTokenEnvelope {
+                payload: "payload".to_string(),
+                signature: "signature".to_string(),
+            },
+            last_verified_at: now - 1,
+            seat_heartbeat_due_at: Some(now + SEAT_HEARTBEAT_INTERVAL_SECONDS),
+            seats_used: None,
+            seat_limit: None,
+        };
+
+        assert!(!paid_license_refresh_is_due(&cached, &claims, now));
+        cached.last_verified_at = now - LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS;
+        assert!(
+            paid_license_refresh_is_due(&cached, &claims, now),
+            "verification is due exactly twelve hours after the persisted check"
+        );
+
+        cached.last_verified_at = now - 1;
+        cached.seat_heartbeat_due_at = Some(now);
+        assert!(
+            paid_license_refresh_is_due(&cached, &claims, now),
+            "a due seat heartbeat must override an otherwise fresh verification"
+        );
+
+        claims.plan = "trial".to_string();
+        assert!(
+            !paid_license_refresh_is_due(&cached, &claims, now),
+            "trial tokens must never be sent to the paid refresh endpoint"
+        );
+        assert!(
+            license_service_refresh_is_due(now + 1, now),
+            "a future local verification timestamp must fail safe into a refresh"
+        );
+    }
+
     fn claims_json(device_hash: &str) -> String {
         // LicenseClaims has no #[serde(rename_all = "camelCase")] — field
         // names must match the Rust snake_case identifiers exactly.
@@ -1649,6 +2111,7 @@ mod tests {
             entitlement_revoked,
             seats_used: Some(99),
             seat_limit: Some(0),
+            seat_heartbeat_due_at: None,
         }
     }
 
