@@ -34,10 +34,26 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 - Frequent live metrics share a bounded five-second native disk snapshot while
   CPU and RAM stay live. Identity, licence, portable state, settings, and
   mutation inputs are not cached in that snapshot.
+- Serialized Vault service operations mark both lock acquisition and execution
+  as blocking work while preserving the caller's Windows impersonation thread.
+  Queued status reads must not starve the broker's pipe I/O or timeout timers.
+  Mount/dismount response waits are bounded to three minutes and are never
+  replayed automatically after an ambiguous transport failure. A timeout is
+  an unknown result, not proof that no mount occurred.
+- Available drive letters are preloaded at app startup into the shared in-memory
+  query cache and refreshed every thirty seconds while the app is visible.
+  Secure Storage and Quick Mount open from that cache, not a new letter scan.
+  Manual refresh and mount submission recheck availability; the service remains
+  authoritative when allocating a drive. Fleet policy-specific exclusions are
+  not stored in this common cache.
 - Secure Storage refreshes its authorized mount inventory every five seconds
-  while the panel is visible, and on return to the window. Hidden panels do not
-  poll it. Overlapping older replies cannot replace a newer observation; the
-  Refresh control remains busy until outstanding reads finish.
+  while the panel is visible, with one initial check when no observation exists.
+  Clicking, focusing, or returning to the panel does not start an extra check.
+  Hidden panels do not poll it. Manual Refresh and post-operation checks start
+  fresh reads, even during a background check; older replies cannot replace
+  newer observations. Manual Refresh is busy until its foreground reads finish.
+  Failed checks retain the last confirmed rows with a stale warning and disabled
+  actions; a confirmed empty result removes them.
 - The native trace uses one monotonic clock for allowlisted native phases and
   frontend job milestones. It stores no paths, settings values, command
   arguments, licence material, or error text.

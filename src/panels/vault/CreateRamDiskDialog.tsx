@@ -33,7 +33,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
 
   const [sizeMB, setSizeMB] = useState(MIN_RAM_DISK_SIZE_MB);
   const [letter, setLetter] = useState("R");
-  const driveList = useVaultDriveLetters(isOpen);
+  const driveList = useVaultDriveLetters();
   const [filesystem, setFilesystem] = useState<Filesystem>("NTFS");
   const [label, setLabel] = useState("TEMP");
   const [readOnly, setReadOnly] = useState(false);

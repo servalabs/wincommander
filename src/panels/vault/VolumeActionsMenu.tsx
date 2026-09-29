@@ -16,11 +16,12 @@ interface VolumeActionsMenuProps {
   accessible?: boolean;
   dismountAllowed?: boolean;
   dismountReason?: string | null;
+  statusError?: string | null;
   onErrorChange?: (message: string) => void;
   onDismounted: () => void;
 }
 
-function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
+function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, statusError, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
   const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
@@ -59,6 +60,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   };
 
   const handleDismount = async () => {
+    if (statusError) { setFailure(statusError); return; }
     setDismounting(true);
     setFailure("");
     try {
@@ -85,6 +87,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   };
 
   const handleOpen = async () => {
+    if (statusError) { setFailure(statusError); return; }
     setFailure("");
     try {
       const result = await openEncryptionVolume(letter);
@@ -101,7 +104,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
           minimal
           small
           onClick={handleOpen}
-          disabled={!accessible}
+          disabled={!accessible || Boolean(statusError)}
           className="vol-inline-btn"
           aria-label={accessible ? `Open ${driveLabel} in Explorer` : `${driveLabel} is unavailable in this Windows sign-in`}
         />
@@ -126,6 +129,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
             minimal
             small
             loading={dismounting}
+            disabled={Boolean(statusError)}
             onClick={handleDismount}
             className="vol-danger-btn"
             aria-label={`Force dismount ${driveLabel}`}

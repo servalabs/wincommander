@@ -3,6 +3,7 @@ import { useState, useCallback, useMemo } from "react";
 import { trackBackendWork } from "../lib/activityStore";
 import { clearCommand, commandId, invokeCommand } from "../lib/commandIds";
 import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
+import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 
 // Types for backend responses
@@ -1321,7 +1322,7 @@ function getBackendRequestKey(command: string, params: Record<string, string>): 
   return `${command}:${JSON.stringify(orderedParams)}`;
 }
 
-const inFlightBackendRequests = new Map<string, Promise<unknown>>();
+const runTrackedRequest = createBackendRequestTracker();
 
 async function hasActivePaidEntitlement(): Promise<boolean> {
   try {
@@ -1355,24 +1356,12 @@ async function runBackendScriptTracked<T>(
 ): Promise<T> {
   const serializedParams = serializeBackendParams(params);
   const requestKey = getBackendRequestKey(command, serializedParams);
-  const existingRequest = inFlightBackendRequests.get(requestKey) as Promise<T> | undefined;
-  if (existingRequest) {
-    return existingRequest;
-  }
-
-  const request = trackBackendWork(
+  return runTrackedRequest(command, requestKey, () => trackBackendWork(
     invoke<T>("run_backend_script", {
       command,
       params: serializedParams,
     })
-  );
-
-  inFlightBackendRequests.set(requestKey, request as Promise<unknown>);
-  try {
-    return await request;
-  } finally {
-    inFlightBackendRequests.delete(requestKey);
-  }
+  ));
 }
 
 // Hook for executing backend commands

@@ -12,6 +12,7 @@ interface DriveLetterPickerProps {
   id: string;
   value: string;
   letters: string[];
+  variant?: "dropdown" | "grid";
   loading?: boolean;
   unavailable?: boolean;
   onRefresh?: () => void;
@@ -46,6 +47,7 @@ export default function DriveLetterPicker({
   id,
   value,
   letters,
+  variant = "dropdown",
   loading = false,
   unavailable = false,
   onRefresh,
@@ -112,11 +114,16 @@ export default function DriveLetterPicker({
         </div>
       ) : (
         <div className="drive-letter-selection">
-          <select id={id} aria-label="Drive letter" className="drive-letter-select" value={choices.includes(value) ? value : ""}
+          {variant === "grid" ? <div id={id} className="drive-letter-picker" role="radiogroup" aria-label="Drive letter">
+            {choices.map(letter => <button key={letter} type="button" role="radio" aria-checked={value === letter}
+              disabled={loading || unavailable}
+              className={`drive-letter-picker__option${value === letter ? " drive-letter-picker__option--selected" : ""}`}
+              onClick={() => onChange(letter)}>{letter}:</button>)}
+          </div> : <select id={id} aria-label="Drive letter" className="drive-letter-select" value={choices.includes(value) ? value : ""}
             disabled={loading || unavailable || choices.length === 0} onChange={event => onChange(event.target.value)} onKeyDown={onKeyDown}>
             <option value="" disabled>{loading ? "Checking free letters…" : unavailable ? "Drive list unavailable" : "Select a free drive letter"}</option>
             {choices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
-          </select>
+          </select>}
           {onRefresh && <Button minimal disabled={loading} onClick={onRefresh}>Refresh free letters</Button>}
           {loading && <p role="status" className="mount-target-hint">Checking available drive letters…</p>}
           {!loading && unavailable && <VaultOperationNotice message="Free drive letters could not be checked. Refresh the list before continuing." />}

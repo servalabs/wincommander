@@ -4,8 +4,8 @@
 // Replaces the old "poll everything always" approach that pinned CPU at 80-90%.
 //
 // Behavior:
-//   1. On panel ENTER: immediate one-shot refresh (fresh data on arrival)
-//   2. While on panel: silent refresh every 10s
+//   1. On panel ENTER: one-shot refresh (Vault only on first unloaded visit)
+//   2. While on panel: silent refresh every 10s (Vault every 5s while visible)
 //   3. On panel LEAVE: interval is cleared (zero CPU for hidden panels)
 //   4. Dashboard special case: refreshLiveMetrics runs every 2s (Rust-native,
 //      zero PS spawns) so CPU/RAM gauges stay live.
@@ -85,6 +85,9 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
     // Track previous panel to fire immediate one-shot on panel change
     const prevPanelRef = useRef<PanelId | null>(null);
     const panelRefreshInFlightRef = useRef(false);
+    const vaultInitialReadRef = useRef(false);
+    const vaultHasObservationRef = useRef(false);
+    vaultHasObservationRef.current = Boolean(appState.encryptionStatus || appState.vaultStatusError);
 
     // ── Manifest-driven refresh lookup ───────────────────────────────────
     // Instead of a switch-case mapping panel → refresh function, we look up
@@ -108,7 +111,7 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         const fn = refreshers[refreshKey];
         if (typeof fn !== 'function') return null;
         // Most refresh functions accept a `silent` boolean param
-        return async () => { await fn(true); };
+        return async () => { await (activePanel === 'vault' ? refreshVault(true, true) : fn(true)); };
     }, [
         activePanel,
         appSettings?.app?.modules,
@@ -170,28 +173,24 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
             prevPanelRef.current = activePanel;
             // AppProvider owns the once-per-launch hardware refresh. Returning
             // to the dashboard must not start another PowerShell hardware scan.
-            if (refreshFn && (activePanel !== 'vault' || document.visibilityState === 'visible')) {
+            if (refreshFn && activePanel !== 'vault') {
                 void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
             }
         }
 
         // ── Periodic refresh while panel is active ──
         if (!refreshFn) return;
+        if (activePanel === 'vault' && !vaultInitialReadRef.current && document.visibilityState === 'visible') {
+            vaultInitialReadRef.current = true;
+            if (!vaultHasObservationRef.current) void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
+        }
 
         const refreshVisible = () => {
             if (activePanel === 'vault' && document.visibilityState !== 'visible') return;
             void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
         };
         const id = setInterval(refreshVisible, activePanel === 'vault' ? 5_000 : PANEL_POLL_INTERVAL);
-        if (activePanel === 'vault') {
-            window.addEventListener('focus', refreshVisible);
-            document.addEventListener('visibilitychange', refreshVisible);
-        }
-        return () => {
-            clearInterval(id);
-            window.removeEventListener('focus', refreshVisible);
-            document.removeEventListener('visibilitychange', refreshVisible);
-        };
+        return () => clearInterval(id);
 
     }, [
         activePanel,

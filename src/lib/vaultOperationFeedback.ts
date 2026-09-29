@@ -1,4 +1,12 @@
 import { VAULT_MOUNT_REASONS, vaultMountResultLabel } from "@/panels/fleet/vaultAccessTypes";
+import type { EncryptionStatus, MountVolumeResult } from "@/hooks/useBackend";
+
+/** Call only after the mount receipt and Windows drive verification succeeded. */
+export function confirmedMountObservationError(mount: Pick<MountVolumeResult, "drive" | "internalDrive">, observed: EncryptionStatus | null | undefined): string | null {
+  if (!observed || !Array.isArray(observed.volumes)) return "vault_confirmed_mount_list_unavailable";
+  return observed.volumes.some(volume => volume.letter === mount.drive && volume.internalDrive === mount.internalDrive && volume.accessible !== false)
+    ? null : "vault_confirmed_mount_not_in_list";
+}
 
 export function isAuthorizedBulkDismountReceipt(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -11,6 +19,14 @@ export function isAuthorizedBulkDismountReceipt(value: unknown): boolean {
 /** Show only known failure categories, never raw service transport or credential data. */
 export function vaultOperationError(error: unknown, operation: "mount" | "dismount" | "open" = "mount"): string {
   const detail = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
+  if (detail.includes("vault_mount_options_timeout")) return "The Vault service did not finish checking the drive list. No mount was started. Wait for any current operation to finish, then refresh the free letters.";
+  if (detail.includes("vault_request_timeout") || detail.includes("pro response timeout")) return "The Vault service did not return an operation result in time. The operation may still be running. Do not submit it again; refresh Secure Storage to check the drive's status first.";
+  if (detail.includes("vault_operation_unconfirmed")) return "The connection to the Vault service was interrupted before its result arrived. The operation may have completed. Refresh Secure Storage to check the drive's status before trying again.";
+  if (detail.includes("vault_service_busy") || detail.includes("all pipe instances are busy")) return "The Vault service is busy and could not accept this request. Wait for the current operation to finish, then refresh Secure Storage before retrying.";
+  if (detail.includes("vault_runtime_update_required")) return "The installed Pro component is incompatible with this WinCommander build. Install a matching Pro update from License / Pro. If no compatible update is available, the matching release must be published first; reinstalling the older Pro will not fix it. No mount or dismount was started.";
+  if (detail.includes("vault_service_personal_status_invalid")) return "The installed WinCommander app, Pro component and Vault service could not exchange a compatible status result. Update or repair them together, then refresh the mounted-volume status. The current mount or dismount state could not be verified.";
+  if (detail.includes("vault_confirmed_mount_list_unavailable")) return "The mount and Windows drive access were confirmed, but the mounted-volume list could not be refreshed. This does not mean mounting failed. Refresh status before using the drive; do not mount it again.";
+  if (detail.includes("vault_confirmed_mount_not_in_list")) return "The mount and Windows drive access were confirmed, but the latest volume list no longer shows that same accessible drive. Its state may have changed. Refresh status before using or mounting it again.";
   const partial = detail.match(/(?:^|\s)vault_bulk_dismount_partial:([a-z_]+):(\d+):(\d+)(?:$|\s)/);
   if (partial && VAULT_MOUNT_REASONS.includes(partial[1] as typeof VAULT_MOUNT_REASONS[number])) {
     const dismounted = Number(partial[2]);

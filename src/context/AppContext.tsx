@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { invoke } from '@tauri-apps/api/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthMode } from './AuthModeContext';
+import useVaultDriveLetters from '../hooks/useVaultDriveLetters';
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from '../lib/decoyFakeData';
 import { settingsKeys } from '../hooks/queries/useSettingsQuery';
 import useBackend, {
@@ -35,7 +36,7 @@ import { preserveDashboardPolicyUnknowns } from '../lib/dashboardPolicyObservati
 import { getStartupSettingsFailureMessage } from '../lib/startupSettingsFailure';
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
 import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
-import { createVaultStatusRefresh } from '../lib/vaultStatusRefresh';
+import { createVaultStatusRefresh, vaultInventoryFailureMessage } from '../lib/vaultStatusRefresh';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -46,6 +47,8 @@ interface AppState {
     networkBlocklistStatus: BlocklistStatus | null;
     networkDnsStatus: DNSStatus | null;
     encryptionStatus: EncryptionStatus | null;
+    vaultStatusError: string | null;
+    vaultManualRefreshing: boolean;
     productivityStatus: { installed?: boolean; running: boolean; details: { server: boolean; input: boolean; active: boolean } } | null;
 
     // App Inventory — persisted snapshot from settings.json → current.apps.inventory
@@ -106,7 +109,7 @@ interface AppState {
      *  exact moment the task popup says "INSTALLED". */
     markMeshInstalled: (installed: boolean) => void;
     refreshBranding: () => Promise<void>;
-    refreshVault: (silent?: boolean) => Promise<EncryptionStatus | null>;
+    refreshVault: (silent?: boolean, background?: boolean) => Promise<EncryptionStatus | null>;
     refreshProductivity: (silent?: boolean) => Promise<void>;
     /** Run the unified app inventory scan (Get-AppInventory).
      * Auto-persists to settings.json → current.apps.inventory.
@@ -167,6 +170,7 @@ function stripNullLeaves(obj: unknown): Record<string, unknown> | undefined {
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { mode: authMode } = useAuthMode();
+    useVaultDriveLetters(true);
     const { data: startupLicense } = useLicenseQuery();
     const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
     const settingsReadStoreRef = useRef(createStartupProbeStore<AppSettings>());
@@ -206,6 +210,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [networkBlocklistStatus, setNetworkBlocklistStatus] = useState<BlocklistStatus | null>(null);
     const [networkDnsStatus, setNetworkDnsStatus] = useState<DNSStatus | null>(null);
     const [encryptionStatus, setEncryptionStatus] = useState<EncryptionStatus | null>(null);
+    const [vaultStatusError, setVaultStatusError] = useState<string | null>(null);
+    const [vaultManualRefreshing, setVaultManualRefreshing] = useState(false);
     const [productivityStatus, setProductivityStatus] = useState<{ installed?: boolean; running: boolean; details: { server: boolean; input: boolean; active: boolean } } | null>(null);
 
     // Unified Settings State
@@ -246,7 +252,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const vaultStatusRefreshRef = useRef(createVaultStatusRefresh<EncryptionStatus>(
         setEncryptionStatus,
         busy => setLoading(prev => prev.vault === busy ? prev : { ...prev, vault: busy }),
+        error => setVaultStatusError(error === null ? null : vaultInventoryFailureMessage(error)),
+        setVaultManualRefreshing,
     ));
+    const vaultAuthModeRef = useRef(authMode);
+    useEffect(() => {
+        if (vaultAuthModeRef.current !== authMode) {
+            vaultAuthModeRef.current = authMode;
+            vaultStatusRefreshRef.current.reset();
+        }
+    }, [authMode]);
     const [startupError, setStartupError] = useState<string | null>(null);
     const [startupAttempt, setStartupAttempt] = useState(0);
     const retryStartup = useCallback(() => {
@@ -869,13 +884,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMeshInstalled(installed);
     }, []);
 
-    const refreshVault = useCallback(async (_silent: boolean = false): Promise<EncryptionStatus | null> => {
+    const refreshVault = useCallback(async (_silent: boolean = false, background = false): Promise<EncryptionStatus | null> => {
         // Only the authenticated inventory may expose mounted volumes.
+        if (authMode === 'decoy') return null;
         return vaultStatusRefreshRef.current(async () => {
             const res = await getEncryptedVolumeStatus();
-            return res.success && res.data ? res.data : null;
-        });
-    }, [getEncryptedVolumeStatus]);
+            if (!res.success || !res.data) throw new Error(res.error || "vault_inventory_unavailable");
+            return res.data;
+        }, background);
+    }, [authMode, getEncryptedVolumeStatus]);
 
     const refreshProductivity = useCallback(async (silent: boolean = false) => {
         if (!silent) setLoading(prev => ({ ...prev, dashboard: true }));
@@ -1411,7 +1428,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateStatus,
         networkBlocklistStatus,
         networkDnsStatus,
-        encryptionStatus,
+        encryptionStatus: authMode === "decoy" ? null : encryptionStatus,
+        vaultStatusError: authMode === "decoy" ? null : vaultStatusError,
+        vaultManualRefreshing,
         productivityStatus,
         // KT: in decoy mode return inert fake data so panels show a plausible PC, not a blank install
         appInventory: authMode === "decoy" ? DECOY_INVENTORY : appInventory,
@@ -1452,6 +1471,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         networkBlocklistStatus,
         networkDnsStatus,
         encryptionStatus,
+        vaultStatusError,
+        vaultManualRefreshing,
         productivityStatus,
         appInventory,
         authMode,

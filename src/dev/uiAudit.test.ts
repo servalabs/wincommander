@@ -7,6 +7,9 @@ import { shouldSkipStartupSplash } from "../lib/startupMode";
 import { ALL_CATEGORIES } from "../panels/cleanup/cleanupCategories";
 
 describe("UI audit fixture", () => {
+  test("preloads synthetic free letters through the native drive-list command", () => {
+    expect(uiAuditDirectResponse("get_vault_available_drive_letters")).toEqual({ letters: ["X", "Y", "Z"] });
+  });
   test("skips only the dev audit splash so exhaustive route checks do not time out", () => {
     expect(shouldSkipStartupSplash(true, "/ui-audit.html")).toBe(true);
     expect(shouldSkipStartupSplash(true, "/nested/ui-audit.html")).toBe(true);

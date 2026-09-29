@@ -52,7 +52,7 @@ function RamDisksSection() {
   const [asSkipAfterLockdown, setAsSkipAfterLockdown] = useState<boolean>(!!savedAutostart.skipAfterLockdown);
   const [autostartSaving, setAutostartSaving] = useState(false);
   const [autostartConfigOpen, setAutostartConfigOpen] = useState(false);
-  const driveList = useVaultDriveLetters(autostartConfigOpen);
+  const driveList = useVaultDriveLetters();
   const savedMountedLetter = savedAutostart.driveLetter?.replace(/:$/, "").toUpperCase();
   const ownSavedLetterIsMounted = savedMountedLetter && status?.disks.some(disk => disk.letter?.replace(/:$/, "").toUpperCase() === savedMountedLetter);
   const autostartLetters = !driveList.loading && !driveList.unavailable && ownSavedLetterIsMounted

@@ -7,6 +7,7 @@ import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
 import { getDisplayBranding } from "../lib/branding";
 import useBackend, { type EncryptionPartition } from "../hooks/useBackend";
+import useVaultDriveLetters from "../hooks/useVaultDriveLetters";
 import type { QuickMountSlot } from "../types/settings";
 import useVisibility from "../hooks/useVisibility";
 import useEntitlements from "../hooks/useEntitlements";
@@ -16,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
-import { isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
 import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
@@ -132,7 +133,6 @@ export default function RightSidebar() {
         mountVolume,
         verifyVaultDrive,
         getEncryptionPartitions,
-        getAvailableDriveLetters,
         openEncryptionVolume,
         safePastePrepare,
     } = useBackend();
@@ -202,8 +202,7 @@ export default function RightSidebar() {
         setQmFeedbackTone(tone);
     }, []);
     const [qmMountedDrive, setQmMountedDrive] = useState<string | null>(null);
-    const [qmAvailableLetters, setQmAvailableLetters] = useState<string[]>([]);
-    const [qmLettersLoading, setQmLettersLoading] = useState(false);
+    const { letters: qmAvailableLetters, loading: qmLettersLoading, refresh: refreshDriveLetters } = useVaultDriveLetters();
     const [dismountFailure, setDismountFailure] = useState('');
     // Fleet Vaults never use this user-settings list: the secure service owns
     // the caller-filtered projection and takes only an opaque entry id on mount.
@@ -246,21 +245,13 @@ export default function RightSidebar() {
     }, [qmOpen, refreshFleetVaults]);
 
     const refreshQmLetters = useCallback(async () => {
-        setQmLettersLoading(true);
-        try {
-            const result = await getAvailableDriveLetters();
-            if (!result.success || !result.data) throw new Error();
-            const letters = selectableDriveLetters(result.data.letters);
-            setQmAvailableLetters(letters);
-            return letters;
-        } catch {
-            setQmAvailableLetters([]);
+        const letters = await refreshDriveLetters();
+        if (!letters) {
             setQmFeedback('Free drive letters could not be checked. Refresh the list before saving or mounting.');
-            return null;
-        } finally { setQmLettersLoading(false); }
-    }, [getAvailableDriveLetters]);
+        }
+        return letters;
+    }, [refreshDriveLetters, setQmFeedback]);
 
-    useEffect(() => { if (qmOpen) void refreshQmLetters(); }, [qmOpen, qmEditing?.idx, refreshQmLetters]);
     const qmLetterChoices = selectableDriveLetters(qmAvailableLetters, quickMountSlots
         .filter((_, index) => qmEditing?.idx === 'new' || index !== qmEditing?.idx)
         .map(slot => slot.driveLetter));
@@ -419,12 +410,12 @@ export default function RightSidebar() {
             if (r?.success && r.data?.scope === "machine") {
                 await verifyVaultDrive(r.data.drive);
                 const refreshed = await refreshVault(true);
-                const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
-                    volume.letter === r.data?.drive
-                    && volume.internalDrive === r.data?.internalDrive,
-                );
-                if (!isVisibleInThisSession) {
-                    throw new Error("The encrypted volume was not available in this signed-in Windows session.");
+                const observationError = confirmedMountObservationError(r.data, refreshed);
+                if (observationError) {
+                    const message = vaultOperationError(observationError);
+                    setQmFeedback(message);
+                    showError(message, undefined, { kind: "notification" });
+                    return;
                 }
                 showSuccess(`Volume mounted as ${r.data.drive}`);
                 setQmFeedback(`Volume mounted as ${r.data.drive}.`, 'success');

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
+import { confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
+import type { EncryptionStatus } from "@/hooks/useBackend";
 
 test("bulk success requires an explicit bounded authorized-subset receipt", () => {
   const receipt = { status: "authorized_dismounted", state: "unmounted", scope: "authorized", dismounted: 2 };
@@ -17,6 +18,35 @@ test("shows the same unlock guidance for native string and Error rejections", ()
   expect(vaultOperationError(new Error("vault_engine_unlock_failed"))).toBe(message);
 });
 
+test("runtime incompatibility distinguishes preflight denial from unverified post-operation status", () => {
+  const preflight = vaultOperationError("vault_runtime_update_required");
+  expect(preflight).toContain("matching Pro update from License / Pro");
+  expect(preflight).toContain("reinstalling the older Pro will not fix it");
+  expect(preflight).toContain("No mount or dismount was started");
+  const status = vaultOperationError("vault_service_personal_status_invalid", "dismount");
+  expect(status).toContain("app, Pro component and Vault service");
+  expect(status).toContain("Update or repair them together");
+  expect(status).toContain("could not be verified");
+  expect(status).not.toContain("No mount or dismount was started");
+  expect(status).not.toContain("password");
+});
+
+test("confirmed mounts distinguish unavailable inventory from an observed missing or replaced drive", () => {
+  const mount = { drive: "J:", internalDrive: 4 };
+  const observation = (volumes: unknown[]) => ({ volumes }) as EncryptionStatus;
+  const unavailable = confirmedMountObservationError(mount, null);
+  const missing = confirmedMountObservationError(mount, observation([]));
+  expect(unavailable).toBe("vault_confirmed_mount_list_unavailable");
+  expect(missing).toBe("vault_confirmed_mount_not_in_list");
+  expect(confirmedMountObservationError(mount, observation([{ letter: "J:", internalDrive: 5 }]))).toBe(missing);
+  expect(confirmedMountObservationError(mount, observation([{ ...mount, letter: "J:", accessible: false }]))).toBe(missing);
+  expect(confirmedMountObservationError(mount, observation([{ ...mount, letter: "J:", accessible: true }]))).toBe(null);
+  expect(vaultOperationError(unavailable)).toContain("mount and Windows drive access were confirmed");
+  expect(vaultOperationError(unavailable)).toContain("does not mean mounting failed");
+  expect(vaultOperationError(missing)).toContain("latest volume list no longer shows");
+  expect(vaultOperationError(unavailable)).not.toContain("password");
+});
+
 test("missing Pro installation and licensing failure never diagnose the container password", () => {
   for (const error of ["PRO_NOT_INSTALLED: missing engine", "vault_pro_not_installed"]) {
     expect(vaultOperationError(error)).toContain("Pro module is not installed");
@@ -24,6 +54,16 @@ test("missing Pro installation and licensing failure never diagnose the containe
   }
   expect(vaultOperationError("vault_entitlement_denied")).toContain("verify or activate your key");
   expect(vaultOperationError("vault_entitlement_denied")).not.toContain("password");
+});
+
+test("timeouts and interrupted operations never claim failure or encourage automatic replay", () => {
+  for (const operation of ["mount", "dismount"] as const) {
+    expect(vaultOperationError("vault_request_timeout", operation)).toContain("may still be running");
+    expect(vaultOperationError("vault_operation_unconfirmed", operation)).toContain("may have completed");
+    expect(vaultOperationError("vault_operation_unconfirmed", operation)).not.toContain("password");
+  }
+  expect(vaultOperationError("vault_mount_options_timeout")).toContain("No mount was started");
+  expect(vaultOperationError("All pipe instances are busy. (os error 231)")).toContain("service is busy");
 });
 
 test("generic engine failures never diagnose an incorrect password or expose transport data", () => {

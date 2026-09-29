@@ -807,6 +807,8 @@ export function uiAuditDirectResponse(command: string): unknown {
       return { ip: "203.0.113.42" };
     case "get_managed_policy":
       return { managed: false, source: "", values: {} };
+    case "get_vault_available_drive_letters":
+      return uiAuditBackendResponse("Get-AvailableDriveLetters");
     case "get_vault_access_capabilities":
       return { can_manage_policy: true };
     case "get_vault_access_policy":
