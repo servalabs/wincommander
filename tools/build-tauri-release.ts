@@ -84,7 +84,7 @@ copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 copyFileSync(serviceBuildPath, stagedServicePath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
+  run(["bun", "x", "--package", "@tauri-apps/cli@2.11.4", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
 } finally {
   rmSync(generatedConfigPath, { force: true });
   rmSync(stagedContextShredPath, { force: true });
