@@ -27,11 +27,13 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("policyBlockers");
   });
 
-  test("the camera capability toggle requires elevation for its policy writes", async () => {
+  test("the camera toggle permits current-user consent without weakening machine policy", async () => {
     const toggles = await read("src/registry/capabilities.toggles.ts");
     const webcam = toggles.slice(toggles.indexOf('id: "cap-webcam"'), toggles.indexOf('id: "cap-microphone"'));
 
-    expect(webcam).toContain("needsAdmin: true");
+    expect(webcam).toContain("needsAdmin: false");
+    const source = await read("src-tauri/commander-free/scripts/modules/privacy/telemetry.ps1");
+    expect(source).toContain("if (-not (Test-IsAdmin)) { return Set-CurrentUserCapabilityAccess");
   });
 
   test("capability changes fail when Windows still reports the opposite effective access", async () => {

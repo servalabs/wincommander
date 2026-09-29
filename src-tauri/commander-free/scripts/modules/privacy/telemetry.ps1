@@ -374,11 +374,82 @@ $Script:AppPrivacyValueNames = @{
     'microphone' = 'LetAppsAccessMicrophone'
     'location'   = 'LetAppsAccessLocation'
     'appDiagnostics' = 'LetAppsGetDiagnosticInfo'
+    'contacts' = 'LetAppsAccessContacts'
+    'appointments' = 'LetAppsAccessCalendar'
+    'phoneCall' = 'LetAppsAccessPhone'
+    'phoneCallHistory' = 'LetAppsAccessCallHistory'
+    'chat' = 'LetAppsAccessMessaging'
+    'email' = 'LetAppsAccessEmail'
+    'radios' = 'LetAppsAccessRadios'
+    'userNotificationListener' = 'LetAppsAccessNotifications'
+    'gazeInput' = 'LetAppsAccessGazeInput'
+    'userAccountInformation' = 'LetAppsAccessAccountInfo'
+    'bluetoothSync' = 'LetAppsSyncWithDevices'
+}
+
+function Get-CapabilityRegistryValue {
+    param([string]$Path, [string]$Name = 'Value')
+    try { $properties = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return $null }
+    $property = $properties.PSObject.Properties[$Name]
+    if ($null -ne $property) { return $property.Value }
+    return $null
+}
+
+function Set-CurrentUserCapabilityAccess {
+    param([ValidateSet('webcam', 'microphone', 'location', 'contacts', 'appointments', 'phoneCall', 'phoneCallHistory', 'chat', 'email', 'radios', 'userNotificationListener', 'documentsLibrary', 'picturesLibrary', 'videosLibrary', 'broadFileSystemAccess', 'gazeInput', 'appDiagnostics', 'userAccountInformation', 'bluetoothSync')][string]$Capability, [ValidateSet('Allow', 'Deny')][string]$Access)
+    try {
+        # Standard users change only their own consent, never machine policy or services.
+        if ($Script:AppPrivacyValueNames.ContainsKey($Capability)) {
+            $name = $Script:AppPrivacyValueNames[$Capability]
+            foreach ($hive in @('HKLM:', 'HKCU:')) {
+                $policy = Get-CapabilityRegistryValue -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name $name
+                if ($policy -in @(1, 2)) { throw 'Managed policy controls this permission.' }
+                foreach ($suffix in @('_ForceAllowTheseApps', '_ForceDenyTheseApps')) {
+                    $exceptions = Get-CapabilityRegistryValue -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name ($name + $suffix)
+                    if (@($exceptions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count) { throw 'Managed app exceptions control this permission.' }
+                }
+            }
+        }
+        if ($Access -eq 'Allow') {
+            $machineConsent = Get-CapabilityRegistryValue -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
+            if ($machineConsent -eq 'Deny') { throw 'Machine consent blocks this permission.' }
+            if ($Script:DeviceAccessGuids.ContainsKey($Capability)) {
+                $device = Get-CapabilityRegistryValue -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\$($Script:DeviceAccessGuids[$Capability])"
+                if ($device -eq 'Deny') { throw 'Device permission is blocked.' }
+            }
+            if ($Capability -eq 'webcam') {
+                foreach ($hive in @('HKLM:', 'HKCU:')) {
+                    $camera = Get-CapabilityRegistryValue -Path "$hive\SOFTWARE\Policies\Microsoft\Camera" -Name 'AllowCamera'
+                    if ($null -ne $camera -and $camera -eq 0) { throw 'Camera policy blocks access.' }
+                }
+            }
+        }
+        $root = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
+        $paths = @($root)
+        if (Test-Path -LiteralPath $root -ErrorAction Stop) {
+            $paths += @(Get-ChildItem -LiteralPath $root -Recurse -ErrorAction Stop | ForEach-Object { $_.PSPath })
+        }
+        if ($Capability -in @('webcam', 'microphone')) { $paths += "$root\NonPackaged" }
+        $paths = @($paths | Select-Object -Unique)
+        foreach ($path in $paths) {
+            if (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) { New-Item -Path $path -Force -ErrorAction Stop | Out-Null }
+            Set-ItemProperty -LiteralPath $path -Name Value -Value $Access -Type String -Force -ErrorAction Stop
+        }
+        foreach ($path in $paths) {
+            if ((Get-CapabilityRegistryValue -Path $path) -cne $Access) { throw 'Consent readback did not match.' }
+        }
+        $effective = Get-AppCapabilityAccessStatus -Capability $Capability
+        if ($effective.error -or $effective.value -ne $Access) { throw 'Effective access did not match.' }
+        @{ status = 'updated'; capability = $Capability; value = $Access; scope = 'user'; verified = $true; entriesTouched = $paths.Count }
+    } catch {
+        @{ error = $true; verified = $false; message = 'Windows could not confirm this account permission. An administrator policy may control it, or Windows denied the change. No machine policy was changed.' }
+    }
 }
 
 function Set-AppCapabilityAccess {
     param(
-        [Parameter(Mandatory = $true)][string]$Capability,
+        [Parameter(Mandatory = $true)][ValidateSet('webcam', 'microphone', 'location', 'contacts', 'appointments', 'phoneCall', 'phoneCallHistory', 'chat', 'email', 'radios', 'userNotificationListener', 'documentsLibrary', 'picturesLibrary', 'videosLibrary', 'broadFileSystemAccess', 'gazeInput', 'appDiagnostics', 'userAccountInformation', 'bluetoothSync')][string]$Capability,
         [Parameter(Mandatory = $true)][ValidateSet("Allow", "Deny")][string]$Access
     )
 
@@ -401,6 +472,7 @@ function Set-AppCapabilityAccess {
     #   4. PnP device disable (optional, kernel-level — handled by a
     #      separate `Set-CapabilityHardwareDisable` toggle if the user
     #      wants the nuclear option).
+    if (-not (Test-IsAdmin)) { return Set-CurrentUserCapabilityAccess -Capability $Capability -Access $Access }
     Assert-IsAdmin
     try {
         $touched = 0
@@ -427,7 +499,7 @@ function Set-AppCapabilityAccess {
         # Locks "Let apps access your camera/microphone" sub-toggle.
         # Dual HKCU+HKLM write mirrors the clipboard approach that reliably
         # shows the "Managed by your organization" banner in Windows Settings.
-        if ($Script:AppPrivacyValueNames.ContainsKey($Capability)) {
+        if ($Capability -in @('webcam', 'microphone', 'location', 'appDiagnostics')) {
             $valueName = $Script:AppPrivacyValueNames[$Capability]
             foreach ($hive in @('HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy', 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy')) {
                 try {
@@ -527,7 +599,7 @@ public class WC_PolicyRefresh {
             }
         }
 
-        @{ status = "updated"; capability = $Capability; value = $Access; entriesTouched = $touched }
+        @{ status = "updated"; capability = $Capability; value = $Access; verified = $true; entriesTouched = $touched }
     }
     catch {
         @{ error = $true; message = $_.Exception.Message }

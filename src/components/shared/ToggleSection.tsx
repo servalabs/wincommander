@@ -5,7 +5,7 @@ import SectionCard from "./SectionCard";
 import ConflictToggleDialog from "./ConflictToggleDialog";
 import PinEntryDialog from "./PinEntryDialog";
 import { executeBackendCommand } from "../../hooks/useBackend";
-import { showError } from "../../utils/toast";
+import { showError, showSuccess } from "../../utils/toast";
 import { getByPath, getToggleVisibility, buildToggleCommandParams } from "../../types/toggles";
 import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import { useAppState } from "../../context/AppContext";
@@ -111,6 +111,7 @@ export default function ToggleSection({
 
   // ── Pending state: toggles currently being applied ───────────────
   const [pendingMap, setPendingMap] = useState<Record<string, boolean>>({});
+  const [operationErrors, setOperationErrors] = useState<Record<string, string>>({});
 
   // Filter toggles belonging to THIS section AND matching search query
   const visibleSectionToggles = toggles.filter((t) => {
@@ -186,10 +187,16 @@ export default function ToggleSection({
    */
   const applyToggle = useCallback(
     async (toggle: ToggleDef, checked: boolean, extraParams?: Record<string, string | number | boolean>): Promise<boolean> => {
-      if (isPrivilegedWriteBlocked(toggle.needsAdmin, systemInfo?.isAdmin)) {
-        showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
+      const fail = (message: string) => {
+        const visible = message.replace(/\s+/g, " ").trim().slice(0, 360);
+        setOperationErrors(previous => ({ ...previous, [toggle.id]: visible }));
+        void showError(visible);
         return false;
+      };
+      if (isPrivilegedWriteBlocked(toggle.needsAdmin, systemInfo?.isAdmin)) {
+        return fail(MACHINE_SCOPE_ELEVATION_MESSAGE);
       }
+      setOperationErrors(previous => { const next = { ...previous }; delete next[toggle.id]; return next; });
       setPendingMap((prev) => ({ ...prev, [toggle.id]: true }));
 
       try {
@@ -205,8 +212,7 @@ export default function ToggleSection({
         }
 
         if (!result.success) {
-          showError(result.error || `Failed to ${checked ? "enable" : "disable"} ${toggle.label}`);
-          return false;
+          return fail(result.error || `Failed to ${checked ? "enable" : "disable"} ${toggle.label}`);
         }
 
         // refreshSettings() already re-reads settings.json, updates appSettings, and
@@ -214,11 +220,17 @@ export default function ToggleSection({
         // refetchQueries was a redundant second IPC that compounded the freeze on
         // rapid toggling.
         await refreshSettings();
+        const receipt = result.data as { verified?: boolean; value?: string; scope?: string } | undefined;
+        if (toggle.capabilityKey && (receipt?.verified !== true || receipt.value !== (checked ? "Deny" : "Allow"))) {
+          return fail("Windows did not confirm this permission change. Refresh its status and retry; the change has not been marked successful.");
+        }
+        if (toggle.capabilityKey && receipt?.verified === true) {
+          void showSuccess(`${toggle.label}: ${checked ? "blocked" : "allowed"}${receipt.scope === "user" ? " for this Windows account" : ""}. Windows confirmed the permission.`, 4000, { kind: "notification" });
+        }
         onToggled?.(toggle, checked);
         return true;
       } catch (err) {
-        showError(err instanceof Error ? err.message : String(err));
-        return false;
+        return fail(err instanceof Error ? err.message : String(err));
       } finally {
         setPendingMap((prev) => {
           const next = { ...prev };
@@ -352,7 +364,7 @@ export default function ToggleSection({
           <div key={toggle.id}>
             <UniversalToggle
               label={wording.label}
-              description={needsElevation ? `${wording.description} Requires an administrator.` : wording.description}
+              description={needsElevation ? `${wording.description} Requires an administrator.` : toggle.capabilityKey && systemInfo?.isAdmin !== true ? `${wording.description} Current Windows account only; administrator policies still apply.` : wording.description}
               checked={getChecked(toggle)}
               onChange={(checked) => handleToggle(toggle, checked)}
               loading={pendingMap[toggle.id]}
@@ -381,6 +393,7 @@ export default function ToggleSection({
               }}
             />
             {needsElevation && <p role="alert" className="mt-1 text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
+            {operationErrors[toggle.id] && <p role="alert" className="mt-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">{operationErrors[toggle.id]}</p>}
           </div>
         );
       })}

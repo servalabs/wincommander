@@ -41,6 +41,12 @@ After a successful toggle, the backend syncs the new state back into **both**
 `ideal` and `current` via a command→settings mapping, so the UI reflects the
 change immediately without waiting for the next probe.
 
+App-capability controls can be used by standard Windows accounts. In a
+non-elevated session they write and verify only that account's consent entries,
+not machine policies or services. Administrator-enforced permissions remain
+authoritative and a blocked or unverified request shows an inline error. The
+elevated session retains its existing machine-policy behavior.
+
 ### Drift detection and convergence
 
 The Rust engine flattens `ideal` and `current`, compares them, and emits a

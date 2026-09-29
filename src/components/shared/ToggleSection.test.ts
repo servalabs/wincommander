@@ -41,4 +41,14 @@ describe("ToggleSection", () => {
     expect(source).toContain("needsElevation ||");
     expect(source).toContain("MACHINE_SCOPE_ELEVATION_MESSAGE");
   });
+
+  test("keeps failed operations visible and only announces confirmed capability changes", () => {
+    const source = readFileSync("src/components/shared/ToggleSection.tsx", "utf8");
+    expect(source).toContain('operationErrors[toggle.id] && <p role="alert"');
+    expect(source).toContain('receipt?.verified !== true || receipt.value !== (checked ? "Deny" : "Allow")');
+    expect(source.indexOf('return fail("Windows did not confirm')).toBeGreaterThan(source.indexOf('await refreshSettings();'));
+    expect(source.indexOf('return fail("Windows did not confirm') < source.indexOf('onToggled?.(toggle, checked)')).toBe(true);
+    expect(source).toContain('Current Windows account only; administrator policies still apply.');
+    expect(source.indexOf('await refreshSettings();') < source.indexOf('void showSuccess(')).toBe(true);
+  });
 });

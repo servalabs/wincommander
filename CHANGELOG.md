@@ -5,6 +5,18 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Standard-user startup retains strict service identity verification while
+  allowing the connecting account to query the service's process identity.
+  The bounded connection retry sends no request before verification; it grants
+  neither administrator powers nor access to another account's saved settings.
+- Vault failures distinguish a missing Pro engine, denied ownership and unlock
+  failures, with visible inline notices and confirmed-operation notifications.
+  Owner and drive-letter selectors have visible borders. Updates require native
+  administrator authorization; standard-user licence activation remains available.
+- Standard users can change their own app-capability consent without writing
+  machine policy. Managed overrides and failed writes remain visible instead of
+  reporting an applied permission; startup errors explain the failure category.
+
 - Dashboard privacy fixes for Recall, background communication, Office logging
   and automatic device encryption now require Windows read-back before success.
   Failed or unverified changes stay visible with an explanation. Status checks
