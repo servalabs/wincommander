@@ -144,11 +144,13 @@ fn missing_key_signature_wrong_key_and_tampering_never_reach_persistence() {
 }
 
 #[test]
-fn failure_does_not_advance_cached_policy_and_an_invalid_strategy_is_denied() {
+fn persistence_failure_invalidates_uncertain_policy_and_an_invalid_strategy_is_denied() {
     let f = Fixture::new();
     let before = f.value();
     assert!(apply_with(&f.epoch(11, "merge"), |_| Err("injected I/O error".into())).is_err());
-    assert_eq!(f.value(), before);
+    assert!(SETTINGS_CACHE.lock().unwrap().is_none());
+    // Model an authoritative reload without touching the operator's real settings.
+    *SETTINGS_CACHE.lock().unwrap() = Some(serde_json::from_value(before).unwrap());
     f.deny(&f.epoch(11, "typo"));
 }
 

@@ -209,10 +209,9 @@ fn authorization_and_persistence_share_one_cache_transaction() {
             |_, _| panic!("failed write notified observers")
         )
         .is_err());
-    assert_eq!(
-        serde_json::to_value(SETTINGS_CACHE.lock().unwrap().as_ref().unwrap()).unwrap(),
-        before
-    );
+    assert!(SETTINGS_CACHE.lock().unwrap().is_none());
+    // Simulate the authoritative reload required after a possibly committed write.
+    *SETTINGS_CACHE.lock().unwrap() = Some(current);
     let updated = p.commit_with(false, false, |_| Ok(()), |_, _| {}).unwrap();
     assert_eq!(updated.policy.master_config_version, Some(13));
 }

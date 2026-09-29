@@ -484,6 +484,9 @@ async fn authorize_with_interactive_session(
 ) -> Result<Option<TrustOrigin>, String> {
     match classify_verb(verb) {
         CapabilityClass::ReadOnly => Ok(None),
+        // The handler enforces the captured token's SID; no admin bypass or
+        // active-console requirement can cross account boundaries.
+        CapabilityClass::UserScoped => Ok(None),
 
         // This is intentionally separate from read-only. The only current
         // user is personal Vault creation: caller-selected file I/O runs with
@@ -579,6 +582,10 @@ async fn dispatch_verb(
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
         "svc.diagnostics.query" => handle_diagnostics_query(args, peer),
+        "svc.personal_settings.read" | "svc.personal_settings.write" => {
+            crate::personal_settings::handle(&feature_id, args, peer)
+                .map_err(|kind| VerbError::new(kind, kind))
+        }
 
         APPLY_MACHINE_SETTING_VERB => handle_apply_machine_setting(args),
 

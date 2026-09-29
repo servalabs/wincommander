@@ -20,12 +20,10 @@ import useBackend, {
 import type { AppSettings, SettingsPatch, AppInventorySnapshot } from '../types/settings';
 import type { DependencyInfo } from '../hooks/useDependencies';
 import { _getOperationHandlers } from './TaskStatusContext';
-import { getDefaultModules, getFirstRunModules } from '../types/modules';
-import type { ModuleConfig } from '../types/modules';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
 import { isAppInventoryRefreshDue } from '../lib/appInventoryStartup';
 import { waitForSoftTimeout } from '../lib/softTimeout';
-import { hydrateWithinBudget } from '../lib/startupHydration';
+import { getStartupSettingsRecoveryMessage, hydrateWithinBudget, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus, type PersonalSettingsStatus } from '../lib/startupHydration';
 import { canRunStartupJob, type StartupEligibility } from '../lib/startupJobPolicy';
 import { createStartupCoordinator, type StartupCoordinator, type StartupJob, type StartupJobResult } from '../services/startupCoordinator';
 import { createStartupProbeStore } from '../services/startupProbeStore';
@@ -52,6 +50,7 @@ interface AppState {
 
     // Unified Settings
     appSettings: AppSettings | null;
+    personalSettingsStatus: PersonalSettingsStatus | null;
     /** Accepts a plain patch, or an updater `(latest) => patch` resolved at this
      *  write's turn in the serialized queue. Use the updater form when the patch
      *  is derived from shared array/collection state (e.g. lockedPanelIds,
@@ -168,6 +167,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const { data: startupLicense } = useLicenseQuery();
     const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
     const settingsReadStoreRef = useRef(createStartupProbeStore<AppSettings>());
+    const settingsRecoveryMessageRef = useRef<string | null>(null);
     const systemProbeStoreRef = useRef(createStartupProbeStore<unknown>());
     const startupStatusStoreRef = useRef(createStartupProbeStore<unknown>());
     const packageUpdateStartupRequestedRef = useRef(false);
@@ -206,6 +206,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Unified Settings State
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [personalSettingsStatus, setPersonalSettingsStatus] = useState<PersonalSettingsStatus | null>(null);
     const appSettingsRef = useRef<AppSettings | null>(null);
     useEffect(() => { appSettingsRef.current = appSettings; }, [appSettings]);
     const patchChainRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -241,24 +242,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [startupError, setStartupError] = useState<string | null>(null);
     const [startupAttempt, setStartupAttempt] = useState(0);
     const retryStartup = useCallback(() => {
+        settingsRecoveryMessageRef.current = null;
         setStartupError(null);
         setStartupAttempt(attempt => attempt + 1);
     }, []);
     const [startupDataState, setStartupDataState] = useState<'loading' | 'cached' | 'refreshing' | 'ready' | 'stale'>('loading');
-
-    const normalizeModulesConfig = useCallback((
-        modules: ModuleConfig | undefined,
-        level: 'simple' | 'standard' | 'advanced' | undefined,
-        firstRunComplete: boolean | undefined,
-    ): ModuleConfig => {
-        // Before setup is complete there is no user preference to preserve:
-        // seed every panel/module ON. Once setup has completed, retain the
-        // existing experience-level fallback and overlay every persisted choice.
-        const base = firstRunComplete === true
-            ? getDefaultModules(level ?? 'standard')
-            : getFirstRunModules();
-        return { ...base, ...(modules ?? {}) };
-    }, []);
 
     const normalizeDriveLetter = useCallback((value: string | null | undefined): string | null => {
         if (!value) return null;
@@ -691,6 +679,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (authMode === 'decoy') return;
         try {
             const updated = await invoke<AppSettings>('get_settings');
+            setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous));
             // PERF: the active-panel poller calls this every 10s just to READ
             // settings — it mutates nothing. Re-seeding React state with a fresh
             // object identity re-renders the whole app (every useAppState
@@ -972,33 +961,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 () => invoke<AppSettings>('get_settings'), signal ?? new AbortController().signal,
             );
             if (signal?.aborted) return null;
+            settingsRecoveryMessageRef.current = null;
+            setPersonalSettingsStatus(previous => readPersonalSettingsStatus(settings, previous));
 
-            // Heal sparse/legacy module maps so missing keys do NOT default to false on restart.
-            const currentLevel = settings.app?.experienceLevel ?? 'standard';
-            const normalizedModules = normalizeModulesConfig(
-                settings.app?.modules,
-                currentLevel,
-                settings.app?.firstRunComplete,
-            );
-            const hadModuleShapeDrift = Object.keys(normalizedModules).length !== Object.keys(settings.app?.modules ?? {}).length;
-            if (hadModuleShapeDrift) {
-                const normalizedSettings = {
-                    ...settings,
-                    app: { ...settings.app, modules: normalizedModules },
-                };
-                try {
-                    settings = await invoke<AppSettings>('patch_settings_cmd', {
-                        patch: { app: { modules: normalizedModules } },
-                    });
-                } catch {
-                    // A standard user may read the shared machine baseline but
-                    // cannot repair it. Keep the safe normalized shape in
-                    // memory so a denied persistence write never blocks startup.
-                    settings = normalizedSettings;
-                }
-            }
-
-            if (signal?.aborted) return null;
+            // Actual module edits persist their complete map through patchAppSettings.
+            settings = normalizeStartupSettings(settings);
             setAppSettings(settings);
             appSettingsRef.current = settings;
             seedFromCachedSettings(settings);
@@ -1087,12 +1054,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
             }
             return settings;
-        } catch {
+        } catch (error) {
             // Settings engine not available
+            settingsRecoveryMessageRef.current = getStartupSettingsRecoveryMessage(error);
             setStartupDataState('stale');
             return null;
         }
-    }, [seedFromCachedSettings, normalizeModulesConfig, queryClient]);
+    }, [seedFromCachedSettings, queryClient]);
 
     const patchAppSettings = useCallback(async (patch: SettingsPatch | ((latest: AppSettings | null) => SettingsPatch)) => {
         // KT: decoy guard — writes in decoy mode must never reach the backend;
@@ -1155,6 +1123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
           () => invoke<AppSettings>('get_settings'),
           (restored) => {
+            setPersonalSettingsStatus(previous => readPersonalSettingsStatus(restored, previous));
             appSettingsRef.current = restored;
             setAppSettings(restored);
             queryClient.setQueryData(settingsKeys.detail(), restored);
@@ -1164,7 +1133,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // keep the chain alive even if one write throws
         patchChainRef.current = run.catch(() => {});
         return run;
-    }, [authMode, seedFromCachedSettings, normalizeModulesConfig, queryClient]);
+    }, [authMode, seedFromCachedSettings, queryClient]);
 
     const startupEligibility = useMemo<StartupEligibility>(() => ({
         hasVerifiedPaidEntitlement: (startupLicense?.licensed === true && startupLicense.valid === true)
@@ -1229,6 +1198,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 run: (signal) => initSettings(false, undefined, signal),
             });
             if (cancelled) return;
+            if (settingsRecoveryMessageRef.current) {
+                setStartupError(settingsRecoveryMessageRef.current);
+                return;
+            }
             let hydratedSettings = cached.outcome === 'completed' ? cached.value : null;
             if (cached.outcome !== 'completed' || !cached.value) {
                 // Reuse the native read if it is still pending; retry only the
@@ -1237,7 +1210,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setStartupDataState('stale');
                 hydratedSettings = await hydrateWithinBudget(signal => initSettings(false, undefined, signal));
                 if (cancelled) return;
-            if (!hydratedSettings) {
+                if (settingsRecoveryMessageRef.current) {
+                    setStartupError(settingsRecoveryMessageRef.current);
+                    return;
+                }
+                if (!hydratedSettings) {
                     // A soft timeout only bounds the splash's first attempt; it
                     // cannot cancel a native DPAPI/filesystem read.  Keep one
                     // shared read alive instead of presenting a false
@@ -1248,7 +1225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     hydratedSettings = await initSettings(false);
                     if (cancelled) return;
                     if (!hydratedSettings) {
-                        setStartupError('WinCommander could not load its settings. Retry to continue.');
+                        setStartupError(settingsRecoveryMessageRef.current ?? 'WinCommander could not load its settings. Retry to continue.');
                         return;
                     }
                 }
@@ -1439,6 +1416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // KT: in decoy mode return inert fake data so panels show a plausible PC, not a blank install
         appInventory: authMode === "decoy" ? DECOY_INVENTORY : appInventory,
         appSettings: authMode === "decoy" ? DECOY_APP_SETTINGS : appSettings,
+        personalSettingsStatus: authMode === "decoy" ? null : personalSettingsStatus,
         patchAppSettings,
         refreshSettings,
         dependencyStatus,
@@ -1478,6 +1456,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         appInventory,
         authMode,
         appSettings,
+        personalSettingsStatus,
         patchAppSettings,
         refreshSettings,
         dependencyStatus,

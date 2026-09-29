@@ -18,7 +18,7 @@ flowchart LR
     direction TB
     FREE["wincommander-free.exe<br/>(commander-free, AGPL)<br/>UI · free tier · licence · broker<br/>asInvoker: caller token"]
     PRO["wincommander-pro.exe<br/>(commander-pro, paid)<br/>headless, paid-tier handlers"]
-    SVC["wincommander-svc.exe<br/>Optional administrator component<br/>Fleet Vault policy + mount lifecycle"]
+    SVC["wincommander-svc.exe<br/>Optional administrator component<br/>Fleet Vault lifecycle + personal settings"]
   end
 
   subgraph crates["Linked crates (no side effects)"]
@@ -41,12 +41,14 @@ flowchart LR
     direction TB
     STORE[("%ProgramData%\\WinCommander\\<br/>settings · PIN hashes · licence · hide flag<br/>(machine-wide)")]
     USTORE[("%LOCALAPPDATA%\\WinCommander\\<br/>logs · Privacy Shield quota · search index<br/>(per-user)")]
+    PSTORE[("%ProgramData%\\WinCommanderPersonalSettings\\<br/>SID-owned preferences + protected secret envelope")]
   end
 
   UI -- "Tauri IPC · invoke()" --> FREE
   FREE -- "decrypt + spawn" --> PS
   FREE == "require_paid + named pipe<br/>HMAC-signed frames" ==> PRO
-  FREE == "authorized Vault requests<br/>caller token preserved" ==> SVC
+  FREE == "Vault + personal settings requests<br/>authenticated Windows peer" ==> SVC
+  SVC -- "authenticated caller SID · revision-checked atomic save" --> PSTORE
   PRO -- "paid PowerShell" --> PS
   PRO -. "signed Notification frames" .-> FREE
   FREE -- "DoH update check" --> UPD
@@ -55,6 +57,7 @@ flowchart LR
   FREE --> USTORE
   SHARED -.-> FREE
   SHARED -.-> PRO
+  SHARED -.-> SVC
   SEARCH -.-> FREE
 ```
 
@@ -76,6 +79,7 @@ flowchart LR
 | Backend dispatcher | AES decrypt, data-driven tier registry (`COMMAND_REGISTRY`) with match fallback, module gate, PS dispatch, settings sync | `src-tauri/commander-free/src/backend.rs` |
 | App-data store | Per-section at-rest encrypted persistence; `load`/`save`/`load_profile`/`save_profile`; current `enc:v2:` + base64(nonce∥ciphertext), Argon2id KDF, AES-256-GCM and authenticated storage context; legacy `enc:v1:` remains read-only compatible and upgrades on the next save; per-install `.install.material` | `src-tauri/commander-free/src/datastore.rs` |
 | Settings engine | `ideal`/`current` model, drift, patch, locked paths; `load_profile_section`/`save_profile_section` seams (P1 wires them) | `src-tauri/commander-free/src/settings.rs` |
+| Personal settings service | Ordinary preferences are independent of Windows password-derived keys. The authenticated pipe token selects the owner; a revision-checked atomic record contains preferences and a separately AES-GCM-protected secret envelope using the existing profile key. Machine policy/PIN settings remain outside this record. See [settings storage](docs/frontend/settings-reference.md) and [security boundaries](SECURITY.md). | `src-tauri/commander-free/src/personal_settings.rs`, `src-tauri/commander-svc/src/personal_settings.rs`, `src-tauri/wincmd-shared/src/personal_settings.rs` |
 | Licence layer | Ed25519 JWT verify, device binding, trial, grace, entitlement | `src-tauri/commander-free/src/license.rs` |
 | Pro broker | Spawn Pro, handshake, signed dispatch, notifications | `src-tauri/commander-free/src/sidecar.rs` |
 | Endpoint management integration | Endpoint responsibilities are split between session-bound and service-owned components. `commander-svc` (LocalSystem) owns selected machine functions and a durable signed-policy store, but not the full Fleet lifecycle; its `fleet_conn_loop`, `reconciler_loop`, and `command_worker_loop` are declared and not yet implemented. Managed settings with a mapped enable/disable command have an existing probe-and-reapply path; coverage and evidence freshness vary by control. See [SECURITY.md](SECURITY.md) for the operational limits. Planned ownership changes are tracked privately. | `src-tauri/commander-svc/`, `src-tauri/commander-free/src/settings.rs`, `src/hooks/useAutoHeal.ts` |
@@ -296,16 +300,24 @@ Trust model: an unexpected pipe client fails the PID check before learning the t
 
 ## Data model / storage
 
-Persistent state is local (atomic write via temp + rename); no server-side state except paid licence rows. **Gate/identity state — the encrypted settings (incl. the three startup-PIN hashes), the licence cache, the hidden-mode flag, and the runtime-visibility manifest — lives MACHINE-WIDE under `%ProgramData%\WinCommander\` so one activation + one PIN set covers every Windows account (the app runs elevated, so no extra ACL is needed). Per-user scratch (logs, Privacy Shield quota) stays under `%LOCALAPPDATA%`.**
+Persistent settings state is local. Machine installations keep shared policy and
+gate/identity state under `%ProgramData%\WinCommander\`; a current-user
+installation retains its general store in that profile's LocalAppData. The
+settings scope tables separate machine policy from personal preferences.
+Where the current service is installed, personal preferences use SID-owned,
+revision-checked records in `%ProgramData%\WinCommanderPersonalSettings\`, with
+restrictive ACLs and machine DPAPI. Logs, Privacy Shield quota and search state
+remain per-user. The [settings storage reference](docs/frontend/settings-reference.md#where-settings-live)
+owns encryption, migration, key recovery and unavailable-service behavior.
 
-- `store/settings.dat` — the central tree, encoded at rest (`enc:v1:` AES-256-GCM, argon2id KDF, per-install salt). `ideal` (user intent) vs `current` (machine reality), plus `app` (preferences, modules, flows), `policy` (admin/fleet). Schema in `src/types/settings.ts` + `settings.rs`; every key is catalogued in [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md). Plaintext `settings.json` is migrated on first launch and deleted after the encoded write succeeds.
+- `store/settings.dat` — the machine partition of the settings tree, encoded with AES-256-GCM (`enc:v2:` authenticated scope; legacy `enc:v1:` remains readable). The desktop merges the personal partition in memory into `AppSettings`; flows and other sensitive personal fields retain a separate encrypted envelope inside the service's atomic record. Plaintext migration cleanup requires confirmed service-backed personal and machine persistence, a durable hash journal, committed-partition checks, and exclusive-handle source verification before removal. Older no-service fallback writes retain the plaintext and journal. Encrypted legacy originals remain preserved.
 - Licence cache (`%ProgramData%\WinCommander\license_cache.json`, machine-wide) — signed JWT envelope (`payload` + `signature`), `last_verified_at`, optional seat info; verified against the build-embedded Ed25519 pubkey, bound to `current_device_hash()` — now derived from motherboard UUID + disk serial via `Get-CimInstance` (not the removed `wmic`), memoised per process (`license.rs`).
 - `trial.json` (`%ProgramData%\WinCommander\`) — write-only local 16-day trial record for UI display (`started_at`/`expires_at`); it is never read for entitlement. Starting a trial contacts the licence worker (`POST /trial`, device hash only) which mints a worker-signed token cached in `license_cache.json` and enforces once-per-device server-side (`device_trials`) — trial entitlement is not purely local. **Compiled out of the `portable` build and ignored if present, so a copied portable build can't farm trials.**
 - `shield-quota.json` — Privacy Shield daily-minute counter (`shield_quota.rs`).
 - `logs/wincommander.log` — rolling app log, 7-day purge at startup (`log.rs`). Each record is encrypted per line and source-tagged `[ui]` (frontend console + window errors), `[core]` (Free backend `log_message`), or `[pro]` (the Pro sidecar's stderr, drained line-by-line in `sidecar.rs` — which also keeps the piped stream from blocking Pro). The in-app **Error Center** (`LogViewer.tsx`, Secret Settings) reads it via `get_log_records`; optional severity filters are applied before the 500-record read window. Read and clear return empty / no-op in decoy mode so a coerced session can't see the real log.
-- `store/<section>.dat` — per-section at-rest-encoded JSON (`datastore.rs`): `enc:v1:` + base64(nonce[12] ∥ ciphertext+GCM-tag), argon2id-derived key (64 MiB / 2 iter / 1 lane) from per-install `.install.material`. General sections (including `settings`) use a blank passphrase; the `private` section uses the user passphrase held in `license::SESSION_PHRASE` (`Zeroizing<String>`, zeroed on lock).
+- `store/<section>.dat` — per-section at-rest-encoded JSON (`datastore.rs`): `enc:v2:` + base64(nonce[12] ∥ ciphertext+GCM-tag) with authenticated section identity; existing `enc:v1:` remains readable. The Argon2id-derived key uses per-install `.install.material`. General sections use a blank passphrase; the `private` section uses the user passphrase held in `license::SESSION_PHRASE` (`Zeroizing<String>`, zeroed on lock).
 - `.install.material` (`%ProgramData%\WinCommander\`, machine-wide alongside the store) — 32 random bytes generated on first run; the argon2id salt. Not tied to the binary version (update-safe). Written atomically; a wrong-length/corrupt material file **fails closed** (returns an error) rather than being silently regenerated — regenerating would rotate the salt and permanently brick every encrypted section (the startup-PIN hashes, the licence cache, the settings blob).
-- Flows live in `settings.json → app.flows[]`; execution history is an in-memory 50-entry ring buffer (not persisted until `flows.durable-journal` lands).
+- The settings schema exposes flows through `app.flows[]`; service-backed persistence includes them in the separately encrypted `_personalSecrets` envelope. Execution history is an in-memory 50-entry ring buffer.
 
 ```jsonc
 // settings.json shape (abridged)

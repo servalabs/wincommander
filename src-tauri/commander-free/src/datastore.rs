@@ -51,7 +51,14 @@ use std::path::PathBuf;
 
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
-const USER_STORE_FILES: [&str; 2] = ["user-settings.dat", "clipboard-guard-rules.dat"];
+const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";
+const USER_STORE_FILES: [&str; 3] = [
+    "user-settings.dat",
+    "clipboard-guard-rules.dat",
+    PERSONAL_SECRETS_KEY_MARKER,
+];
+const PERSONAL_SECRETS_SCOPE: &str = "user:personal-settings-secrets";
+const MAX_PERSONAL_SECRETS_BYTES: usize = 1_048_576;
 const STORE_SUBDIR: &str = "store";
 const FORMAT_PREFIX_V1: &str = "enc:v1:";
 const FORMAT_PREFIX_V2: &str = "enc:v2:";
@@ -412,7 +419,7 @@ fn write_new_user_material(
 
 fn decode_user_material(raw: &[u8], current_user_install: bool) -> Result<[u8; 32], String> {
     let plain = unprotect_user_store_material(raw, current_user_install).map_err(|_| {
-        "Could not unlock settings key; existing key and encrypted data preserved.".to_string()
+        "SETTINGS_KEY_UNAVAILABLE: Could not unlock settings key; existing key and encrypted data preserved.".to_string()
     })?;
     plain
         .try_into()
@@ -421,18 +428,29 @@ fn decode_user_material(raw: &[u8], current_user_install: bool) -> Result<[u8; 3
 
 fn user_material() -> Result<[u8; 32], String> {
     let directory = crate::paths::user_data_dir()?;
+    load_or_create_user_material(
+        &directory,
+        crate::paths::current_user_install_uses_local_datastore(),
+        write_new_user_material,
+    )
+}
+
+fn load_or_create_user_material(
+    directory: &std::path::Path,
+    current_user_install: bool,
+    create: impl FnOnce(&std::path::Path, bool) -> Result<[u8; 32], String>,
+) -> Result<[u8; 32], String> {
     let path = directory.join(USER_MATERIAL_FILENAME);
-    let current_user_install = crate::paths::current_user_install_uses_local_datastore();
     match read_material_file(&path)? {
         Some(raw) => decode_user_material(&raw, current_user_install),
         None => {
             let creation =
-                ensure_material_can_be_created(&directory, current_user_install, &USER_STORE_FILES);
+                ensure_material_can_be_created(directory, current_user_install, &USER_STORE_FILES);
             match read_material_file(&path)? {
                 Some(raw) => decode_user_material(&raw, current_user_install),
                 None => {
                     creation?;
-                    write_new_user_material(&path, current_user_install)
+                    create(&path, current_user_install)
                 }
             }
         }
@@ -611,6 +629,76 @@ pub(crate) fn load_user_blob(
         return Err("per-user data exceed the size limit".to_string());
     }
     Ok(Some(plaintext))
+}
+
+/// Produces ciphertext for the caller's atomic service-record update.
+pub(crate) fn encode_user_secrets(
+    plaintext: &[u8],
+    require_existing: bool,
+) -> Result<String, String> {
+    if plaintext.len() > MAX_PERSONAL_SECRETS_BYTES {
+        return Err("Personal secrets exceed the size limit".to_string());
+    }
+    // A loaded service envelope proves a key existed even if no legacy file remains.
+    let material = if require_existing {
+        let path = crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME);
+        existing_user_material(
+            &path,
+            crate::paths::current_user_install_uses_local_datastore(),
+        )?
+    } else {
+        user_material()?
+    };
+    mark_personal_secrets_key_in_use(&crate::paths::user_data_dir()?)?;
+    let key = derive_section_key(&material, None)?;
+    encode_section(&key, plaintext, PERSONAL_SECRETS_SCOPE)
+}
+
+fn mark_personal_secrets_key_in_use(directory: &std::path::Path) -> Result<(), String> {
+    // All other user_material consumers must know ciphertext can live only in the service.
+    atomic_write_bytes(
+        &directory.join(PERSONAL_SECRETS_KEY_MARKER),
+        b"personal-secrets-key-v1\n",
+    )
+    .map_err(|_| "Could not preserve personal secrets key ownership".to_string())
+}
+
+fn validate_user_secrets_envelope(encoded: &str) -> Result<(), String> {
+    if encoded.len() > MAX_PERSONAL_SECRETS_BYTES * 2 + 128 {
+        return Err("Personal secrets exceed the size limit".to_string());
+    }
+    if !encoded.starts_with(FORMAT_PREFIX_V2) {
+        return Err("Personal secrets encryption format is invalid".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_user_secrets(encoded: &str) -> Result<Vec<u8>, String> {
+    validate_user_secrets_envelope(encoded)?;
+    // An existing envelope proves there was a key: never create another on read.
+    let path = crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME);
+    let material = existing_user_material(
+        &path,
+        crate::paths::current_user_install_uses_local_datastore(),
+    )?;
+    let key = derive_section_key(&material, None)?;
+    let plaintext = decode_section(&key, encoded, PERSONAL_SECRETS_SCOPE)
+        .map_err(|_| "Personal secrets could not be decoded".to_string())?;
+    if plaintext.len() > MAX_PERSONAL_SECRETS_BYTES {
+        return Err("Personal secrets exceed the size limit".to_string());
+    }
+    Ok(plaintext)
+}
+
+fn existing_user_material(
+    path: &std::path::Path,
+    current_user_install: bool,
+) -> Result<[u8; 32], String> {
+    let raw = read_material_file(path)?.ok_or_else(|| {
+        "SETTINGS_KEY_UNAVAILABLE: Personal secrets key is missing; encrypted data preserved."
+            .to_string()
+    })?;
+    decode_user_material(&raw, current_user_install)
 }
 
 /// Atomically replaces one bounded user-owned encrypted blob.
@@ -814,6 +902,70 @@ mod tests {
     }
 
     #[test]
+    fn personal_secret_envelope_is_bound_to_its_own_scope() {
+        let key = test_key(19);
+        let encoded = encode_section(&key, b"synthetic secret", PERSONAL_SECRETS_SCOPE).unwrap();
+        validate_user_secrets_envelope(&encoded).unwrap();
+        assert_eq!(
+            decode_section(&key, &encoded, PERSONAL_SECRETS_SCOPE).unwrap(),
+            b"synthetic secret"
+        );
+        assert!(decode_section(&key, &encoded, "user:user-settings.dat").is_err());
+        assert!(decode_section(&key, &encoded, "machine:settings").is_err());
+    }
+
+    #[test]
+    fn secret_envelope_rejects_legacy_and_oversized_input_before_key_access() {
+        assert!(validate_user_secrets_envelope("enc:v1:AAAA").is_err());
+        assert!(
+            validate_user_secrets_envelope(&"x".repeat(MAX_PERSONAL_SECRETS_BYTES * 2 + 129))
+                .is_err()
+        );
+        assert!(encode_user_secrets(&vec![0; MAX_PERSONAL_SECRETS_BYTES + 1], false).is_err());
+    }
+
+    #[test]
+    fn service_secret_read_never_creates_missing_profile_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(USER_MATERIAL_FILENAME);
+        let error = existing_user_material(&path, false).unwrap_err();
+        assert!(error.starts_with("SETTINGS_KEY_UNAVAILABLE:"));
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn service_secret_marker_prevents_other_consumers_replacing_a_missing_key() {
+        let directory = tempfile::tempdir().unwrap();
+        mark_personal_secrets_key_in_use(directory.path()).unwrap();
+        for current_user_install in [false, true] {
+            let error = load_or_create_user_material(directory.path(), current_user_install, |_, _| {
+                panic!("service ciphertext must forbid replacement key creation")
+            }).unwrap_err();
+            assert!(error.starts_with("Settings key is missing but encrypted data exists;"));
+        }
+        assert!(!directory.path().join(USER_MATERIAL_FILENAME).exists());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn fresh_profile_key_creation_remains_available_without_secret_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let material = load_or_create_user_material(directory.path(), false, |path, _| {
+            assert_eq!(path, directory.path().join(USER_MATERIAL_FILENAME));
+            Ok([17; 32])
+        }).unwrap();
+        assert_eq!(material, [17; 32]);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn secret_key_marker_write_failure_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join(PERSONAL_SECRETS_KEY_MARKER)).unwrap();
+        assert!(mark_personal_secrets_key_in_use(directory.path()).is_err());
+    }
+
+    #[test]
     fn wrong_key_fails_authentication() {
         let key1 = test_key(1);
         let key2 = test_key(2);
@@ -957,7 +1109,10 @@ mod tests {
         let path = temp.path().join(USER_MATERIAL_FILENAME);
         fs::write(&path, b"unreadable material").unwrap();
         let raw = read_material_file(&path).unwrap().unwrap();
-        assert!(decode_user_material(&raw, true).is_err());
+        for current_user_install in [false, true] {
+            let error = decode_user_material(&raw, current_user_install).unwrap_err();
+            assert!(error.starts_with("SETTINGS_KEY_UNAVAILABLE:"));
+        }
         assert_eq!(fs::read(&path).unwrap(), raw);
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
     }

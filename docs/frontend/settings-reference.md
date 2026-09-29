@@ -64,19 +64,103 @@ auto-healed.
 
 ## Where settings live
 
-Settings are persisted **machine-wide** under `%ProgramData%`, not per-user, so
-every Windows account on the device — including Windows Server/RDS sessions —
-shares one protection, policy and monitor configuration. Persistence goes through the app-data store
+Machine policy is shared under `%ProgramData%`. With the current Windows service,
+personal preferences are stored in `%ProgramData%\WinCommanderPersonalSettings`,
+in a separate record for each authenticated Windows account SID. The service
+derives the SID from the named-pipe token; neither administrator status nor a
+request argument can select another account's preferences. Renaming an account
+preserves its SID; deleting and recreating an account creates a different owner.
+The settings scope tables determine which fields belong to each partition.
+
+Personal records use machine-scoped Windows DPAPI protection, with the owning
+SID bound both to DPAPI entropy and the protected payload. The directory and
+files admit only SYSTEM and local administrators at the filesystem boundary;
+ordinary users access their own record through the service. Creation applies
+the restrictive ACL before any payload is written. Existing insecure objects,
+reparse points and hard-linked record files are refused. Password changes and
+administrator password resets do not change the machine encryption context
+used for these ordinary preferences.
+
+Every personal save includes the revision previously read. The service checks
+that revision and atomically replaces the record under one transaction lock;
+a stale writer receives a conflict instead of silently overwriting another
+session's save. Personal JSON is an object bounded to 2 MiB, including its
+encrypted secret envelope, and is not an instruction to
+change machine policy or run a command.
+
+The general machine store, and a current-user installation's general store,
+continue to use the app-data store
 ([`datastore.rs`](../../src-tauri/commander-free/src/datastore.rs)), which encodes
 each section at rest:
 
 - **Store files:** `%ProgramData%\<APP>\store\<section>.dat`. Settings are the `settings` section.
-- **At-rest format:** `enc:v1:` + base64(`nonce[12]` ‖ ciphertext-with-GCM-tag), encrypted with **AES-256-GCM**.
+- **At-rest format:** new writes use `enc:v2:` + base64(`nonce[12]` ‖ ciphertext-with-GCM-tag), encrypted with **AES-256-GCM** and authenticated section identity. Existing `enc:v1:` records remain readable.
 - **Key derivation:** a per-install 32-byte material file (`%ProgramData%\<APP>\.install.material`) is the Argon2id salt. General sections derive their key from an empty password; the private section derives from a user passphrase. The material is generated once and is **not** tied to the binary version, so settings survive app updates.
 - **Key preservation:** concurrent first launches use the same committed material.
   Read or unlock failures never automatically replace a key. If encrypted data
   exists without its matching material, startup preserves it for recovery;
   restoring that data requires its matching key, not administrator elevation.
+
+### Personal secrets and password-reset recovery
+
+Flow signing material, saved flows and contingency configuration, and distress
+phrase records retain a separate AES-GCM envelope using the existing profile
+key. The desktop stores that encrypted payload in `_personalSecrets` inside
+the service record, so secret
+changes and ordinary preference changes share the same atomic revision check.
+The service stores this nested payload opaquely; it does not obtain the user's
+secret key. The desktop does not expose `_personalSecrets` as a settings field.
+
+The profile key retains its existing protection: legacy keys can use
+current-user DPAPI, while current-user-install mode may use machine DPAPI with
+profile filesystem permissions. This separate envelope does not introduce a
+new cryptographic SID binding or protection against administrator/SYSTEM access.
+
+An administrator password reset can still prevent Windows from unlocking an
+older current-user DPAPI key protecting these secrets. WinCommander preserves
+that key and the original `%LOCALAPPDATA%\WinCommander\user-settings.dat`;
+it never replaces a missing or unreadable key automatically. Ordinary preferences
+remain available from the service while affected secrets and dependent automation
+remain locked. Recovering those secrets requires restoring access to their
+original encryption key; reinstalling or refreshing a licence does not recover it.
+A durable, non-secret `personal-secrets-key.in-use` marker prevents other local
+key consumers from creating a replacement when the encrypted payload exists
+only in the service record; a preference-only profile does not create this marker.
+
+When importing a readable legacy overlay, the desktop copies preferences and
+encrypts its secret subset with the existing profile key into the new service
+record. Original encrypted legacy files remain preserved. If that overlay was
+already unreadable before migration, the app can open with safe defaults and a
+recovery notice; it cannot
+reconstruct the lost preferences or secrets. The service retains a recovery
+marker instead of treating later ordinary edits as proof of recovery.
+
+Plaintext migration cleanup uses a durable journal containing hashes of the
+source and expected encrypted settings partitions. Cleanup happens only after
+both the service-backed personal record and machine persistence are confirmed;
+using the older no-service fallback retains the plaintext and journal until
+service migration succeeds. After a restart, cleanup first compares the actually
+committed partitions with the journal. Before removing plaintext, it opens the
+source exclusively and verifies its exact file identity and content hash,
+then removes that same opened file. A changed source, invalid journal, failed
+commit, or failed verification leaves the plaintext source preserved.
+
+If the service is unavailable before migration, a readable legacy overlay can
+still be used. Once migration is recorded, service unavailability opens a
+temporary, read-only session with safe defaults, preserving the canonical
+service record. A corrupt or denied service record fails closed instead of
+silently starting a replacement store. The inactivity/dead-man's-switch watchdog
+also pauses while personal settings or their required recovery state are
+unavailable, so temporary defaults cannot trigger its saved automation.
+
+These guarantees concern the implemented storage boundaries. Automated local
+Windows checks do not establish installed-service acceptance across password
+resets, standard-user sessions, or Windows Server/RDS deployments. Machine
+replacement or loss of Windows' machine protection also requires separate recovery.
+
+Startup fills missing module visibility defaults in memory. It does not require
+a normalization write before displaying the app; actual preference edits persist
+the normalized module map through the usual settings update path.
 
 A wrong passphrase on the private section yields an AES-256-GCM authentication
 failure — there is no plaintext fallback.
@@ -87,7 +171,8 @@ Earlier builds stored a plaintext `%APPDATA%\WinCommander\settings.json` or
 `%LOCALAPPDATA%\WinCommander\settings.json`.
 On the first elevated launch with no machine store, the current interactive
 account's legacy record is imported into `%ProgramData%` and the plaintext
-copy is removed only after the encrypted write succeeds. This establishes one
+copy is removed only after service-backed personal and machine persistence are
+confirmed. This establishes one
 machine policy; conflicting legacy settings from other profiles are not merged
 silently. Schema versions below the current version are migrated on load.
 

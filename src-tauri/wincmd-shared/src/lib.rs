@@ -888,6 +888,7 @@ pub use fleet_proto as fleet;
 /// protocol version, capability-class enum, and `classify_verb` — the shared
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
+pub mod personal_settings;
 pub mod vault_access;
 
 /// F6 USB wipe-authorization handshake token (Phase 1, Piece 1).

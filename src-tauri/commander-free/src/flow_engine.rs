@@ -593,6 +593,7 @@ fn push_execution_event(
 }
 
 pub(crate) fn persist_flows_to_settings(flows: &[Flow]) -> Result<(), String> {
+    require_automation_settings()?;
     let patch = serde_json::json!({
         "app": { "flows": flows }
     });
@@ -614,6 +615,9 @@ fn ensure_default_flows_persisted() -> bool {
             return false;
         }
     };
+    if !settings::personal_settings_automation_available() {
+        return false;
+    }
     let merged = merge_default_system_flows(settings.app.flows.clone());
     if merged == settings.app.flows {
         return true;
@@ -1450,20 +1454,39 @@ fn start_all_listeners(app: &AppHandle) {
 /// Read flows from settings.json → app.flows[]
 pub(crate) fn get_flows_from_settings() -> Vec<Flow> {
     match settings::read_settings() {
-        Ok(s) => merge_default_system_flows(s.app.flows),
+        Ok(s) => available_flows(s.app.flows, settings::personal_settings_automation_available()),
         Err(err) => {
             flow_engine_log(
                 "warn",
                 None,
                 "settings",
                 format!(
-                    "Falling back to built-in default flows because settings could not be read: {}",
+                    "Flow automation unavailable because settings could not be read: {}",
                     err
                 ),
             );
-            default_system_flows()
+            Vec::new()
         }
     }
+}
+
+fn available_flows(flows: Vec<Flow>, automation_available: bool) -> Vec<Flow> {
+    if automation_available {
+        merge_default_system_flows(flows)
+    } else {
+        Vec::new()
+    }
+}
+
+fn require_automation_settings() -> Result<(), String> {
+    settings::read_settings()?;
+    if !settings::personal_settings_automation_available() {
+        return Err(
+            "Flow automation is unavailable until personal settings and secrets are accessible."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1473,6 +1496,10 @@ pub(crate) fn get_flows_from_settings() -> Vec<Flow> {
 /// Start a background listener for a specific flow's trigger type.
 /// Spawns one task per trigger — any trigger in the array can fire the flow.
 fn start_listener_for_flow(app: &AppHandle, flow: &Flow) {
+    if let Err(error) = require_automation_settings() {
+        flow_engine_log("warn", Some(&flow.id), "listener", error);
+        return;
+    }
     if let Err(err) = validate_flow(flow) {
         flow_engine_log(
             "error",
@@ -3199,6 +3226,10 @@ async fn execute_flow(
     trigger_detail: Option<&str>,
     dry_run: bool,
 ) {
+    if let Err(error) = require_automation_settings() {
+        flow_engine_log("warn", Some(flow_id), "execution", error);
+        return;
+    }
     let flows = get_flows_from_settings();
     // Dry-runs are exempt from the enabled-gate — the whole point is
     // "let me see what would happen BEFORE I arm this". Live triggers
@@ -3927,6 +3958,7 @@ pub fn get_flows() -> Result<Vec<Flow>, String> {
 #[tauri::command]
 pub async fn save_flow(app: AppHandle, flow: Flow) -> Result<(), String> {
     crate::license::require_paid("flows")?;
+    require_automation_settings()?;
     validate_flow(&flow)?;
 
     flow_engine_log(
@@ -3980,6 +4012,7 @@ pub async fn save_flow(app: AppHandle, flow: Flow) -> Result<(), String> {
 #[tauri::command]
 pub async fn delete_flow(app: AppHandle, flow_id: String) -> Result<(), String> {
     crate::license::require_paid("flows")?;
+    require_automation_settings()?;
     flow_engine_log("info", Some(&flow_id), "settings", "Deleting flow");
 
     let mut flows = get_flows_from_settings();
@@ -4007,6 +4040,7 @@ pub async fn delete_flow(app: AppHandle, flow_id: String) -> Result<(), String> 
 #[tauri::command]
 pub async fn toggle_flow(app: AppHandle, flow_id: String, enabled: bool) -> Result<(), String> {
     crate::license::require_paid("flows")?;
+    require_automation_settings()?;
     flow_engine_log(
         "info",
         Some(&flow_id),
@@ -4099,6 +4133,7 @@ pub async fn fire_flow(
     dry_run: Option<bool>,
 ) -> Result<(), String> {
     crate::license::require_paid("flows")?;
+    require_automation_settings()?;
     let dry_run = dry_run.unwrap_or(false);
     flow_engine_log(
         "info",
@@ -4185,6 +4220,7 @@ pub async fn reload_flows(app: AppHandle) -> Result<(), String> {
     }
 
     // Start fresh
+    require_automation_settings()?;
     flow_engine_log("info", None, "listener", "Reloading all flow listeners");
     start_all_listeners(&app);
     flow_engine_log("info", None, "listener", "Flow listener reload complete");
@@ -4194,6 +4230,18 @@ pub async fn reload_flows(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod default_flow_merge_tests {
     use super::*;
+
+    #[test]
+    fn unavailable_personal_settings_never_regenerate_enabled_default_flows() {
+        assert!(default_system_flows().iter().any(|flow| flow.enabled));
+        assert!(available_flows(Vec::new(), false).is_empty());
+        assert!(available_flows(default_system_flows(), false).is_empty());
+    }
+
+    #[test]
+    fn accessible_personal_settings_retain_normal_default_flow_behavior() {
+        assert_eq!(available_flows(Vec::new(), true), default_system_flows());
+    }
 
     #[test]
     fn merged_defaults_are_semantically_stable_after_first_persist() {

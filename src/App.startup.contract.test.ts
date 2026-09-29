@@ -5,6 +5,19 @@ declare const Bun: {
 };
 
 describe("startup prefetch ownership", () => {
+  test("personal recovery or unavailable settings replace only Automation before its panel can mount", async () => {
+    const source = await Bun.file("src/App.tsx").text();
+    const route = source.slice(source.indexOf("function PanelRoute("), source.indexOf("function AppContent("));
+    const guard = 'if (panelId === "flows" && personalSettingsStatus && (personalSettingsStatus.recoveryRequired || !personalSettingsStatus.canSave))';
+
+    expect(route).toContain(guard);
+    expect(route).toContain("return <FlowSettingsRecovery recoveryRequired={personalSettingsStatus.recoveryRequired} />;");
+    expect(route.indexOf(guard)).toBeLessThan(route.indexOf("getLazyPanel("));
+    expect(route).not.toContain('panelId === "vault"');
+    expect(route).not.toContain('panelId === "productivity"');
+    expect(route).toContain('if (manifest?.id === "dashboard") return <DashboardPanel />;');
+  });
+
   test("keeps the splash visible until the readiness gate completes on every launch", async () => {
     const source = await Bun.file("src/App.tsx").text();
 

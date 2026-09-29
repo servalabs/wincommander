@@ -186,9 +186,8 @@ fn a_managed_user_can_change_an_unlocked_preference() {
 }
 
 #[test]
-fn failed_persistence_leaves_the_existing_state_and_observers_untouched() {
-    let fixture = Fixture::managed();
-    let before = fixture.current();
+fn failed_persistence_invalidates_uncertain_cache_without_notifying_observers() {
+    let _fixture = Fixture::managed();
     let result = apply_with(
         Mutation::Patch(json!({"app": {"theme": "light"}})),
         true,
@@ -196,7 +195,7 @@ fn failed_persistence_leaves_the_existing_state_and_observers_untouched() {
         |_, _| panic!("failed persistence notified observers"),
     );
     assert!(result.is_err());
-    assert_eq!(fixture.current(), before);
+    assert!(SETTINGS_CACHE.lock().unwrap().is_none());
 }
 
 #[test]

@@ -97,6 +97,52 @@ resuming a partially consumed frame. These deadlines do not cancel an already
 executing machine operation or replace Windows peer authorization. They bound
 specific resources; they are not a claim of complete denial-of-service immunity.
 
+## Personal settings and Windows password changes
+
+The personal-settings service derives record ownership exclusively from the
+authenticated named-pipe token's Windows SID. Read and write require that peer,
+including for administrators; the API has no other-user selector. An account
+rename retains ownership, while deleting and recreating an account does not.
+The service stores bounded opaque preferences without interpreting them as
+machine-policy changes or privileged commands.
+
+Records in `%ProgramData%\WinCommanderPersonalSettings` use machine-scoped
+Windows DPAPI with SID-bound entropy and protected owner metadata. Direct
+filesystem access is restricted to SYSTEM and local administrators. Protection
+is present at creation, existing owner/ACLs are verified, reparse points and
+hard-linked records are refused, and guarded ancestors prevent directory
+substitution during access. Saves use a revision check and atomic replacement
+so competing sessions cannot silently overwrite each other's revisions.
+The machine context keeps ordinary preferences independent of a user's Windows
+password, including administrator password resets.
+
+Sensitive personal settings retain a separate AES-GCM envelope using the existing
+profile key in the nested `_personalSecrets` payload, committed in the same
+transaction as ordinary preferences. Key protection keeps its existing scope:
+legacy keys can use current-user DPAPI; current-user-install mode may use
+machine DPAPI with profile ACLs. This envelope does not add cryptographic SID
+binding or protection from administrator/SYSTEM access. Losing access to a
+current-user DPAPI key can still lock these
+secrets and their dependent automation. Missing or unreadable old keys are
+never silently replaced; encrypted legacy originals remain available for recovery.
+Plaintext migration sources are removed only after service-backed personal and
+machine persistence are confirmed; older no-service fallback writes do not
+authorize cleanup and retain the source and migration journal.
+A durable hash journal supports restart recovery by checking committed settings
+partitions; cleanup verifies the source's file identity and hash through one
+exclusive handle before removing that same file. Failed checks preserve it.
+After migration, an unavailable service produces a temporary read-only session
+rather than making the stale legacy copy authoritative again. Corrupt or denied
+service records fail closed. The inactivity watchdog pauses while personal
+settings are unavailable or recovery remains unresolved. See the
+[settings reference](docs/frontend/settings-reference.md#personal-secrets-and-password-reset-recovery)
+for migration and recovery behavior.
+
+This boundary does not protect against an administrator/SYSTEM attacker,
+restore keys lost with Windows machine protection, or transfer ownership to a
+recreated account. Local automated checks are not installed-service acceptance
+for password resets, simultaneous standard/admin users, or Windows Server/RDS.
+
 ## Private-volume search
 
 WinCommander stores indexes for selected VeraCrypt folders in

@@ -22,6 +22,8 @@ import type { PanelId } from "../types/panels";
 import { useDashboardScale } from "../hooks/useWindowScale";
 import { applyMotionClass } from "../lib/motionPolicy";
 import { useSearchQuery } from "../context/SearchContext";
+import { useAppState } from "../context/AppContext";
+import { PersonalSettingsNotice } from "./startup/PersonalSettingsNotice";
 
 interface AppShellProps {
   activePanel: PanelId;
@@ -46,6 +48,7 @@ export default function AppShell({
   const isDashboard = activePanel === "dashboard";
   const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup";
   const { clearSearch } = useSearchQuery();
+  const { personalSettingsStatus } = useAppState();
 
   // Reset any palette-seeded panel filter whenever the user switches panels.
   useEffect(() => { clearSearch(); }, [activePanel, clearSearch]);
@@ -80,6 +83,7 @@ export default function AppShell({
   return (
     <>
       <TitleBar activePanel={activePanel} />
+      <PersonalSettingsNotice status={personalSettingsStatus} />
       <div className="app-body flex overflow-hidden">
         {/* Column 1: Left Navigation */}
         <Sidebar

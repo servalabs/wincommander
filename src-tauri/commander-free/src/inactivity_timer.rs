@@ -138,7 +138,10 @@ pub fn init(app: &AppHandle) {
 /// "switch fired" is a normal Ok path with a side-effect.
 async fn tick(app: &AppHandle) -> Result<(), String> {
     let cfg = read_config()?;
-    if !cfg.enabled {
+    if !watchdog_available(
+        &cfg,
+        crate::settings::personal_settings_automation_available(),
+    ) {
         return Ok(());
     }
     // Already fired — don't re-fire. Operator must explicitly clear.
@@ -186,6 +189,10 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         serde_json::json!({ "firedAt": fire_time }),
     );
     Ok(())
+}
+
+fn watchdog_available(cfg: &DeadMansSwitchConfig, personal_settings_available: bool) -> bool {
+    cfg.enabled && personal_settings_available
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -287,6 +294,17 @@ pub fn clear_dead_mans_switch_fired() -> Result<DeadMansSwitchConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_recovery_or_service_outage_cannot_trigger_lockdown() {
+        let cfg = DeadMansSwitchConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(!watchdog_available(&cfg, false));
+        assert!(watchdog_available(&cfg, true));
+        assert!(!watchdog_available(&DeadMansSwitchConfig::default(), true));
+    }
 
     #[test]
     fn parse_iso_handles_empty() {

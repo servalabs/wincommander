@@ -1541,6 +1541,10 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::Machine,
     },
     SystemStateScopeRule {
+        path: "security.monitorAlertReporting",
+        scope: SettingsScope::Machine,
+    },
+    SystemStateScopeRule {
         path: "security.metricAlertReporting.systemReportToFleet",
         scope: SettingsScope::Machine,
     },

@@ -30,6 +30,7 @@ import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
 import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
+import { FlowSettingsRecovery } from "./components/startup/FlowSettingsRecovery";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
 import ShredConfirmationDialog from "./components/ShredConfirmationDialog";
 import UsbHidApprovalDialog from "./components/shared/UsbHidApprovalDialog";
@@ -179,6 +180,10 @@ function PanelRoute({
   panelId: PanelId;
   recoveryGeneration: number;
 }) {
+  const { personalSettingsStatus } = useAppState();
+  if (panelId === "flows" && personalSettingsStatus && (personalSettingsStatus.recoveryRequired || !personalSettingsStatus.canSave)) {
+    return <FlowSettingsRecovery recoveryRequired={personalSettingsStatus.recoveryRequired} />;
+  }
   const manifest = PANEL_MANIFESTS.find((candidate) => candidate.id === panelId)
     ?? PANEL_MANIFESTS.find((candidate) => candidate.id === "dashboard");
   // KT: Dashboard is the initial, always-visible surface. Keeping it out of the

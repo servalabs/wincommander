@@ -21,11 +21,14 @@
 //!
 //! Every `Request::feature_id` in this namespace is prefixed `svc.`.  The
 //! service enforces a capability-class split on the peer identity.  There are
-//! **four** classes, in increasing order of trust required from the peer:
+//! **five** classes, with distinct peer requirements:
 //!
 //! - **[`CapabilityClass::ReadOnly`]** — queries and status checks that carry
 //!   no privilege risk.  The service allows these from any authenticated peer
 //!   (interactive user session or restricted helper).
+//! - **[`CapabilityClass::UserScoped`]** — opaque preferences owned exclusively
+//!   by the Windows SID captured from the pipe token. Both read and write require
+//!   a captured peer; administrator status never selects another owner's record.
 //! - **[`CapabilityClass::SessionHelper`]** — a named action performed by a
 //!   specific, pinned per-user helper process that is *not* an admin:
 //!   submitting an already-locally-generated event/receipt, or installing a
@@ -95,6 +98,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.ping"
             | "svc.health"
             | "svc.diagnostics.query"
+            | "svc.personal_settings.read"
+            | "svc.personal_settings.write"
             | APPLY_MACHINE_SETTING_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
@@ -201,6 +206,9 @@ pub enum MachineSettingObserved {
 /// re-checks regardless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CapabilityClass {
+    /// Read or write only the authenticated Windows SID's opaque preferences.
+    /// The dispatcher must require a captured pipe peer, regardless of admin status.
+    UserScoped,
     /// Mutations, dispatches, and any unrecognised verb.  Fail-closed: unknown
     /// verbs default here so they are never accidentally served read-only or
     /// as a session helper.  Requires the peer to be admin or LocalSystem.
@@ -232,8 +240,8 @@ pub enum CapabilityClass {
 
 impl CapabilityClass {
     /// Ordinal strength of this class, strictly increasing with the trust the
-    /// service demands of the peer: `ReadOnly` (0) < `InteractiveSession` (1)
-    /// < `SessionHelper` (2) < `Privileged` (3).
+    /// service demands of the peer: `ReadOnly` (0) < `UserScoped` (1)
+    /// < `InteractiveSession` (2) < `SessionHelper` (3) < `Privileged` (4).
     ///
     /// A pure ordering helper for the service side — e.g. to assert that a
     /// peer's confirmed identity class dominates a verb's required class
@@ -245,9 +253,10 @@ impl CapabilityClass {
     pub fn rank(self) -> u8 {
         match self {
             CapabilityClass::ReadOnly => 0,
-            CapabilityClass::InteractiveSession => 1,
-            CapabilityClass::SessionHelper => 2,
-            CapabilityClass::Privileged => 3,
+            CapabilityClass::UserScoped => 1,
+            CapabilityClass::InteractiveSession => 2,
+            CapabilityClass::SessionHelper => 3,
+            CapabilityClass::Privileged => 4,
         }
     }
 }
@@ -272,6 +281,7 @@ impl CapabilityClass {
 /// ```
 pub fn classify_verb(feature_id: &str) -> CapabilityClass {
     match feature_id {
+        "svc.personal_settings.read" | "svc.personal_settings.write" => CapabilityClass::UserScoped,
         // ── Existing read-only verbs (unchanged) ──────────────────────────
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,

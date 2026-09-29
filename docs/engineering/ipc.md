@@ -1,19 +1,56 @@
 # IPC command catalog
 
-A reference for the two IPC channels in WinCommander, focused on the **Tauri command catalog**.
+A reference for WinCommander's IPC channels, focused on the **Tauri command catalog**.
 
-WinCommander has two IPC boundaries:
+WinCommander has three IPC boundaries:
 
 1. **Frontend ↔ Backend (Tauri IPC)** — the React UI invokes Rust `#[tauri::command]` handlers in `wincommander-free.exe`. Cataloged below.
 2. **commander-free ↔ commander-pro (Windows named pipe)** — Free spawns the Pro sidecar on demand for paid commands.
+3. **Desktop ↔ Windows system service (Windows named pipe)** — the service authenticates the connected Windows token and enforces each `svc.*` capability.
 
-The **wire format, handshake, signing, and trust model** for both channels are documented in [ARCHITECTURE.md — Free ↔ Pro IPC](../../ARCHITECTURE.md#free--pro-ipc) and the [Data flow](../../ARCHITECTURE.md#data-flow) section. This document does not repeat them; it is the command-catalog companion. The wire-format source of truth is [`wincmd-shared/src/lib.rs`](../../src-tauri/wincmd-shared/src/lib.rs).
+The **wire format, handshake, signing, and trust model** are documented in [ARCHITECTURE.md — Free ↔ Pro IPC](../../ARCHITECTURE.md#free--pro-ipc) and the [Data flow](../../ARCHITECTURE.md#data-flow) section. This document is their command-catalog companion. The wire-format source of truth is [`wincmd-shared/src/lib.rs`](../../src-tauri/wincmd-shared/src/lib.rs); service capability classification lives in [`wincmd-shared/src/svc.rs`](../../src-tauri/wincmd-shared/src/svc.rs).
 
 Command registration lives in [`src-tauri/commander-free/src/lib.rs`](../../src-tauri/commander-free/src/lib.rs) (the `tauri::generate_handler!` block), plus the data-driven tier entries registered at startup by `backend::register_p2_commands` / `register_p3_commands` / `register_file_search_commands`.
 
 ## How a command is routed
 
 Every UI-driven toggle funnels through `run_backend_script`, which decides — by `get_command_tier` — whether the work runs in-process (Free) or is forwarded to the Pro sidecar (Paid). The dedicated commands below are direct Tauri handlers; many of them call `license::require_paid` internally and dispatch to Pro over the signed pipe. See [ARCHITECTURE.md — Data flow](../../ARCHITECTURE.md#data-flow) for the full guard order (evidence-integrity kill-switch → shield quota → tier gate → module gate).
+
+## Personal settings service contract
+
+Both verbs below use `CapabilityClass::UserScoped` on `\\.\pipe\wincmd-svc`.
+The handler requires a captured Windows pipe peer and derives the record owner
+only from that peer's SID. Admin and standard-user callers have the same
+own-record boundary. Requests cannot supply a SID, path, key, or administrative
+override; unknown fields are rejected.
+
+| Verb | Request | Result |
+|------|---------|--------|
+| `svc.personal_settings.read` | `{}` | `{ revision, value, legacyRecoveryRequired }` |
+| `svc.personal_settings.write` | `{ expectedRevision, value, legacyRecoveryRequired }` | The committed record in the same result shape. |
+
+An absent record reads as revision `0`, value `null`, and recovery flag `false`.
+A write accepts only a JSON object whose serialized value is at most 2 MiB,
+including any nested encrypted secret envelope. This accommodates base64
+expansion when importing a legacy profile bounded to 1 MiB of plaintext.
+The service compares `expectedRevision`, increments it without wrapping, and
+atomically persists the result. Stale revisions return
+`personal_settings_conflict`; exhausted revisions return
+`personal_settings_revision_exhausted`. Concurrent sessions must reload/reapply
+their intended change rather than overwrite an unrelated update.
+
+Once true, `legacyRecoveryRequired` remains true in the service record; an
+ordinary write cannot clear it. `_personalSecrets`, when present inside
+`value`, is an AES-GCM desktop payload encrypted with the existing profile key and included in the
+same revision transaction. It is not a service credential or execution request.
+The service performs no machine-policy application from this opaque JSON.
+Missing peers, invalid payloads, inaccessible storage and corrupt records return
+bounded errors without returning paths or plaintext settings.
+
+Source contracts are in
+[`personal_settings.rs`](../../src-tauri/wincmd-shared/src/personal_settings.rs).
+The [settings storage reference](../frontend/settings-reference.md#where-settings-live)
+owns migration, password-reset recovery and unavailable-service behavior.
 
 ## Tauri command catalog (frontend ↔ backend)
 

@@ -10,7 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -35,6 +34,15 @@ enum SettingsScope {
 
 #[path = "settings_scope.rs"]
 mod settings_scope;
+
+#[path = "personal_settings.rs"]
+mod personal_settings;
+#[path = "settings_legacy_migration.rs"]
+mod legacy_migration;
+
+pub(crate) fn personal_settings_automation_available() -> bool {
+    personal_settings::automation_available()
+}
 
 const ROOT_SETTINGS_SCOPE_TABLE: &[(&str, SettingsScope)] = &[
     ("settingsVersion", SettingsScope::Machine),
@@ -2559,7 +2567,7 @@ fn merge_user_overlay(
     parse_and_migrate_json_val(merged)
 }
 
-fn load_user_settings_overlay() -> Result<Option<serde_json::Value>, String> {
+fn load_legacy_user_settings_overlay() -> Result<Option<serde_json::Value>, String> {
     let Some(bytes) = crate::datastore::load_user_blob(
         USER_SETTINGS_FILENAME,
         USER_SETTINGS_MAX_PLAINTEXT_BYTES,
@@ -2596,20 +2604,22 @@ fn migrate_legacy_monitor_names(root: &mut serde_json::Value) {
 /// Load settings from the encoded store. If the store section is absent,
 /// check for a legacy plaintext settings.json and migrate it on first run.
 fn load_settings_from_store() -> Result<AppSettings, String> {
+    legacy_migration::clear()?;
     crate::paths::migrate_user_data_layout()?;
     let stored = crate::datastore::load("settings")?;
+    let encrypted_machine_exists = stored.as_object().is_some_and(|value| !value.is_empty());
     let defaults = create_default_settings();
     let (default_machine, default_user_overlay) = split_settings_value(
         serde_json::to_value(&defaults)
             .map_err(|error| format!("Failed to serialize default settings: {error}"))?,
     )?;
     let mut legacy_user_overlay = None;
+    let mut legacy_source = None;
     // Empty object = section file does not yet exist.
     let machine_value = if stored.as_object().map(|m| m.is_empty()).unwrap_or(false) {
         let legacy = crate::paths::user_settings_path()?;
         if legacy.exists() {
-            let raw = fs::read_to_string(&legacy)
-                .map_err(|e| format!("Failed to read legacy settings.json: {e}"))?;
+            let (raw, source) = legacy_migration::read(&legacy)?;
             if !raw.trim().is_empty() {
                 let json: serde_json::Value = serde_json::from_str(&raw)
                     .map_err(|e| format!("Failed to parse legacy settings.json: {e}"))?;
@@ -2623,8 +2633,7 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
                         format!("Failed to serialize legacy settings: {error}")
                     })?)?;
                 legacy_user_overlay = Some(user);
-                // Delete the plaintext file now that migration is complete.
-                let _ = fs::remove_file(&legacy);
+                legacy_source = Some(source);
                 machine
             } else {
                 default_machine.clone()
@@ -2638,16 +2647,49 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
         // this Windows profile already owns user-settings.dat.
         split_settings_value(stored)?.0
     };
-    if let Ok(legacy) = crate::paths::user_settings_path() {
-        if legacy.exists() {
-            let _ = fs::remove_file(&legacy);
+    let machine = parse_and_migrate_json_val(machine_value)?;
+    let loaded = personal_settings::load()?;
+    let personal_overlay = loaded.value;
+    let encrypted_personal_exists = personal_overlay.is_some();
+    if personal_overlay.is_none() && !loaded.safe_defaults {
+        if let Some(source) = legacy_source {
+            legacy_migration::remember(source)?;
         }
     }
-    let machine = parse_and_migrate_json_val(machine_value)?;
-    let user_overlay = load_user_settings_overlay()?
+    let user_overlay = personal_overlay
         .or(legacy_user_overlay)
         .unwrap_or(default_user_overlay);
-    merge_user_overlay(machine, user_overlay)
+    let mut settings = merge_user_overlay(machine, user_overlay)?;
+    if loaded.safe_defaults {
+        apply_personal_recovery_defaults(&mut settings);
+    }
+    if encrypted_machine_exists
+        && encrypted_personal_exists
+        && loaded.service_backed
+        && !loaded.safe_defaults
+        && !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let (machine, user) = split_settings_value(
+            serde_json::to_value(&settings)
+                .map_err(|_| "Could not verify completed settings migration")?,
+        )?;
+        legacy_migration::resume_committed(&machine, &user);
+    }
+    Ok(settings)
+}
+
+fn apply_personal_recovery_defaults(settings: &mut AppSettings) {
+    // Preserve decoded machine PIN/policy, but don't invent the lost user's automation intent.
+    settings.app.auto_heal = false;
+    settings.app.auto_fix_all = false;
+    settings.app.auto_update = false;
+    settings.app.first_run_complete = true;
+    settings.app.welcome_tour_pending = false;
+    settings.app.flows.clear();
+    settings.app.pro_flows.clear();
+    settings.app.contingency = Default::default();
+    settings.app.dead_mans_switch = None;
+    settings.app.disable_native_notifications = true;
 }
 
 /// Read settings from disk, or create defaults if file doesn't exist.
@@ -2687,6 +2729,9 @@ pub fn read_settings() -> Result<AppSettings, String> {
         // store under coercion (and write_settings_internal would refuse it).
         if !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed) {
             if let Err(error) = write_settings_internal(&settings) {
+                if personal_settings::is_conflict(&error) {
+                    settings = load_settings_from_store()?;
+                }
                 crate::log_message(
                     "warn",
                     &format!("[Settings] loaded read-only; metadata persistence skipped: {error}"),
@@ -2722,20 +2767,15 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
     let value = serde_json::to_value(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     let (machine, user) = split_settings_value(value)?;
-    let user_bytes = serde_json::to_vec(&user)
-        .map_err(|error| format!("Failed to serialize per-user settings: {error}"))?;
-    crate::datastore::save_user_blob(
-        USER_SETTINGS_FILENAME,
-        &user_bytes,
-        USER_SETTINGS_MAX_PLAINTEXT_BYTES,
-    )?;
+    legacy_migration::before_persistence(&machine, &user)?;
+    let service_backed = personal_settings::save(&user)?;
 
     // A standard account must be able to persist its own overlay, but never
     // needs to rewrite the read-only machine blob when no device policy changed.
     // Compare partitions so user writes do not fail merely because ProgramData
     // is (correctly) protected.
     let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
-    let res = if stored_machine == machine {
+    let res = if !machine_settings_changed(&stored_machine, &machine)? {
         Ok(())
     } else {
         crate::datastore::save("settings", &machine)
@@ -2747,13 +2787,44 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
             &format!("[Settings] write_settings_internal failed: {}", e),
         );
     }
+    legacy_migration::after_persistence(
+        res.is_ok() && service_backed,
+        &machine,
+        &user,
+    );
     res
+}
+
+fn machine_settings_changed(
+    stored: &serde_json::Value,
+    candidate: &serde_json::Value,
+) -> Result<bool, String> {
+    if stored.as_object().is_some_and(|value| value.is_empty()) {
+        return Ok(true);
+    }
+    let normalized = parse_and_migrate_json_val(stored.clone())?;
+    let (mut before, _) = split_settings_value(
+        serde_json::to_value(normalized)
+            .map_err(|_| "Could not compare machine settings".to_string())?,
+    )?;
+    let mut after = candidate.clone();
+    // Reading a newer client must not require an ordinary user to rewrite machine metadata.
+    for value in [&mut before, &mut after] {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("appVersion");
+        }
+    }
+    Ok(before != after)
 }
 
 /// Write full settings (public API).
 pub fn write_settings(settings: &AppSettings) -> Result<(), String> {
     crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
-    write_settings_internal(settings)?;
+    if let Err(error) = write_settings_internal(settings) {
+        // A transport timeout or later machine-store failure can follow a committed personal CAS.
+        invalidate_cache();
+        return Err(error);
+    }
     if let Ok(mut guard) = SETTINGS_CACHE.lock() {
         *guard = Some(settings.clone());
     }
@@ -2828,7 +2899,11 @@ fn mutate_settings_with(
     } else {
         None
     };
-    persist(&updated)?;
+    if let Err(error) = persist(&updated) {
+        // An error is not proof that neither store committed; reread before another mutation.
+        *cache = None;
+        return Err(error);
+    }
     *cache = Some(updated.clone());
     drop(cache);
     crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
@@ -2917,7 +2992,9 @@ pub async fn get_settings() -> Result<serde_json::Value, String> {
 
 fn get_settings_sync() -> Result<serde_json::Value, String> {
     let settings = read_settings()?;
-    let v = serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
+    let mut v = serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
+    v["personalSettingsStatus"] = serde_json::to_value(personal_settings::status())
+        .map_err(|_| "Could not encode personal settings status".to_string())?;
     Ok(v)
 }
 
@@ -4541,12 +4618,11 @@ mod tests {
     }
 
     #[test]
-    fn failed_patch_does_not_notify_observers_or_replace_cached_settings() {
+    fn failed_patch_does_not_notify_observers_and_invalidates_uncertain_cached_settings() {
         let _lock = GLOBAL_STATE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         warm_cache_with_defaults();
-        let before = serde_json::to_value(read_settings().unwrap()).unwrap();
         let result = patch_settings_with(
             serde_json::json!({"app": {"theme": "light"}}),
             true,
@@ -4554,10 +4630,7 @@ mod tests {
             |_, _| panic!("a failed write must not notify observers"),
         );
         assert!(result.is_err());
-        assert_eq!(
-            serde_json::to_value(read_settings().unwrap()).unwrap(),
-            before
-        );
+        assert!(SETTINGS_CACHE.lock().unwrap().is_none());
     }
     // ── Decoy-mode write refusal (write_settings_internal choke point) ──
     //

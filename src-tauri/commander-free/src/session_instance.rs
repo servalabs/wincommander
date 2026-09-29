@@ -127,14 +127,14 @@ fn instance_object_name(sid: u32, purpose: &str) -> String {
     format!("WinCommander_{}S{}_{}", INSTANCE_CHANNEL, sid, purpose)
 }
 
-fn primary_pid_value_name() -> &'static str {
+fn primary_pid_value_name(sid: u32) -> String {
     #[cfg(wincommander_dev_profile)]
     {
-        "DevelopmentPrimaryPid"
+        format!("DevelopmentPrimaryPid_S{sid}")
     }
     #[cfg(not(wincommander_dev_profile))]
     {
-        "PrimaryPid"
+        format!("PrimaryPid_S{sid}")
     }
 }
 
@@ -495,8 +495,8 @@ pub fn start_pipe_listener(app: tauri::AppHandle) {
 // ── Private helpers ──────────────────────────────────────────────────────────
 
 /// Persist our own PID to HKCU\SOFTWARE\WinCommander so a future
-/// duplicate-instance can verify whether the mutex-holder is alive. Debug and
-/// installed release instances use distinct value names. HKCU avoids any
+/// duplicate-instance can verify whether the mutex-holder is alive. Sessions
+/// and build channels use distinct value names. HKCU avoids any
 /// elevation requirement. Non-fatal on failure — logged only.
 fn persist_primary_pid() {
     use windows_sys::Win32::System::Registry::{
@@ -529,7 +529,7 @@ fn persist_primary_pid() {
             return;
         }
         let pid = GetCurrentProcessId();
-        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name())
+        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name(current_session_id()))
             .encode_utf16()
             .collect();
         let _ = RegSetValueExW(
@@ -551,7 +551,7 @@ fn persist_primary_pid() {
     );
 }
 
-/// Read the stored primary PID for this build channel from
+/// Read the stored primary PID for this build channel and session from
 /// HKCU\SOFTWARE\WinCommander.
 /// Returns None if the key or value doesn't exist.
 fn read_stored_primary_pid() -> Option<u32> {
@@ -571,7 +571,8 @@ fn read_stored_primary_pid() -> Option<u32> {
         if r != 0 {
             return None;
         }
-        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name())
+        let session_id = current_session_id();
+        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name(session_id))
             .encode_utf16()
             .collect();
         let mut data: u32 = 0;
@@ -586,7 +587,7 @@ fn read_stored_primary_pid() -> Option<u32> {
             &mut data_size,
         );
         let _ = RegCloseKey(hkey);
-        if r2 == 0 && reg_type == REG_DWORD {
+        if r2 == 0 && reg_type == REG_DWORD && data_size == 4 {
             Some(data)
         } else {
             None
@@ -789,7 +790,7 @@ mod resolve_context_menu_event_tests {
     fn development_instance_channel_isolated_from_installed_release() {
         assert_eq!(instance_object_name(7, "lock"), "WinCommander_Dev_S7_lock");
         assert_eq!(pipe_path(7), r"\\.\pipe\WinCommander_Dev_S7_args");
-        assert_eq!(primary_pid_value_name(), "DevelopmentPrimaryPid");
+        assert_eq!(primary_pid_value_name(7), "DevelopmentPrimaryPid_S7");
     }
 
     #[cfg(not(wincommander_dev_profile))]
@@ -797,7 +798,25 @@ mod resolve_context_menu_event_tests {
     fn release_instance_channel_remains_backward_compatible() {
         assert_eq!(instance_object_name(7, "lock"), "WinCommander_S7_lock");
         assert_eq!(pipe_path(7), r"\\.\pipe\WinCommander_S7_args");
-        assert_eq!(primary_pid_value_name(), "PrimaryPid");
+        assert_eq!(primary_pid_value_name(7), "PrimaryPid_S7");
+    }
+
+    #[test]
+    fn three_simultaneous_sessions_have_independent_instance_channels_and_pid_records() {
+        let sessions = [1, 2, 3];
+        for (index, session) in sessions.iter().enumerate() {
+            for other in &sessions[index + 1..] {
+                assert_ne!(
+                    instance_object_name(*session, "lock"),
+                    instance_object_name(*other, "lock")
+                );
+                assert_ne!(pipe_path(*session), pipe_path(*other));
+                assert_ne!(
+                    primary_pid_value_name(*session),
+                    primary_pid_value_name(*other)
+                );
+            }
+        }
     }
 
     #[test]

@@ -195,6 +195,12 @@ fn canonical_json_bytes(value: &Value) -> Vec<u8> {
 /// first call. Idempotent.
 fn get_or_create_signing_key() -> Result<SigningKey, String> {
     let mut settings = read_settings()?;
+    if !crate::settings::personal_settings_automation_available() {
+        return Err(
+            "Flow signing is unavailable until personal settings and secrets are accessible."
+                .to_string(),
+        );
+    }
 
     if let Some(seed_b64) = settings.app.flow_signing_seed_b64.as_deref() {
         let seed = B64
