@@ -135,6 +135,12 @@ recovery notice; it cannot
 reconstruct the lost preferences or secrets. The service retains a recovery
 marker instead of treating later ordinary edits as proof of recovery.
 
+The recovery banner offers **Review in Settings** and **Dismiss for now**.
+Dismissal lasts for the current app session and the current recovery condition;
+a changed recovery or save status shows the notice again. Recovery details stay
+available in Settings after dismissal. Dismissing the notice does not change the
+service recovery state, unlock sensitive features, or delete preserved data.
+
 Plaintext migration cleanup uses a durable journal containing hashes of the
 source and expected encrypted settings partitions. Cleanup happens only after
 both the service-backed personal record and machine persistence are confirmed;

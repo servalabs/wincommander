@@ -83,7 +83,7 @@ export default function AppShell({
   return (
     <>
       <TitleBar activePanel={activePanel} />
-      <PersonalSettingsNotice status={personalSettingsStatus} />
+      <PersonalSettingsNotice status={personalSettingsStatus} onOpenSettings={() => onPanelChange("system-identity")} />
       <div className="app-body flex overflow-hidden">
         {/* Column 1: Left Navigation */}
         <Sidebar

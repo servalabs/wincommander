@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PersonalSettingsNotice } from "./PersonalSettingsNotice";
+import { PersonalSettingsNotice, PersonalSettingsRecoveryDetails } from "./PersonalSettingsNotice";
 
 test("recovery notice preserves access to the app and explains old data separately from new preferences", () => {
   const html = renderToStaticMarkup(<PersonalSettingsNotice status={{ mode: "service", recoveryRequired: true, canSave: true }} />);
@@ -12,9 +12,33 @@ test("recovery notice preserves access to the app and explains old data separate
   expect(html).toContain("affected sensitive features stay locked");
   expect(html).not.toContain("fresh personal defaults");
   expect(html).toContain("You can save new preferences");
-  expect(html).not.toContain("<button");
+  expect(html).toContain("Dismiss for now");
+  expect(html).toContain('aria-label="Dismiss personal data recovery notice for this session"');
+  expect(html).toContain("Details remain in Settings");
+  expect(html).toContain("Dismissing does not unlock protected data");
   expect(html).not.toContain('role="dialog"');
   expect(html).not.toContain("Retry startup");
+});
+
+test("recovery banner offers a Settings route and details stay available independently of dismissal", () => {
+  const status = { mode: "service" as const, recoveryRequired: true, canSave: true };
+  const banner = renderToStaticMarkup(<PersonalSettingsNotice status={status} onOpenSettings={() => {}} />);
+  expect(banner).toContain("Review in Settings");
+  const details = renderToStaticMarkup(<PersonalSettingsRecoveryDetails status={status} />);
+  expect(details).toContain('aria-label="Personal data recovery"');
+  expect(details).toContain("original files are preserved");
+  expect(details).toContain("Administrator permission alone cannot unlock another account");
+  expect(details).not.toContain("Dismiss");
+  expect(status.recoveryRequired).toBe(true);
+});
+
+test("an acknowledged episode has a stable identity until the actual recovery or save status changes", () => {
+  const status = { mode: "service" as const, recoveryRequired: true, canSave: true };
+  const episode = PersonalSettingsNotice({ status });
+  expect(PersonalSettingsNotice({ status: { ...status } })?.key).toBe(episode?.key);
+  expect(PersonalSettingsNotice({ status: { ...status, canSave: false } })?.key).not.toBe(episode?.key);
+  expect(PersonalSettingsNotice({ status: { ...status, recoveryRequired: false } })).toBeNull();
+  expect(PersonalSettingsNotice({ status: null })).toBeNull();
 });
 
 test("temporary recovery preferences never claim they can be saved", () => {

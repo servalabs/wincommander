@@ -5,6 +5,7 @@ import useBackend from "../../hooks/useBackend";
 import SectionCard from "../../components/shared/SectionCard";
 import VersionManagementCard from "../../components/settings/VersionManagementCard";
 import ImportExportSettingsCard from "../../components/settings/ImportExportSettingsCard";
+import { PersonalSettingsRecoveryDetails } from "../../components/startup/PersonalSettingsNotice";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import TierGate from "../../components/shared/TierGate";
@@ -71,7 +72,7 @@ function useDebounceApply(delayMs = 5000) {
 }
 
 export default function IdentityPanel() {
-    const { appSettings, patchAppSettings } = useAppState();
+    const { appSettings, patchAppSettings, personalSettingsStatus } = useAppState();
     const { enableDnsCensorshipProtection, disableDnsCensorshipProtection } = useBackend();
 
     // ── Appearance: disable all animations ──────────────────────────────────
@@ -158,6 +159,7 @@ export default function IdentityPanel() {
                 title="Settings"
                 description="App preferences, logging, updates, and appearance."
             />
+            <PersonalSettingsRecoveryDetails status={personalSettingsStatus} />
             <div className="identity-cols">
 
             {/* ── Settings Cards ── */}

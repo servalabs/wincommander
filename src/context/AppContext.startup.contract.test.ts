@@ -54,7 +54,7 @@ describe("AppContext startup coordination", () => {
     expect(refresh).toContain("setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous))");
     expect(hydration).not.toContain("setStartupError(");
     expect(source).toContain('personalSettingsStatus: authMode === "decoy" ? null : personalSettingsStatus');
-    expect(shell).toContain("<PersonalSettingsNotice status={personalSettingsStatus} />");
+    expect(shell).toContain('<PersonalSettingsNotice status={personalSettingsStatus} onOpenSettings={() => onPanelChange("system-identity")} />');
     expect(shell.indexOf("<PersonalSettingsNotice")).toBeGreaterThan(shell.indexOf("<TitleBar"));
   });
 
