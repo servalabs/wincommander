@@ -46,6 +46,8 @@ test("administration, Fleet policy, private ownership and unknown state remain d
   expect(fleet).toContain("Fleet Vault permission");
   expect(owner).toContain("administrator access does not replace ownership");
   expect(unknown).toContain("could not be verified");
+  expect(unknown).toContain("original mounting tool");
+  expect(unknown).toContain("restart the WinCommander service");
   for (const message of [admin, fleet, owner, unknown]) expect(message).not.toContain("password");
 });
 

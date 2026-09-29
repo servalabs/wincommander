@@ -58,7 +58,7 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   administrator_required: "This machine-wide drive needs administrator approval. Open WinCommander as an administrator to manage it",
   policy_access_denied: "Your Windows account does not have the required Fleet Vault permission. Ask the Vault owner to review your access",
   private_owner_required: "This private Vault is available only to its owner in the Windows session where it was mounted; administrator access does not replace ownership",
-  mount_state_unknown: "This drive's mount state could not be verified for your Windows account. Refresh Secure Storage before trying again",
+  mount_state_unknown: "This drive's mount identity could not be verified for your Windows account. Refresh Secure Storage. If this persists after an upgrade or an external mount, close open files and have the authorized owner dismount it using the original mounting tool, then restart the WinCommander service before remounting",
   invalid_request: "The Vault request is invalid",
   already_mounted: "This Vault is already mounted. Open the existing drive, or dismount it before changing its mount settings",
   broker_unavailable: "The secure Vault service is unavailable",
