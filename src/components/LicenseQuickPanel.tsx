@@ -9,7 +9,7 @@ import LicenseQuickStats from "./LicenseQuickStats";
 import { licenseStateLabel } from "../utils/licensePresentation";
 
 export default function LicenseQuickPanel() {
-  const { getLicenseStatus, activateAppLicense, refreshAppLicense, clearAppLicenseCache, deactivateAppLicense } = useBackend();
+  const { getLicenseStatus, activateAppLicense, refreshAppLicense, deactivateAppLicense } = useBackend();
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [licenseKey, setLicenseKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -163,17 +163,12 @@ export default function LicenseQuickPanel() {
       setMessage(wasTrial
         ? "Trial ended on this device. Trial eligibility remains recorded by the server."
         : "License deactivated. Device released.");
-      // Attempt local fallback already done inside deactivateAppLicense on the Rust side.
       window.dispatchEvent(new CustomEvent("license-updated"));
       await refreshStatus(false);
-    } catch {
-      try {
-        await clearAppLicenseCache();
-        setStatus(null);
-        setMessage("License removed from this device.");
-      } catch (err2) {
-        setMessage(err2 instanceof Error ? err2.message : String(err2));
-      }
+    } catch (error) {
+      // A local-only clear would leave the server seat occupied. Keep the
+      // signed token and show the failure so the user can retry safely.
+      setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }

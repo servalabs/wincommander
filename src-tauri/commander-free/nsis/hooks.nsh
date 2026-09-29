@@ -232,6 +232,24 @@ ${Using:StrFunc} UnStrStr
   wc_service_deleted_${stage}:
 !macroend
 
+; A true product uninstall must release the server-side device seat before it
+; removes the local signed token. `/UPDATE` deliberately skips this macro so an
+; in-place upgrade never consumes/requires another activation. If the network
+; release cannot be confirmed, abort while the application and retryable token
+; are still present rather than silently stranding a licence seat.
+!macro WC_RELEASE_LICENSE_SEAT_OR_ABORT
+  IfFileExists "$INSTDIR\wincommander-free.exe" 0 wc_license_release_missing
+    DetailPrint "Releasing this device's licence seat..."
+    nsExec::ExecToStack '"$INSTDIR\wincommander-free.exe" --release-license-seat'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-license-release" "$0" "attempted"
+    ${If} $0 != 0
+      Abort "WinCommander could not confirm release of this device's licence seat. Connect to the internet and retry the uninstall, or use Deactivate device from WinCommander first."
+    ${EndIf}
+  wc_license_release_missing:
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "postinstall"
   !insertmacro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
@@ -384,7 +402,7 @@ ${Using:StrFunc} UnStrStr
     Goto wc_uninstall_cleanup_done
   ${EndIf}
 
-  !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "uninstall"
+  !insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT
 
   ; An explicit product uninstall removes machine-owned WinCommander components,
   ; including the separately delivered Pro runtime and device policy/state.

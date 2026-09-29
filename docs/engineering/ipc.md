@@ -105,10 +105,10 @@ Native listeners can subscribe to `startup://phase` and
 | `get_license_status` | Current entitlement (licensed / trial / grace / free). |
 | `get_license_api_base` | Resolved license-server base URL. |
 | `activate_license` | Activate with a license key (device-bound). |
-| `refresh_license_if_due` | Background check; returns the verified paid token locally until its persisted 12-hour deadline or seat heartbeat is due. Trial tokens never call the paid refresh endpoint. |
+| `refresh_license_if_due` | Background check; returns the verified paid token locally until its persisted four-hour deadline. It never requests a seat-activity update. Trial tokens never call the paid refresh endpoint. |
 | `refresh_license` | Explicit user-requested paid-token re-verification; a trial returns its signed local status without calling the paid refresh endpoint. |
 | `deactivate_license` | Release this device's activation. |
-| `clear_license_cache` | Drop the local license cache. |
+| `clear_license_cache` | Compatibility command: a paid token is deactivated server-side before its local cache is cleared; a trial has no seat. |
 | `start_trial` / `clear_trial` | Begin / clear the client-side trial record. |
 
 ### Pro sidecar & install

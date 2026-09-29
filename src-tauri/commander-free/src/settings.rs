@@ -1304,9 +1304,9 @@ pub struct SelfDestructSettings {
     /// against everything).
     pub exclude_browsers: Option<bool>,
     /// Free the licence seat on the server before clearing. Default false.
-    /// Recommended ON if you're going to also uninstall the app — otherwise the
-    /// seat stays attached to a device that no longer exists until
-    /// the idle-seat reaper picks it up.
+    /// Recommended ON only for an intentional device retirement. The signed
+    /// server release frees the seat before removal; ordinary updates preserve
+    /// the licence and must not release it.
     pub deactivate_license_first: Option<bool>,
     /// Trigger a graceful Windows shutdown after the cascade ends.
     pub shutdown_system: Option<bool>,

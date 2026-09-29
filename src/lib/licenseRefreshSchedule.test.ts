@@ -10,13 +10,14 @@ describe("license refresh schedule", () => {
   test("schedules from the persisted verification time without refreshing early", () => {
     const now = 2_000_000_000_000;
     const verifiedNow = now / 1_000;
-    const verifiedElevenHoursFiftyNineMinutesAgo = (now - LICENSE_REFRESH_BASE_MS + 60_000) / 1_000;
+    const verifiedThreeHoursFiftyNineMinutesAgo = (now - LICENSE_REFRESH_BASE_MS + 60_000) / 1_000;
 
+    expect(LICENSE_REFRESH_BASE_MS).toBe(4 * 60 * 60 * 1_000);
     expect(nextLicenseRefreshDueDelay(verifiedNow, now, () => 0)).toBe(LICENSE_REFRESH_BASE_MS);
     expect(nextLicenseRefreshDueDelay(verifiedNow, now, () => 1)).toBe(
       LICENSE_REFRESH_BASE_MS + 5 * 60 * 1_000,
     );
-    expect(nextLicenseRefreshDueDelay(verifiedElevenHoursFiftyNineMinutesAgo, now, () => 0)).toBe(60_000);
+    expect(nextLicenseRefreshDueDelay(verifiedThreeHoursFiftyNineMinutesAgo, now, () => 0)).toBe(60_000);
   });
 
   test("schedules an immediate native check when verification is absent or overdue", () => {

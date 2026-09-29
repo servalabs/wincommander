@@ -1,13 +1,13 @@
-export const LICENSE_REFRESH_BASE_MS = 12 * 60 * 60 * 1_000;
+export const LICENSE_REFRESH_BASE_MS = 4 * 60 * 60 * 1_000;
 export const LICENSE_REFRESH_INITIAL_DELAY_MS = 1_500;
 const LICENSE_REFRESH_DUE_JITTER_MS = 5 * 60 * 1_000;
 const RETRY_DELAYS_MS = [15 * 60 * 1_000, 60 * 60 * 1_000, 4 * 60 * 60 * 1_000];
 
 /**
  * Returns the delay until the persisted native verification reaches its
- * 12-hour deadline. Jitter is only added after the deadline, never before it,
- * so an app started eleven hours and fifty-nine minutes after verification
- * checks again in about one minute rather than another twelve hours.
+ * four-hour deadline. Jitter is only added after the deadline, never before it,
+ * so an app started three hours and fifty-nine minutes after verification
+ * checks again in about one minute rather than another four hours.
  */
 export function nextLicenseRefreshDueDelay(
   lastVerifiedAtSeconds: number | null | undefined,

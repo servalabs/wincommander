@@ -13,6 +13,12 @@ fn main() {
     if let Some(exit_code) = wincommander_lib::run_machine_pro_update_if_requested(&args) {
         std::process::exit(exit_code);
     }
+    // A true NSIS uninstall releases the device seat before removing the
+    // executable. `/UPDATE` never passes this argument, so updates retain the
+    // existing token and seat without asking the user to activate again.
+    if let Some(exit_code) = wincommander_lib::run_license_seat_release_if_requested(&args) {
+        std::process::exit(exit_code);
+    }
     #[cfg(all(feature = "autonomous-test", debug_assertions))]
     if wincommander_lib::autonomous_test::is_invocation(&args) {
         attach_parent_console();

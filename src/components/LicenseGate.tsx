@@ -135,8 +135,8 @@ export default function LicenseGate({
       }
     };
     // The native command makes a network call only after its persisted
-    // verification deadline or a seat heartbeat is due. Recalculate when the
-    // status changes so a restart near the deadline doesn't wait another 12h.
+    // four-hour verification deadline. Recalculate when the status changes so
+    // a restart near the deadline does not wait another full interval.
     schedule(nextLicenseRefreshDueDelay(licenseStatus.last_verified_at));
     return () => {
       cancelled = true;

@@ -182,7 +182,7 @@ describe("Free machine-wide release packaging", () => {
     expect(sharedSettingsRepairTest).not.toContain(".Sddl");
   });
 
-  test("runs a machine-wide release setup and uninstaller with service lifecycle and cleanup that preserves the license", () => {
+  test("preserves a licence across updates and releases its seat on explicit uninstall", () => {
     expect(releaseWorkflow).toContain("Verify Free setup installs and removes the machine-wide installation");
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\wincommander-free.exe"');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"');
@@ -198,8 +198,15 @@ describe("Free machine-wide release packaging", () => {
     expect(verification).not.toContain("$env:LOCALAPPDATA");
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+    const uninstallHook = hooks.slice(
+      hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL"),
+      hooks.indexOf("!macroend", hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL")),
+    );
     expect(hooks).toContain('${GetOptions} $CMDLINE "/UPDATE" $R7');
     expect(hooks).toContain("An update must retain");
+    expect(hooks).toContain("!macro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
+    expect(hooks).toContain("--release-license-seat");
+    expect(uninstallHook).toContain("!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
     expect(hooks).toContain('ReadEnvStr $R5 "ProgramData"');
     expect(hooks).toContain('RMDir /r "$R5\\WinCommander"');
     expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(

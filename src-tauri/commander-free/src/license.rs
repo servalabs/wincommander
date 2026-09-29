@@ -20,8 +20,10 @@ const DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 12 * 60 * 60;
 const MIN_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 60 * 60;
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
-const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 12 * 60 * 60;
-const SEAT_HEARTBEAT_INTERVAL_SECONDS: u64 = 14 * 24 * 60 * 60;
+/// A routine entitlement check may happen every four hours, but it is always
+/// read-only at the licensing worker.  D1 mutations are reserved for a real
+/// lifecycle change such as a new activation or an explicit deactivation.
+const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 4 * 60 * 60;
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[cfg(test)]
 const TRIAL_DURATION_SECONDS: u64 = 16 * 24 * 60 * 60; // 16 days
@@ -76,11 +78,6 @@ struct SignedTokenEnvelope {
 struct CachedLicense {
     token: SignedTokenEnvelope,
     last_verified_at: u64,
-    /// The next time this device should ask the worker to persist a seat
-    /// heartbeat. Older cache files lack this value; their next normal,
-    /// read-only refresh learns it from the worker before a heartbeat is due.
-    #[serde(default)]
-    seat_heartbeat_due_at: Option<u64>,
     #[serde(default)]
     seats_used: Option<u32>,
     #[serde(default)]
@@ -168,8 +165,6 @@ struct WorkerTokenResponse {
     seats_used: Option<u32>,
     #[serde(rename = "seatLimit")]
     seat_limit: Option<u32>,
-    #[serde(rename = "seatHeartbeatDueAt")]
-    seat_heartbeat_due_at: Option<u64>,
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
@@ -237,8 +232,6 @@ struct WorkerRefreshRequest<'a> {
     app_version: &'a str,
     #[serde(rename = "isPortable")]
     is_portable: bool,
-    #[serde(rename = "seatHeartbeat", skip_serializing_if = "Option::is_none")]
-    seat_heartbeat: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -858,46 +851,13 @@ fn clear_trial_eligibility_cache() {
     }
 }
 
-fn seat_heartbeat_is_due(cached: &CachedLicense, now: u64) -> bool {
-    match cached.seat_heartbeat_due_at {
-        Some(due_at) => due_at <= now,
-        // Do not turn every existing installation into an immediate D1 write
-        // during rollout. The next ordinary 12-hour refresh is read-only and
-        // supplies the authoritative due time for legacy cache files.
-        None => false,
-    }
-}
-
 fn license_service_refresh_is_due(last_verified_at: u64, now: u64) -> bool {
     last_verified_at > now
         || now.saturating_sub(last_verified_at) >= LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS
 }
 
 fn paid_license_refresh_is_due(cached: &CachedLicense, claims: &LicenseClaims, now: u64) -> bool {
-    claims.plan != "trial"
-        && (license_service_refresh_is_due(cached.last_verified_at, now)
-            || seat_heartbeat_is_due(cached, now))
-}
-
-fn next_seat_heartbeat_due_at(now: u64) -> u64 {
-    now.saturating_add(SEAT_HEARTBEAT_INTERVAL_SECONDS)
-}
-
-fn seat_heartbeat_due_from_worker(worker_due_at: Option<u64>, now: u64) -> u64 {
-    worker_due_at.unwrap_or_else(|| next_seat_heartbeat_due_at(now))
-}
-
-fn refreshed_seat_heartbeat_due_at(
-    previous_due_at: Option<u64>,
-    seat_heartbeat_requested: bool,
-    worker_due_at: Option<u64>,
-    refreshed_at: u64,
-) -> Option<u64> {
-    if seat_heartbeat_requested || previous_due_at.is_none() {
-        Some(seat_heartbeat_due_from_worker(worker_due_at, refreshed_at))
-    } else {
-        previous_due_at
-    }
+    claims.plan != "trial" && license_service_refresh_is_due(cached.last_verified_at, now)
 }
 
 fn license_file_path() -> Result<PathBuf, String> {
@@ -1447,17 +1407,12 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         return Err("Activation token device hash mismatch.".to_string());
     }
 
-    let activated_at = now_unix();
     let cached = CachedLicense {
         token: SignedTokenEnvelope {
             payload: signed_payload,
             signature,
         },
-        last_verified_at: activated_at,
-        seat_heartbeat_due_at: Some(seat_heartbeat_due_from_worker(
-            payload.seat_heartbeat_due_at,
-            activated_at,
-        )),
+        last_verified_at: now_unix(),
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
@@ -1468,7 +1423,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
 }
 
 /// Background refresh path. A fresh, verified paid token is returned locally;
-/// only an overdue verification or persisted seat heartbeat reaches the worker.
+/// only an overdue four-hour verification reaches the worker.
 /// Trial tokens are signed once and deliberately never sent to the paid
 /// `/license/refresh` endpoint.
 #[tauri::command]
@@ -1531,8 +1486,6 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
 
-    let seat_heartbeat_requested = seat_heartbeat_is_due(&cached, now_unix());
-
     let client = crate::net::doh_http_client()?;
 
     let response = client
@@ -1544,7 +1497,6 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
             app_id: APP_ID,
             app_version: env!("CARGO_PKG_VERSION"),
             is_portable: is_portable_os(),
-            seat_heartbeat: seat_heartbeat_requested.then_some(true),
         })
         .send()
         .await
@@ -1586,12 +1538,6 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
             signature,
         },
         last_verified_at: refreshed_at,
-        seat_heartbeat_due_at: refreshed_seat_heartbeat_due_at(
-            cached.seat_heartbeat_due_at,
-            seat_heartbeat_requested,
-            payload.seat_heartbeat_due_at,
-            refreshed_at,
-        ),
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
@@ -1603,7 +1549,24 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn clear_license_cache() -> Result<(), String> {
-    clear_cached_license_inner()
+    let Some(cached) = load_cached_license()? else {
+        return Ok(());
+    };
+    let (_, public_key_b64) = get_config()?;
+    let claims = parse_and_verify_claims(
+        &cached.token.payload,
+        &cached.token.signature,
+        &public_key_b64,
+    )?;
+
+    // Trial tokens have no paid seat. For a paid token, a local-only clear
+    // would leave the server allocation occupied, so use the same confirmed
+    // deactivation path as the visible Remove button.
+    if claims.plan == "trial" {
+        clear_cached_license_inner()
+    } else {
+        deactivate_license_internal().await
+    }
 }
 
 /// Start the one-time 16-day free trial for this device.
@@ -1720,7 +1683,6 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
                 signature,
             },
             last_verified_at: now_unix(),
-            seat_heartbeat_due_at: None,
             seats_used: None,
             seat_limit: None,
         };
@@ -1733,9 +1695,8 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
 
 /// Internal async helper — can be called from other modules (e.g. lockdown).
 /// Contacts the server to release the seat, then removes the local cache.
-/// If the server rejects (e.g. key mismatch), we still clear the local cache so
-/// deactivation always succeeds locally; the stale seat on the server will be
-/// reclaimed automatically by the idle-seat cleanup job.
+/// The server release is authoritative: if it cannot be confirmed, retain the
+/// local token so the user can retry instead of silently stranding a seat.
 pub async fn deactivate_license_internal() -> Result<(), String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
@@ -1752,46 +1713,49 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
 
     let client = crate::net::doh_http_client()?;
 
-    // Best-effort server call — we always clear locally regardless of outcome.
-    let server_result = async {
-        let response = client
-            .post(format!("{}/license/deactivate", api_base))
-            .json(&WorkerDeactivateRequest {
-                payload: &cached.token.payload,
-                signature: &cached.token.signature,
-                device_hash: &device_hash,
-                app_id: APP_ID,
-            })
-            .send()
-            .await
-            .map_err(|e| format!("Deactivation request failed: {}", e))?;
+    let response = client
+        .post(format!("{}/license/deactivate", api_base))
+        .json(&WorkerDeactivateRequest {
+            payload: &cached.token.payload,
+            signature: &cached.token.signature,
+            device_hash: &device_hash,
+            app_id: APP_ID,
+        })
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "Deactivation request failed; the licence was kept so you can retry: {}",
+                e
+            )
+        })?;
 
-        let payload: WorkerTokenResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Invalid deactivation response: {}", e))?;
-
-        if !payload.ok {
-            return Err(payload
-                .error
-                .unwrap_or_else(|| "Deactivation rejected by server.".to_string()));
-        }
-        Ok(())
-    }
-    .await;
-
-    // Always clear the local cache — seat will be reclaimed server-side if not already freed.
-    clear_cached_license_inner()?;
-
-    // Surface server errors as warnings (non-fatal since local cache is cleared).
-    if let Err(e) = server_result {
-        eprintln!(
-            "[license] Server deactivation warning (local cache cleared anyway): {}",
+    let payload: WorkerTokenResponse = response.json().await.map_err(|e| {
+        format!(
+            "Invalid deactivation response; the licence was kept so you can retry: {}",
             e
-        );
+        )
+    })?;
+
+    if !payload.ok {
+        return Err(payload.error.unwrap_or_else(|| {
+            "Deactivation rejected by server; the licence was kept so you can retry.".to_string()
+        }));
     }
 
+    clear_cached_license_inner()?;
     Ok(())
+}
+
+/// Used by the explicit uninstaller path. A device without a cached licence
+/// has no server seat to release; an existing cached licence must receive a
+/// confirmed server-side release before the uninstaller continues.
+pub async fn release_license_seat_if_present() -> Result<bool, String> {
+    if load_cached_license()?.is_none() {
+        return Ok(false);
+    }
+    deactivate_license_internal().await?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1963,83 +1927,24 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_refresh_omits_seat_heartbeat_and_due_refresh_includes_it() {
-        let ordinary = WorkerRefreshRequest {
+    fn paid_refresh_payload_never_requests_a_seat_write() {
+        let refresh = WorkerRefreshRequest {
             payload: "payload",
             signature: "signature",
             device_hash: "device-a",
             app_id: APP_ID,
             app_version: "test",
             is_portable: false,
-            seat_heartbeat: None,
         };
-        let due = WorkerRefreshRequest {
-            payload: "payload",
-            signature: "signature",
-            device_hash: "device-a",
-            app_id: APP_ID,
-            app_version: "test",
-            is_portable: false,
-            seat_heartbeat: Some(true),
-        };
-
-        let ordinary_json = serde_json::to_value(ordinary).expect("serialize ordinary refresh");
-        let due_json = serde_json::to_value(due).expect("serialize due refresh");
+        let refresh_json = serde_json::to_value(refresh).expect("serialize refresh");
         assert!(
-            ordinary_json.get("seatHeartbeat").is_none(),
-            "ordinary twice-daily refreshes must remain read-only"
-        );
-        assert_eq!(due_json["seatHeartbeat"], true);
-    }
-
-    #[test]
-    fn seat_heartbeat_due_time_moves_only_for_a_heartbeat_or_legacy_cache_migration() {
-        let now = 1_000_000;
-        let original_due = now + 60;
-        let cached = CachedLicense {
-            token: SignedTokenEnvelope {
-                payload: "payload".to_string(),
-                signature: "signature".to_string(),
-            },
-            last_verified_at: now,
-            seat_heartbeat_due_at: Some(original_due),
-            seats_used: None,
-            seat_limit: None,
-        };
-
-        assert!(!seat_heartbeat_is_due(&cached, now));
-        assert!(seat_heartbeat_is_due(&cached, original_due));
-        assert!(!seat_heartbeat_is_due(
-            &CachedLicense {
-                seat_heartbeat_due_at: None,
-                ..cached.clone()
-            },
-            now
-        ), "a legacy cache must first receive a read-only refresh deadline");
-        assert_eq!(
-            refreshed_seat_heartbeat_due_at(Some(original_due), false, Some(now + 1), now),
-            Some(original_due),
-            "a normal successful refresh must not extend the next write deadline"
-        );
-        assert_eq!(
-            refreshed_seat_heartbeat_due_at(Some(original_due), true, None, now),
-            Some(now + SEAT_HEARTBEAT_INTERVAL_SECONDS),
-            "only a successful requested heartbeat sets the next deadline"
-        );
-        assert_eq!(
-            refreshed_seat_heartbeat_due_at(Some(original_due), true, Some(now + 123), now),
-            Some(now + 123),
-            "a successful requested heartbeat must prefer the worker's policy deadline"
-        );
-        assert_eq!(
-            refreshed_seat_heartbeat_due_at(None, false, Some(now + 456), now),
-            Some(now + 456),
-            "a legacy cache adopts the worker deadline without writing a heartbeat"
+            refresh_json.get("seatHeartbeat").is_none(),
+            "routine paid refreshes must never request a seat write"
         );
     }
 
     #[test]
-    fn background_paid_refresh_uses_the_persisted_twelve_hour_deadline() {
+    fn background_paid_refresh_uses_the_persisted_four_hour_deadline() {
         let now = 1_000_000;
         let mut claims = trial_claims(now + 100_000);
         claims.plan = "pro".to_string();
@@ -2049,7 +1954,6 @@ mod tests {
                 signature: "signature".to_string(),
             },
             last_verified_at: now - 1,
-            seat_heartbeat_due_at: Some(now + SEAT_HEARTBEAT_INTERVAL_SECONDS),
             seats_used: None,
             seat_limit: None,
         };
@@ -2058,14 +1962,7 @@ mod tests {
         cached.last_verified_at = now - LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS;
         assert!(
             paid_license_refresh_is_due(&cached, &claims, now),
-            "verification is due exactly twelve hours after the persisted check"
-        );
-
-        cached.last_verified_at = now - 1;
-        cached.seat_heartbeat_due_at = Some(now);
-        assert!(
-            paid_license_refresh_is_due(&cached, &claims, now),
-            "a due seat heartbeat must override an otherwise fresh verification"
+            "verification is due exactly four hours after the persisted check"
         );
 
         claims.plan = "trial".to_string();
@@ -2111,7 +2008,6 @@ mod tests {
             entitlement_revoked,
             seats_used: Some(99),
             seat_limit: Some(0),
-            seat_heartbeat_due_at: None,
         }
     }
 

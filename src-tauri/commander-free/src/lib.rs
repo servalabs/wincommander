@@ -152,6 +152,35 @@ pub fn run_machine_pro_update_if_requested(args: &[String]) -> Option<i32> {
     pro_install::run_machine_pro_update_if_requested(args)
 }
 
+/// Release the current device's paid seat without constructing the desktop
+/// runtime. NSIS invokes this only for an explicit uninstall, never `/UPDATE`.
+/// A failed release deliberately returns non-zero so the uninstaller retains
+/// the installed token and the user can retry rather than strand the seat.
+pub fn run_license_seat_release_if_requested(args: &[String]) -> Option<i32> {
+    if !args.iter().any(|arg| arg == "--release-license-seat") {
+        return None;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Could not initialise licence-release runtime: {error}");
+            return Some(1);
+        }
+    };
+    Some(
+        match runtime.block_on(license::release_license_seat_if_present()) {
+            Ok(_) => 0,
+            Err(error) => {
+                eprintln!("Could not release this device's licence seat: {error}");
+                1
+            }
+        },
+    )
+}
+
 struct TrayShieldState {
     running: Mutex<bool>,
     menu_item: MenuItem<tauri::Wry>,
