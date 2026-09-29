@@ -47,6 +47,8 @@ import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showInfo, showSuccess } from "../../utils/toast";
 import { getMaintenanceFailureMessage } from "../../utils/maintenance";
+import { retainUnverifiedFindings, verifyDashboardToggleFix } from "./fixVerification";
+import { useFindingFixAttempts } from "./useFindingFixAttempts";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
@@ -158,6 +160,7 @@ export default function DashboardPanel() {
   // This directly-owned flag covers the interval before TaskStatusContext
   // registers the operation, preventing duplicate Fix All submissions.
   const [isFixAllRunning, setIsFixAllRunning] = useState(false);
+  const { fixAttempts, trackFindingFix } = useFindingFixAttempts();
   const fixAllInProgress = isFixEverythingRunning || isFixAllRunning;
   // This is deliberately a per-Windows-user preference and defaults to off.
   // It changes only the next Dashboard Fix All request; individual fixes and
@@ -420,14 +423,14 @@ export default function DashboardPanel() {
     () => {
       const seenFindingIds = new Set<string>();
       const seenToggleIds = new Set<string>();
-      return [
+      return retainUnverifiedFindings([
         ...(radar.report?.findings ?? []),
         ...registryDriftFindings,
         ...missingEngineFindings,
         ...pendingUpdateFindings,
         ...(combinedUpdateFinding ? [combinedUpdateFinding] : []),
         ...(proFinding ? [proFinding] : []),
-      ].filter((finding) => {
+      ], fixAttempts).filter((finding) => {
         if (seenFindingIds.has(finding.id)) return false;
         seenFindingIds.add(finding.id);
         const toggleId = finding.id.startsWith("drift:")
@@ -440,7 +443,7 @@ export default function DashboardPanel() {
         return true;
       });
     },
-    [radar.report?.findings, registryDriftFindings, missingEngineFindings, pendingUpdateFindings, combinedUpdateFinding, proFinding]
+    [radar.report?.findings, registryDriftFindings, missingEngineFindings, pendingUpdateFindings, combinedUpdateFinding, proFinding, fixAttempts]
   );
   const activeFindings = allFindings.filter((f) => {
     if (ignoredFindingIds.includes(f.id)) return false;
@@ -528,7 +531,7 @@ export default function DashboardPanel() {
   //   suggestions          → companion Disable-SetupCompletionNags
   //   paste-monitor        → settings-only (no toggle/command), flips ideal.privacy.clipboard.pasteMonitorEnabled
   const buildFindingOp = useCallback((f: ScanFinding, machineWide = false, ownsPackageOperation = false): { label: string; fn: () => Promise<any> } | null => {
-    const wrap = (fn: () => Promise<any>) => async () => {
+    const wrap = (fn: () => Promise<any>) => () => trackFindingFix(f, async () => {
       const res = await fn();
       if (res && (res as any).error) throw new Error((res as any).error);
       if (res && res.success === false) throw new Error("Operation failed");
@@ -539,7 +542,7 @@ export default function DashboardPanel() {
         throw new Error(res.data.reason || "This fix cannot be applied machine-wide.");
       }
       return res;
-    };
+    });
     const runToggleCommand = async (toggleId: string, targetChecked = true) => {
       const toggle = getToggleById(toggleId);
       if (!toggle) return null;
@@ -551,6 +554,7 @@ export default function DashboardPanel() {
         });
       }
       const res = await executeBackendCommand(targetChecked ? toggle.enableCmd : toggle.disableCmd, { MachineWide: machineWide });
+      await verifyDashboardToggleFix(toggleId, targetChecked, res, () => executeBackendCommand('Get-HardeningStatus'));
       if (targetChecked && toggle.id === 'suggestions') {
         await executeBackendCommand('Disable-SetupCompletionNags', { MachineWide: machineWide });
       }
@@ -672,7 +676,7 @@ export default function DashboardPanel() {
       }
     }
     return fn ? { label: f.label, fn: wrap(fn) } : null;
-  }, [toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen]);
+  }, [trackFindingFix, toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen]);
 
   // Run a set of findings through the operation overlay, then re-read state so
   // the radar, score, and toggles update. Used by both Fix-all and per-item Fix.
@@ -1030,6 +1034,7 @@ export default function DashboardPanel() {
                     <div className="dashboard-fix-actions">
                       <NeedsAttention
                         findings={activeFindings}
+                        fixErrors={Object.fromEntries(Object.entries(fixAttempts).flatMap(([id, attempt]) => attempt.error ? [[id, attempt.error]] : []))}
                         busyIds={busyIds}
                         onFixOne={handleFixOne}
                         onFixAll={handleFixAll}

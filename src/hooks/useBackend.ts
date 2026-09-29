@@ -440,7 +440,7 @@ export interface HardeningStatus {
   usbStorageLockdown?: boolean;
   advertisingIdDisabled?: boolean;
   tailoredExperiencesDisabled?: boolean;
-  officeLoggingDisabled?: boolean;
+  officeLoggingDisabled?: boolean | null;
   diagnosticEventTracingDisabled?: boolean;
   // Phase E — hide-recent MRU surfaces (HKCU reads)
   hideQuickAccessRecent?: boolean;
@@ -448,8 +448,9 @@ export interface HardeningStatus {
   hideRunMRU?: boolean;
   disableSearchHistory?: boolean;
   terminalHistoryDisabled?: boolean;
-  internetCommRestricted?: boolean;
-  recallSnapshotsDisabled?: boolean;
+  internetCommRestricted?: boolean | null;
+  bitlockerAutoEncryptDisabled?: boolean | null;
+  recallSnapshotsDisabled?: boolean | null;
   transparencyDisabled?: boolean;
   typingInsightsDisabled?: boolean;
   rdpKeepAlive?: boolean;

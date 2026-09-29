@@ -31,6 +31,7 @@ import { useLicenseQuery } from '../hooks/queries/useLicenseQuery';
 import { createTauriStartupReporter } from '../events/startup';
 import { reportStartupPhase } from '../hooks/startupTrace';
 import { recoverSettingsWrite } from '../lib/settingsWriteRecovery';
+import { preserveDashboardPolicyUnknowns } from '../lib/dashboardPolicyObservation';
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
 import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
 
@@ -440,6 +441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             usbWriteProtect: h?.usbWriteProtect ?? null,
                             usbStorageLockdown: h?.usbStorageLockdown ?? null,
                             consumerFeaturesDisabled: h?.consumerFeaturesDisabled ?? null,
+                            bitlockerAutoEncryptDisabled: h?.bitlockerAutoEncryptDisabled ?? null,
                             // Host hardening (Feature 4)
                             systemRestoreOff: h?.systemRestoreOff ?? null,
                             recallOff: h?.recallSnapshotsDisabled ?? null,
@@ -542,8 +544,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 },
             };
 
-            const stripped = stripNullLeaves(patch);
-            if (!stripped) return;
+            const stripped = preserveDashboardPolicyUnknowns(stripNullLeaves(patch) ?? {}, h);
+            if (Object.keys(stripped).length === 0) return;
             const updated = await invoke<AppSettings>('patch_settings_cmd', { patch: stripped });
             setAppSettings(updated);
             appSettingsRef.current = updated;

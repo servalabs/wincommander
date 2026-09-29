@@ -27,6 +27,8 @@ export interface NeedsAttentionProps {
   findings: ScanFinding[];
   /** IDs currently being fixed (spinner + disabled). */
   busyIds: Set<string>;
+  /** Failed or unverified fixes stay visible even when popup alerts are disabled. */
+  fixErrors?: Readonly<Record<string, string>>;
   onFixOne: (f: ScanFinding) => void;
   onFixAll: () => void;
   onIgnore: (f: ScanFinding) => void;
@@ -54,6 +56,7 @@ export interface NeedsAttentionProps {
 export default function NeedsAttention({
   findings,
   busyIds,
+  fixErrors = {},
   onFixOne,
   onFixAll,
   onIgnore,
@@ -157,6 +160,7 @@ export default function NeedsAttention({
                     <span className="na-cat">{CATEGORY_LABEL[f.category]}</span>
                   </div>
                   {f.impact ? <div className="na-impact">{f.impact}</div> : null}
+                  {fixErrors[f.id] && <div className="na-fix-error" role="alert">{fixErrors[f.id]}</div>}
                 </div>
                 <div className="na-actions">
                   <button

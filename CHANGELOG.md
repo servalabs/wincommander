@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Dashboard privacy fixes for Recall, background communication, Office logging
+  and automatic device encryption now require Windows read-back before success.
+  Failed or unverified changes stay visible with an explanation. Status checks
+  work with Windows PowerShell 5.1 and reload the saved BitLocker policy correctly.
+
 - Vault mount/dismount failures remain visible beside the operation, including
   unlock, drive-letter and Windows-access guidance. Authorized existing mounts
   can be opened without a disruptive remount. Fleet and Quick Mount selectors
