@@ -13,6 +13,7 @@ import VaultPanel from '/src/panels/vault/index.tsx';
 import useVaultDriveLetters from '/src/hooks/useVaultDriveLetters.ts';
 import {Dialog,DialogContent,DialogHeader,DialogTitle} from '/src/components/ui/dialog.tsx';
 import VaultOperationNotice from '/src/components/shared/VaultOperationNotice.tsx';
+import { AppConfirmProvider } from '/src/components/shared/AppConfirmDialog.tsx';
 import '/src/components/RightSidebar.css';
 window.__pendingLetters=[];window.__letterRequests=0;window.__pendingPartitions=[];window.__mountReason='vault_administrator_required';window.__toasts=[];
 window.__resolveLetters=result=>{for(const resolve of window.__pendingLetters.splice(0))resolve(result)};
@@ -26,7 +27,7 @@ window.__backend={
 window.__state={encryptionStatus:{volumes:[]},vaultStatusError:null,vaultManualRefreshing:false,loading:{vault:false},refreshVault:async()=>{window.__state.loading.vault=true;window.__state.vaultManualRefreshing=true;window.__rerender();await new Promise(resolve=>window.__finishRefresh=resolve);window.__state.loading.vault=false;window.__state.vaultManualRefreshing=false;window.__rerender();return window.__state.encryptionStatus}};
 function Fixture(){useVaultDriveLetters(true);const[,update]=React.useState(0);const[show,setShow]=React.useState(false);window.__rerender=()=>update(n=>n+1);return React.createElement(React.Fragment,null,React.createElement(VaultPanel),React.createElement('button',{onClick:()=>setShow(true)},'Show dismount feedback'),React.createElement(Dialog,{open:show,onOpenChange:setShow},React.createElement(DialogContent,{className:'vault-dismount-dialog'},React.createElement(DialogHeader,null,React.createElement(DialogTitle,null,'Dismount needs attention')),React.createElement(VaultOperationNotice,{message:'2 encrypted volumes dismounted; 1 left mounted. Your Windows account does not have the required Fleet Vault permission. Ask the Vault owner to review your access.'}))))}
 const queryClient=new QueryClient({defaultOptions:{queries:{retry:false}}});
-ReactDOM.createRoot(document.getElementById('fixture')).render(React.createElement(QueryClientProvider,{client:queryClient},React.createElement(Fixture)));`;
+ReactDOM.createRoot(document.getElementById('fixture')).render(React.createElement(QueryClientProvider,{client:queryClient},React.createElement(AppConfirmProvider,null,React.createElement(Fixture))));`;
 
 (async()=>{
   const browser=await chromium.launch({headless:true});
@@ -43,7 +44,6 @@ ReactDOM.createRoot(document.getElementById('fixture')).render(React.createEleme
     await module('**/src/context/AppContext.tsx*','export const useAppState=()=>window.__state;export const useOptionalAppState=()=>null;');
     await module('**/src/context/ThemeContext.tsx*',"export const useTheme=()=>({theme:'light'});");
     await module('**/src/hooks/useEntitlements.ts*','export default()=>({canUse:()=>true});');
-    await module('**/src/components/shared/AppConfirmDialog.tsx*','export const useAppConfirm=()=>async()=>true;');
     await module('**/src/utils/toast.ts*',"export const showError=message=>window.__toasts.push({kind:'error',message});export const showSuccess=message=>window.__toasts.push({kind:'success',message});");
     await module('**/src/components/shared/TierGate.tsx*','export default({children})=>children;');
     await module('**/src/components/shared/PanelHeader.tsx*','export default()=>null;');
@@ -111,6 +111,28 @@ ReactDOM.createRoot(document.getElementById('fixture')).render(React.createEleme
     await failure.waitFor();
     assert.equal(await failure.evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(255, 241, 242)');
     assert.equal((await failure.innerText()).includes('password'),false);
+    await page.evaluate(()=>{
+      window.__toasts=[];window.__repairAttempts=[];
+      window.__backend.mountVolume=async params=>{
+        window.__repairAttempts.push(params.repairCurrentAccountAccess===true);
+        window.__backend.error='"vault_caller_access_denied"';window.__rerender();
+        return {success:false,error:'vault_caller_access_denied'};
+      };
+      window.__rerender();
+    });
+    await dialog.locator('#password').fill('fixture-only');
+    await dialog.getByRole('button',{name:'MOUNT VOLUME',exact:true}).click();
+    await page.waitForFunction(()=>window.__pendingLetters.length>0);
+    await page.evaluate(()=>window.__resolveLetters({success:true,data:{letters:['J','Z']}}));
+    const consent=page.getByRole('alertdialog');await consent.waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.__repairAttempts),[false],'Permission changes require an explicit decision');
+    assert.equal(await page.evaluate(()=>window.__toasts.length),0,'Handled permission denial must not produce a raw competing toast');
+    await consent.getByRole('button',{name:'Add This Account and Retry',exact:true}).click();
+    await dialog.getByRole('alert').filter({hasText:'denied this account access'}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.__repairAttempts),[false,true],'Consent retries exactly once, not an infinite repair loop');
+    assert.equal(await page.getByRole('alertdialog').count(),0);
+    assert.equal(await dialog.getByRole('button',{name:'CANCEL',exact:true}).isEnabled(),true);
+    await page.evaluate(()=>{window.__backend.error=null;window.__rerender()});
     await page.evaluate(()=>{
       window.__toasts=[];
       window.__savedRefresh=window.__state.refreshVault;

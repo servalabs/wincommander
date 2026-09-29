@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage reports recovery permission failures through the active mount
+  dialog, without a competing raw-error toast. Approval retries once; a denied
+  repair explains that existing Windows permissions may still block access.
+  Post-mount drive and inventory checks have bounded waits and never turn an
+  unavailable observation into a successful mount notification.
 - Secure Storage refreshes visible mount status and prevents older responses from
   restoring stale rows. Refresh stays disabled while requests are running.
   Windows container-path prefixes are removed for display; unknown paths are

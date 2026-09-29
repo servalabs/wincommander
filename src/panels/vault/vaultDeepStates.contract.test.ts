@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const vaultSource = readFileSync("src/panels/vault/index.tsx", "utf8");
+const progressSource = readFileSync("src/panels/vault/MountProgress.tsx", "utf8");
 const ramDiskSource = readFileSync("src/panels/vault/CreateRamDiskDialog.tsx", "utf8");
 const propertiesSource = readFileSync("src/panels/vault/VolumePropertiesDialog.tsx", "utf8");
 const backendSource = readFileSync("src/hooks/useBackend.ts", "utf8");
@@ -31,15 +32,15 @@ describe("secure storage deep-state contracts", () => {
     expect(ramDiskSource).toContain("catch (error)");
     expect(propertiesSource).toContain('className="props-error" role="alert"');
     expect(vaultSource).toContain('<VaultOperationNotice message={mountFailure} />');
-    expect(vaultSource).toContain('className="mount-progress" role="status"');
-    expect(vaultSource).toContain("Unlocking with your PIM can take several minutes. Your password was cleared for safety.");
+    expect(progressSource).toContain('className="mount-progress" role="status"');
+    expect(vaultSource).toContain('<MountProgress');
     expect(vaultSource).toContain("const boundedMountError");
     expect(vaultSource).toContain("installed WinCommander service still requires an NTFS permission check");
     expect(vaultSource).toContain("Repair or update the WinCommander service");
     expect(mountHandlerSource).toContain("setMountFailure(message);");
     expect(mountHandlerSource).toContain("mountPasswordSelectedVolume(mountVolume");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
-    expect(mountHandlerSource).toContain("getAvailableDriveLetters()");
+    expect(mountHandlerSource).toContain("refreshMountLetters()");
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
     expect(vaultSource).toContain("vault_engine_unlock_failed");
     expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
@@ -95,7 +96,7 @@ describe("secure storage deep-state contracts", () => {
   test("Secure Storage mounts machine-wide and verifies the Explorer-facing drive", () => {
     expect(vaultSource).toContain('scope: "machine"');
     expect(vaultSource).toContain("hardenAcl: true");
-    expect(vaultSource).toContain("await verifyVaultDrive(result.data.drive)");
+    expect(vaultSource).toContain('waitForMountReadback(verifyVaultDrive(result.data.drive), "vault_mount_readback_unconfirmed")');
     expect(vaultSource).toContain("setMountedVolume(result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
     expect(sidebarSource).toContain('scope: "machine"');

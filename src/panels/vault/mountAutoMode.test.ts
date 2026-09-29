@@ -54,6 +54,18 @@ test("normal mount does not retry hidden mode for a non-credential failure", asy
   ]);
 });
 
+test("timeouts, interrupted replies and repair denials are never automatically replayed", async () => {
+  for (const error of ["vault_request_timeout", "vault_operation_unconfirmed", "vault_caller_access_denied", "vault_caller_acl_repair_failed"]) {
+    let attempts = 0;
+    const result = await mountPasswordSelectedVolume(async () => {
+      attempts++;
+      return { success: false, error };
+    }, { ...baseRequest, repairCurrentAccountAccess: true });
+    expect(attempts).toBe(1);
+    expect(result).toEqual({ success: false, error });
+  }
+});
+
 test("explicit current-account ACL repair consent survives standard-to-hidden detection", async () => {
   const calls: Array<{ volumeKind?: string; volumeRole?: string; repairCurrentAccountAccess?: boolean }> = [];
   await mountPasswordSelectedVolume(async (request) => {

@@ -28,7 +28,7 @@ import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import { confirmedMountObservationError, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import MountProgress from "./MountProgress";
-import { waitForMountOptions, type MountStage } from "./mountOperationProgress";
+import { waitForMountOptions, waitForMountReadback, type MountStage } from "./mountOperationProgress";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -36,6 +36,7 @@ const MOUNT_ERROR_MAX_LENGTH = 300;
 const boundedMountError = (error: unknown) => {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Failed to mount volume.";
   const normalized = message.replace(/\s+/g, " ").trim();
+  if (/vault_mount_readback_unconfirmed|vault_confirmed_mount_list_unavailable/.test(normalized)) return vaultOperationError(error);
   if (/vault_mount_options_timeout|vault_request_timeout|vault_operation_unconfirmed|vault_service_busy|all pipe instances are busy|pro response timeout/i.test(normalized)) return vaultOperationError(error);
   if (/pro_not_installed|vault_runtime_update_required|vault_service_personal_status_invalid|vault_entitlement_denied|vault_owner_required|vault_administrator_required|vault_policy_access_denied|vault_private_owner_required|vault_mount_state_unknown|vault_not_authorized/i.test(normalized)) return vaultOperationError(error);
   if (normalized.includes("vault_already_mounted")) {
@@ -49,6 +50,9 @@ const boundedMountError = (error: unknown) => {
   }
   if (normalized.includes("vault_caller_acl_repair_failed")) {
     return "Windows could not add and verify this account's access. The volume was dismounted, and its existing permissions were preserved. Ask an administrator to review the volume's permissions before retrying.";
+  }
+  if (normalized.includes("vault_caller_access_still_denied")) {
+    return "Windows still denied this account access after the approved permission repair. WinCommander dismounted the incomplete mount. An existing deny permission may still block access; ask an administrator to review the volume's Windows permissions. Do not reformat the container. No further retry was started.";
   }
   if (normalized.includes("vault_caller_access_denied")) {
     return "Windows mounted the encrypted container but denied this account access to its contents. This can happen after recovering it on another PC because Windows accounts with the same name can have different permissions. WinCommander dismounted the incomplete mount without changing the encrypted data or its saved permissions. Do not reformat the container.";
@@ -111,6 +115,7 @@ const vaultMountErrorCode = (error: unknown) => {
   if (message.includes("vault_engine_unlock_failed")) return "VLT.UNLOCK.FAILED";
   if (message.includes("vault_engine_drive_letter_unavailable")) return "VLT.DRIVE_LETTER.UNAVAILABLE";
   if (message.includes("vault_caller_acl_repair_failed")) return "VLT.ACL.CALLER_REPAIR_FAILED";
+  if (message.includes("vault_caller_access_still_denied")) return "VLT.ACL.CALLER_REPAIR_DENIED";
   if (message.includes("vault_caller_access_denied")) return "VLT.ACL.CALLER_ACCESS_DENIED";
   if (message.includes("vault_acl_")) return "VLT.ACL.FAILED";
   if (message.includes("vault_policy_managed")) return "VLT.POLICY.MANAGED";
@@ -198,7 +203,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     verifyVaultDrive,
     openEncryptionVolume,
     getEncryptionPartitions,
-    error
   } = useBackend();
   const { canUse } = useEntitlements();
   const accessibleVolumes = volumes.filter((volume) => volume.accessible !== false);
@@ -377,6 +381,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
             ...mountRequest,
             repairCurrentAccountAccess: true,
           });
+          if (!result.success && result.error?.includes("vault_caller_access_denied")) {
+            throw new Error("vault_caller_access_still_denied");
+          }
         }
       }
       setMountPassword("");
@@ -385,9 +392,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         throw new Error("The encrypted volume was not confirmed as machine-wide. Update both WinCommander and Pro before retrying.");
       }
       setMountStage("verifying");
-      await verifyVaultDrive(result.data.drive);
+      const verified = await waitForMountReadback(verifyVaultDrive(result.data.drive), "vault_mount_readback_unconfirmed");
+      if (!verified?.accessible) throw new Error("vault_mount_readback_unconfirmed");
       setMountStage("refreshing");
-      const refreshed = await refreshVault(true);
+      const refreshed = await waitForMountReadback(refreshVault(true), "vault_confirmed_mount_list_unavailable");
       const observationError = confirmedMountObservationError(result.data, refreshed);
       if (observationError) {
         const message = vaultOperationError(observationError);
@@ -461,14 +469,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     void handleMountVolume();
   }, [canMount, handleMountVolume]);
 
-  useEffect(() => {
-    if (error) {
-      recordDiagnostic({ feature: "vault", action: "status_read", stage: "ui_refresh",
-        lifecycle: "verified", outcome: "failed", errorCode: "VLT.STATUS.READ_FAILED", severity: "warn",
-        retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      showError(error);
-    }
-  }, [error]);
+  // Each operation owns its feedback. A hook-wide error effect also reported
+  // intermediate unlock/access failures while the consent/retry flow was active.
 
   return (
     <>

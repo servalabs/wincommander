@@ -24,3 +24,18 @@ export async function waitForMountOptions<T>(read: Promise<T>, milliseconds = 15
     })]);
   } finally { clearTimeout(timer); }
 }
+
+// A receipt is not the same as successful Windows/inventory readback. These
+// observations may time out without undoing (or repeating) the successful mount.
+export async function waitForMountReadback<T>(
+  read: Promise<T>,
+  errorCode: "vault_mount_readback_unconfirmed" | "vault_confirmed_mount_list_unavailable",
+  milliseconds = 15_000,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([read, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(errorCode)), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
+}
