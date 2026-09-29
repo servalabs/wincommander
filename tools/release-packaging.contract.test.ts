@@ -137,6 +137,9 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("file-search");
     expect(legacyLaunchMigration).toContain("HKEY_USERS");
     expect(legacyLaunchMigration).toContain("reg.exe load");
+    expect(legacyLaunchMigration).toContain("Test-ProfileHiveUnavailable");
+    expect(legacyLaunchMigration).toContain("registryHivesDeferred");
+    expect(legacyLaunchMigration).toContain("deferredRegistryHives");
     expect(legacyLaunchMigration).toContain("RunOnce");
     expect(legacyLaunchMigration).toContain("Join-Path $profile.Path 'Desktop'");
     expect(legacyLaunchMigration).toContain("startupShortcutsRemoved");

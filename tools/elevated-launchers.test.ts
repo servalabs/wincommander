@@ -167,4 +167,25 @@ Write-Output 'PASS'
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("PASS");
   });
+
+  test.skipIf(process.platform !== "win32")("defers inaccessible legacy profile hives without hiding unrelated migration failures", () => {
+    const script = `
+$ErrorActionPreference='Stop'
+$tokens=$null; $parseErrors=$null
+$scriptPath=Join-Path (Get-Location) 'src-tauri/commander-free/nsis/migrate-legacy-user-launches.ps1'
+$ast=[Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Invalid legacy migration script' }
+$definition=$ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Test-ProfileHiveUnavailable' },$true)
+if ($null -eq $definition) { throw 'Missing profile-hive availability classifier' }
+Invoke-Expression $definition.Extent.Text
+if (-not (Test-ProfileHiveUnavailable ([UnauthorizedAccessException]::new('denied')))) { throw 'Unauthorized profile hive was not deferred.' }
+if (-not (Test-ProfileHiveUnavailable 'ERROR: Access is denied.')) { throw 'reg.exe access denial was not deferred.' }
+if (Test-ProfileHiveUnavailable 'The hive file is malformed.') { throw 'Unrelated hive failure was hidden.' }
+Write-Output 'PASS'
+`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8" });
+    expect(result.stderr.trim()).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("PASS");
+  });
 });

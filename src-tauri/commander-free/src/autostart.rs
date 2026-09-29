@@ -403,7 +403,9 @@ function Get-RunPaths {
 }
 
 function Get-OwnedRunEntries {
-  foreach ($path in @(Get-RunPaths)) {
+  param([string[]]$Paths)
+  if ($null -eq $Paths) { $Paths = @(Get-RunPaths) }
+  foreach ($path in @($Paths)) {
     $key = Get-RegistryKeyOrNull -Path $path
     if ($null -eq $key) { continue }
     foreach ($name in $runValueNames) {
@@ -416,7 +418,8 @@ function Get-OwnedRunEntries {
 }
 
 function Remove-OwnedRunValues {
-  foreach ($entry in @(Get-OwnedRunEntries)) {
+  param([string[]]$Paths)
+  foreach ($entry in @(Get-OwnedRunEntries -Paths $Paths)) {
     Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction Stop
   }
 }
@@ -445,9 +448,16 @@ function Get-StartupRoots {
   return @($roots | Select-Object -Unique)
 }
 
+function Get-CurrentUserStartupRoots {
+  if ([string]::IsNullOrWhiteSpace([string]$env:APPDATA)) { return @() }
+  return @(Join-Path -Path $env:APPDATA -ChildPath 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
+}
+
 function Get-OwnedStartupShortcutEntries {
+  param([string[]]$Roots)
+  if ($null -eq $Roots) { $Roots = @(Get-StartupRoots) }
   $shell = $null
-  foreach ($root in @(Get-StartupRoots)) {
+  foreach ($root in @($Roots)) {
     $directory = Get-FileSystemItemOrNull -Path $root
     if ($null -eq $directory) { continue }
     if (-not $directory.PSIsContainer) { throw "Startup path '$root' is not a directory." }
@@ -462,9 +472,19 @@ function Get-OwnedStartupShortcutEntries {
 }
 
 function Remove-OwnedStartupShortcuts {
-  foreach ($entry in @(Get-OwnedStartupShortcutEntries)) {
+  param([string[]]$Roots)
+  foreach ($entry in @(Get-OwnedStartupShortcutEntries -Roots $Roots)) {
     Remove-Item -LiteralPath $entry.Path -Force -ErrorAction Stop
   }
+}
+
+function Remove-CurrentUserOwnedCompetingRoutes {
+  # This deliberately touches only the caller's HKCU and Startup folder. It
+  # lets a profile whose hive was unavailable to the elevated installer remove
+  # its own exact old route without asking for elevation or changing the
+  # machine-wide router.
+  Remove-OwnedRunValues -Paths @(Get-UserRunPaths -RegistryRoot 'Registry::HKEY_CURRENT_USER')
+  Remove-OwnedStartupShortcuts -Roots @(Get-CurrentUserStartupRoots)
 }
 
 function Test-LegacyReopenMarker {
@@ -540,6 +560,11 @@ function Register-CanonicalTask {
 
 #[cfg(windows)]
 const POWERSHELL_ENSURE: &str = r#"
+
+# A standard account may safely clear only its own exact old Run/Startup
+# routes. This closes any migration deferred because another profile hive was
+# unavailable during installation; global task repair still requires elevation.
+Remove-CurrentUserOwnedCompetingRoutes
 
 $preference = Get-AutostartPreference
 # Previous versions represented an explicit off choice as a disabled task.
@@ -876,6 +901,17 @@ mod tests {
         assert!(script.contains("CmdletizationQuery_NotFound"));
         assert!(script.contains("Remove-OwnedRunValues"));
         assert!(script.contains("Remove-OwnedStartupShortcuts"));
+    }
+
+    #[test]
+    fn standard_user_repairs_only_its_own_legacy_routes_before_global_integrity() {
+        let script = build_autostart_script(false, AutostartOperation::Ensure).unwrap();
+        assert!(script.contains("function Remove-CurrentUserOwnedCompetingRoutes"));
+        assert!(script.contains(
+            "Remove-OwnedRunValues -Paths @(Get-UserRunPaths -RegistryRoot 'Registry::HKEY_CURRENT_USER')"
+        ));
+        assert!(script.contains("Remove-OwnedStartupShortcuts -Roots @(Get-CurrentUserStartupRoots)"));
+        assert!(script.contains("Remove-CurrentUserOwnedCompetingRoutes\n\n$preference"));
     }
 
     #[test]

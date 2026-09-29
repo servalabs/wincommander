@@ -22,7 +22,7 @@ if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) {
 $runValueNames = @('WinCommander', 'WinCommander Free')
 $systemProfileSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
 $shell = New-Object -ComObject WScript.Shell
-$summary = [ordered]@{ profiles = 0; runValuesRemoved = 0; startupShortcutsRemoved = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; failures = 0 }
+$summary = [ordered]@{ profiles = 0; runValuesRemoved = 0; startupShortcutsRemoved = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; registryHivesDeferred = 0; failures = 0 }
 $failureMessages = [System.Collections.Generic.List[string]]::new()
 
 function Get-OptionalRegistryValue([string]$Path, [string]$Name) {
@@ -95,16 +95,55 @@ function Update-LegacyShortcuts([string]$Root, [string]$StartupRoot, [string]$Le
     return $updated
 }
 
+function Test-ProfileHiveUnavailable([object]$Failure) {
+    # A different account's NTUSER.DAT can be actively in use or protected
+    # from this elevated installer. Do not take ownership or weaken its ACL
+    # merely to clean an optional legacy launch value. The account's packaged
+    # app cleans its own exact owned routes at its next normal launch.
+    $exception = $null
+    if ($Failure -is [System.Management.Automation.ErrorRecord]) {
+        $exception = $Failure.Exception
+    } elseif ($Failure -is [System.Exception]) {
+        $exception = $Failure
+    }
+    while ($null -ne $exception) {
+        if ($exception -is [System.UnauthorizedAccessException] -or $exception.HResult -eq -2147024891) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    # reg.exe reports access failures as text and exits 1 rather than
+    # preserving the Win32 ERROR_ACCESS_DENIED code. This fallback handles
+    # that documented behaviour without treating an arbitrary migration bug
+    # as an optional condition.
+    return ([string]$Failure) -match '(?i)\baccess\s+(is\s+)?denied\b'
+}
+
 function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
     $sid = [string]$Profile.Sid
     $loadedRoot = "Registry::HKEY_USERS\$sid"
-    if (Test-Path -LiteralPath $loadedRoot) {
-        & $Action $loadedRoot
-        return
+    try {
+        if (Test-Path -LiteralPath $loadedRoot -ErrorAction Stop) {
+            try {
+                $null = & $Action $loadedRoot
+                return $true
+            } catch {
+                if (Test-ProfileHiveUnavailable $_) { return $false }
+                throw
+            }
+        }
+    } catch {
+        if (Test-ProfileHiveUnavailable $_) { return $false }
+        throw
     }
 
     $ntUserDat = Join-Path $Profile.Path 'NTUSER.DAT'
-    if (-not (Test-Path -LiteralPath $ntUserDat -PathType Leaf)) { return }
+    try {
+        if (-not (Test-Path -LiteralPath $ntUserDat -PathType Leaf -ErrorAction Stop)) { return $true }
+    } catch {
+        if (Test-ProfileHiveUnavailable $_) { return $false }
+        throw
+    }
     $mountName = "WinCommanderInstallerCleanup_$($sid -replace '[^A-Za-z0-9]', '_')"
     $mountRoot = "Registry::HKEY_USERS\$mountName"
     if (Test-Path -LiteralPath $mountRoot) { throw "Temporary profile hive is already mounted: $mountName" }
@@ -112,9 +151,18 @@ function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
     $mounted = $false
     try {
         $loadOutput = & reg.exe load "HKU\$mountName" $ntUserDat 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "Could not load profile hive ${sid}: $loadOutput" }
+        if ($LASTEXITCODE -ne 0) {
+            if (Test-ProfileHiveUnavailable $loadOutput) { return $false }
+            throw "Could not load profile hive ${sid}: $loadOutput"
+        }
         $mounted = $true
-        & $Action $mountRoot
+        try {
+            $null = & $Action $mountRoot
+            return $true
+        } catch {
+            if (Test-ProfileHiveUnavailable $_) { return $false }
+            throw
+        }
     } finally {
         if ($mounted) {
             $unloadOutput = & reg.exe unload "HKU\$mountName" 2>&1
@@ -164,7 +212,7 @@ foreach ($profile in $profiles) {
     }
 
     try {
-        Invoke-ProfileHive $profile {
+        $registryHiveCleaned = Invoke-ProfileHive $profile {
             param($hiveRoot)
             $runPaths = @(
                 "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -177,6 +225,12 @@ foreach ($profile in $profiles) {
             if (Test-Path -LiteralPath $uninstallKey) {
                 Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction Stop
             }
+        }
+        if (-not $registryHiveCleaned) {
+            # This is an optional migration for another account's protected
+            # hive, not a reason to leave the new machine-wide app uninstalled.
+            # We never take ownership or edit an inaccessible user profile.
+            $summary.registryHivesDeferred++
         }
     } catch {
         $summary.failures++
@@ -221,4 +275,4 @@ if ($summary.failures -gt 0) {
     throw "WinCommander launch-route cleanup failed: $($failureMessages -join '; ')"
 }
 
-"WinCommander launch-route cleanup: profiles=$($summary.profiles) runValues=$($summary.runValuesRemoved) startupShortcuts=$($summary.startupShortcutsRemoved) shortcuts=$($summary.shortcutsUpdated) files=$($summary.staleFilesRemoved)"
+"WinCommander launch-route cleanup: profiles=$($summary.profiles) runValues=$($summary.runValuesRemoved) startupShortcuts=$($summary.startupShortcutsRemoved) shortcuts=$($summary.shortcutsUpdated) files=$($summary.staleFilesRemoved) deferredRegistryHives=$($summary.registryHivesDeferred)"
