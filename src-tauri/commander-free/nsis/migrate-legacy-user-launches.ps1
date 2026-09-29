@@ -107,16 +107,14 @@ function Test-ProfileHiveUnavailable([object]$Failure) {
         $exception = $Failure
     }
     while ($null -ne $exception) {
-        if ($exception -is [System.UnauthorizedAccessException] -or $exception.HResult -eq -2147024891) {
+        if ($exception -is [System.UnauthorizedAccessException] -or $exception.HResult -in @(-2147024891, -2147024864)) {
             return $true
         }
         $exception = $exception.InnerException
     }
-    # reg.exe reports access failures as text and exits 1 rather than
-    # preserving the Win32 ERROR_ACCESS_DENIED code. This fallback handles
-    # that documented behaviour without treating an arbitrary migration bug
-    # as an optional condition.
-    return ([string]$Failure) -match '(?i)\baccess\s+(is\s+)?denied\b'
+    # Some registry-provider and reg.exe errors have no usable HRESULT. These
+    # are the two normal forms for a foreign hive that is unavailable now.
+    return ([string]$Failure) -match '(?i)\baccess\s+(is\s+)?denied\b|\bsharing\s+violation\b|\bbeing\s+used\s+by\s+another\s+process\b'
 }
 
 function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
@@ -150,10 +148,14 @@ function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
 
     $mounted = $false
     try {
-        $loadOutput = & reg.exe load "HKU\$mountName" $ntUserDat 2>&1
+        $null = & reg.exe load "HKU\$mountName" $ntUserDat 2>&1
         if ($LASTEXITCODE -ne 0) {
-            if (Test-ProfileHiveUnavailable $loadOutput) { return $false }
-            throw "Could not load profile hive ${sid}: $loadOutput"
+            # Loading a different account's offline hive is optional. Any
+            # failure means Windows did not make that private hive available
+            # to this installer; defer it instead of blocking a valid shared
+            # application install. A successful mount still fails closed on
+            # real processing or unload errors below.
+            return $false
         }
         $mounted = $true
         try {

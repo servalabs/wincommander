@@ -180,6 +180,7 @@ if ($null -eq $definition) { throw 'Missing profile-hive availability classifier
 Invoke-Expression $definition.Extent.Text
 if (-not (Test-ProfileHiveUnavailable ([UnauthorizedAccessException]::new('denied')))) { throw 'Unauthorized profile hive was not deferred.' }
 if (-not (Test-ProfileHiveUnavailable 'ERROR: Access is denied.')) { throw 'reg.exe access denial was not deferred.' }
+if (-not (Test-ProfileHiveUnavailable 'The process cannot access the file because it is being used by another process.')) { throw 'Busy profile hive was not deferred.' }
 if (Test-ProfileHiveUnavailable 'The hive file is malformed.') { throw 'Unrelated hive failure was hidden.' }
 Write-Output 'PASS'
 `;
