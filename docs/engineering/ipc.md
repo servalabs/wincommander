@@ -419,7 +419,7 @@ triggers mount cleanup.
 | `show_native_test_notification` / `show_test_notification_kind` | Native toast test paths. |
 | `dismiss_notification_toast` / `dismiss_notification_toast_id` | Dismiss a toast. |
 | `show_rdp_idle_warning_native` | Native RDP-idle warning toast. |
-| `ensure_autostart_task` / `remove_autostart_task` / `update_autostart_task_identity` | Manage the per-machine autostart scheduled task. |
+| `is_autostart_enabled` / `enable_autostart_task` / `ensure_autostart_task` / `remove_autostart_task` / `update_autostart_task_identity` | Read or manage the one supported machine-wide WinCommander logon route. Explicit enable creates it; disable records the choice and removes only WinCommander-owned automatic-start entries. |
 | `ensure_attend_watch_task` / `remove_attend_watch_task` | Manage the SYSTEM attend-watch task (RDP idle → vault dismount). |
 | `is_dev_build` | Dev-build sentinel (always present; `false` in release). |
 

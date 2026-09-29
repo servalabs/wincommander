@@ -63,7 +63,7 @@ const BACKEND_EXE_NAMES = [
 // PIN lock, the cover name it shows to onlookers, and hiding the app entirely.
 
 /** A single concealment toggle rendered as an icon tile (new console look). */
-function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange, children }: {
+function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange, control, children }: {
     icon: IconName;
     title: string;
     desc: string;
@@ -72,6 +72,7 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
     loading?: boolean;
     disabled?: boolean;
     onChange: (v: boolean) => void;
+    control?: ReactNode;
     children?: ReactNode;
 }) {
     return (
@@ -82,16 +83,167 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
                     <div className="dgz-tile-title">{title}</div>
                     <div className="dgz-tile-desc">{desc}</div>
                 </div>
-                <Switch
-                    checked={checked}
-                    disabled={loading || disabled}
-                    onCheckedChange={onChange}
-                    aria-label={title}
-                    title={title}
-                />
+                {control ?? (
+                    <Switch
+                        checked={checked}
+                        disabled={loading || disabled}
+                        onCheckedChange={onChange}
+                        aria-label={title}
+                        title={title}
+                    />
+                )}
             </div>
             {children}
         </div>
+    );
+}
+
+const AUTOSTART_POLICY_PATHS = ["autostart.enabled", "app.autostart.enabled"];
+const INITIAL_AUTOSTART_STATUS_RETRIES = 3;
+const INITIAL_AUTOSTART_STATUS_RETRY_DELAY_MS = 350;
+
+function isAutostartPolicyLocked(lockedPaths: readonly string[]): boolean {
+    return lockedPaths.some((rawPath) => {
+        const path = rawPath.trim().toLowerCase();
+        return path.length > 0 && AUTOSTART_POLICY_PATHS.some((target) => target.startsWith(path));
+    });
+}
+
+function nativeErrorMessage(error: unknown, fallback: string): string {
+    if (typeof error === "string" && error.trim()) return error.trim();
+    if (error instanceof Error && error.message.trim()) return error.message.trim();
+    return fallback;
+}
+
+type AutostartErrorPhase = "status" | "change" | "confirmation";
+
+interface AutostartErrorState {
+    phase: AutostartErrorPhase;
+    message: string;
+}
+
+function AutoStartTile() {
+    const { appSettings } = useAppState();
+    const autostartPolicyLocked = isAutostartPolicyLocked(appSettings?.policy?.lockedPaths ?? []);
+    const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
+    const [autostartLoading, setAutostartLoading] = useState(true);
+    const [autostartBusy, setAutostartBusy] = useState(false);
+    const [autostartError, setAutostartError] = useState<AutostartErrorState | null>(null);
+    const [autostartControlVersion, setAutostartControlVersion] = useState(0);
+
+    const readAutostartStatus = useCallback(async (retryInitialFalse = false) => {
+        setAutostartLoading(true);
+        setAutostartError(null);
+        try {
+            let enabled = await invoke<boolean>("is_autostart_enabled");
+            for (let retry = 0; retryInitialFalse && !enabled && retry < INITIAL_AUTOSTART_STATUS_RETRIES; retry += 1) {
+                await new Promise<void>((resolve) => window.setTimeout(resolve, INITIAL_AUTOSTART_STATUS_RETRY_DELAY_MS));
+                enabled = await invoke<boolean>("is_autostart_enabled");
+            }
+            setAutostartEnabled(enabled);
+        } catch (error) {
+            setAutostartError({
+                phase: "status",
+                message: nativeErrorMessage(error, "Windows could not report the Auto Start state."),
+            });
+        } finally {
+            setAutostartLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void readAutostartStatus(true);
+    }, [readAutostartStatus]);
+
+    const handleToggleAutostart = useCallback(async (next: boolean) => {
+        if (autostartEnabled === null || autostartBusy || autostartPolicyLocked) return;
+
+        setAutostartBusy(true);
+        setAutostartError(null);
+        setAutostartControlVersion((version) => version + 1);
+        let nativeOperationFinished = false;
+        try {
+            await invoke(next ? "enable_autostart_task" : "remove_autostart_task");
+            nativeOperationFinished = true;
+            const confirmed = await invoke<boolean>("is_autostart_enabled");
+            if (confirmed !== next) {
+                throw new Error(next
+                    ? "Windows did not confirm that the sign-in task was created."
+                    : "Windows did not confirm that all WinCommander startup entries were removed.");
+            }
+            setAutostartEnabled(confirmed);
+            showSuccess(next
+                ? "Auto Start on — WinCommander will use the supported Windows sign-in task."
+                : "Auto Start off — all WinCommander startup entries were removed.");
+        } catch (error) {
+            const message = nativeErrorMessage(error, "Windows could not save the Auto Start choice.");
+            const phase: AutostartErrorPhase = nativeOperationFinished ? "confirmation" : "change";
+            const heading = phase === "confirmation"
+                ? "Auto Start may have changed, but Windows did not confirm it"
+                : "Auto Start wasn't changed";
+            setAutostartError({ phase, message });
+            showError(`${heading}: ${message}`);
+        } finally {
+            setAutostartBusy(false);
+            setAutostartControlVersion((version) => version + 1);
+        }
+    }, [autostartBusy, autostartEnabled, autostartPolicyLocked]);
+
+    const description = autostartLoading
+        ? "Checking Windows startup…"
+        : autostartBusy
+            ? "Saving your Auto Start choice…"
+            : autostartEnabled === true
+                ? "On — WinCommander starts at sign-in with the supported Windows sign-in task. Turn it off to remove all WinCommander startup entries."
+                : autostartEnabled === false
+                    ? "Off — WinCommander won't start at sign-in. Turn it on to create the supported Windows sign-in task."
+                    : "Windows startup could not be checked. Try again before changing Auto Start.";
+
+    const control = autostartLoading || autostartBusy ? (
+        <span className="dgz-autostart-status" role="status" aria-live="polite">
+            {autostartBusy ? "Saving…" : "Checking…"}
+        </span>
+    ) : autostartEnabled === null ? (
+        <button className="dgz-autostart-retry" type="button" onClick={() => void readAutostartStatus(false)}>
+            Try again
+        </button>
+    ) : (
+        <Switch
+            // The shared switch animates an internal thumb immediately. Remount it
+            // for each request so a failed native operation cannot leave it looking changed.
+            key={`autostart-${autostartEnabled}-${autostartControlVersion}`}
+            checked={autostartEnabled}
+            disabled={autostartPolicyLocked}
+            onCheckedChange={handleToggleAutostart}
+            aria-label="Start WinCommander at sign-in"
+            title={autostartPolicyLocked ? "Set by your administrator." : "Start WinCommander at sign-in"}
+        />
+    );
+
+    const errorHeading = autostartError?.phase === "status"
+        ? "Auto Start status unavailable"
+        : autostartError?.phase === "confirmation"
+            ? "Auto Start may have changed, but Windows did not confirm it"
+            : "Auto Start wasn't changed";
+
+    return (
+        <DgzTile
+            icon="time"
+            title="Start WinCommander at sign-in"
+            desc={description}
+            checked={autostartEnabled === true}
+            onChange={handleToggleAutostart}
+            control={control}
+        >
+            {autostartError && (
+                <p className="dgz-autostart-error" role="alert">
+                    {errorHeading}: {autostartError.message}
+                </p>
+            )}
+            <p className="dgz-autostart-note">
+                {autostartPolicyLocked ? "Set by your administrator." : "Windows will ask for approval if needed."}
+            </p>
+        </DgzTile>
     );
 }
 
@@ -457,6 +609,7 @@ function LockDisguiseSection() {
                             onChange={handleToggleBackend}
                             disabled={backendBusy || needsElevation}
                         />
+                        <AutoStartTile />
                     </div>
                 </div>
             </div>

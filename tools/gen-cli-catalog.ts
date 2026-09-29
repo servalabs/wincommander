@@ -36,7 +36,13 @@ const ROOT = resolve(import.meta.dir, "..");
 const LIB_RS = resolve(ROOT, "src-tauri/commander-free/src/lib.rs");
 const BACKEND_RS = resolve(ROOT, "src-tauri/commander-free/src/backend.rs");
 const OUT = resolve(ROOT, "src-tauri/commander-free/src/cli_catalog.generated.json");
-const INTERNAL_TAURI_HANDLERS = new Set(["mark_tauri_cli_ready", "complete_tauri_cli", "startup_window_ready"]);
+const INTERNAL_TAURI_HANDLERS = new Set([
+  "mark_tauri_cli_ready",
+  "complete_tauri_cli",
+  "startup_window_ready",
+  "is_autostart_enabled",
+  "enable_autostart_task",
+]);
 
 function normalizePath(path: string): string {
   return relative(ROOT, path).replaceAll("\\", "/");

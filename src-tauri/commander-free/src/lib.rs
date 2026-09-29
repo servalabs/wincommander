@@ -2839,6 +2839,8 @@ pub fn run() {
             settings::set_settings,
             settings::patch_settings_cmd,
             settings::set_decoy_mode,
+            autostart::is_autostart_enabled,
+            autostart::enable_autostart_task,
             autostart::ensure_autostart_task,
             attend_watch::ensure_attend_watch_task,
             attend_watch::remove_attend_watch_task,
