@@ -890,6 +890,8 @@ pub use fleet_proto as fleet;
 pub mod svc;
 pub mod personal_settings;
 pub mod vault_access;
+pub mod vault_display_path;
+pub mod vault_inventory;
 
 /// F6 USB wipe-authorization handshake token (Phase 1, Piece 1).
 /// Ed25519-signed, device-bound, nonce-bearing, TTL-limited token that gates

@@ -338,7 +338,7 @@ fn legacy_personal_presentation() -> VaultPresentation {
     VaultPresentation::PerUser
 }
 
-/// Bounded service-registry projection; backing paths and credentials stay private.
+/// Bounded caller-authorized service projection; credentials never leave the broker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersonalVaultMountedVolume {
@@ -346,6 +346,14 @@ pub struct PersonalVaultMountedVolume {
     pub internal_drive: u8,
     pub presentation: VaultPresentation,
     pub cleanup_required: bool,
+    #[serde(default)]
+    pub browse_allowed: bool,
+    #[serde(default)]
+    pub dismount_allowed: bool,
+    #[serde(default)]
+    pub dismount_reason: Option<VaultMountReason>,
+    #[serde(default)]
+    pub canonical_container_path: Option<String>,
 }
 
 /// Service-produced, authenticated service-to-Pro mount plan. Renderer input
@@ -607,6 +615,10 @@ pub enum VaultMountState {
 #[serde(rename_all = "snake_case")]
 pub enum VaultMountReason {
     NotAuthorized,
+    AdministratorRequired,
+    PolicyAccessDenied,
+    PrivateOwnerRequired,
+    MountStateUnknown,
     InvalidRequest,
     AlreadyMounted,
     ProNotInstalled,
@@ -630,8 +642,12 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 25] = [
         Self::NotAuthorized,
+        Self::AdministratorRequired,
+        Self::PolicyAccessDenied,
+        Self::PrivateOwnerRequired,
+        Self::MountStateUnknown,
         Self::InvalidRequest,
         Self::AlreadyMounted,
         Self::ProNotInstalled,
@@ -654,8 +670,12 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 21] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 25] = [
         "not_authorized",
+        "administrator_required",
+        "policy_access_denied",
+        "private_owner_required",
+        "mount_state_unknown",
         "invalid_request",
         "already_mounted",
         "pro_not_installed",
@@ -681,6 +701,10 @@ impl VaultMountReason {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::NotAuthorized => "not_authorized",
+            Self::AdministratorRequired => "administrator_required",
+            Self::PolicyAccessDenied => "policy_access_denied",
+            Self::PrivateOwnerRequired => "private_owner_required",
+            Self::MountStateUnknown => "mount_state_unknown",
             Self::InvalidRequest => "invalid_request",
             Self::AlreadyMounted => "already_mounted",
             Self::ProNotInstalled => "pro_not_installed",
@@ -707,6 +731,10 @@ impl VaultMountReason {
     pub fn from_wire(value: &str) -> Option<Self> {
         match value {
             "not_authorized" => Some(Self::NotAuthorized),
+            "administrator_required" => Some(Self::AdministratorRequired),
+            "policy_access_denied" => Some(Self::PolicyAccessDenied),
+            "private_owner_required" => Some(Self::PrivateOwnerRequired),
+            "mount_state_unknown" => Some(Self::MountStateUnknown),
             "invalid_request" => Some(Self::InvalidRequest),
             "already_mounted" => Some(Self::AlreadyMounted),
             "pro_not_installed" => Some(Self::ProNotInstalled),
@@ -906,7 +934,10 @@ mod tests {
             wire["access_pattern"] = serde_json::json!(label);
             let entry: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
             assert_eq!(entry.access_pattern, Some(pattern));
-            assert_eq!(serde_json::to_value(entry).unwrap()["access_pattern"], label);
+            assert_eq!(
+                serde_json::to_value(entry).unwrap()["access_pattern"],
+                label
+            );
         }
         wire["access_pattern"] = serde_json::json!("unsupported-mode");
         assert!(serde_json::from_value::<VaultAccessEntry>(wire).is_err());

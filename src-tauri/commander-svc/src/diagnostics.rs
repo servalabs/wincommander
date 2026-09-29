@@ -671,6 +671,18 @@ fn reason_fields(
             false,
             "review_request",
         ),
+        Some(VaultMountReason::AdministratorRequired) => (
+            "VLT.AUTH.ADMINISTRATOR_REQUIRED", DiagnosticSeverity::Error, false, "request_administrator_approval",
+        ),
+        Some(VaultMountReason::PolicyAccessDenied) => (
+            "VLT.AUTH.POLICY_ACCESS_DENIED", DiagnosticSeverity::Error, false, "request_authorization",
+        ),
+        Some(VaultMountReason::PrivateOwnerRequired) => (
+            "VLT.AUTH.PRIVATE_OWNER_REQUIRED", DiagnosticSeverity::Error, false, "ask_primary_owner",
+        ),
+        Some(VaultMountReason::MountStateUnknown) => (
+            "VLT.MOUNT.STATE_UNKNOWN", DiagnosticSeverity::Error, false, "refresh_status",
+        ),
         Some(VaultMountReason::BrokerUnavailable) => (
             "VLT.BROKER.UNAVAILABLE",
             DiagnosticSeverity::Error,

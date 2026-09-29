@@ -686,7 +686,7 @@ async fn dispatch_verb(
         }
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
-                handle_personal_vault_list(vault_mount, &args, peer)
+                handle_personal_vault_list(vault_access, vault_mount, &args, peer)
             } else {
                 handle_vault_list_authorized(vault_access, vault_mount, peer)
             }
@@ -2728,30 +2728,7 @@ fn handle_vault_unmount(
             );
             VerbError::new("vault_validation_failed", "unmount request is invalid")
         })?;
-    let authorization = peer
-        .map(|peer| {
-            crate::vault_access::authorize_mount_for_token(
-                vault_access,
-                &request.entry_id,
-                peer.token(),
-            )
-        })
-        .unwrap_or_else(vault_authorization_denied);
-    let result = if authorization.allowed {
-        let Some(peer) = peer else {
-            crate::diagnostics::record_vault_failure(
-                diagnostic_operation_id,
-                "dismount",
-                "VLT.AUTH.DENIED",
-                "request_authorization",
-                false,
-                started,
-            );
-            return Err(VerbError::new(
-                "vault_not_authorized",
-                "vault peer token unavailable",
-            ));
-        };
+    let result = if let Some(peer) = peer {
         vault_mount.dismount_authorized(
             vault_access,
             crate::vault_mount::AuthorizedDismount {
@@ -2760,9 +2737,7 @@ fn handle_vault_unmount(
                 caller_token: peer.token(),
                 caller_session: peer.session_id(),
                 caller_sid: peer.caller_sid(),
-                presentation: authorization
-                    .presentation
-                    .unwrap_or(wincmd_shared::vault_access::VaultPresentation::PerUser),
+                caller_elevated: token_is_privileged(peer.token()).unwrap_or(false),
             },
         )
     } else {
@@ -2771,7 +2746,7 @@ fn handle_vault_unmount(
             state: wincmd_shared::vault_access::VaultMountState::Denied,
             presentation: None,
             drive_letter: None,
-            reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
+            reason: Some(wincmd_shared::vault_access::VaultMountReason::MountStateUnknown),
         }
     };
     crate::diagnostics::record_vault_terminal(
@@ -2807,6 +2782,7 @@ fn valid_personal_mount_query(args: &serde_json::Value) -> bool {
 }
 
 fn handle_personal_vault_list(
+    vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: &serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
@@ -2819,7 +2795,7 @@ fn handle_personal_vault_list(
     }
     let peer = require_personal_mount_peer(peer)?;
     let mounts = vault_mount
-        .personal_mounts_for_caller(peer.session_id(), peer.caller_sid())
+        .personal_mounts_for_caller(vault_access, peer.token(), peer.session_id(), peer.caller_sid(), token_is_privileged(peer.token()).unwrap_or(false))
         .map_err(|reason| {
             VerbError::new(
                 VaultMountBroker::personal_mount_failure_code(reason),
@@ -2870,6 +2846,7 @@ fn handle_personal_vault_dismount(
         peer.token(),
         peer.session_id(),
         peer.caller_sid(),
+        token_is_privileged(peer.token()).unwrap_or(false),
     );
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))

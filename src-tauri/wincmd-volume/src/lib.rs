@@ -24,6 +24,13 @@ pub struct VolumeInfo {
     pub read_only: bool,
 }
 
+/// Service-side physical snapshot. No paths, labels or credentials are returned.
+/// Each identity binds the driver's stable volume ID and this mount generation.
+#[cfg(windows)]
+pub fn mounted_slot_identities() -> Result<std::collections::HashMap<u8, String>, String> {
+    driver::mounted_slot_identities()
+}
+
 /// Inspect an existing local drive path; reject missing paths and reparse aliases.
 pub fn inspect_path(path: &Path) -> Result<VolumeInfo, String> {
     #[cfg(windows)]

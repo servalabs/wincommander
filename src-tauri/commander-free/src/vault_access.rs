@@ -92,7 +92,15 @@ fn vault_failure_code(
     error: &str,
 ) -> (&'static str, DiagnosticRetryability, &'static str) {
     let lower = error.to_ascii_lowercase();
-    if lower.contains("pro_not_installed") {
+    if lower.contains("administrator_required") {
+        ("VLT.AUTH.ADMINISTRATOR_REQUIRED", DiagnosticRetryability::Manual, "request_administrator_approval")
+    } else if lower.contains("policy_access_denied") {
+        ("VLT.AUTH.POLICY_ACCESS_DENIED", DiagnosticRetryability::Never, "request_authorization")
+    } else if lower.contains("private_owner_required") {
+        ("VLT.AUTH.PRIVATE_OWNER_REQUIRED", DiagnosticRetryability::Never, "ask_primary_owner")
+    } else if lower.contains("mount_state_unknown") {
+        ("VLT.MOUNT.STATE_UNKNOWN", DiagnosticRetryability::Manual, "refresh_status")
+    } else if lower.contains("pro_not_installed") {
         (
             "VLT.PRO.NOT_INSTALLED",
             DiagnosticRetryability::Manual,
@@ -720,6 +728,10 @@ mod tests {
     #[test]
     fn vault_transport_failures_map_to_safe_stable_codes() {
         for (error, expected) in [
+            ("vault_administrator_required", "VLT.AUTH.ADMINISTRATOR_REQUIRED"),
+            ("vault_policy_access_denied", "VLT.AUTH.POLICY_ACCESS_DENIED"),
+            ("vault_private_owner_required", "VLT.AUTH.PRIVATE_OWNER_REQUIRED"),
+            ("vault_mount_state_unknown", "VLT.MOUNT.STATE_UNKNOWN"),
             ("vault_pro_not_installed", "VLT.PRO.NOT_INSTALLED"),
             ("PRO_NOT_INSTALLED:missing module", "VLT.PRO.NOT_INSTALLED"),
             ("vault_entitlement_denied", "VLT.ENTITLEMENT.DENIED"),

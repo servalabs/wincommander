@@ -8,6 +8,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 
+#[path = "vault_inventory.rs"]
+mod vault_inventory;
+
 // ═══════════════════════════════════════════════════════════════════════
 // COMMAND REGISTRY — data-driven tier + risk classification (P0 seam)
 // ═══════════════════════════════════════════════════════════════════════
@@ -5071,6 +5074,27 @@ pub(crate) async fn run_backend_script_with_timeout(
             crate::log_message("warn", &format!("[Investigator] {}", msg));
             return Err(msg);
         }
+    }
+
+    // Legacy read/cleanup commands share the authenticated Vault inventory.
+    // Never fall back to machine-wide PowerShell/driver enumeration or /d all.
+    if command == "Get-EncryptionStatus" {
+        return vault_inventory::status().await;
+    }
+    if command == "Dismount-LocalVaults" {
+        return vault_inventory::dismount_authorized().await;
+    }
+    if command == "Open-EncryptionVolume" {
+        return vault_inventory::open(
+            params.get("DriveLetter").map(String::as_str).unwrap_or_default(),
+        ).await;
+    }
+    if command == "Get-VolumeInfo" {
+        let root = vault_inventory::authorized_root(
+            params.get("DriveLetter").map(String::as_str).unwrap_or_default(),
+        ).await?;
+        params.clear();
+        params.insert("DriveLetter".into(), root[..2].to_owned());
     }
 
     // Privacy Shield 15-min/day quota — defence-in-depth for the

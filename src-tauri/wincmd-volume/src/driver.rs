@@ -17,6 +17,11 @@ pub(crate) struct Properties {
 }
 
 pub(crate) fn properties(slot: u8) -> Result<Properties, String> {
+    let driver = open_driver()?;
+    properties_with_driver(&driver, slot)
+}
+
+fn open_driver() -> Result<Handle, String> {
     let name = wide(r"\\.\VeraCrypt")?;
     let driver = Handle::new(unsafe {
         CreateFileW(
@@ -34,11 +39,61 @@ pub(crate) fn properties(slot: u8) -> Result<Properties, String> {
     if u32::from_le_bytes(version) != DRIVER_VERSION {
         return Err("Unsupported VeraCrypt driver version".into());
     }
+    Ok(driver)
+}
+
+fn properties_with_driver(driver: &Handle, slot: u8) -> Result<Properties, String> {
     // The driver returns a container path; wipe it rather than retaining or logging it.
     let mut buffer = Zeroizing::new([0u8; PROPERTIES_SIZE]);
     buffer[..4].copy_from_slice(&(slot as u32).to_le_bytes());
-    query(&driver, 0x0022_201c, &mut buffer[..])?;
+    query(driver, 0x0022_201c, &mut buffer[..])?;
     decode(&buffer[..], slot)
+}
+
+// Packed MOUNT_LIST_STRUCT from the same pinned Apidrvr.h: bitfield plus 26
+// path/label/ID/length/cipher/type/reserved records (26 * 670 bytes).
+const MOUNT_LIST_SIZE: usize = 17_424;
+
+fn mounted_mask(driver: &Handle) -> Result<u32, String> {
+    let mut buffer = Zeroizing::new(vec![0u8; MOUNT_LIST_SIZE]);
+    query(driver, 0x0022_2018, &mut buffer)?;
+    decode_mount_mask(&buffer)
+}
+
+fn decode_mount_mask(buffer: &[u8]) -> Result<u32, String> {
+    if buffer.len() != MOUNT_LIST_SIZE {
+        return Err("Incomplete VeraCrypt mount inventory".into());
+    }
+    let mask = u32::from_le_bytes(buffer[..4].try_into().unwrap());
+    if mask >> 26 != 0 {
+        return Err("Invalid VeraCrypt mount inventory".into());
+    }
+    Ok(mask)
+}
+
+pub(crate) fn mounted_slot_identities() -> Result<std::collections::HashMap<u8, String>, String> {
+    let driver = open_driver()?;
+    let before = mounted_mask(&driver)?;
+    let mut result = std::collections::HashMap::new();
+    for slot in 0..26 {
+        if before & (1 << slot) != 0 {
+            let properties = properties_with_driver(&driver, slot)?;
+            result.insert(
+                slot,
+                format!("{}:{}", properties.stable_id, properties.generation),
+            );
+        }
+    }
+    if mounted_mask(&driver)? != before {
+        return Err("VeraCrypt mount inventory changed during inspection".into());
+    }
+    for (&slot, identity) in &result {
+        let properties = properties_with_driver(&driver, slot)?;
+        if *identity != format!("{}:{}", properties.stable_id, properties.generation) {
+            return Err("VeraCrypt mount generation changed during inspection".into());
+        }
+    }
+    Ok(result)
 }
 
 fn query(driver: &Handle, code: u32, buffer: &mut [u8]) -> Result<(), String> {
@@ -82,6 +137,26 @@ fn decode(buffer: &[u8], slot: u8) -> Result<Properties, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "read-only installed driver ABI acceptance; no paths or identities are printed"]
+    fn live_driver_inventory_has_a_complete_bounded_snapshot() {
+        let snapshot = mounted_slot_identities().expect("installed driver snapshot unavailable");
+        assert!(snapshot.len() <= 26);
+        println!("physical slots observed: {}", snapshot.len());
+    }
+
+    #[test]
+    fn malformed_or_partial_snapshot_is_never_an_empty_inventory() {
+        assert!(decode_mount_mask(&[]).is_err());
+        assert!(decode_mount_mask(&[0; 4]).is_err());
+        let mut bytes = vec![0u8; MOUNT_LIST_SIZE];
+        assert_eq!(decode_mount_mask(&bytes), Ok(0));
+        bytes[..4].copy_from_slice(&(1u32 << 26).to_le_bytes());
+        assert!(decode_mount_mask(&bytes).is_err());
+        bytes[..4].copy_from_slice(&(1u32 << 25).to_le_bytes());
+        assert_eq!(decode_mount_mask(&bytes), Ok(1 << 25));
+    }
 
     fn response() -> [u8; PROPERTIES_SIZE] {
         let mut data = [0; PROPERTIES_SIZE];
