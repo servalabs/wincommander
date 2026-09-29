@@ -4883,6 +4883,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/panels/dashboard/index.tsx",
         "src/registry/privacy.toggles.ts",
         "src/registry/tweaks.toggles.ts"
       ]

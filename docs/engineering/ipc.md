@@ -449,12 +449,24 @@ store. They do not create Windows drive mappings or reserve letters against
 external Windows tools.
 
 Secure Storage uses machine-wide unmanaged mounts while preserving existing
-filesystem permissions. Its authenticated service calls reuse
-`svc.vault.list_authorized` with exactly `{ "personal": true }`, returning
-bounded drive/slot/scope information without backing paths. The service derives
-the caller identity; Fleet entry authorization remains separate. Existing
-dismount behavior is unchanged. Logging off the originating session still
-triggers mount cleanup.
+filesystem permissions. Its authenticated service inventory uses
+`svc.vault.list_authorized` with `{ "personal": true, "inventory_version": 2 }`.
+The service returns only caller-authorized rows, including explicit browse and
+dismount permissions, a bounded denial reason, and an optional canonical path.
+The original `{ "personal": true }` query retains the original four-field wire
+shape for older clients. During an update, new clients can retry that read-only
+query only after a query-validation rejection; they still require every current
+permission field and reject incomplete legacy rows. No permission is inferred.
+The service derives the caller identity; Fleet entry authorization remains
+separate. Logging off the originating session still triggers mount cleanup.
+
+Free reads Secure Storage inventory directly from the authenticated service,
+retaining the existing paid-command entitlement check. Pro's verified `Hello`
+advertises optional `vault_runtime_version`; Vault lifecycle dispatch requires
+version 2 or later before sending a command. An incompatible peer returns
+`vault_runtime_update_required` without starting the operation. Other paid
+features do not require this Vault-specific capability. Mount and dismount
+success still require their typed service receipts and current-state checks.
 
 Personal-container account repair is opt-in. The mount request's
 `RepairCurrentAccountAccess` flag reaches the paid component as a JSON boolean,

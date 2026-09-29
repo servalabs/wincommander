@@ -57,6 +57,9 @@ use crate::vault_mount::VaultMountBroker;
 #[path = "service_peer_query.rs"]
 mod service_peer_query;
 
+#[path = "vault_inventory_contract.rs"]
+mod vault_inventory_contract;
+
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -2776,9 +2779,7 @@ fn require_personal_mount_peer(
 }
 
 fn valid_personal_mount_query(args: &serde_json::Value) -> bool {
-    args.as_object().is_some_and(|object| {
-        object.get("personal") == Some(&serde_json::Value::Bool(true)) && object.len() == 1
-    })
+    vault_inventory_contract::parse_query(args).is_some()
 }
 
 fn handle_personal_vault_list(
@@ -2802,7 +2803,10 @@ fn handle_personal_vault_list(
                 "personal mount list unavailable",
             )
         })?;
-    serde_json::to_value(mounts)
+    vault_inventory_contract::reply(
+        vault_inventory_contract::parse_query(args).expect("validated inventory request"),
+        &mounts,
+    )
         .map_err(|_| VerbError::new("vault_internal_error", "personal mount list unavailable"))
 }
 

@@ -402,6 +402,7 @@ pub fn hello_from_ui(session_token: impl Into<String>) -> crate::Hello {
         binary_hash: None,
         free_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         pro_version: None,
+        vault_runtime_version: None,
     }
 }
 

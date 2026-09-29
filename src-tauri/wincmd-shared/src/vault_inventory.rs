@@ -6,6 +6,12 @@ use crate::vault_access::{PersonalVaultMountedVolume, VaultMountReason};
 use crate::vault_display_path::normalize_vault_display_path;
 use serde_json::{json, Value};
 
+pub const VAULT_INVENTORY_VERSION: u32 = 2;
+
+#[path = "vault_inventory_query.rs"]
+mod query;
+pub use query::query_mounts;
+
 pub fn parse_mounts(value: Value) -> Result<Vec<PersonalVaultMountedVolume>, String> {
     let mut mounts: Vec<PersonalVaultMountedVolume> = serde_json::from_value(value)
         .map_err(|_| "vault_service_personal_status_invalid".to_owned())?;

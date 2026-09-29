@@ -272,6 +272,7 @@ pub async fn vault_call(
             binary_hash: None,
             free_version: None,
             pro_version: None,
+            vault_runtime_version: None,
         });
         timeout_at(deadline, write_envelope(&mut pipe, &hello))
             .await

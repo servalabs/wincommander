@@ -5147,6 +5147,9 @@ pub(crate) async fn run_backend_script_with_timeout(
 
     if get_command_tier(&command) == "paid" {
         license::require_paid(&command)?;
+        if command == "Get-EncryptedVolumeStatus" {
+            return vault_inventory::status().await;
+        }
         // Arm the local tail BEFORE the Pro launcher starts Python. The
         // detector can emit its first event before the paid reply returns;
         // attaching afterwards replays that old event late (sometimes after

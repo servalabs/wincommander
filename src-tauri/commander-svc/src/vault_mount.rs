@@ -433,11 +433,22 @@ impl VaultMountBroker {
     }
 
     pub fn with_exclusive_operation<T>(&self, operation: impl FnOnce() -> T) -> T {
-        let _guard = self
-            .operation
-            .lock()
-            .expect("vault operation lock poisoned");
-        operation()
+        let serialized = || {
+            let _guard = self
+                .operation
+                .lock()
+                .expect("vault operation lock poisoned");
+            operation()
+        };
+        // Waiting readers must not occupy every I/O worker while a mount holds
+        // this lock awaiting its broker. Keep the caller's impersonation thread.
+        if tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(serialized)
+        } else {
+            serialized()
+        }
     }
 
     fn snapshot(&self) -> Result<HashMap<u8, String>, String> {
@@ -2477,6 +2488,49 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 7,
         }
+    }
+
+    #[test]
+    fn queued_vault_observation_does_not_starve_broker_io_and_deadlines() {
+        let broker = Arc::new(VaultMountBroker::with_broker(Box::new(MountBroker(
+            Arc::new(Mutex::new(BrokerEvents::default())),
+        ))));
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = Arc::clone(&broker);
+        let holding_thread = std::thread::spawn(move || {
+            holder.with_exclusive_operation(|| {
+                held_tx.send(()).unwrap();
+                // Bounded escape makes a regression fail instead of hanging the suite.
+                let _ = release_rx.recv_timeout(std::time::Duration::from_secs(2));
+            });
+        });
+        held_rx.recv().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let elapsed = runtime.block_on(async move {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let waiter = tokio::spawn(async move {
+                let caller_thread = std::thread::current().id();
+                started_tx.send(()).unwrap();
+                broker.with_exclusive_operation(|| {
+                    // Windows impersonation remains on the original request thread.
+                    assert_eq!(caller_thread, std::thread::current().id());
+                });
+            });
+            started_rx.await.unwrap();
+            let started = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let elapsed = started.elapsed();
+            let _ = release_tx.send(());
+            waiter.await.unwrap();
+            elapsed
+        });
+        holding_thread.join().unwrap();
+        assert!(elapsed < std::time::Duration::from_secs(1), "service timer starved for {elapsed:?}");
     }
 
     fn personal_request() -> PersonalVaultMountRequest {

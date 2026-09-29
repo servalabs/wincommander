@@ -77,7 +77,11 @@ free_version: string | null,
 /**
  * Pro version string in the ack.
  */
-pro_version: string | null, };
+pro_version: string | null,
+/**
+ * Optional Vault lifecycle contract supported by the verified Pro peer.
+ */
+vault_runtime_version: number | null, };
 
 export type MutationReceiptV2 = { version: string, target: DestructiveTargetIdentityV2, verified: boolean, };
 

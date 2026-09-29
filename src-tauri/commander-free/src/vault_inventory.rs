@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 use wincmd_shared::vault_access::{PersonalVaultMountedVolume, VaultMountReason};
 use wincmd_shared::vault_inventory::{
-    bulk_failure, bulk_success, confirmed_slot_dismount, parse_mounts, project_mount,
+    bulk_failure, bulk_success, confirmed_slot_dismount, project_mount, query_mounts,
 };
 
 async fn mounts() -> Result<Vec<PersonalVaultMountedVolume>, String> {
@@ -13,10 +13,10 @@ async fn mounts() -> Result<Vec<PersonalVaultMountedVolume>, String> {
 
 async fn mounts_via<F, Fut>(call: F) -> Result<Vec<PersonalVaultMountedVolume>, String>
 where
-    F: FnOnce(&'static str, Value) -> Fut,
+    F: FnMut(&'static str, Value) -> Fut,
     Fut: std::future::Future<Output = Result<Value, String>>,
 {
-    parse_mounts(call("svc.vault.list_authorized", json!({"personal":true})).await?)
+    query_mounts(call).await
 }
 
 pub(super) async fn authorized_root(letter: &str) -> Result<String, String> {
@@ -99,11 +99,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wincmd_shared::vault_inventory::parse_mounts;
     #[tokio::test]
     async fn production_inventory_adapter_preserves_service_failure_no_raw_fallback() {
         let error = mounts_via(|verb, args| async move {
             assert_eq!(verb, "svc.vault.list_authorized");
-            assert_eq!(args, json!({"personal":true}));
+            assert_eq!(args, json!({"personal":true,"inventory_version":2}));
             Err("vault_mount_state_unknown".into())
         })
         .await

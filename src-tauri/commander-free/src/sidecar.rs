@@ -1,3 +1,6 @@
+#[path = "sidecar_vault_contract.rs"]
+mod vault_contract;
+
 // src-tauri/src/sidecar.rs (commander-free crate)
 // ═══════════════════════════════════════════════════════════════════════
 // Pro-sidecar broker
@@ -106,10 +109,28 @@ const STEGO_TRANSFER_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// A Fleet-lab enrollment pass is one-use.  Bound its IPC wait more tightly
 /// than a normal GUI operation and never replay it after a timeout.
 const FLEET_LAB_JOIN_TIMEOUT: Duration = Duration::from_secs(45);
+// The service bounds its broker at 120 seconds; leave time for cleanup and
+// return an unknown outcome rather than waiting forever or replaying a mount.
+const VAULT_MUTATION_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn is_vault_mount_mutation(feature_id: &str) -> bool {
+    [
+        &["Mount-~", "Encryption~", "Volume~"][..],
+        &["Mount-~", "Encrypted~", "Volume~"][..],
+        &["Dismount-~", "Encryption~", "Volume~"][..],
+        &["Dismount-~", "Encrypted~", "Volume~"][..],
+        &["Dismount-~", "AllEncryption~", "Volumes~"][..],
+        &["Dismount-~", "AllEncrypted~", "Volumes~"][..],
+    ]
+    .iter()
+    .any(|parts| crate::command_strings::matches_parts(feature_id, parts))
+}
 
 fn request_timeout_for(feature_id: &str) -> Option<Duration> {
+    if is_vault_mount_mutation(feature_id) {
+        return Some(VAULT_MUTATION_TIMEOUT);
+    }
     match feature_id {
-        "Mount-EncryptionVolume" => None,
         "Create-StegoMp4"
         | "Extract-StegoMp4"
         | "Attach-StegoContainer"
@@ -348,6 +369,7 @@ static PRO_POOL_REAPER_STARTED: AtomicBool = AtomicBool::new(false);
 type InflightMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>>>;
 
 pub struct ProSession {
+    vault_runtime_version: Option<u32>,
     /// Write half of the named pipe — owned by dispatch (only writes).
     ///
     /// The authenticated Free-owned forensic collector is the sole exception:
@@ -1131,7 +1153,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         .map_err(|_| "Hello read timeout".to_string())?
         .map_err(|e| format!("Hello read: {}", e))?;
 
-    match inbound {
+    let vault_runtime_version = match inbound {
         Envelope::Hello(h)
             if h.session_token == token && h.protocol_version == PROTOCOL_VERSION =>
         {
@@ -1173,6 +1195,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
                 "core",
                 "[Sidecar] spawn_pro_session: handshake verified, session live",
             );
+            h.vault_runtime_version
         }
         Envelope::Hello(_) => {
             crate::log_message_src(
@@ -1190,7 +1213,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
             );
             return Err("expected Hello as first frame from Pro".to_string());
         }
-    }
+    };
 
     // Handshake ok — split the pipe and spawn the reader. tokio::io::split
     // works for any AsyncRead+AsyncWrite; named-pipe halves serialise at
@@ -1311,6 +1334,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     ));
 
     Ok(ProSession {
+        vault_runtime_version,
         write: write_half,
         child,
         session_token: token,
@@ -1797,6 +1821,10 @@ pub async fn dispatch_paid_command(
     // semantic errors from Pro ([pro:*]) propagate immediately so
     // business-logic failures aren't masked by a "Pro went away" retry.
     for attempt in 0..2 {
+        if let Err(error) = vault_contract::require_vault_runtime(feature_id, session.vault_runtime_version) {
+            return_pro_session_to_pool(session).await;
+            return Err(error);
+        }
         // Build a fresh Request per attempt — ids are session-scoped,
         // so a respawn means we want a new one on the new session.
         let req = Request {
@@ -1865,6 +1893,16 @@ pub async fn dispatch_paid_command(
                     "Metadata scrub could not finish safely and was not retried: {}",
                     transport_err
                 ));
+            }
+            Err(transport_err) if is_vault_mount_mutation(feature_id) => {
+                crate::log_message("error", &format!(
+                    "[Sidecar] '{feature_id}' result unknown; mutation was not replayed: {transport_err}"
+                ));
+                return Err(if transport_err == "Pro response timeout" {
+                    "vault_request_timeout"
+                } else {
+                    "vault_operation_unconfirmed"
+                }.to_string());
             }
             Err(transport_err) => {
                 // Transport-level failure — drop the broken session.
@@ -1999,8 +2037,17 @@ mod tests {
     }
 
     #[test]
-    fn personal_mount_has_no_free_side_request_timeout() {
-        assert_eq!(request_timeout_for("Mount-EncryptionVolume"), None);
+    fn vault_mount_mutations_have_a_bounded_wait_and_cannot_be_replayed() {
+        for command in [
+            "Mount-EncryptionVolume", "Mount-EncryptedVolume",
+            "Dismount-EncryptionVolume", "Dismount-EncryptedVolume",
+            "Dismount-AllEncryptionVolumes", "Dismount-AllEncryptedVolumes",
+        ] {
+            assert!(is_vault_mount_mutation(command));
+            assert_eq!(request_timeout_for(command), Some(Duration::from_secs(180)));
+        }
+        assert!(!is_vault_mount_mutation("Get-EncryptedVolumeStatus"));
+        assert!(!is_vault_mount_mutation("Mount-EncryptionVolume-Other"));
     }
 
     #[test]

@@ -316,6 +316,9 @@ pub struct Hello {
     /// Pro version string in the ack.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pro_version: Option<String>,
+    /// Optional Vault lifecycle contract supported by the verified Pro peer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_runtime_version: Option<u32>,
 }
 
 /// Free → Pro: invoke a paid feature.
@@ -397,6 +400,7 @@ pub fn hello_from_free(session_token: impl Into<String>) -> Hello {
         binary_hash: None,
         free_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         pro_version: None,
+        vault_runtime_version: None,
     }
 }
 
