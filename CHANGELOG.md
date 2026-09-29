@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Setup no longer mounts offline user registries during legacy startup cleanup,
+  so leftover temporary hives from an earlier failed setup cannot block retries.
+  Signed-in profiles are cleaned during setup; other profiles clean their own
+  legacy startup entries when they next launch WinCommander.
+
 - Network maintenance can inspect machine and current-user certificate stores,
   compare roots with the Windows AuthRoot reference, and save a local baseline.
   Differences are transparency signals, not malware findings; nothing is

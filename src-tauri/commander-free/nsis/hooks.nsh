@@ -327,8 +327,8 @@ ${Using:StrFunc} UnStrStr
   nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe"'
   Pop $0
   Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
   ${If} $0 != 0
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
     Abort "WinCommander could not remove legacy automatic startup routes. See installer-lifecycle.log."
   ${EndIf}
 

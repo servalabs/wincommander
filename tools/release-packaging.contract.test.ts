@@ -136,7 +136,8 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("'resources', 'scripts'");
     expect(legacyLaunchMigration).toContain("file-search");
     expect(legacyLaunchMigration).toContain("HKEY_USERS");
-    expect(legacyLaunchMigration).toContain("reg.exe load");
+    expect(legacyLaunchMigration).not.toContain("reg.exe load");
+    expect(legacyLaunchMigration).not.toContain("reg.exe unload");
     expect(legacyLaunchMigration).toContain("Test-ProfileHiveUnavailable");
     expect(legacyLaunchMigration).toContain("registryHivesDeferred");
     expect(legacyLaunchMigration).toContain("deferredRegistryHives");

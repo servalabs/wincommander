@@ -135,42 +135,10 @@ function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
         throw
     }
 
-    $ntUserDat = Join-Path $Profile.Path 'NTUSER.DAT'
-    try {
-        if (-not (Test-Path -LiteralPath $ntUserDat -PathType Leaf -ErrorAction Stop)) { return $true }
-    } catch {
-        if (Test-ProfileHiveUnavailable $_) { return $false }
-        throw
-    }
-    $mountName = "WinCommanderInstallerCleanup_$($sid -replace '[^A-Za-z0-9]', '_')"
-    $mountRoot = "Registry::HKEY_USERS\$mountName"
-    if (Test-Path -LiteralPath $mountRoot) { throw "Temporary profile hive is already mounted: $mountName" }
-
-    $mounted = $false
-    try {
-        $null = & reg.exe load "HKU\$mountName" $ntUserDat 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            # Loading a different account's offline hive is optional. Any
-            # failure means Windows did not make that private hive available
-            # to this installer; defer it instead of blocking a valid shared
-            # application install. A successful mount still fails closed on
-            # real processing or unload errors below.
-            return $false
-        }
-        $mounted = $true
-        try {
-            $null = & $Action $mountRoot
-            return $true
-        } catch {
-            if (Test-ProfileHiveUnavailable $_) { return $false }
-            throw
-        }
-    } finally {
-        if ($mounted) {
-            $unloadOutput = & reg.exe unload "HKU\$mountName" 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Could not unload profile hive ${sid}: $unloadOutput" }
-        }
-    }
+    # Offline hive mounts can outlive a failed installer and block every retry.
+    # Only use canonical Windows-loaded SID roots. Leave old temporary mounts
+    # untouched; this account's normal app launch cleans its own Run values.
+    return $false
 }
 
 try {

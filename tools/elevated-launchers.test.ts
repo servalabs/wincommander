@@ -3,6 +3,18 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 describe("installer task readback", () => {
+  test.skipIf(process.platform !== "win32")("retries after leftover offline hive mounts and preserves real cleanup failures", () => {
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", "tools/test-legacy-profile-hives.ps1",
+    ], { encoding: "utf8" });
+    expect(result.stderr.trim()).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("PASS: repeated setup defers offline profiles with leftover temporary hives");
+    expect(result.stdout).toContain("PASS: loaded profile takes precedence over leftover temporary hive");
+    expect(result.stdout).toContain("PASS: denied access is deferred; genuine cleanup failures remain errors");
+  });
+
   test.skipIf(process.platform !== "win32")("normalizes group names and rejects the wrong privilege, executable, arguments and session policy", () => {
     const script = `
 $ErrorActionPreference='Stop'

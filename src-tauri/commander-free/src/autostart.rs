@@ -372,7 +372,9 @@ function Get-UserRunPaths {
   param([Parameter(Mandatory)][string]$RegistryRoot)
   return @(
     "$RegistryRoot\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-    "$RegistryRoot\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+    "$RegistryRoot\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+    "$RegistryRoot\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run",
+    "$RegistryRoot\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
   )
 }
 
@@ -384,9 +386,7 @@ function Get-RunPaths {
     'Registry::HKEY_LOCAL_MACHINE\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run',
     'Registry::HKEY_LOCAL_MACHINE\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
   )
-  # An elevated toggle also cleans safely loaded user hives. Offline profiles
-  # are handled by the elevated installer/update migration rather than loading
-  # arbitrary NTUSER.DAT files during a settings click.
+  # Offline profiles clean their own routes on next launch; do not mount them.
   if (Test-IsAdministrator) {
     try {
       $loadedHives = Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction Stop
