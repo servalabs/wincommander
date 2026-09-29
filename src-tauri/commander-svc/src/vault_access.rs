@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+mod access_directory_mutation;
+
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use wincmd_shared::vault_access::{
@@ -30,7 +32,7 @@ const MAX_ENTRIES: usize = 64;
 const MAX_GRANTS: usize = 32;
 const PERSONAL_CREATION_TTL_SECS: i64 = 10 * 60;
 
-// ── `svc.vault.reconcile_access_groups` bounds (Task B) ──────────────────
+// Access-directory reconciliation bounds.
 // Mirrors the MAX_ENTRIES / MAX_GRANTS style above: bounded batch and
 // per-group member counts so an admin-authored request can't be used to
 // exhaust the service.
@@ -39,7 +41,7 @@ const MAX_RECONCILE_GROUP_MEMBERS: usize = 512;
 const MAX_GROUP_NAME_LEN: usize = 64;
 /// Case-insensitive prefix reserved for deterministic service-owned groups
 /// (see [`managed_group_name`]). An admin-authored group must never collide
-/// with it: `reconcile_access_groups` only ever creates-if-absent and syncs
+/// with it: internal reconciliation creates-if-absent and syncs
 /// membership, so a colliding name would let an admin request silently
 /// absorb (and later have its membership overwritten by) a policy-owned
 /// group, or vice versa.
@@ -48,6 +50,10 @@ const RESERVED_GROUP_PREFIX: &str = "wc-vault-";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
     Validation,
+    Forbidden,
+    Mounted,
+    GroupInUse,
+    GroupNameConflict,
     /// A live Fleet policy reserves this exact normalized container filename.
     /// This is deliberately distinct from ordinary validation so callers can
     /// tell an administrator to retarget or remove the policy, while siblings
@@ -64,9 +70,6 @@ pub enum VaultError {
     ContainerIdentity,
     AclApply,
     AclReadback,
-    /// A requested access-group membership mutation was not attempted because
-    /// the live Vaults could not first be dismounted.
-    DismountFailed,
     Persistence,
 }
 
@@ -524,6 +527,20 @@ fn access_directory_group_members<'a>(
         .map(|group| group.member_sids.as_slice())
 }
 
+fn fleet_group_member_sids<'a>(
+    entry: &VaultAccessEntry,
+    directory: &'a VaultAccessDirectory,
+) -> Option<HashSet<&'a str>> {
+    if entry.mount.presentation != VaultPresentation::Machine {
+        return None;
+    }
+    let groups = std::iter::once(entry.owner_account.as_str())
+        .chain(entry.grants.iter().map(|grant| grant.principal_name.as_str()))
+        .filter_map(|name| access_directory_group_members(directory, name))
+        .collect::<Vec<_>>();
+    (!groups.is_empty()).then(|| groups.into_iter().flatten().map(String::as_str).collect())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyRecoveryRecord {
@@ -920,9 +937,8 @@ impl VaultAccessStore {
         self.save_access_directory_before_change(directory, || Ok(()))
     }
 
-    /// Saves the access directory and synchronizes its Windows groups. The
-    /// service uses the callback to close active mounts only if a real group
-    /// membership change is about to be made.
+    /// Internal directory reconciliation seam. Pipe callers must use the
+    /// authenticated save path, which rejects changes while Vaults are mounted.
     pub fn save_access_directory_before_change<F>(
         &self,
         directory: VaultAccessDirectory,
@@ -1963,8 +1979,13 @@ impl VaultAccessStore {
         if !valid_windows_sid(caller_sid) {
             return self.empty_policy_projection();
         }
+        let Ok(directory) = self.access_directory() else {
+            return self.empty_policy_projection();
+        };
         self.policy_projection_for(false, |entry| {
             entry.primary_owner_sid.as_deref() == Some(caller_sid)
+                && fleet_group_member_sids(entry, &directory)
+                    .is_none_or(|members| members.contains(caller_sid))
         })
     }
 
@@ -1978,6 +1999,19 @@ impl VaultAccessStore {
         &self,
     ) -> wincmd_shared::vault_access::VaultOwnerPolicyFragment {
         self.policy_projection_for(true, |_| true)
+    }
+
+    pub fn fleet_group_access(
+        &self,
+        entry: &VaultAccessEntry,
+        caller_sid: &str,
+    ) -> Result<Option<bool>, VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.access_directory_healthy {
+            return Err(VaultError::Persistence);
+        }
+        Ok(fleet_group_member_sids(entry, &state.access_directory)
+            .map(|members| members.contains(caller_sid)))
     }
 
     fn policy_projection_for(
@@ -2070,7 +2104,7 @@ impl VaultAccessStore {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let active = state.active.as_ref()?;
-        if state.status.validation_state != VaultValidationState::Current {
+        if state.status.validation_state != VaultValidationState::Current || !state.access_directory_healthy {
             return None;
         }
         let entry = active
@@ -2086,9 +2120,11 @@ impl VaultAccessStore {
         // Generated group SIDs can outlive a membership change in a signed-in
         // token. Mount authorization and the mounted root use only the current
         // direct users and explicitly selected groups, never generated groups.
+        let group_members = fleet_group_member_sids(entry, &state.access_directory);
         let mounted_root_grants = resolved
             .authorization_grants
             .iter()
+            .filter(|grant| group_members.as_ref().is_none_or(|members| members.contains(grant.sid.as_str())))
             .map(|grant| ResolvedGrant {
                 sid: grant.sid.clone(),
                 access: grant.access,
@@ -2613,6 +2649,12 @@ impl VaultAccessStore {
         else {
             return denied(VaultMountDenial::NotAuthorized);
         };
+        if !state.access_directory_healthy
+            || fleet_group_member_sids(entry, &state.access_directory)
+                .is_some_and(|members| !caller_sids.iter().any(|sid| members.contains(sid.as_str())))
+        {
+            return denied(VaultMountDenial::NotAuthorized);
+        }
         if !self
             .fs
             .stable_file_identity(Path::new(&entry.container_path))
@@ -2746,6 +2788,12 @@ impl VaultAccessStore {
                     let sid = principal.sid;
                     merge_grant(&mut grants, sid.clone(), grant.access);
                     merge_grant(&mut authorization_grants, sid, grant.access);
+                }
+                if let Some(members) = fleet_group_member_sids(entry, access_directory) {
+                    grants.retain(|grant| members.contains(grant.sid.as_str()));
+                    authorization_grants.retain(|grant| members.contains(grant.sid.as_str()));
+                    read_members.retain(|sid| members.contains(sid.as_str()));
+                    write_members.retain(|sid| members.contains(sid.as_str()));
                 }
                 for (access, members) in [
                     (VaultAccess::Read, &mut read_members),
@@ -2976,21 +3024,9 @@ impl VaultAccessStore {
             .collect()
     }
 
-    /// Backs `svc.vault.reconcile_access_groups` (Privileged / SYSTEM-Admin
-    /// only — see `pipe.rs`'s `classify_verb`/`authorize` gate). Creates
-    /// each admin-authored Windows local group if absent and sets its
-    /// membership to EXACTLY the supplied SIDs, reusing the same
-    /// [`LocalGroupReconciler`] seam the policy-apply path uses for its own
-    /// deterministic `WC-Vault-*` groups. A pre-existing group is never
-    /// deleted or renamed — only created-if-absent and membership-synced —
-    /// and a group whose name collides with the reserved `WC-Vault-*`
-    /// prefix is rejected rather than silently reconciled, so an admin
-    /// request can never absorb or corrupt a policy-owned group.
-    ///
-    /// One group's failure never aborts the batch: it is reported as that
-    /// group's own `Failed` result. The only whole-request rejection is an
-    /// oversized batch (`Err(VaultError::Validation)`), mirroring
-    /// `validate_policy`'s `MAX_ENTRIES` check.
+    /// Internal bounded group reconciliation; the legacy raw RPC is retired.
+    /// Runtime callers authorize against the protected directory first.
+    /// Per-group failures remain in-band for the verified save path to roll back.
     pub fn reconcile_access_groups(
         &self,
         groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],
@@ -2998,10 +3034,8 @@ impl VaultAccessStore {
         self.reconcile_access_groups_before_change(groups, || Ok(()))
     }
 
-    /// Reconciles administrator-authored access groups, calling
-    /// `before_change` once before the first membership mutation. The service
-    /// pipe uses it to dismount live Vaults before a group member gains or
-    /// retains access through an already-mounted volume.
+    /// Calls the mutation guard before the first membership change. The
+    /// authenticated directory save checks mounted state before reaching this.
     pub fn reconcile_access_groups_before_change<F>(
         &self,
         groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],
@@ -3013,13 +3047,13 @@ impl VaultAccessStore {
         if groups.len() > MAX_RECONCILE_GROUPS {
             return Err(VaultError::Validation);
         }
-        let mut dismounted_for_change = false;
+        let mut checked_for_change = false;
         groups
             .iter()
             .map(|group| {
                 self.reconcile_one_access_group(
                     group,
-                    &mut dismounted_for_change,
+                    &mut checked_for_change,
                     &mut before_change,
                 )
             })
@@ -3029,7 +3063,7 @@ impl VaultAccessStore {
     fn reconcile_one_access_group<F>(
         &self,
         group: &wincmd_shared::vault_access::VaultAccessGroupInput,
-        dismounted_for_change: &mut bool,
+        checked_for_change: &mut bool,
         before_change: &mut F,
     ) -> Result<wincmd_shared::vault_access::VaultAccessGroupResult, VaultError>
     where
@@ -3087,13 +3121,12 @@ impl VaultAccessStore {
                 }
             }
             // The snapshot contract is one entry per plan. If an adapter
-            // breaks that contract, preserve the security invariant and
-            // close live mounts before allowing a possible mutation.
+            // breaks that contract, run the mutation guard before proceeding.
             None => true,
         };
-        if changed && !*dismounted_for_change {
+        if changed && !*checked_for_change {
             before_change()?;
-            *dismounted_for_change = true;
+            *checked_for_change = true;
         }
 
         if let Err(error) = self
@@ -4597,7 +4630,7 @@ fn managed_group_name(entry_id: &str, access: VaultAccess) -> String {
     )
 }
 
-/// An admin-authored `svc.vault.reconcile_access_groups` group name must be
+/// An administrator-authored access-directory group name must be
 /// non-empty, bounded, and must never collide with the reserved
 /// `WC-Vault-*` prefix [`managed_group_name`] derives — see
 /// [`RESERVED_GROUP_PREFIX`]'s doc comment for why that collision matters.
@@ -4607,8 +4640,8 @@ fn valid_admin_group_name(name: &str) -> bool {
         && !name.to_ascii_lowercase().starts_with(RESERVED_GROUP_PREFIX)
 }
 
-/// A short, content-free reason for one group's `svc.vault
-/// .reconcile_access_groups` failure. `PrincipalResolution`'s payload here
+/// A short, content-free reason for an internal group reconciliation failure.
+/// `PrincipalResolution`'s payload here
 /// is always the admin-supplied `local_group` name (never a member SID),
 /// so it is safe to include — same privacy boundary as `pipe.rs`'s
 /// `vault_error_message`.
@@ -4657,13 +4690,13 @@ fn status_for(
 /// of sending an administrator down the wrong repair path.
 fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
     match error {
-        VaultError::Validation | VaultError::PolicyPathReserved | VaultError::VersionConflict => {
+        VaultError::Validation | VaultError::Forbidden | VaultError::Mounted | VaultError::GroupInUse | VaultError::GroupNameConflict | VaultError::PolicyPathReserved | VaultError::VersionConflict => {
             VaultEntryResult::ValidationFailed
         }
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
         VaultError::AclApply => VaultEntryResult::AclApplyFailed,
-        VaultError::AclReadback | VaultError::DismountFailed | VaultError::Persistence => {
+        VaultError::AclReadback | VaultError::Persistence => {
             VaultEntryResult::AclReadbackFailed
         }
     }
@@ -7779,6 +7812,156 @@ mod tests {
     }
 
     #[test]
+    fn group_creator_is_authenticated_sid_and_persists_after_restart() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(files.clone(), groups);
+        let mut requested = access_directory();
+        requested.groups[0].member_sids.clear();
+        let (saved, _) = store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())).unwrap();
+        assert_eq!(saved.groups[0].member_sids, ["S-1-5-21-202"]);
+        assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-202"]);
+        let restarted = store_with_groups(files, Groups(membership));
+        restarted.load_at_startup();
+        assert_eq!(restarted.access_directory().unwrap(), saved);
+    }
+
+    #[test]
+    fn outsider_admin_cannot_join_edit_delete_or_reidentify_an_existing_group() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        let original = access_directory();
+        store.save_access_directory(original.clone()).unwrap();
+        for attempt in 0..4 {
+            let mut requested = original.clone();
+            match attempt {
+                0 => requested.groups[0].member_sids.push("S-1-5-21-202".into()),
+                1 => requested.groups[0].name = "Changed".into(),
+                2 => requested.groups.clear(),
+                _ => requested.groups[0].id = "new-id".into(),
+            }
+            requested.users.push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
+                sid: "S-1-5-21-202".into(), username: "Other".into(), display_name: None,
+            });
+            assert_eq!(store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())), Err(VaultError::Forbidden));
+            assert_eq!(store.access_directory().unwrap(), original);
+            assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-101"]);
+        }
+    }
+
+    #[test]
+    fn saving_unchanged_outsider_group_never_adds_creator_or_repairs_its_membership() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        let original = access_directory();
+        store.save_access_directory(original.clone()).unwrap();
+        membership.lock().unwrap().insert("WC_Sales".into(), vec![]);
+        let (saved, results) = store.save_access_directory_for_caller(original.clone(), "S-1-5-21-202", || Ok(())).unwrap();
+        assert_eq!(saved, original);
+        assert!(results.is_empty());
+        assert!(membership.lock().unwrap()["WC_Sales"].is_empty());
+    }
+
+    #[test]
+    fn new_group_cannot_take_over_an_existing_windows_group() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        membership.lock().unwrap().insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        assert_eq!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())), Err(VaultError::GroupNameConflict));
+        assert!(store.access_directory().unwrap().groups.is_empty());
+        assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-999"]);
+    }
+
+    #[test]
+    fn mounted_group_save_leaves_directory_and_windows_membership_unchanged() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        assert_eq!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Err(VaultError::Mounted)), Err(VaultError::Mounted));
+        assert!(store.access_directory().unwrap().groups.is_empty());
+        assert!(membership.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn creator_not_inserted_twice_and_existing_member_can_edit_unmounted_group() {
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+        let (mut saved, _) = store.save_access_directory_for_caller(access_directory(), "s-1-5-21-101", || Ok(())).unwrap();
+        assert_eq!(saved.groups[0].member_sids.len(), 1);
+        saved.groups[0].name = "Renamed label".into();
+        let (updated, _) = store.save_access_directory_for_caller(saved.clone(), "S-1-5-21-101", || Ok(())).unwrap();
+        assert_eq!(updated, saved);
+    }
+
+    #[test]
+    fn assigned_group_cannot_be_deleted_or_renamed_to_strip_vault_scope() {
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+        let directory = access_directory();
+        store.save_access_directory(directory.clone()).unwrap();
+        let mut requested = policy(1, 0);
+        requested.entries[0].grants.push(wincmd_shared::vault_access::VaultGrantInput {
+            principal_name: "WC_Sales".into(), access: VaultAccess::Write,
+        });
+        store.apply(requested, 7).unwrap();
+        for remove in [true, false] {
+            let mut next = directory.clone();
+            if remove { next.groups.clear(); } else { next.groups[0].local_group = "WC_Renamed".into(); }
+            assert_eq!(store.save_access_directory_for_caller(next, "S-1-5-21-101", || Ok(())), Err(VaultError::GroupInUse));
+            assert_eq!(store.access_directory().unwrap(), directory);
+        }
+    }
+
+    #[test]
+    fn group_creation_requires_independent_membership_readback() {
+        struct UnverifiedGroups(Groups);
+        impl LocalGroupReconciler for UnverifiedGroups {
+            fn reconcile_exact_members(&self, _: &str, _: &[String]) -> Result<(), VaultError> { Ok(()) }
+            fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError> { self.0.snapshot(plans) }
+            fn delete_service_owned_group(&self, name: &str) -> Result<(), VaultError> { self.0.delete_service_owned_group(name) }
+            fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> { self.0.restore(snapshots) }
+        }
+        let store = VaultAccessStore::open_with_groups(
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))), Box::new(Resolver), Box::new(Acl),
+            Box::new(UnverifiedGroups(Groups::default())), PathBuf::from("/policy"),
+        );
+        assert!(matches!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())), Err(VaultError::PrincipalResolution(_))));
+        assert!(store.access_directory().unwrap().groups.is_empty());
+    }
+
+    #[test]
+    fn new_or_renamed_group_cannot_capture_an_existing_vault_principal() {
+        for (principal, group_name, rename) in [("Admin", "ADMIN", false), ("DOMAIN\\WC_Sales", "WC_Sales", false), ("DOMAIN\\Partner", "Partner", true)] {
+            let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+            let mut directory = access_directory();
+            if rename { store.save_access_directory(directory.clone()).unwrap(); }
+            let mut requested = policy(1, 0);
+            if principal != "Admin" { requested.entries[0].grants[1].principal_name = principal.into(); }
+            store.apply(requested, 7).unwrap();
+            let original = store.access_directory().unwrap();
+            directory.groups[0].local_group = group_name.into();
+            assert_eq!(store.save_access_directory_for_caller(directory, "S-1-5-21-101", || Ok(())), Err(VaultError::GroupInUse));
+            assert_eq!(store.access_directory().unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn group_created_after_early_check_is_not_adopted_or_modified() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        let result = store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || {
+            membership.lock().unwrap().insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
+            Ok(())
+        });
+        assert_eq!(result, Err(VaultError::GroupNameConflict));
+        assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-999"]);
+        assert!(store.access_directory().unwrap().groups.is_empty());
+    }
+
+    #[test]
     fn access_directory_rejects_unknown_member_or_reserved_group_name() {
         let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
         let mut unknown_member = access_directory();
@@ -7827,7 +8010,20 @@ mod tests {
         ];
         store.apply(requested, 7).unwrap();
 
+        assert!(!store.authorize_mount("shared", &["S-1-test-Admin".into()]).allowed,
+            "the primary owner cannot bypass the assigned Fleet group");
+        assert_eq!(store.fleet_group_access(&store.policy().unwrap().entries[0], "S-1-test-Admin").unwrap(), Some(false));
+        assert_eq!(store.fleet_group_access(&store.policy().unwrap().entries[0], &alex).unwrap(), Some(true));
+
+        // Existing releases persisted an independent owner grant; read-back
+        // must enforce current scope without requiring an owner to re-save.
+        store.state.lock().unwrap().active.as_mut().unwrap().resolved[0]
+            .authorization_grants.push(ResolvedGrantRecord { sid: "S-1-test-Admin".into(), access: VaultAccess::Write });
+        assert!(!store.authorize_mount("shared", &["S-1-test-Admin".into()]).allowed);
+
         let (before, ..) = store.mount_plan("shared").unwrap();
+        assert!(before.grants.iter().all(|grant| grant.sid != "S-1-test-Admin"),
+            "the mounted-root ACL must not reintroduce the outsider owner");
         assert!(before.grants.iter().any(|grant| grant.sid == alex));
         assert!(before.grants.iter().any(|grant| grant.sid == removed));
         assert!(

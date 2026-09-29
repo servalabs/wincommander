@@ -155,6 +155,15 @@ restore keys lost with Windows machine protection, or transfer ownership to a
 recreated account. Local automated checks are not installed-service acceptance
 for password resets, simultaneous standard/admin users, or Windows Server/RDS.
 
+## Fleet Vault group boundaries
+
+Fleet group-backed Vault operations are authorized by the service using the
+authenticated Windows account and protected group membership. Windows
+administrator status alone does not authorize another group's Vault. Mounted
+policies cannot be edited or removed through the application. This supported
+workflow boundary does not prevent a machine administrator or SYSTEM process
+from bypassing Windows protections outside WinCommander.
+
 ## Private-volume search
 
 WinCommander stores indexes for selected VeraCrypt folders in

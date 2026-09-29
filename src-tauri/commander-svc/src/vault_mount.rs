@@ -8,6 +8,9 @@
 #![cfg(windows)]
 
 use std::collections::{HashMap, HashSet};
+
+#[cfg(test)]
+pub(crate) use tests::mounted_test_broker;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -1716,6 +1719,9 @@ impl VaultMountBroker {
     /// on their behalf because an implicit close would let an administrator
     /// bypass the owner's active session.
     pub(crate) fn has_active_mounts_locked(&self) -> bool {
+        if self.recovery.lock().map_or(true, |state| state.registry_untrusted) {
+            return true;
+        }
         self.active
             .lock()
             .map(|active| !active.is_empty())
@@ -2569,6 +2575,12 @@ mod tests {
             engine_mount_identity: Some("test-mount:12".into()),
             canonical_container_path: None,
         }
+    }
+
+    pub(crate) fn mounted_test_broker() -> VaultMountBroker {
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+        broker.active.lock().unwrap().insert("vault-1".into(), active_mount_for_owner(7, "S-1-5-21-owner"));
+        broker
     }
 
     #[test]
@@ -3496,6 +3508,33 @@ mod tests {
         assert_eq!(result.state, VaultMountState::Unmounted);
         assert_eq!(broker.projection(entry_id).0, VaultMountState::Unmounted);
         assert_eq!(events.lock().unwrap().recovered, vec![12]);
+    }
+
+    #[test]
+    fn outsider_administrator_cannot_dismount_group_mount_or_clear_policy_mount_guard() {
+        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let entry_id = "fleet-shared";
+        assert!(broker.retain_cleanup_mount(&store, entry_id, active_mount_for_owner(7, "S-1-5-21-owner")));
+        assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
+        let result = broker.dismount_authorized(&store, AuthorizedDismount {
+            operation_id: 43, entry_id, caller_token: std::ptr::null_mut(), caller_session: 11,
+            caller_sid: "S-1-5-21-outsider-admin", caller_elevated: true,
+        });
+        assert_eq!(result.state, VaultMountState::Denied);
+        assert_eq!(result.reason, Some(VaultMountReason::PolicyAccessDenied));
+        assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
+        assert!(events.lock().unwrap().recovered.is_empty());
+        assert!(events.lock().unwrap().dismounted.is_empty());
+    }
+
+    #[test]
+    fn unknown_mount_registry_blocks_policy_edits_and_deletions() {
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+        assert!(!broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
+        broker.recovery.lock().unwrap().registry_untrusted = true;
+        assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
     }
 
     #[test]

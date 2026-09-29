@@ -435,12 +435,28 @@ exact previous revision when applying; a concurrent write is never overwritten
 by an automatic retry. Unchanged records belonging to other owners are omitted
 from the write fragment and remain preserved by the service.
 Removal uses explicit `remove_entry_ids`, never omission. The service checks the
-saved revision, caller ownership or local-administrator permission, and mounted
+saved revision, caller ownership or applicable administrator permission, and mounted
 state before revoking access and persisting the removal. The editor verifies the
 requested IDs are absent from service readback before reporting success.
 An administrator's recovery view retains the saved policy identity and revision
 when validation is degraded; ordinary owner listing and mounting remain denied
 until the policy is valid again.
+
+Shared entries assigned to Fleet access groups require current membership in
+at least one assigned group, including for the primary owner. An unrelated
+local administrator cannot list, mount, dismount, edit, transfer or remove
+those entries. A member administrator can manage an unmounted shared policy.
+Mounted or unverified mount state blocks policy and group changes; a group save
+does not implicitly dismount volumes. Private and ungrouped entries retain
+their separate ownership rules.
+
+Access-directory saves derive the creator SID from the authenticated pipe peer
+and add it to each newly created group. Existing-group changes require previous
+membership. The service verifies Windows membership before persisting the
+directory, rejects adoption of existing Windows groups, and rejects removal or
+renaming of a group still referenced by a Vault. The legacy raw
+`svc.vault.reconcile_access_groups` method rejects requests; callers must use
+the protected directory save path.
 
 Saved preferred letters are reserved across the machine within supported
 WinCommander mount workflows, including when a Vault is unmounted. Reservations
