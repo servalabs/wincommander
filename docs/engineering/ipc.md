@@ -456,6 +456,13 @@ the caller identity; Fleet entry authorization remains separate. Existing
 dismount behavior is unchanged. Logging off the originating session still
 triggers mount cleanup.
 
+Personal-container account repair is opt-in. The mount request's
+`RepairCurrentAccountAccess` flag reaches the paid component as a JSON boolean,
+even though the desktop command transport uses string parameters. Only literal
+`true` and `false` are accepted for that flag; other fields, including passwords,
+remain unchanged. The service derives the account to add from the authenticated
+caller. This does not change Fleet-managed access rules.
+
 ### AI Security Advisor & appearance
 
 | Command | Purpose |

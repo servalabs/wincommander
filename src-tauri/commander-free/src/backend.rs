@@ -8,6 +8,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 
+#[path = "backend_paid_args.rs"]
+mod backend_paid_args;
+
 #[path = "vault_inventory.rs"]
 mod vault_inventory;
 
@@ -5154,7 +5157,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         // four were reclassified as Free (the data lives in Free's
         // encrypted modules), and Connect-MeshVPN now runs through Pro's
         // mesh handler alongside Get-MeshVPNStatus / Start-MeshVPNLogin.
-        let args = serde_json::to_value(&params).unwrap_or(serde_json::Value::Null);
+        let args = backend_paid_args::paid_command_args(&command, &params)?;
         let result = crate::sidecar::dispatch_paid_command(&command, args).await;
         // Apply settings sync patch so the toggle UI reflects the new
         // state immediately after the Pro sidecar succeeds.
