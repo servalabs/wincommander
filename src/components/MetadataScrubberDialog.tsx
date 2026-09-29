@@ -33,6 +33,10 @@ interface StrippedField {
   category: string;
   /** Friendly chip label, e.g. "ICC Color Profile". */
   label: string;
+  /** Sanitized names of the metadata properties cleared from this category.
+   *  These intentionally contain property names only, never the original
+   *  author, device, location, or other personal values. */
+  details?: string[];
   /** Bytes of the segment / chunk removed. */
   bytes: number;
   /** True iff the stripped data typically identifies the operator
@@ -1515,8 +1519,17 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
   const identifyingFields = result.fieldsStripped.filter((f) => f.isIdentifying);
   const otherFields = result.fieldsStripped.filter((f) => !f.isIdentifying);
   const orderedFields = [...identifyingFields, ...otherFields];
+  const removedProperties = orderedFields.flatMap((field) => {
+    const details = field.details?.filter(Boolean) ?? [];
+    return (details.length > 0 ? details : [field.label]).map((detail) => ({
+      ...field,
+      detail,
+    }));
+  });
   const residualFields = result.residualFields ?? [];
   const hasResidual = residualFields.length > 0;
+  const sourceName = basename(result.inputPath);
+  const outputIsOriginal = result.outputPath === result.inputPath;
 
   return (
     <div
@@ -1552,8 +1565,9 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
             fontFamily: 'var(--font-mono)', fontWeight: 700, flex: 1, minWidth: 0,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
+          title={result.inputPath}
         >
-          Item {String(index + 1).padStart(2, '0')}
+          {sourceName || `Item ${String(index + 1).padStart(2, '0')}`}
         </span>
         {result.gpsCoords && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--color-danger)', fontWeight: 700, flexShrink: 0 }}>
@@ -1571,11 +1585,16 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
       {/* ─── Body ───────────────────────────────────────────────── */}
       <div style={{ display: 'flex' }}>
         <div style={{ flex: 1, minWidth: 0, padding: '9px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {/* Metadata values — device, author, dates etc. */}
+          {/* Values below came from the original pre-scan, not the clean copy. */}
           {metaItems.length > 0 && (
             <div>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 5 }}>
-                Data found inside:
+                Examples found in the original:
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--color-text-muted)', marginBottom: 5, lineHeight: 1.4 }}>
+                {hasResidual
+                  ? 'These values were found before cleaning. Check the remaining-data warning below.'
+                  : 'These values were present before cleaning and are not in the cleaned copy.'}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {metaItems.map(({ key, value }, i) => (
@@ -1607,27 +1626,45 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Icon icon="map-marker" size={10} style={{ color: 'var(--color-danger)', flexShrink: 0 }} />
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                Location data found
+                {result.dryRun
+                  ? 'Location to remove:'
+                  : hasResidual
+                    ? 'Location found before cleaning — check remaining-data warning:'
+                    : 'Location removed:'}{' '}
+                {result.gpsCoords.label}
               </span>
             </div>
           )}
 
-          {/* Stripped fields — identifying first */}
-          {orderedFields.length > 0 && (
+          {/* File-by-file receipt. The engine sends property names only, so the
+              receipt explains what changed without repeating personal values. */}
+          {removedProperties.length > 0 && (
             <div>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 4 }}>
-                {result.dryRun ? 'Will remove:' : 'Removed:'}
+                {result.dryRun ? 'Will remove from this file:' : 'Removed from this file:'}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--color-text-muted)', marginBottom: 5, lineHeight: 1.4 }}>
+                {hasResidual
+                  ? 'This receipt lists property names. Check the remaining-data warning below.'
+                  : 'This receipt lists property names; the clean copy contains none of their original values.'}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {orderedFields.map((f, i) => (
-                  <CategoryChip
-                    key={`${f.category}-${i}`}
-                    category={f.category}
-                    label={f.label}
-                    bytes={f.bytes}
-                    isIdentifying={f.isIdentifying}
-                    size="sm"
-                  />
+                {removedProperties.map((field, i) => (
+                  <span
+                    key={`${field.category}-${field.detail}-${i}`}
+                    title={`${field.label} — ${field.detail}${field.isIdentifying ? ' · could identify you' : ''}`}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      fontSize: 10, padding: '1px 6px', borderRadius: 3,
+                      background: categoryTint(field.category).bg,
+                      color: categoryTint(field.category).fg,
+                      border: `1px solid ${categoryTint(field.category).border}`,
+                      maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {field.isIdentifying && <Icon icon="shield" size={9} style={{ flexShrink: 0 }} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{field.detail}</span>
+                  </span>
                 ))}
               </div>
             </div>
@@ -1661,7 +1698,7 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
             </div>
           )}
 
-          {metaItems.length === 0 && orderedFields.length === 0 && !result.gpsCoords && !hasResidual && (
+          {metaItems.length === 0 && removedProperties.length === 0 && !result.gpsCoords && !hasResidual && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-text-muted)', fontSize: 11, fontStyle: 'italic', padding: '2px 0' }}>
               <Icon icon="tick-circle" size={11} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
               No metadata found — already clean
@@ -1669,8 +1706,19 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
           )}
 
           {!result.dryRun && result.outputPath && (
-            <div style={{ fontSize: 10, color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-              Clean copy written
+            <div style={{ minWidth: 0, fontSize: 10, color: 'var(--color-text-muted)' }}>
+              <div style={{ marginBottom: 2 }}>
+                {outputIsOriginal ? 'Scrubbed original saved at:' : 'Clean copy saved at:'}
+              </div>
+              <div
+                title={result.outputPath}
+                style={{
+                  fontFamily: 'var(--font-mono)', color: 'var(--color-text-primary)',
+                  overflowWrap: 'anywhere', lineHeight: 1.4,
+                }}
+              >
+                {result.outputPath}
+              </div>
             </div>
           )}
         </div>

@@ -29,6 +29,11 @@ use serde::{Deserialize, Serialize};
 pub struct StrippedField {
     pub category: String,
     pub label: String,
+    /// Sanitized metadata kinds actually found and removed, such as
+    /// "GPS location" or "Capture date/time". Never contains the original
+    /// value, coordinate, account name, device serial, or file path.
+    #[serde(default)]
+    pub details: Vec<String>,
     pub bytes: u64,
     pub is_identifying: bool,
 }

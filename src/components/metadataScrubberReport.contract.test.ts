@@ -13,4 +13,14 @@ describe("metadata scrubber report wording", () => {
     expect(source).toContain("No removable metadata found.");
     expect(source).toContain("page count and PDF version, is not personal information.");
   });
+
+  test("gives every completed file a private removal receipt and output location", async () => {
+    const source = await Bun.file("src/components/MetadataScrubberDialog.tsx").text();
+
+    expect(source).toContain("details?: string[]");
+    expect(source).toContain("Removed from this file:");
+    expect(source).toContain("This receipt lists property names; the clean copy contains none of their original values.");
+    expect(source).toContain("Location removed:");
+    expect(source).toContain("Clean copy saved at:");
+  });
 });

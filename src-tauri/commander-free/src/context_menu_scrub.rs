@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::file_metadata::{ScrubOptions, ScrubReport};
+use crate::file_metadata::{ScrubOptions, ScrubReport, StrippedField};
 
 const OUTPUT_FOLDER_NAME: &str = "_scrubbed";
 
@@ -15,7 +15,7 @@ const OUTPUT_FOLDER_NAME: &str = "_scrubbed";
 /// here: a file selected on the Desktop is written to
 /// `Desktop\\_scrubbed\\<name>`, and a selected folder writes its tree to that
 /// folder's `_scrubbed` child. Originals are never modified by this verb.
-pub(crate) fn execute_cli(raw_paths: Vec<String>) -> Result<Vec<String>, String> {
+pub(crate) fn execute_cli(raw_paths: Vec<String>) -> Result<ContextScrubSuccess, String> {
     let paths = selected_paths(raw_paths)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -38,7 +38,7 @@ pub(crate) fn execute_cli(raw_paths: Vec<String>) -> Result<Vec<String>, String>
         // Close it before the process exits, just as Safe Copy/Paste does.
         crate::sidecar::close_pro_session().await;
         let report = result?;
-        clean_output_dirs(&report)
+        clean_output_summary(&report)
     })
 }
 
@@ -61,7 +61,36 @@ fn selected_paths(raw_paths: Vec<String>) -> Result<Vec<String>, String> {
 
 /// A written output is shareable only when every queued item was processed and
 /// its post-scrub verification reported no surviving identifying metadata.
-fn clean_output_dirs(report: &ScrubReport) -> Result<Vec<String>, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextScrubFile {
+    name: String,
+    removed_kinds: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContextScrubSuccess {
+    output_dirs: Vec<String>,
+    files: Vec<ContextScrubFile>,
+}
+
+/// The native Explorer popup must be useful without re-disclosing the source
+/// metadata. It reports only property *kinds*, never values such as a GPS
+/// coordinate, device serial, author name, timestamp, or full input path.
+fn sanitized_removed_kinds(fields: &[StrippedField]) -> Vec<String> {
+    let mut kinds = BTreeSet::new();
+    for field in fields {
+        if field.details.is_empty() {
+            kinds.insert(field.label.clone());
+        } else {
+            kinds.extend(field.details.iter().cloned());
+        }
+    }
+    kinds.into_iter().collect()
+}
+
+/// A written output is shareable only when every queued item was processed and
+/// its post-scrub verification reported no surviving identifying metadata.
+fn clean_output_summary(report: &ScrubReport) -> Result<ContextScrubSuccess, String> {
     if !report.errors.is_empty() {
         return Err(format!(
             "Scrub could not complete for {} item(s): {}",
@@ -94,19 +123,51 @@ fn clean_output_dirs(report: &ScrubReport) -> Result<Vec<String>, String> {
     if dirs.is_empty() {
         return Err("Scrub completed without an output folder.".into());
     }
-    Ok(dirs.into_iter().collect())
+    Ok(ContextScrubSuccess {
+        output_dirs: dirs.into_iter().collect(),
+        files: report
+            .scrubbed
+            .iter()
+            .map(|result| ContextScrubFile {
+                name: Path::new(&result.output_path)
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("scrubbed file"))
+                    .to_string_lossy()
+                    .to_string(),
+                removed_kinds: sanitized_removed_kinds(&result.fields_stripped),
+            })
+            .collect(),
+    })
 }
 
-pub(crate) fn show_result(result: Result<Vec<String>, String>) {
+fn success_message(success: &ContextScrubSuccess) -> String {
+    let mut message = String::from(
+        "Scrubbed file(s) passed post-scrub checks.\r\n\r\nVerified metadata removed:\r\n",
+    );
+    for file in &success.files {
+        message.push_str(&format!("{}\r\n", file.name));
+        if file.removed_kinds.is_empty() {
+            message.push_str("  • No removable metadata was detected (normal file structure was retained).\r\n");
+        } else {
+            for kind in &file.removed_kinds {
+                message.push_str(&format!("  • {kind}\r\n"));
+            }
+        }
+    }
+    message.push_str(&format!(
+        "\r\nSaved in {OUTPUT_FOLDER_NAME} folder(s):\r\n{}",
+        success.output_dirs.join("\r\n"),
+    ));
+    message
+}
+
+pub(crate) fn show_result(result: Result<ContextScrubSuccess, String>) {
     match result {
-        Ok(output_dirs) => {
+        Ok(success) => {
             crate::log_message_src("info", "core", "[ContextScrub] completed clean output");
             show_message(
                 "WinCommander Scrub",
-                &format!(
-                    "Scrubbed file(s) passed post-scrub checks.\r\n\r\nSaved in {OUTPUT_FOLDER_NAME} folder(s):\r\n{}",
-                    output_dirs.join("\r\n"),
-                ),
+                &success_message(&success),
                 false,
             );
         }
@@ -149,7 +210,7 @@ fn show_message(_title: &str, _message: &str, _is_error: bool) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_metadata::{ScrubError, ScrubResult};
+    use crate::file_metadata::{GpsCoords, ScrubError, ScrubResult};
 
     fn clean_report() -> ScrubReport {
         ScrubReport {
@@ -172,7 +233,7 @@ mod tests {
     #[test]
     fn clean_context_scrub_reports_the_adjacent_scrubbed_folder() {
         assert_eq!(
-            clean_output_dirs(&clean_report()).unwrap(),
+            clean_output_summary(&clean_report()).unwrap().output_dirs,
             vec!["C:\\Users\\Ada\\Desktop\\_scrubbed"]
         );
     }
@@ -181,7 +242,7 @@ mod tests {
     fn context_scrub_never_reports_residual_metadata_as_safe() {
         let mut report = clean_report();
         report.residual_count = 1;
-        assert!(clean_output_dirs(&report)
+        assert!(clean_output_summary(&report)
             .unwrap_err()
             .contains("not safe to share"));
     }
@@ -193,7 +254,32 @@ mod tests {
             input_path: "C:\\Users\\Ada\\Desktop\\a.pdf".into(),
             message: "test failure".into(),
         });
-        assert!(clean_output_dirs(&report).is_err());
+        assert!(clean_output_summary(&report).is_err());
+    }
+
+    #[test]
+    fn context_scrub_popup_lists_sanitized_verified_removals_not_original_values() {
+        let mut report = clean_report();
+        report.scrubbed[0].fields_stripped = vec![StrippedField {
+            category: "exif".into(),
+            label: "Camera & GPS".into(),
+            details: vec!["GPS location".into(), "Device make / model".into()],
+            bytes: 12,
+            is_identifying: true,
+        }];
+        report.scrubbed[0].sample_values = vec!["GPSLatitude: 37.7749".into()];
+        report.scrubbed[0].gps_coords = Some(GpsCoords {
+            lat: 37.7749,
+            lon: -122.4194,
+            label: "37.7749° N, 122.4194° W".into(),
+        });
+
+        let message = success_message(&clean_output_summary(&report).unwrap());
+        assert!(message.contains("a.pdf"));
+        assert!(message.contains("GPS location"));
+        assert!(message.contains("Device make / model"));
+        assert!(!message.contains("37.7749"));
+        assert!(!message.contains("GPSLatitude"));
     }
 
     #[test]
