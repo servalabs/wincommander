@@ -1,4 +1,5 @@
 import { Button, FormGroup, InputGroup, Tag } from "@/components/ui/bp";
+import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../../../hooks/useBackend";
 import UniversalCallout from "../../../components/shared/UniversalCallout";
@@ -34,6 +35,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [feedback, setFeedback] = useState<{ intent: "success" | "danger" | "warning"; text: string } | null>(null);
+  const [canRemoveDeviceLicense, setCanRemoveDeviceLicense] = useState(false);
   // Two-step confirm: null = idle, 'deactivate' = awaiting 2nd click
   const [confirmPending, setConfirmPending] = useState<'deactivate' | null>(null);
 
@@ -54,6 +56,20 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   }, [getLicenseStatus, onStatusLoaded]);
 
   useEffect(() => { refreshStatus(); }, [refreshStatus]);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>("is_current_process_elevated")
+      .then((elevated) => {
+        if (active) setCanRemoveDeviceLicense(elevated);
+      })
+      // Treat a failed probe as not approved. Native removal applies the
+      // exact same check, so this only improves the explanation in the UI.
+      .catch(() => {
+        if (active) setCanRemoveDeviceLicense(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   const runWithLoading = async (key: string, action: () => Promise<void>) => {
     setLoading((prev) => ({ ...prev, [key]: true }));
@@ -107,6 +123,13 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
 
   // Two-step deactivation: first click → show "Confirm?", second click → execute
   const handleDeactivateClick = () => {
+    if (!canRemoveDeviceLicense) {
+      setFeedback({
+        intent: "warning",
+        text: "Administrator approval is required to remove this device license. Reopen WinCommander as an administrator and try again.",
+      });
+      return;
+    }
     if (confirmPending !== 'deactivate') {
       setConfirmPending('deactivate');
       return;
@@ -131,7 +154,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   }, [status]);
 
   // Can deactivate if there's an active paid license OR an active trial
-  const canDeactivate = !!status?.configured &&
+  const hasRemovableDeviceLicense = !!status?.configured &&
     (!!status?.trial_active || (!!status?.licensed && !!status?.valid));
   const accessSummary = licenseAccessSummary(status);
   const activeServices = activeLicenseServices(status);
@@ -172,21 +195,29 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
           <Button text="ACTIVATE" icon="key" onClick={activate} loading={!!loading.activate} className="compact-action-btn" />
           <Button text="REFRESH" icon="refresh" onClick={refresh} loading={!!loading.refresh} className="compact-action-btn secondary" />
           <Button text="CHECK" icon="diagnosis" onClick={refreshStatus} loading={!!loading.status} className="compact-action-btn secondary" />
-          {canDeactivate && (
+          {hasRemovableDeviceLicense && (
             <Button
               text={confirmPending === 'deactivate' ? "CONFIRM" : "REMOVE"}
               icon={confirmPending === 'deactivate' ? "warning-sign" : "log-out"}
               onClick={handleDeactivateClick}
               onBlur={() => setConfirmPending(null)}
               loading={!!loading.deactivate}
+              disabled={!canRemoveDeviceLicense}
               className={`compact-action-btn danger${confirmPending === 'deactivate' ? ' confirm-pending' : ''}`}
-              title={status?.trial_active
-                ? "End your free trial on this device (trial cannot be restarted)"
-                : "Release this device from the license and remove it from this PC"}
+              title={!canRemoveDeviceLicense
+                ? "Administrator approval is required to remove the shared device license"
+                : status?.trial_active
+                  ? "End your free trial on this device (trial cannot be restarted)"
+                  : "Release this device from the license and remove it from this PC"}
             />
           )}
         </div>
       </div>
+      {hasRemovableDeviceLicense && !canRemoveDeviceLicense && (
+        <div className="mt-3 text-xs text-muted-foreground">
+          An administrator must approve removal of this shared device license.
+        </div>
+      )}
     </div>
   );
 }

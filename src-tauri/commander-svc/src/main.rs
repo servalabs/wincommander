@@ -27,10 +27,12 @@ fn main() {
 
 // ── Windows implementation ───────────────────────────────────────────────────
 
-mod settings_host;
 #[cfg(windows)]
 mod personal_settings;
+mod settings_host;
 
+#[cfg(windows)]
+mod license_cache;
 #[cfg(windows)]
 mod machine_settings;
 #[cfg(windows)]

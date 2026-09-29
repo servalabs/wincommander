@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "commander-free"
-version = "3.6.3"
+version = "3.6.4"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -947,6 +947,8 @@ name = "commander-svc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "ed25519-dalek",
  "rand 0.8.8",
  "serde",
  "serde_json",

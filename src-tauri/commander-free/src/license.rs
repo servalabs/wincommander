@@ -244,6 +244,18 @@ struct WorkerDeactivateRequest<'a> {
     app_id: &'a str,
 }
 
+/// The local SYSTEM service accepts this bounded, signed envelope from an
+/// active interactive session. It assigns the machine-cache timestamp itself
+/// and never accepts a path or an administrator decision from the renderer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceLicenseCacheWriteRequest<'a> {
+    payload: &'a str,
+    signature: &'a str,
+    seats_used: Option<u32>,
+    seat_limit: Option<u32>,
+}
+
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[derive(Debug, Serialize)]
 struct WorkerTrialRequest<'a> {
@@ -862,9 +874,11 @@ fn paid_license_refresh_is_due(cached: &CachedLicense, claims: &LicenseClaims, n
 
 fn license_file_path() -> Result<PathBuf, String> {
     // Per-MACHINE cache (%ProgramData%\WinCommander) so ONE activation covers
-    // every Windows account on the device. Writes still require the existing
-    // machine-data ACL; standard-user sessions are not elevated by default.
-    // Was per-user %APPDATA% — that gave each account its own (un)licensed state.
+    // every Windows account on the device. Standard users read it directly,
+    // while their verified activation is written through the fixed,
+    // signature-checking SYSTEM service verb below. They never receive
+    // ProgramData write access. Was per-user %APPDATA% — that gave each
+    // account its own (un)licensed state.
     let mut path = crate::paths::machine_data_dir()?;
     path.push("license_cache.json");
     Ok(path)
@@ -882,11 +896,57 @@ fn load_cached_license() -> Result<Option<CachedLicense>, String> {
     Ok(Some(parsed))
 }
 
-fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
+fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
     let path = license_file_path()?;
     let data = serde_json::to_string_pretty(cached)
         .map_err(|e| format!("Failed to encode cached license token: {}", e))?;
     atomic_write(&path, data.as_bytes())
+}
+
+/// Persist a verified signed token without granting a standard user write
+/// access to the shared ProgramData cache. A legacy/dev service that does not
+/// understand this narrow verb may be bypassed only by an already-elevated
+/// desktop process; a normal user gets a truthful retryable error instead.
+async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let args = serde_json::to_value(ServiceLicenseCacheWriteRequest {
+            payload: &cached.token.payload,
+            signature: &cached.token.signature,
+            seats_used: cached.seats_used,
+            seat_limit: cached.seat_limit,
+        })
+        .map_err(|_| "License cache request could not be encoded.".to_string())?;
+        match crate::svc_client::call(wincmd_shared::svc::STORE_LICENSE_CACHE_VERB, args).await {
+            Ok(_) => Ok(()),
+            Err(_error) if crate::startup_elevation::is_current_process_elevated() => {
+                save_cached_license_direct(cached)
+            }
+            Err(error) => Err(format!(
+                "The local WinCommander service must be running to save this device license. Retry after it has started. {error}"
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        save_cached_license_direct(cached)
+    }
+}
+
+const LICENSE_REMOVAL_ADMIN_REQUIRED: &str =
+    "Administrator approval is required to remove this device license. Reopen WinCommander as an administrator and try again.";
+
+/// License state is shared by every Windows account on this PC. Treat removal
+/// like removing a building-wide access card: only an elevated administrator
+/// may release the server seat and delete the protected machine cache.
+fn license_removal_authorized(process_is_elevated: bool) -> Result<(), String> {
+    process_is_elevated
+        .then_some(())
+        .ok_or_else(|| LICENSE_REMOVAL_ADMIN_REQUIRED.to_string())
+}
+
+fn require_license_removal_administrator() -> Result<(), String> {
+    license_removal_authorized(crate::startup_elevation::is_current_process_elevated())
 }
 
 fn clear_cached_license_inner() -> Result<(), String> {
@@ -1416,7 +1476,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
-    save_cached_license(&cached)?;
+    save_cached_license(&cached).await?;
 
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
@@ -1541,7 +1601,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         seats_used: payload.seats_used,
         seat_limit: payload.seat_limit,
     };
-    save_cached_license(&updated)?;
+    save_cached_license(&updated).await?;
 
     let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
@@ -1558,6 +1618,8 @@ pub async fn clear_license_cache() -> Result<(), String> {
         &cached.token.signature,
         &public_key_b64,
     )?;
+
+    require_license_removal_administrator()?;
 
     // Trial tokens have no paid seat. For a paid token, a local-only clear
     // would leave the server allocation occupied, so use the same confirmed
@@ -1686,7 +1748,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             seats_used: None,
             seat_limit: None,
         };
-        save_cached_license(&cached)?;
+        save_cached_license(&cached).await?;
 
         let status = status_from_cached(&cached, &claims, Some("Free trial started.".to_string()));
         serde_json::to_value(status).map_err(|e| e.to_string())
@@ -1701,6 +1763,7 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to deactivate.".to_string())?;
+    require_license_removal_administrator()?;
     let device_hash = parse_and_verify_claims(
         &cached.token.payload,
         &cached.token.signature,
@@ -1767,6 +1830,15 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[test]
+    fn device_license_removal_requires_an_elevated_administrator_token() {
+        assert!(license_removal_authorized(true).is_ok());
+        assert_eq!(
+            license_removal_authorized(false).unwrap_err(),
+            LICENSE_REMOVAL_ADMIN_REQUIRED
+        );
+    }
 
     #[test]
     fn license_write_preserves_another_sessions_staging_file() {

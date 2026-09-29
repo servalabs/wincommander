@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../hooks/useBackend";
 import useInvestigatorInstall from "../hooks/useInvestigatorInstall";
@@ -14,6 +15,7 @@ export default function LicenseQuickPanel() {
   const [licenseKey, setLicenseKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [canRemoveDeviceLicense, setCanRemoveDeviceLicense] = useState(false);
   const hasPaid = status?.valid === true && (status.features ?? []).includes("paid");
   // Pro install detection shares the module-level cache with the installer,
   // but it only performs local sidecar work after entitlement is known.
@@ -126,6 +128,20 @@ export default function LicenseQuickPanel() {
     };
   }, [refreshStatus]);
 
+  useEffect(() => {
+    let active = true;
+    void invoke<boolean>("is_current_process_elevated")
+      .then((elevated) => {
+        if (active) setCanRemoveDeviceLicense(elevated);
+      })
+      // A failed probe must never make a destructive shared-device action
+      // appear available. Native code applies this same requirement.
+      .catch(() => {
+        if (active) setCanRemoveDeviceLicense(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   // isTrialActive covers both: a local free trial AND a server-activated trial key
   // (where the admin worker sets plan = "trial"). The key path uses the normal
   // license activation flow so trial_active stays false; we detect it by plan name.
@@ -149,6 +165,10 @@ export default function LicenseQuickPanel() {
 
   // First click → show "Confirm?", second click → execute deactivation
   const handleDeactivateClick = async () => {
+    if (!canRemoveDeviceLicense) {
+      setMessage("Administrator approval is required to remove this device license. Reopen WinCommander as an administrator and try again.");
+      return;
+    }
     if (!confirmPending) {
       setConfirmPending(true);
       return;
@@ -261,9 +281,12 @@ export default function LicenseQuickPanel() {
               </button>
               <button
                 className={`license-btn danger${confirmPending ? ' confirm-pending' : ''}`}
-                disabled={loading}
+                disabled={loading || !canRemoveDeviceLicense}
                 onClick={handleDeactivateClick}
                 onBlur={() => setConfirmPending(false)}
+                title={canRemoveDeviceLicense
+                  ? "End the trial on this shared device"
+                  : "Administrator approval is required to remove the shared device license"}
               >
                 {confirmPending ? "Confirm?" : "Deactivate"}
               </button>
@@ -324,12 +347,21 @@ export default function LicenseQuickPanel() {
               </button>
               <button
                 className={`license-btn danger${confirmPending ? ' confirm-pending' : ''}`}
-                disabled={loading}
+                disabled={loading || !canRemoveDeviceLicense}
                 onClick={handleDeactivateClick}
                 onBlur={() => setConfirmPending(false)}
+                title={canRemoveDeviceLicense
+                  ? "Release this shared device from the license"
+                  : "Administrator approval is required to remove the shared device license"}
               >
                 {confirmPending ? "Confirm?" : "Deactivate"}
               </button>
+            </div>
+          )}
+
+          {isActive && !canRemoveDeviceLicense && (
+            <div className="license-msg">
+              An administrator must approve removal of this shared device license.
             </div>
           )}
 

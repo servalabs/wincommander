@@ -85,6 +85,13 @@ pub const SVC_WINDOWS_SERVICE_NAME: &str = "WinCommanderSvc";
 /// registry paths, shell commands, firewall rules, ACLs, or arbitrary JSON.
 pub const APPLY_MACHINE_SETTING_VERB: &str = "svc.apply.machine_setting";
 
+/// Stores a verified, device-wide licence cache record. The service accepts
+/// this from an active interactive session so a standard Windows user can
+/// activate a legitimate key without receiving write access to ProgramData.
+/// The service independently verifies the worker signature before it writes
+/// the fixed cache path; this is not a general file-write capability.
+pub const STORE_LICENSE_CACHE_VERB: &str = "svc.license.store_cache";
+
 /// Exact verbs implemented by the current service dispatcher.
 ///
 /// Existence is deliberately independent from [`classify_verb`]. The latter
@@ -101,6 +108,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.personal_settings.read"
             | "svc.personal_settings.write"
             | APPLY_MACHINE_SETTING_VERB
+            | STORE_LICENSE_CACHE_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
             | "svc.clipboard.set_enabled"
@@ -282,6 +290,11 @@ impl CapabilityClass {
 pub fn classify_verb(feature_id: &str) -> CapabilityClass {
     match feature_id {
         "svc.personal_settings.read" | "svc.personal_settings.write" => CapabilityClass::UserScoped,
+        // A valid key may be entered by a standard interactive Windows user.
+        // The service verifies the signed worker envelope and writes only the
+        // fixed machine licence cache, so this is deliberately not a broad
+        // ProgramData-write or administrator capability.
+        STORE_LICENSE_CACHE_VERB => CapabilityClass::InteractiveSession,
         // ── Existing read-only verbs (unchanged) ──────────────────────────
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
@@ -426,6 +439,15 @@ mod tests {
     }
 
     #[test]
+    fn signed_license_cache_store_requires_an_interactive_session_not_admin() {
+        assert_eq!(
+            classify_verb(STORE_LICENSE_CACHE_VERB),
+            CapabilityClass::InteractiveSession
+        );
+        assert!(is_known_verb(STORE_LICENSE_CACHE_VERB));
+    }
+
+    #[test]
     fn vault_owner_operations_are_caller_bound_in_handlers_not_wts_state() {
         for verb in ["svc.vault.get_policy", "svc.vault.apply_owner_fragment"] {
             assert_eq!(
@@ -506,6 +528,7 @@ mod tests {
             "svc.health",
             "svc.diagnostics.query",
             APPLY_MACHINE_SETTING_VERB,
+            STORE_LICENSE_CACHE_VERB,
             "svc.clipboard.get_policy",
             "svc.clipboard.report_event",
             "svc.clipboard.set_enabled",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 
 const identity = readFileSync("src/panels/identity/index.tsx", "utf8");
 const license = readFileSync("src/panels/identity/components/AppLicensePanel.tsx", "utf8");
+const quickLicense = readFileSync("src/components/LicenseQuickPanel.tsx", "utf8");
 
 describe("settings deep-state contracts", () => {
   test("a rejected censorship apply clears busy state and reports failure", () => {
@@ -14,6 +15,16 @@ describe("settings deep-state contracts", () => {
   test("license key label is programmatically associated", () => {
     expect(license).toContain('labelFor="identity-license-key"');
     expect(license).toContain('id="identity-license-key"');
+  });
+
+  test("keeps shared-device licence removal behind an elevated administrator token", () => {
+    for (const source of [license, quickLicense]) {
+      expect(source).toContain('invoke<boolean>("is_current_process_elevated")');
+      expect(source).toContain("canRemoveDeviceLicense");
+      expect(source).toContain("Administrator approval is required to remove this device license");
+    }
+    expect(license).toContain("disabled={!canRemoveDeviceLicense}");
+    expect(quickLicense).toContain("disabled={loading || !canRemoveDeviceLicense}");
   });
 
   test("Fix All's all-users preference remains a per-user opt-in", () => {

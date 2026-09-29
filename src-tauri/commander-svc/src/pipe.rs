@@ -38,7 +38,7 @@ use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
@@ -588,6 +588,10 @@ async fn dispatch_verb(
         }
 
         APPLY_MACHINE_SETTING_VERB => handle_apply_machine_setting(args),
+
+        STORE_LICENSE_CACHE_VERB => crate::license_cache::store(args)
+            .map(|_| serde_json::json!({ "stored": true }))
+            .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
         "svc.clipboard.get_policy" => Ok(clipboard_policy_response(policy_store)),
 
