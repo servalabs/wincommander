@@ -7336,6 +7336,16 @@
       ]
     },
     {
+      "id": "tauri:apply_vault_owner_policy_fragment",
+      "name": "apply_vault_owner_policy_fragment",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:apply_wincommander_hide_mode",
       "name": "apply_wincommander_hide_mode",
       "transport": "tauri",
@@ -9609,7 +9619,9 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/components/LicenseQuickPanel.tsx",
+        "src/panels/identity/components/AppLicensePanel.tsx"
       ]
     },
     {
@@ -11779,6 +11791,16 @@
     {
       "id": "tauri:vault_list_authorized_entries",
       "name": "vault_list_authorized_entries",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_list_known_principals",
+      "name": "vault_list_known_principals",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
