@@ -135,7 +135,7 @@ async fn call_via_with_timeout(
 ) -> Result<Value, String> {
     use tokio::time::timeout;
 
-    let (mut client, session_token) =
+    let (mut client, session_token, _verified_peer) =
         open_authenticated_service_session(pipe_name, feature_id).await?;
 
     let request_id = next_request_id();
@@ -219,7 +219,7 @@ fn retries_service_startup_handshake(feature_id: &str) -> bool {
 async fn open_authenticated_service_session(
     pipe_name: &str,
     feature_id: &str,
-) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String), String> {
+) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String, Option<wincmd_service_auth::VerifiedServicePeer>), String> {
     let retry = retries_service_startup_handshake(feature_id);
     for (attempt, delay) in SERVICE_PROBE_HANDSHAKE_RETRY_DELAYS.iter().enumerate() {
         match open_authenticated_service_session_once(pipe_name).await {
@@ -242,7 +242,7 @@ async fn open_authenticated_service_session(
 #[cfg(windows)]
 async fn open_authenticated_service_session_once(
     pipe_name: &str,
-) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String), String> {
+) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String, Option<wincmd_service_auth::VerifiedServicePeer>), String> {
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -251,7 +251,7 @@ async fn open_authenticated_service_session_once(
     let mut client = open_service_pipe(pipe_name).await?;
     // Authenticate before writing even Hello: the server could otherwise
     // impersonate the caller or receive a Vault credential.
-    let _verified_peer = verify_connected_service(&client, pipe_name)?;
+    let verified_peer = verify_connected_service(&client, pipe_name)?;
     let session_token = Uuid::new_v4().to_string();
     let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
 
@@ -272,7 +272,7 @@ async fn open_authenticated_service_session_once(
     if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
         return Err("service returned an invalid Hello acknowledgement".to_string());
     }
-    Ok((client, session_token))
+    Ok((client, session_token, verified_peer))
 }
 
 #[cfg(windows)]

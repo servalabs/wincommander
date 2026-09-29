@@ -405,6 +405,7 @@ fn broker_transport_reason(error: &str) -> wincmd_shared::vault_access::VaultMou
     use wincmd_shared::vault_access::VaultMountReason;
 
     match error {
+        "pro_not_installed" => VaultMountReason::ProNotInstalled,
         "session_unavailable" => VaultMountReason::SessionUnavailable,
         "broker_rejected" | "broker_handshake" | "broker_hmac" => VaultMountReason::BrokerRejected,
         _ => VaultMountReason::BrokerUnavailable,
@@ -530,6 +531,22 @@ fn fixed_pro_path() -> std::path::PathBuf {
 }
 
 #[cfg(windows)]
+fn pro_payload_observation(observation: std::io::Result<bool>) -> Result<(), &'static str> {
+    match observation {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("broker_rejected"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err("pro_not_installed"),
+        Err(_) => Err("broker_unavailable"),
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn vault_payload_readiness() -> Result<(), wincmd_shared::vault_access::VaultMountReason> {
+    pro_payload_observation(std::fs::metadata(fixed_pro_path()).map(|metadata| metadata.is_file()))
+        .map_err(broker_transport_reason)
+}
+
+#[cfg(windows)]
 fn hash_matches_fixed_pro(reported: &str) -> bool {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -632,9 +649,7 @@ fn spawn_pro_as_service(
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     let exe = fixed_pro_path();
-    if !exe.is_file() {
-        return Err("broker_unavailable");
-    }
+    pro_payload_observation(std::fs::metadata(&exe).map(|metadata| metadata.is_file()))?;
     let mut command = std::process::Command::new(&exe);
     command
         .arg(format!("--core-pipe={pipe}"))
@@ -720,13 +735,7 @@ fn spawn_pro_with_user_token(
     };
 
     let exe = fixed_pro_path();
-    if !exe.is_file() {
-        eprintln!(
-            "[wincommander-svc] spawn_pro_with_user_token: exe not found at {}",
-            exe.display()
-        );
-        return Err("broker_unavailable");
-    }
+    pro_payload_observation(std::fs::metadata(&exe).map(|metadata| metadata.is_file()))?;
     if !token_matches_authenticated_client(user_token, session_id, caller_sid) {
         eprintln!("[wincommander-svc] spawn_pro_with_user_token: token_matches_authenticated_client failed (session_id={session_id}, caller_sid={caller_sid})");
         return Err("broker_rejected");
@@ -884,6 +893,37 @@ fn session_token_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<St
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn missing_pro_is_not_confused_with_permission_or_integrity_failure() {
+        use std::io::{Error, ErrorKind};
+        use wincmd_shared::vault_access::VaultMountReason;
+        assert_eq!(super::pro_payload_observation(Ok(true)), Ok(()));
+        assert_eq!(
+            super::pro_payload_observation(Ok(false)),
+            Err("broker_rejected")
+        );
+        assert_eq!(
+            super::pro_payload_observation(Err(Error::from(ErrorKind::NotFound))),
+            Err("pro_not_installed")
+        );
+        assert_eq!(
+            super::pro_payload_observation(Err(Error::from(ErrorKind::PermissionDenied))),
+            Err("broker_unavailable")
+        );
+        assert_eq!(
+            super::broker_transport_reason("pro_not_installed"),
+            VaultMountReason::ProNotInstalled
+        );
+        assert_eq!(
+            super::broker_transport_reason("broker_hmac"),
+            VaultMountReason::BrokerRejected
+        );
+        assert_ne!(
+            super::broker_transport_reason("unknown"),
+            VaultMountReason::EngineUnlockFailed
+        );
+    }
     use super::*;
 
     #[cfg(windows)]

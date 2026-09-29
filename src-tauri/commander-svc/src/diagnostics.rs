@@ -677,6 +677,12 @@ fn reason_fields(
             true,
             "retry",
         ),
+        Some(VaultMountReason::ProNotInstalled) => (
+            "VLT.PRO.NOT_INSTALLED",
+            DiagnosticSeverity::Error,
+            false,
+            "install_pro_module",
+        ),
         Some(VaultMountReason::BrokerRejected) => (
             "VLT.BROKER.REJECTED",
             DiagnosticSeverity::Error,

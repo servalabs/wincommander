@@ -92,7 +92,25 @@ fn vault_failure_code(
     error: &str,
 ) -> (&'static str, DiagnosticRetryability, &'static str) {
     let lower = error.to_ascii_lowercase();
-    if lower.contains("timed out") || lower.contains("did not confirm") {
+    if lower.contains("pro_not_installed") {
+        (
+            "VLT.PRO.NOT_INSTALLED",
+            DiagnosticRetryability::Manual,
+            "install_pro_module",
+        )
+    } else if lower.contains("entitlement_denied") || lower.contains("missing_entitlement") {
+        (
+            "VLT.ENTITLEMENT.DENIED",
+            DiagnosticRetryability::Manual,
+            "check_license_status",
+        )
+    } else if lower.contains("owner_required") {
+        (
+            "VLT.POLICY.OWNER_REQUIRED",
+            DiagnosticRetryability::Never,
+            "ask_primary_owner",
+        )
+    } else if lower.contains("timed out") || lower.contains("did not confirm") {
         (
             "VLT.OPERATION.TIMEOUT",
             DiagnosticRetryability::Manual,
@@ -701,6 +719,14 @@ mod tests {
 
     #[test]
     fn vault_transport_failures_map_to_safe_stable_codes() {
+        for (error, expected) in [
+            ("vault_pro_not_installed", "VLT.PRO.NOT_INSTALLED"),
+            ("PRO_NOT_INSTALLED:missing module", "VLT.PRO.NOT_INSTALLED"),
+            ("vault_entitlement_denied", "VLT.ENTITLEMENT.DENIED"),
+            ("vault_owner_required", "VLT.POLICY.OWNER_REQUIRED"),
+        ] {
+            assert_eq!(vault_failure_code("mount", error).0, expected);
+        }
         assert_eq!(
             vault_failure_code(
                 "mount",

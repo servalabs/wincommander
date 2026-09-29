@@ -54,6 +54,9 @@ use crate::settings_host;
 use crate::vault_access::VaultAccessStore;
 use crate::vault_mount::VaultMountBroker;
 
+#[path = "service_peer_query.rs"]
+mod service_peer_query;
+
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -227,6 +230,13 @@ async fn serve_pipe_instance(
         drop(next_sa);
 
         let conn = std::mem::replace(&mut server, next_server);
+        // Before the client sends Hello it verifies this SYSTEM process image.
+        // Grant only its kernel-derived account SID metadata-query access; this
+        // is separate from post-Hello impersonation/command authorization.
+        if service_peer_query::allow_connected_account(conn.as_raw_handle()).is_err() {
+            drop(conn);
+            continue;
+        }
         let Ok(permit) = Arc::clone(&connection_slots).try_acquire_owned() else {
             drop(conn);
             continue;
@@ -1197,8 +1207,8 @@ fn merge_owner_fragment_policy(
     let caller_privileged = administrator_sids.is_some();
     let denied = || {
         VerbError::new(
-            "vault_not_authorized",
-            "vault policy is owned by another Windows user",
+            "vault_owner_required",
+            "Only the primary owner can edit this vault policy. Administrators may remove or transfer it only while unmounted.",
         )
     };
     if fragment.schema_version != wincmd_shared::vault_access::VAULT_ACCESS_SCHEMA_VERSION {
@@ -1391,8 +1401,8 @@ fn validate_vault_owner_policy_mutation(
 ) -> Result<(), VerbError> {
     let denied = || {
         VerbError::new(
-            "vault_not_authorized",
-            "vault policy is owned by another Windows user",
+            "vault_owner_required",
+            "Only the primary owner can edit this vault policy. Administrators may remove or transfer it only while unmounted.",
         )
     };
     let Some(previous) = previous else {
@@ -2183,6 +2193,13 @@ async fn handle_personal_vault_mount(
     };
     // Legacy clients omit presentation and retain their per-user scope.
     record.scope = request.presentation;
+    if let Err(reason) = crate::pro_broker::vault_payload_readiness() {
+        zeroize_personal_mount(&mut request);
+        return Err(VerbError::new(
+            VaultMountBroker::personal_mount_failure_code(reason),
+            "The Vault engine module is unavailable. Check the Pro installation in License settings.",
+        ));
+    }
     let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
         .await
         .unwrap_or(Err(
@@ -2426,6 +2443,35 @@ async fn handle_vault_mount(
         })
         .unwrap_or_else(vault_authorization_denied);
     let result = if authorization.allowed {
+        if let Err(reason) = crate::pro_broker::vault_payload_readiness() {
+            use zeroize::Zeroize;
+            request.password.zeroize();
+            if let Some(password) = &mut request.hidden_protection_password {
+                password.zeroize();
+            }
+            request.hidden_protection_password = None;
+            let missing = reason == wincmd_shared::vault_access::VaultMountReason::ProNotInstalled;
+            crate::diagnostics::record_vault_failure(
+                diagnostic_operation_id,
+                "mount",
+                if missing {
+                    "VLT.PRO.NOT_INSTALLED"
+                } else {
+                    "VLT.BROKER.UNAVAILABLE"
+                },
+                if missing {
+                    "install_pro_module"
+                } else {
+                    "check_service_health"
+                },
+                false,
+                started,
+            );
+            return Err(VerbError::new(
+                VaultMountBroker::personal_mount_failure_code(reason),
+                "The Vault engine module is unavailable. Check the Pro installation in License settings.",
+            ));
+        }
         // This internal guard has no pipe verb: an authenticated user may ask
         // for a policy-authorized mount, but can never name a driver, service,
         // or executable.  Validate/repair the fixed engine driver before the
@@ -3976,14 +4022,14 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert_eq!(error.kind, "vault_not_authorized");
+        assert_eq!(error.kind, "vault_owner_required");
         let mut forged = previous.clone();
         forged.entries.pop();
         assert_eq!(
             validate_vault_owner_policy_mutation(Some(&previous), &forged, "S-1-5-21-owner", false)
                 .unwrap_err()
                 .kind,
-            "vault_not_authorized"
+            "vault_owner_required"
         );
     }
 
@@ -4082,6 +4128,30 @@ mod tests {
 
         transfer.grants[0].access = wincmd_shared::vault_access::VaultAccess::Read;
         assert!(!is_administrator_ownership_transfer(&existing, &transfer));
+    }
+
+    #[test]
+    fn administrator_edit_of_another_owner_reports_ownership_not_stale_draft() {
+        use wincmd_shared::vault_access::{VaultContainerPathState, VaultOwnedPolicyEntry};
+        let previous = removal_test_policy();
+        let mut fragment = removal_test_fragment(&[]);
+        fragment.expected_previous_version = 0;
+        let mut entry = previous.entries[0].clone();
+        entry.label = "Edited by another administrator".into();
+        fragment.entries.push(VaultOwnedPolicyEntry {
+            entry,
+            container_path_state: VaultContainerPathState::Available,
+            canonical_container_path: None,
+        });
+        let administrators = HashSet::from(["S-1-5-21-admin".to_string()]);
+        let error = merge_owner_fragment_policy(
+            Some(previous),
+            fragment,
+            "S-1-5-21-admin",
+            Some(&administrators),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "vault_owner_required");
     }
 
     #[test]

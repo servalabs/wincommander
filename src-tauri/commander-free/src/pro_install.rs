@@ -1294,6 +1294,7 @@ async fn install_pro_binary_machine(
     consent_defender_exclusion: bool,
     pro_version: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    crate::updater::require_update_administrator().map_err(|error| format!("elevation:{error}"))?;
     // Errors are stage-prefixed so the frontend dialog can render an
     // actionable message per failure mode:
     //   "entitlement:..."         -- paid build delivery period ended

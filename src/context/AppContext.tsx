@@ -32,6 +32,7 @@ import { createTauriStartupReporter } from '../events/startup';
 import { reportStartupPhase } from '../hooks/startupTrace';
 import { recoverSettingsWrite } from '../lib/settingsWriteRecovery';
 import { preserveDashboardPolicyUnknowns } from '../lib/dashboardPolicyObservation';
+import { getStartupSettingsFailureMessage } from '../lib/startupSettingsFailure';
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
 import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
 
@@ -169,6 +170,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
     const settingsReadStoreRef = useRef(createStartupProbeStore<AppSettings>());
     const settingsRecoveryMessageRef = useRef<string | null>(null);
+    const settingsFailureMessageRef = useRef<string | null>(null);
     const systemProbeStoreRef = useRef(createStartupProbeStore<unknown>());
     const startupStatusStoreRef = useRef(createStartupProbeStore<unknown>());
     const packageUpdateStartupRequestedRef = useRef(false);
@@ -244,6 +246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [startupAttempt, setStartupAttempt] = useState(0);
     const retryStartup = useCallback(() => {
         settingsRecoveryMessageRef.current = null;
+        settingsFailureMessageRef.current = null;
         setStartupError(null);
         setStartupAttempt(attempt => attempt + 1);
     }, []);
@@ -964,6 +967,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             );
             if (signal?.aborted) return null;
             settingsRecoveryMessageRef.current = null;
+            settingsFailureMessageRef.current = null;
             setPersonalSettingsStatus(previous => readPersonalSettingsStatus(settings, previous));
 
             // Actual module edits persist their complete map through patchAppSettings.
@@ -1059,6 +1063,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch (error) {
             // Settings engine not available
             settingsRecoveryMessageRef.current = getStartupSettingsRecoveryMessage(error);
+            settingsFailureMessageRef.current = getStartupSettingsFailureMessage(error);
             setStartupDataState('stale');
             return null;
         }
@@ -1227,7 +1232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     hydratedSettings = await initSettings(false);
                     if (cancelled) return;
                     if (!hydratedSettings) {
-                        setStartupError(settingsRecoveryMessageRef.current ?? 'WinCommander could not load its settings. Retry to continue.');
+                        setStartupError(settingsFailureMessageRef.current ?? getStartupSettingsFailureMessage(null));
                         return;
                     }
                 }

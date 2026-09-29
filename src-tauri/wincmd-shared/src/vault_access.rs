@@ -609,6 +609,7 @@ pub enum VaultMountReason {
     NotAuthorized,
     InvalidRequest,
     AlreadyMounted,
+    ProNotInstalled,
     BrokerUnavailable,
     BrokerRejected,
     BrokerIdentityRejected,
@@ -629,10 +630,11 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::NotAuthorized,
         Self::InvalidRequest,
         Self::AlreadyMounted,
+        Self::ProNotInstalled,
         Self::BrokerUnavailable,
         Self::BrokerRejected,
         Self::BrokerIdentityRejected,
@@ -652,10 +654,11 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 20] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 21] = [
         "not_authorized",
         "invalid_request",
         "already_mounted",
+        "pro_not_installed",
         "broker_unavailable",
         "broker_rejected",
         "broker_identity_rejected",
@@ -680,6 +683,7 @@ impl VaultMountReason {
             Self::NotAuthorized => "not_authorized",
             Self::InvalidRequest => "invalid_request",
             Self::AlreadyMounted => "already_mounted",
+            Self::ProNotInstalled => "pro_not_installed",
             Self::BrokerUnavailable => "broker_unavailable",
             Self::BrokerRejected => "broker_rejected",
             Self::BrokerIdentityRejected => "broker_identity_rejected",
@@ -705,6 +709,7 @@ impl VaultMountReason {
             "not_authorized" => Some(Self::NotAuthorized),
             "invalid_request" => Some(Self::InvalidRequest),
             "already_mounted" => Some(Self::AlreadyMounted),
+            "pro_not_installed" => Some(Self::ProNotInstalled),
             "broker_unavailable" => Some(Self::BrokerUnavailable),
             "broker_rejected" => Some(Self::BrokerRejected),
             "broker_identity_rejected" => Some(Self::BrokerIdentityRejected),

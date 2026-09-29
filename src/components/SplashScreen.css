@@ -3,6 +3,17 @@
     margin: 24px 20px 0;
     text-align: center;
     font: 14px/1.5 system-ui, sans-serif;
+    padding: 16px;
+    border: 1px solid #b45353;
+    border-radius: 8px;
+    background: #321b20;
+    color: #ffdad6;
+}
+
+.splash-screen--light .sp-startup-error {
+    background: #fff1f0;
+    color: #8f2525;
+    border-color: #e7a4a0;
 }
 
 .sp-startup-error button {

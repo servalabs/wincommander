@@ -97,6 +97,18 @@ resuming a partially consumed frame. These deadlines do not cancel an already
 executing machine operation or replace Windows peer authorization. They bound
 specific resources; they are not a claim of complete denial-of-service immunity.
 
+Before sending even the Hello frame, clients verify the pipe server against the
+running dedicated LocalSystem service, its configured executable and its actual
+process image. The verified process handle remains pinned through the request.
+On connection, the service allows only that kernel-identified process account's
+SID to query its process identity, preserving the existing process DACL. This
+limited metadata grant does not permit memory access, process control or command
+execution; it adds no Everyone/Users ACE. A bounded access-denied retry handles
+the accept/grant race before any request or credentials are sent. Command
+authorization still uses the separately impersonated pipe caller. Restricted
+token tests exercise the metadata grant and denied process-control rights;
+installed-service standard-user acceptance remains a separate release check.
+
 ## Personal settings and Windows password changes
 
 The personal-settings service derives record ownership exclusively from the

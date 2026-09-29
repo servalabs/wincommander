@@ -1074,6 +1074,7 @@ async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInf
 
 #[tauri::command]
 async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
+    updater::require_update_administrator()?;
     use std::sync::atomic::Ordering;
     use tauri_plugin_updater::UpdaterExt;
 

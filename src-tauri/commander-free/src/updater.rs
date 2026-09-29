@@ -366,6 +366,21 @@ pub(crate) fn init_headless(app: &AppHandle) {
     }
 }
 
+fn update_install_authorized(process_is_elevated: bool) -> Result<(), String> {
+    if process_is_elevated {
+        Ok(())
+    } else {
+        Err("Administrator approval is required to install updates. Reopen WinCommander as an administrator and try again.".to_string())
+    }
+}
+
+pub(crate) fn require_update_administrator() -> Result<(), String> {
+    #[cfg(windows)]
+    return update_install_authorized(crate::startup_elevation::is_current_process_elevated());
+    #[cfg(not(windows))]
+    update_install_authorized(true)
+}
+
 /// Install the update staged in the background, then the frontend relaunches.
 /// Falls back to a fresh download+install if nothing is staged (e.g. the
 /// process restarted since the artifact was downloaded). Free-tier command.
@@ -376,6 +391,7 @@ pub(crate) fn init_headless(app: &AppHandle) {
 /// Reset to false on error so the user can retry; success → app relaunches.
 #[tauri::command]
 pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
+    require_update_administrator()?;
     // Acquire install lock — synchronous, before any await.
     {
         let state = app
@@ -469,6 +485,14 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{take_staged_for_version, StagedUpdate};
+
+    #[test]
+    fn update_install_requires_an_actually_elevated_token() {
+        assert!(super::update_install_authorized(false)
+            .unwrap_err()
+            .contains("Administrator approval"));
+        assert!(super::update_install_authorized(true).is_ok());
+    }
 
     #[test]
     fn staged_installer_is_reused_only_for_the_manifested_version() {

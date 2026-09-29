@@ -360,6 +360,7 @@ impl VaultMountBroker {
             VaultMountReason::CallerAclRepairFailed => "vault_caller_acl_repair_failed",
             VaultMountReason::InvalidRequest => "vault_validation_failed",
             VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
+            VaultMountReason::ProNotInstalled => "vault_pro_not_installed",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
             VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",
             VaultMountReason::BrokerHandshakeRejected => "vault_broker_handshake_rejected",
@@ -2226,6 +2227,7 @@ mod tests {
     fn personal_mount_public_codes_remain_bounded() {
         for (reason, expected) in [
             (VaultMountReason::NotAuthorized, "vault_not_authorized"),
+            (VaultMountReason::ProNotInstalled, "vault_pro_not_installed"),
             (
                 VaultMountReason::SessionUnavailable,
                 "vault_session_unavailable",
