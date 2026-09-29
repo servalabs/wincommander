@@ -602,7 +602,7 @@ impl VaultMountBroker {
         }
         if !self.recovery_allows_entry(&entry_id, store) {
             request.zeroize_secrets();
-            return Err(VaultMountReason::DismountFailed);
+            return Err(self.recovery_failure_reason());
         }
         let access = if request.read_only {
             wincmd_shared::vault_access::VaultAccess::Read
@@ -860,7 +860,7 @@ impl VaultMountBroker {
     ) -> VaultMountResult {
         if !self.recovery_allows_entry(entry_id, store) {
             zeroize_mount_secrets(password, hidden_protection_password);
-            return failed(entry_id, None, VaultMountReason::DismountFailed);
+            return failed(entry_id, None, self.recovery_failure_reason());
         }
         let Some((plan, presentation, preferred_letter, container_identity, container_kind)) =
             store.mount_plan(entry_id)
@@ -1860,6 +1860,18 @@ impl VaultMountBroker {
         }
         active.remove(entry_id);
         true
+    }
+
+    fn recovery_failure_reason(&self) -> VaultMountReason {
+        if self
+            .recovery
+            .lock()
+            .map_or(true, |state| state.registry_untrusted)
+        {
+            VaultMountReason::MountStateUnknown
+        } else {
+            VaultMountReason::DismountFailed
+        }
     }
 
     fn recovery_allows_entry(&self, entry_id: &str, store: &VaultAccessStore) -> bool {

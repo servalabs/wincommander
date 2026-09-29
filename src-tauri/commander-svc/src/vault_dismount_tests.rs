@@ -1,6 +1,58 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[test]
+fn unknown_registry_mount_denials_are_not_reported_as_a_failed_dismount() {
+    let store = mount_store(
+        Arc::new(Mutex::new(HashMap::new())),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    assert_eq!(
+        broker.recovery_failure_reason(),
+        VaultMountReason::DismountFailed
+    );
+    broker.mark_registry_untrusted();
+    let record = personal_record();
+    let mut request = personal_request();
+    assert_eq!(
+        broker.mount_personal_authorized(
+            1,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            &record.owner_sid,
+            (0, 0)
+        ),
+        Err(VaultMountReason::MountStateUnknown)
+    );
+    assert!(request.password.is_empty());
+    let mut password = "secret".to_owned();
+    let mut hidden_password = Some("hidden-secret".to_owned());
+    let result = broker.mount_authorized_locked(
+        2,
+        &store,
+        "managed",
+        &mut password,
+        &mut hidden_password,
+        VaultVolumeRole::Outer,
+        std::ptr::null_mut(),
+        7,
+        &record.owner_sid,
+        (0, 0),
+        wincmd_shared::vault_access::VaultAccess::Write,
+    );
+    assert_eq!(result.reason, Some(VaultMountReason::MountStateUnknown));
+    assert!(password.is_empty());
+    assert!(hidden_password.is_none());
+    assert_eq!(events.lock().unwrap().mounted, 0);
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+}
+
+#[test]
 fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override() {
     for presentation in [VaultPresentation::Machine, VaultPresentation::PerUser] {
         for owner in [false, true] {
