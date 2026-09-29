@@ -8,6 +8,8 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import useBackend from "@/hooks/useBackend";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
+import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
+import { vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
@@ -62,7 +64,7 @@ function vaultListFailure(cause: unknown, request: "authorized vault list" | "Va
   };
 }
 
-export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -70,6 +72,8 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.DRIV
   // Treat both forms identically so an administrator sees the service's safe
   // category instead of every failure becoming the opaque generic fallback.
   const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
+  if (detail.includes("vault_owner_required")) return { code: "VLT.POLICY.OWNER_REQUIRED", message: vaultOperationError(cause) };
+  if (detail.includes("vault_policy_readback_unconfirmed")) return { code: "VLT.POLICY.READBACK_FAILED", message: "The service has not confirmed the saved change. Refresh and review the Vault policy before trying again. No success was reported." };
   if (/drive[_ ]letter.*(?:occupied|reserved|unavailable|in use)/.test(detail)) {
     return { code: "VLT.POLICY.DRIVE_LETTER_CONFLICT", message: "This drive letter is occupied, reserved, or could not be checked. Refresh free letters in the Vault editor and choose an available letter before saving." };
   }
@@ -189,7 +193,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
-  const [operationFeedback, setOperationFeedback] = useState("");
+  const [operationFeedback, setOperationFeedbackMessage] = useState("");
+  const [operationFeedbackTone, setOperationFeedbackTone] = useState<VaultNoticeTone>("error");
+  const setOperationFeedback = (message: string, tone: VaultNoticeTone = "error") => {
+    setOperationFeedbackMessage(message);
+    setOperationFeedbackTone(tone);
+  };
   const { openEncryptionVolume, getAvailableDriveLetters } = useBackend();
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const hiddenProtectionPasswordInputRef = useRef<HTMLInputElement>(null);
@@ -542,9 +551,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const latest = vaultPolicyFromOwnerFragment(await getOwnerPolicyFragment());
       const prepared = prepareVaultAccessSave(policyToApply, draftBaseRef.current,
         latest ? normalizeVaultAccessPolicy(latest) : null);
-      if (!prepared) throw new Error("Vault policy version conflict");
+      if (!prepared) throw new Error(vaultDraftConflictReason(policyToApply, draftBaseRef.current, latest, currentCallerSid));
       const preparedError = validateVaultAccessIntent(prepared);
       if (preparedError) {
+        setOperationFeedback(preparedError);
         showError(preparedError);
         return;
       }
@@ -569,13 +579,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         if (!available.success || !available.data?.letters.includes(letter)) throw new Error("Drive letter is occupied, reserved, or unavailable");
       }
       const appliedStatus = await applyOwnerPolicyFragment(fragment, operationId);
-      if (fragment.remove_entry_ids?.length) {
-        const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
-        if (confirmed?.entries.some(entry => fragment.remove_entry_ids!.includes(entry.id))) {
-          showError("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.", undefined, { operationId });
-          return;
-        }
+      const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
+      if (fragment.remove_entry_ids?.some(id => confirmed?.entries.some(entry => entry.id === id))) {
+        setOperationFeedback("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.");
+        showError("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.", undefined, { operationId });
+        return;
       }
+      if (!vaultPolicyRevisionConfirmed(submittedPolicy, confirmed, fragment.remove_entry_ids ?? [])) throw new Error("vault_policy_readback_unconfirmed");
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // A successful full removal leaves no saved policy to edit. Clear every
@@ -607,21 +617,26 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const refreshed = await refresh(!keepDraft, false);
       if (!refreshed) {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "windows_readback", lifecycle: "verified", outcome: "failed", errorCode: "VLT.POLICY.READBACK_FAILED", severity: "warn", retryability: "manual", suggestedNextAction: "refresh_status", privacyClass: "local_sensitive" });
+        setOperationFeedback("Vault settings were saved, but current access could not be verified. Refresh before mounting.");
         showError("Vault settings were saved, but current access could not be verified. Refresh before mounting.", undefined, { operationId });
         return;
       }
       if (removed) {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
-        showSuccess("Vault policy removed and shared access revoked.", undefined, { operationId });
+        setOperationFeedback("Vault policy removed and shared access revoked.", "success");
+        showSuccess("Vault policy removed and shared access revoked.", undefined, { kind: "notification", operationId });
       } else if (policyEntryRemoved) {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
-        showSuccess("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.", undefined, { operationId });
+        setOperationFeedback("Vault removed from saved policy.", "success");
+        showSuccess("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.", undefined, { kind: "notification", operationId });
       } else if (appliedStatus.validation_state === "degraded") {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "degraded", errorCode: "VLT.POLICY.DEGRADED", severity: "warn", retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
+        setOperationFeedback("Vault settings were saved with warnings. Fix the listed access problems before mounting.");
         showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.", undefined, { operationId });
       } else {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "verified", lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
-        showSuccess("Vault settings saved. Future mounts only need the password.", undefined, { operationId });
+        setOperationFeedback("Vault settings saved. Future mounts only need the password.", "success");
+        showSuccess("Vault settings saved. Future mounts only need the password.", undefined, { kind: "notification", operationId });
       }
     } catch (cause) {
       const failure = vaultPolicySaveFailure(cause);
@@ -696,6 +711,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // The service owns the safety boundary: this recovery command removes
       // only this record and explicitly does not change its Windows ACLs.
       await forgetPolicy(entryId, saved.policy_id, saved.version, operationId);
+      const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
+      if (confirmed?.entries.some(entry => entry.id === entryId)) throw new Error("vault_policy_readback_unconfirmed");
       // A local draft still references the old service revision. Discard it
       // before reading the updated policy so it cannot later recreate the
       // deliberately forgotten entry.
@@ -706,13 +723,15 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       setSelectedEntryId(null);
       setEditorOpen(false);
       setForgetPolicyConfirmation(null);
-      await refresh(true);
+      if (!await refresh(true)) throw new Error("vault_policy_readback_unconfirmed");
       recordDiagnostic({ operationId, feature: "vault", action: "forget_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "warn", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
       showSuccess("Vault removed from WinCommander policy. Windows file permissions were left unchanged.", undefined, { operationId });
+      setOperationFeedback("Vault removed from WinCommander policy. Windows file permissions were left unchanged.", "success");
     } catch (cause) {
       const failure = vaultPolicySaveFailure(cause);
       recordDiagnostic({ operationId, feature: "vault", action: "forget_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      showError("WinCommander could not forget this Vault policy entry. Windows file permissions were not changed.", undefined, { operationId });
+      setOperationFeedback(failure.message);
+      showError(failure.message, undefined, { operationId });
     } finally {
       saveInProgress.current = false;
       setSaving(false);
@@ -833,14 +852,18 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       password = "";
       hiddenProtectionPassword = "";
       const result = await mountRequest;
-      recordMountResult(result);
       if (result.state === "mounted") {
+        const confirmedEntries = await listAuthorizedEntries();
+        setAuthorizedEntries(confirmedEntries);
+        if (!vaultMountResultConfirmed(result, confirmedEntries)) throw new Error("vault_mount_readback_unconfirmed");
+        recordMountResult(result);
         setMountTarget(null);
-        setOperationFeedback(vaultMountResultLabel(result));
+        setOperationFeedback(vaultMountResultLabel(result), "success");
         recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
         showSuccess(vaultMountResultLabel(result), undefined, { operationId });
       } else {
         setOperationFeedback(vaultMountResultLabel(result));
+        recordMountResult(result);
         if (result.reason === "already_mounted") {
           const freshEntries = await listAuthorizedEntries();
           setAuthorizedEntries(freshEntries);
@@ -867,12 +890,17 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "requested", lifecycle: "requested", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
     try {
       const result = await unmountEntry(entryId, operationId);
-      recordMountResult(result);
-      setOperationFeedback(vaultMountResultLabel(result));
       if (result.state === "unmounted") {
+        const confirmedEntries = await listAuthorizedEntries();
+        setAuthorizedEntries(confirmedEntries);
+        if (!vaultMountResultConfirmed(result, confirmedEntries)) throw new Error("vault_dismount_readback_unconfirmed");
+        recordMountResult(result);
+        setOperationFeedback(vaultMountResultLabel(result), "success");
         recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
         showSuccess(vaultMountResultLabel(result), undefined, { operationId });
       } else {
+        setOperationFeedback(vaultMountResultLabel(result));
+        recordMountResult(result);
         recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.DISMOUNT.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry_cleanup", privacyClass: "local_sensitive" });
         showError(vaultMountResultLabel(result), undefined, { operationId });
       }
@@ -903,7 +931,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   return (
     <div className="fleet-admin-stack">
-      {operationFeedback && <div className="fleet-vault-verification-warning" role="alert">{operationFeedback}</div>}
+      <VaultOperationNotice message={operationFeedback} tone={operationFeedbackTone} />
       <Card>
         <CardHeader>
           <CardTitle>{canManagePolicy ? "Saved vaults" : "My vaults"}</CardTitle>
@@ -1184,7 +1212,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               Enter the password for this mount only. It is cleared before the mount request finishes and is never saved.
             </DialogDescription>
           </DialogHeader>
-          {operationFeedback && <p role="alert">{operationFeedback}</p>}
+          <VaultOperationNotice message={operationFeedback} tone={operationFeedbackTone} />
           {mountTarget?.containerKind === "dual" && <label className="fleet-field"><span>Open</span><select aria-label="Vault volume role" value={volumeRole} onChange={event => setVolumeRole(event.target.value as VaultVolumeRole)}><option value="outer">Outer volume</option><option value="hidden">Hidden volume</option></select><small>Choose the volume for this mount only. The choice and password are never saved.</small></label>}
           {mountTarget?.containerKind === "dual" && volumeRole === "outer" && mountTarget.access === "write" && <Input ref={hiddenProtectionPasswordInputRef} aria-label="Hidden volume protection password" type="password" autoComplete="off" placeholder="Hidden password required to protect it while writing" />}
           <Input

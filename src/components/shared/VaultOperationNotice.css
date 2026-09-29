@@ -1,0 +1,28 @@
+.vault-operation-notice {
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.vault-operation-notice--error {
+  background: #fff1f2;
+  border-color: #e49ba4;
+  color: #8b1e2d;
+}
+
+.vault-operation-notice--success {
+  background: #ecfdf3;
+  border-color: #8bc4a3;
+  color: #14532d;
+}
+
+.vault-operation-notice--info {
+  background: #eff6ff;
+  border-color: #9cbbe1;
+  color: #1e4675;
+}

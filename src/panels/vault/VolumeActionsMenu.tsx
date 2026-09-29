@@ -5,6 +5,7 @@ import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
+import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import './VolumeActionsMenu.css';
 
 interface VolumeActionsMenuProps {
@@ -88,7 +89,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   return (
     <div className="flex items-center gap-1 flex-shrink-0">
-      {failure && <span role="alert" className="text-destructive text-sm">{failure}</span>}
+      <VaultOperationNotice message={failure} />
       <Tooltip content="Open in Explorer" position="top">
         <Button
           icon="folder-open"

@@ -17,6 +17,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
 import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
+import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
@@ -193,7 +195,12 @@ export default function RightSidebar() {
     const [qmPartitions, setQmPartitions] = useState<EncryptionPartition[]>([]);
     const [qmPartitionsLoading, setQmPartitionsLoading] = useState(false);
     const [qmSaving, setQmSaving] = useState(false);
-    const [qmFeedback, setQmFeedback] = useState('');
+    const [qmFeedback, setQmFeedbackMessage] = useState('');
+    const [qmFeedbackTone, setQmFeedbackTone] = useState<VaultNoticeTone>('error');
+    const setQmFeedback = useCallback((message: string, tone: VaultNoticeTone = 'error') => {
+        setQmFeedbackMessage(message);
+        setQmFeedbackTone(tone);
+    }, []);
     const [qmMountedDrive, setQmMountedDrive] = useState<string | null>(null);
     const [qmAvailableLetters, setQmAvailableLetters] = useState<string[]>([]);
     const [qmLettersLoading, setQmLettersLoading] = useState(false);
@@ -221,12 +228,14 @@ export default function RightSidebar() {
             const entries = await listAuthorizedEntries();
             setFleetVaults(entries);
             setFleetVaultEntryId(current => entries.some(entry => entry.entry_id === current) ? current : (entries[0]?.entry_id ?? ''));
+            return entries;
         } catch {
             // The normal Quick Mount shortcuts remain usable if the secure
             // Fleet service is briefly unavailable. Never substitute cached
             // policy/path data for this caller-filtered list.
             setFleetVaults([]);
             setFleetVaultEntryId('');
+            return null;
         } finally {
             setFleetVaultsLoading(false);
         }
@@ -277,10 +286,11 @@ export default function RightSidebar() {
         try {
             const result = await mountFleetVaultEntry(fleetVaultEntryId, fleetVaultPassword, 'outer');
             if (result.state === 'mounted') {
-                showSuccess(vaultMountResultLabel(result));
+                const confirmed = await refreshFleetVaults();
+                if (!confirmed || !vaultMountResultConfirmed(result, confirmed)) throw new Error('vault_mount_readback_unconfirmed');
+                showSuccess(vaultMountResultLabel(result), undefined, { kind: 'notification' });
                 setFleetVaultPassword('');
-                setQmFeedback(vaultMountResultLabel(result));
-                await refreshFleetVaults();
+                setQmFeedback(vaultMountResultLabel(result), 'success');
             } else {
                 setQmFeedback(vaultMountResultLabel(result));
                 showError(vaultMountResultLabel(result), undefined, { kind: 'notification' });
@@ -384,7 +394,7 @@ export default function RightSidebar() {
             const status = await refreshVault(true);
             const existing = status?.volumes?.find(volume => volume.accessible !== false && volume.path?.toLowerCase() === slot.filePath.toLowerCase());
             if (existing) {
-                setQmFeedback(`This container is already mounted at ${existing.letter}.`);
+                setQmFeedback(`This container is already mounted at ${existing.letter}.`, 'info');
                 setQmMountedDrive(existing.letter);
                 return;
             }
@@ -415,7 +425,7 @@ export default function RightSidebar() {
                     throw new Error("The encrypted volume was not available in this signed-in Windows session.");
                 }
                 showSuccess(`Volume mounted as ${r.data.drive}`);
-                setQmFeedback(`Volume mounted as ${r.data.drive}.`);
+                setQmFeedback(`Volume mounted as ${r.data.drive}.`, 'success');
                 setQmMountedDrive(r.data.drive);
                 setQmPassword('');
             } else {
@@ -821,7 +831,8 @@ export default function RightSidebar() {
         try {
             await handler();
             if (action === "dismount") {
-                await refreshVault(true);
+                const observed = await refreshVault(true);
+                if (!observed || (observed.volumes?.length ?? 0) > 0) throw new Error('vault_dismount_readback_unconfirmed');
             }
             showSuccess(ACTION_LABELS[action] || "Action completed");
         } catch (err) {
@@ -1095,13 +1106,13 @@ export default function RightSidebar() {
 
             {/* Quick Mount overlay */}
             <Dialog open={Boolean(dismountFailure)} onOpenChange={open => { if (!open) setDismountFailure(''); }}>
-                <DialogContent><DialogHeader><DialogTitle>Dismount needs attention</DialogTitle></DialogHeader><p role="alert">{dismountFailure}</p><button type="button" className="qm-btn qm-btn--primary" onClick={() => setDismountFailure('')}>Close</button></DialogContent>
+                <DialogContent><DialogHeader><DialogTitle>Dismount needs attention</DialogTitle></DialogHeader><VaultOperationNotice message={dismountFailure} /><button type="button" className="qm-btn qm-btn--primary" onClick={() => setDismountFailure('')}>Close</button></DialogContent>
             </Dialog>
             {qmOpen && (
                 <div className="qm-overlay" role="dialog" aria-modal="true"
                     onClick={(e) => { if (e.target === e.currentTarget) { setQmOpen(false); setQmEditing(null); } }}>
                     <div className="qm-dialog">
-                        {qmFeedback && <div className="qm-operation-feedback" role="alert">{qmFeedback}</div>}
+                        <VaultOperationNotice message={qmFeedback} tone={qmFeedbackTone} />
                         {qmMountedDrive && <button type="button" className="qm-btn qm-btn--primary" onClick={() => void openVaultDrive(qmMountedDrive)}>Open {qmMountedDrive} in File Explorer</button>}
                         {qmEditing ? (
                             /* ── Slot editor ── */

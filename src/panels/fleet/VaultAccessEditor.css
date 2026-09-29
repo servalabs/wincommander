@@ -18,7 +18,20 @@
   max-width: 100%;
 }
 
-.vault-access-editor .fleet-field > select { width: 100%; }
+.vault-access-editor .fleet-field > select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid #8b9d95;
+  border-radius: 6px;
+  background: var(--surface-2, #f5f8f4);
+  color: var(--text, #17302a);
+}
+
+.vault-access-editor .fleet-field > select:focus-visible {
+  outline: 2px solid var(--accent, #009b72);
+  outline-offset: 2px;
+}
 
 /* High Windows display scaling reduces the usable CSS width. Long paths and
    localized labels must grow vertically instead of widening the editor. */

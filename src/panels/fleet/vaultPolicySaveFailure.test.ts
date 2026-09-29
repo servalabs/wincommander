@@ -2,6 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { vaultPolicySaveFailure } from "./VaultAccessTab";
 
 describe("Vault policy save failures", () => {
+  test("owner denial takes precedence over generic admin or stale-version wording", () => {
+    const failure = vaultPolicySaveFailure("vault_owner_required: forbidden after version conflict");
+    expect(failure.code).toBe("VLT.POLICY.OWNER_REQUIRED");
+    expect(failure.message).toContain("Ask its owner");
+    expect(failure.message).toContain("only while the Vault is unmounted");
+    expect(failure.message).not.toContain("not a local administrator");
+    expect(failure.message).not.toContain("draft");
+  });
   test("shows a drive reservation conflict inline with a free-letter recovery action", () => {
     const failure = vaultPolicySaveFailure("Drive letter is occupied, reserved, or unavailable");
     expect(failure.code).toBe("VLT.POLICY.DRIVE_LETTER_CONFLICT");

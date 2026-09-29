@@ -48,6 +48,7 @@ describe("Vault Access service intent", () => {
       "caller_access_denied",
       "caller_acl_repair_failed",
       "entitlement_denied",
+      "pro_not_installed",
       "session_unavailable", "engine_unlock_failed", "engine_drive_letter_unavailable",
       "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",
     ]);
@@ -186,7 +187,7 @@ describe("Vault Access service intent", () => {
       presentation: null,
       drive_letter: null,
       reason: "not_authorized",
-    })).toBe("Mount denied by the secure service");
+    })).toContain("Ask its owner to review your access");
     expect(vaultMountResultLabel({
       entry_id: "opaque-entry",
       state: "failed",

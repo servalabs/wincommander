@@ -7,6 +7,15 @@ test("shows the same unlock guidance for native string and Error rejections", ()
   expect(vaultOperationError(new Error("vault_engine_unlock_failed"))).toBe(message);
 });
 
+test("missing Pro installation and licensing failure never diagnose the container password", () => {
+  for (const error of ["PRO_NOT_INSTALLED: missing engine", "vault_pro_not_installed"]) {
+    expect(vaultOperationError(error)).toContain("Pro module is not installed");
+    expect(vaultOperationError(error)).not.toContain("password");
+  }
+  expect(vaultOperationError("vault_entitlement_denied")).toContain("verify or activate your key");
+  expect(vaultOperationError("vault_entitlement_denied")).not.toContain("password");
+});
+
 test("generic engine failures never diagnose an incorrect password or expose transport data", () => {
   expect(vaultOperationError("vault_engine_mount_failed")).not.toContain("password");
   expect(vaultOperationError("transport failed C:\\private\\secret.hc secret=example")).not.toContain("secret");

@@ -38,6 +38,7 @@ export const VAULT_MOUNT_REASONS = [
   "caller_access_denied",
   "caller_acl_repair_failed",
   "entitlement_denied",
+  "pro_not_installed",
   "session_unavailable",
   "engine_unlock_failed",
   "engine_drive_letter_unavailable",
@@ -49,7 +50,7 @@ export const VAULT_MOUNT_REASONS = [
 export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
 const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
-  not_authorized: "Mount denied by the secure service",
+  not_authorized: "This Windows account cannot use this Vault. Ask its owner to review your access. An administrator may remove its policy only while it is unmounted; that does not grant access to its contents",
   invalid_request: "The Vault request is invalid",
   already_mounted: "This Vault is already mounted. Open the existing drive, or dismount it before changing its mount settings",
   broker_unavailable: "The secure Vault service is unavailable",
@@ -61,7 +62,8 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   presentation_rejected: "The Vault drive was not available to this signed-in Windows account",
   caller_access_denied: "Windows did not allow this account to read the mounted Vault contents",
   caller_acl_repair_failed: "The current Windows account could not be added to this Vault's existing permissions",
-  entitlement_denied: "The Pro licence could not be verified for this Vault operation",
+  entitlement_denied: "A valid Pro licence is required for this Vault operation. Open License settings and verify or activate your key",
+  pro_not_installed: "The Pro module is not installed. Open License / Pro and install it before mounting. Activating a licence alone does not install the encryption engine",
   session_unavailable: "The Windows session is unavailable",
   engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
   engine_drive_letter_unavailable: "The requested drive letter is already in use",

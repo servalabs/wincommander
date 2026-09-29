@@ -3,6 +3,10 @@ import { VAULT_MOUNT_REASONS, vaultMountResultLabel } from "@/panels/fleet/vault
 /** Show only known failure categories, never raw service transport or credential data. */
 export function vaultOperationError(error: unknown, operation: "mount" | "dismount" | "open" = "mount"): string {
   const detail = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
+  if (detail.includes("pro_not_installed")) return "The Pro module is not installed. Open License / Pro and install it before mounting. Activating a licence alone does not install the encryption engine.";
+  if (detail.includes("vault_owner_required")) return "Only the primary owner can edit this private Vault. Ask its owner to make changes. An administrator may remove the policy only while the Vault is unmounted; this does not unlock its contents.";
+  if (detail.includes("vault_mount_readback_unconfirmed")) return "The service has not confirmed that this Vault is mounted for your account. Refresh its status before using the drive. No successful mount was reported.";
+  if (detail.includes("vault_dismount_readback_unconfirmed")) return "The service has not confirmed that this Vault was dismounted. Refresh its status before removing the device or changing its policy.";
   const reason = VAULT_MOUNT_REASONS.find(value => new RegExp(`(?:^|[^a-z_])(?:vault_)?${value}(?:$|[^a-z_])`).test(detail));
   if (reason) {
     const label = vaultMountResultLabel({ entry_id: "", state: "failed", presentation: null, drive_letter: null, reason });

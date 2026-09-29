@@ -30,7 +30,7 @@ describe("secure storage deep-state contracts", () => {
   test("native failures remain visible and announced", () => {
     expect(ramDiskSource).toContain("catch (error)");
     expect(propertiesSource).toContain('className="props-error" role="alert"');
-    expect(vaultSource).toContain('className="mount-error" role="alert"');
+    expect(vaultSource).toContain('<VaultOperationNotice message={mountFailure} />');
     expect(vaultSource).toContain('className="mount-progress" role="status"');
     expect(vaultSource).toContain("Unlocking with your PIM can take several minutes. Your password was cleared for safety.");
     expect(vaultSource).toContain("const boundedMountError");

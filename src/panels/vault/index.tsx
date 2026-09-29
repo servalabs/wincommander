@@ -24,6 +24,8 @@ import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
+import { vaultOperationError } from "@/lib/vaultOperationFeedback";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -31,6 +33,7 @@ const MOUNT_ERROR_MAX_LENGTH = 300;
 const boundedMountError = (error: unknown) => {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Failed to mount volume.";
   const normalized = message.replace(/\s+/g, " ").trim();
+  if (/pro_not_installed|vault_entitlement_denied|vault_owner_required/i.test(normalized)) return vaultOperationError(error);
   if (normalized.includes("vault_already_mounted")) {
     return "This container is already mounted. Open its existing drive in Secure Storage, or dismount it before changing mount options.";
   }
@@ -369,6 +372,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountDialogOpen(false);
       resetMountForm();
       setMountedVolume(result.data);
+      showSuccess(`Encrypted volume mounted as ${result.data.drive}.`, undefined, { kind: "notification", operationId });
       recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "windows_readback",
         lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never",
         suggestedNextAction: "none", privacyClass: "local_sensitive" });
@@ -598,12 +602,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               } catch (error) { setMountFailure(boundedMountError(error)); }
             }} />
           </div>}
-          {mountFailure && (
-            <div className="mount-error" role="alert">
-              <Icon icon="warning-sign" size={16} />
-              <span>{mountFailure}</span>
-            </div>
-          )}
+          <VaultOperationNotice message={mountFailure} />
           {mounting && mountPim && (
             <div className="mount-progress" role="status">
               <Icon icon="time" size={16} />
