@@ -31,8 +31,13 @@ let policy = JSON.parse(sessionStorage.getItem('fixture-policy') || 'null') || {
 };
 const status = () => ({ policy_id: policy.policy_id, version: policy.version,
   validation_state: 'current', applied_at: 1,
-  entries: policy.entries.map(entry => ({ id: entry.id, result: 'applied', mount_state: 'unmounted' })) });
+  entries: policy.entries.map(entry => ({ id: entry.id, result: 'applied', mount_state: window.__fixtureMounted ? 'mounted' : 'unmounted' })) });
 const blocked = async () => { throw new Error('Native mutation blocked by fixture'); };
+window.__vaultBackend = {
+  getAvailableDriveLetters: async excludeEntryId => ({ success: true, data: { letters: ['J', 'K', 'L', 'M', 'V', 'W', 'Z'].filter(letter =>
+    !(window.__occupiedLetters || []).includes(letter) && !policy.entries.some(entry => entry.id !== excludeEntryId && entry.mount.preferred_letter === letter)) } }),
+  openEncryptionVolume: async drive => { window.__openedDrive = drive; return { success: true }; }
+};
 window.__advanceVaultRevision = () => { policy.version += 1; };
 window.__addOtherOwnerVault = () => {
   policy.entries.push({ ...structuredClone(policy.entries[0]), id: 'other-owner-vault', label: 'Other owner vault',
@@ -53,7 +58,7 @@ window.__vaultUiService = {
   getStatus: async () => status(),
   listAuthorizedEntries: async () => policy.entries.filter(entry => entry.primary_owner_sid === sid).map(entry => ({ entry_id: entry.id, label: entry.label,
     access: 'write', presentation: entry.mount.presentation, container_kind: 'standard',
-    mount_state: 'unmounted', drive_letter: null, preferred_letter: entry.mount.preferred_letter })),
+    mount_state: window.__fixtureMounted ? 'mounted' : 'unmounted', drive_letter: window.__fixtureMounted ? 'J' : null, preferred_letter: entry.mount.preferred_letter })),
   applyOwnerPolicyFragment: async fragment => {
     if (fragment.policy_id !== policy.policy_id || fragment.expected_previous_version !== policy.version) {
       throw new Error('vault policy was changed elsewhere since this draft was loaded');
@@ -70,7 +75,16 @@ window.__vaultUiService = {
     window.__lastSavedPattern = policy.entries[0]?.access_pattern;
     return status();
   },
-  mountEntry: blocked, unmountEntry: blocked, forgetPolicy: blocked
+  mountEntry: async entry_id => {
+    if (window.__reportAlreadyMounted) return { entry_id, state: 'failed', presentation: null, drive_letter: null, reason: 'already_mounted' };
+    if (window.__allowFixtureMount) {
+      window.__fixtureMounted = true;
+      return { entry_id, state: 'mounted', presentation: 'per-user', drive_letter: 'J', reason: null };
+    }
+    return { entry_id, state: 'failed', presentation: null, drive_letter: null, reason: 'engine_unlock_failed' };
+  },
+  unmountEntry: async entry_id => ({ entry_id, state: 'failed', presentation: null, drive_letter: null, reason: 'dismount_failed' }),
+  forgetPolicy: blocked
 };
 ReactDOM.createRoot(document.getElementById('fixture')).render(React.createElement(VaultAccessTab, {
   isAdmin: true, directory: { schema: 1, users: [
@@ -89,6 +103,9 @@ async function main() {
   await page.route('**/src/hooks/useVaultAccess.ts*', route => route.fulfill({
     contentType: 'application/javascript', body: 'export default function useVaultAccess(){return window.__vaultUiService;}'
   }));
+  await page.route('**/src/hooks/useBackend.ts*', route => route.fulfill({
+    contentType: 'application/javascript', body: 'export default function useBackend(){return window.__vaultBackend;}'
+  }));
   await page.route('**/src/utils/toast.ts*', route => route.fulfill({
     contentType: 'application/javascript', body: `
       window.__toasts = [];
@@ -104,7 +121,43 @@ async function main() {
   };
   try {
     await page.goto(new URL('/__vault_selection__', origin).href);
+    await page.locator('.fleet-vault-lifecycle').first().getByRole('button', { name: 'Mount', exact: true }).click();
+    await page.getByLabel('Vault password', { exact: true }).fill('fixture-only-password');
+    await page.getByRole('button', { name: 'Mount Vault', exact: true }).click();
+    await page.getByRole('dialog').getByRole('alert').filter({ hasText: 'password, PIM, or keyfiles' }).waitFor();
+    assert.equal(await page.getByLabel('Vault password', { exact: true }).inputValue(), '', 'Failed mounts must clear the password');
+    await page.evaluate(() => { window.__allowFixtureMount = true; });
+    await page.getByLabel('Vault password', { exact: true }).fill('fixture-only-password');
+    await page.getByRole('button', { name: 'Mount Vault', exact: true }).click();
+    await page.getByRole('dialog').waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'Open in File Explorer', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.__openedDrive), 'J', 'Open uses the authorized mounted drive');
+    await page.getByRole('button', { name: 'Unmount', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: 'could not be safely unmounted' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Open in File Explorer', exact: true }).count(), 1, 'Failed dismount does not pretend the drive disappeared');
+    await page.evaluate(() => { window.__fixtureMounted = false; });
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.locator('.fleet-vault-lifecycle').first().getByRole('button', { name: 'Mount', exact: true }).waitFor();
+    // Another window mounted it after this page's last service observation.
+    await page.evaluate(() => { window.__fixtureMounted = true; window.__reportAlreadyMounted = true; });
+    await page.locator('.fleet-vault-lifecycle').first().getByRole('button', { name: 'Mount', exact: true }).click();
+    await page.getByLabel('Vault password', { exact: true }).fill('fixture-only-password');
+    await page.getByRole('button', { name: 'Mount Vault', exact: true }).click();
+    await page.getByRole('dialog').waitFor({ state: 'detached' });
+    await page.getByRole('alert').filter({ hasText: 'already mounted' }).waitFor();
+    await page.getByRole('button', { name: 'Open in File Explorer', exact: true }).waitFor();
+    await page.evaluate(() => { window.__fixtureMounted = false; window.__reportAlreadyMounted = false; });
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await openEditor();
+    const preferredLetter = page.getByLabel('Vault 1 preferred drive letter', { exact: true });
+    await preferredLetter.locator('option[value="J"]').waitFor({ state: 'attached' });
+    assert.equal(await preferredLetter.evaluate(element => element.tagName), 'SELECT');
+    assert.equal(await preferredLetter.locator('option[value="C"]').count(), 0, 'Occupied letters are not offered');
+    assert.equal(await preferredLetter.locator('option[value="J"]').isEnabled(), true, 'Editing can retain its own reservation');
+    await page.evaluate(() => { window.__occupiedLetters = ['W']; });
+    await page.getByRole('button', { name: 'Refresh free letters', exact: true }).click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('select[aria-label="Vault 1 preferred drive letter"] option')].some(option => option.value === 'W'));
+    await page.evaluate(() => { window.__occupiedLetters = []; });
     const owner = page.locator('.vault-access-editor select').first();
     const labels = await owner.locator('option').allTextContents();
     assert.ok(labels.some(label => label.includes('ExampleUser') && /current user/i.test(label)));
@@ -130,7 +183,7 @@ async function main() {
     await page.getByRole('button', { name: 'Add private vault', exact: true }).click();
     await page.getByLabel('Vault 2 label', { exact: true }).fill('New vault');
     await page.getByLabel('Vault 2 container path', { exact: true }).fill('D:\\Fixture\\new.ec');
-    await page.getByLabel('Vault 2 preferred drive letter', { exact: true }).fill('K');
+    await page.getByLabel('Vault 2 preferred drive letter', { exact: true }).selectOption('K');
     await page.evaluate(() => window.__addOtherOwnerVault());
     await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('fixture-policy')).entries.length === 3);
@@ -183,7 +236,7 @@ async function main() {
     await page.reload();
     await page.getByText('No vault access is configured yet', { exact: true }).waitFor();
     assert.deepEqual(errors, []);
-    console.log('PASS: owner labels; presets and restored drafts; explicit removals persist through reload, including the last vault.');
+    console.log('PASS: inline mount/dismount failures, password clearing and authorized Open action; native free-letter selector; owner labels; presets and restored drafts; explicit removals persist through reload, including the last vault.');
   } catch (error) {
     console.error({ browserErrors: errors, fixtureText: await page.locator('body').innerText() });
     throw error;

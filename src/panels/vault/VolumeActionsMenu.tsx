@@ -4,6 +4,7 @@ import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
+import { vaultOperationError } from "@/lib/vaultOperationFeedback";
 import './VolumeActionsMenu.css';
 
 interface VolumeActionsMenuProps {
@@ -20,6 +21,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const [dismounting, setDismounting] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const [failure, setFailure] = useState("");
   const driveLabel = letter.endsWith(":") ? letter : `${letter}:`;
 
   const verifyDismounted = async (): Promise<string | null> => {
@@ -41,6 +43,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   const completeDismount = async (forced: boolean) => {
     const verificationError = await verifyDismounted();
     if (verificationError) {
+      setFailure(verificationError);
       showError(verificationError, undefined, { kind: "notification" });
       return false;
     }
@@ -51,6 +54,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const handleDismount = async () => {
     setDismounting(true);
+    setFailure("");
     try {
       // An unavailable volume can belong to another or stale Windows sign-in
       // and may not return the normal "in use" failure that used to expose
@@ -58,14 +62,16 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       // then keep the row until fresh status confirms it has disappeared.
       const result = await dismountVolume(letter, true, internalDrive);
       if (!result.success) {
-        const message = result.error || `Failed to dismount ${driveLabel}.`;
+        const message = vaultOperationError(result.error, "dismount");
+        setFailure(message);
         showError(message, undefined, { kind: "notification" });
         return;
       }
       await completeDismount(true);
     } catch (e) {
       // Operational volume result → Notifications tab, not System Alerts.
-      const message = e instanceof Error ? e.message : `Failed to dismount ${driveLabel}.`;
+      const message = vaultOperationError(e, "dismount");
+      setFailure(message);
       showError(message, undefined, { kind: "notification" });
     } finally {
       setDismounting(false);
@@ -73,11 +79,16 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   };
 
   const handleOpen = async () => {
-    await openEncryptionVolume(letter);
+    setFailure("");
+    try {
+      const result = await openEncryptionVolume(letter);
+      if (!result.success) throw new Error(result.error);
+    } catch (error) { setFailure(vaultOperationError(error, "open")); }
   };
 
   return (
     <div className="flex items-center gap-1 flex-shrink-0">
+      {failure && <span role="alert" className="text-destructive text-sm">{failure}</span>}
       <Tooltip content="Open in Explorer" position="top">
         <Button
           icon="folder-open"

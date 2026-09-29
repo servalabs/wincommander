@@ -34,7 +34,6 @@ interface DriveLetterPickerProps {
   effectiveScope?: EngineMountScope;
 }
 
-const FALLBACK_LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const FOLDER_DISABLED_REASON =
   "Folder mounts need administrator rights and the Mount Manager, which per-user scope deliberately avoids.";
 
@@ -50,7 +49,7 @@ export default function DriveLetterPicker({
   onMountPointChange,
   effectiveScope,
 }: DriveLetterPickerProps) {
-  const choices = letters.length ? letters : FALLBACK_LETTERS;
+  const choices = letters;
   const showModeToggle = mode !== undefined && onModeChange !== undefined;
   const folderDisabled = effectiveScope === "per-user";
   const showFolderInput = mode === "folder" && !folderDisabled;
@@ -105,6 +104,7 @@ export default function DriveLetterPicker({
         </div>
       ) : (
         <div id={id} className="drive-letter-picker" role="radiogroup" aria-label="Drive letter">
+          {choices.length === 0 && <p role="status">No free drive letters are available. Refresh the drive list before continuing.</p>}
           {choices.map((letter) => (
             <button
               key={letter}

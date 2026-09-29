@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Vault mount/dismount failures remain visible beside the operation, including
+  unlock, drive-letter and Windows-access guidance. Authorized existing mounts
+  can be opened without a disruptive remount. Fleet and Quick Mount selectors
+  use service-checked letters, excluding occupied drives and saved reservations.
+- The personal-data recovery notice can be dismissed for the current session;
+  recovery details remain in Settings and protected features remain locked.
+
 - Setup no longer mounts offline user registries during legacy startup cleanup,
   so leftover temporary hives from an earlier failed setup cannot block retries.
   Signed-in profiles are cleaned during setup; other profiles clean their own

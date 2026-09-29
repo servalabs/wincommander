@@ -199,12 +199,13 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment })');
     expect(vaultHook).toContain('invoke<void>("forget_vault_access_entry_policy_only"');
     expect(vaultHook).toContain("diagnosticOperationId: operationId");
-    expect(vault).toContain("nextVaultAccessPolicy(policyToApply)");
+    expect(vault.includes("prepareVaultAccessSave(policyToApply, draftBaseRef.current,")).toBe(true);
+    expect(vault.includes("nextVaultAccessPolicy(prepared)")).toBe(true);
     expect(vault).toContain("Saved vaults");
     expect(vault).toContain("Future mounts only need the password");
     expect(vault).toContain("Save vault settings");
     expect(vault).toContain("Remove Vault policy");
-    expect(vault).toContain('replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)');
+    expect(vault.includes('replacePolicy(retainedDraft?.policy ?? (removed ? null : submittedPolicy), keepDraft, retainedDraft ? retainedDraft.basePolicy : removed ? null : submittedPolicy)')).toBe(true);
     expect(vault).toContain("Vault policy removed and shared access revoked.");
     expect(vault).toContain("Remove the saved Vault policy?");
     expect(vault).toContain("The encrypted container files are not deleted.");

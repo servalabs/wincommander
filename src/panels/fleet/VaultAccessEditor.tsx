@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import useBackend from "@/hooks/useBackend";
+import { selectableDriveLetters } from "@/lib/vaultOperationFeedback";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +20,7 @@ interface VaultAccessEditorProps {
   currentCallerSid: string | null;
   locked?: boolean;
   ownerDirectoryUnavailable?: boolean;
+  otherReservedLetters?: string[];
   onEntryChange: (patch: Partial<VaultAccessEntry>) => void;
   onOwnerChange: (owner: VaultOwnerPrincipal) => void;
   onPresetChange: (preset: Exclude<VaultAccessPreset, "custom">) => void;
@@ -37,7 +40,26 @@ function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: stri
   return `${name}${principal.sid === currentCallerSid ? " (Current user)" : ""}`;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, otherReservedLetters = [], onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+  const { getAvailableDriveLetters } = useBackend();
+  const [availableLetters, setAvailableLetters] = useState<string[]>([]);
+  const [lettersLoading, setLettersLoading] = useState(true);
+  const [letterFailure, setLetterFailure] = useState("");
+  const refreshLetters = useCallback(async () => {
+    setLettersLoading(true);
+    setLetterFailure("");
+    try {
+      const result = await getAvailableDriveLetters(entry.id);
+      if (!result.success || !result.data) throw new Error();
+      setAvailableLetters(selectableDriveLetters(result.data.letters));
+    } catch {
+      setAvailableLetters([]);
+      setLetterFailure("Free drive letters could not be checked. Refresh before choosing a letter.");
+    } finally { setLettersLoading(false); }
+  }, [entry.id, getAvailableDriveLetters]);
+  useEffect(() => { void refreshLetters(); }, [refreshLetters]);
+  const letterChoices = selectableDriveLetters(availableLetters, otherReservedLetters);
+  const selectedLetter = entry.mount.preferred_letter ?? "";
   const accessPreset = vaultAccessPreset(entry);
   const eligibleOwnerPrincipals = accessPreset === "private"
     ? ownerPrincipals.filter(principal => principal.is_local_administrator)
@@ -96,8 +118,15 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
             ? "Only service-approved local administrators appear here. Transfer ownership only while this Vault is unmounted."
             : "The service validates this Windows account."} WinCommander saves the selected Windows account securely, not merely by its displayed name.</small>
       </Field>
-      <Field label="Drive letter" help="The preferred letter in File Explorer. Leave blank for Windows to choose.">
-        <Input aria-label={`Vault ${vaultNumber} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
+      <Field label="Drive letter" help="The preferred letter in File Explorer. Only letters that are free and not reserved by another Vault can be selected. Leave blank for Windows to choose.">
+        <select aria-label={`Vault ${vaultNumber} preferred drive letter`} value={selectedLetter} disabled={lettersLoading} onChange={event => onEntryChange({ mount: { ...entry.mount, preferred_letter: event.target.value || undefined } })}>
+          <option value="">{lettersLoading ? "Checking free letters…" : "Choose automatically"}</option>
+          {selectedLetter && !letterChoices.includes(selectedLetter) && <option value={selectedLetter} disabled>{selectedLetter}: — {lettersLoading ? "checking" : "unavailable"}</option>}
+          {letterChoices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
+        </select>
+        <Button type="button" variant="outline" size="sm" disabled={lettersLoading} onClick={() => void refreshLetters()}>Refresh free letters</Button>
+        {letterFailure && <small role="alert">{letterFailure}</small>}
+        {!lettersLoading && selectedLetter && !letterChoices.includes(selectedLetter) && !locked && <small role="alert">This letter is occupied or reserved. Choose another free letter before saving.</small>}
       </Field>
     </div>
 

@@ -29,8 +29,11 @@ const validPim = (value: string) => !value || (Number.isInteger(Number(value)) &
 const MOUNT_ERROR_MAX_LENGTH = 300;
 
 const boundedMountError = (error: unknown) => {
-  const message = error instanceof Error ? error.message : "Failed to mount volume.";
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Failed to mount volume.";
   const normalized = message.replace(/\s+/g, " ").trim();
+  if (normalized.includes("vault_already_mounted")) {
+    return "This container is already mounted. Open its existing drive in Secure Storage, or dismount it before changing mount options.";
+  }
   if (normalized.includes("vault_engine_unlock_failed")) {
     return "WinCommander could not unlock this volume. Check that you selected the correct file and entered its original password, PIM, and keyfile.";
   }
@@ -186,12 +189,16 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const { canUse } = useEntitlements();
   const accessibleVolumes = volumes.filter((volume) => volume.accessible !== false);
   const unavailableVolumes = volumes.filter((volume) => volume.accessible === false);
+  const existingMountedVolume = accessibleVolumes.find(volume => volume.path?.toLowerCase() === mountPath.trim().toLowerCase());
 
   const [mounting, setMounting] = useState(false);
   const canMount = Boolean(
     mountPath
     && (mountPassword || mountKeyfile)
     && validPim(mountPim)
+    && availableLetters.includes(mountLetter)
+    && !mountDetailsLoading
+    && !existingMountedVolume
     && !mounting
   );
 
@@ -212,7 +219,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     const operationId = newDiagnosticOperationId("vault");
     resetMountForm();
     setMountDialogOpen(true);
+    void refreshVault(true);
     setMountDetailsLoading(true);
+    setAvailableLetters([]);
+    setMountLetter("");
     setPartitions([]);
     try {
       const [letterRes, partitionRes] = await Promise.all([
@@ -224,9 +234,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         setAvailableLetters(letterRes.data.letters);
         setMountLetter(letterRes.data.letters[0]);
       } else {
-        const fallback = "DEFGHIJKLMNOPQRSTUVWXYZ".split("");
-        setAvailableLetters(fallback);
-        setMountLetter("Y");
+        setAvailableLetters([]);
+        setMountLetter("");
+        setMountFailure(letterRes?.success ? "No free drive letters are available. Close and reopen this dialog after a letter becomes free." : "Free drive letters could not be checked. Close and reopen this dialog to retry.");
       }
 
       if (partitionRes?.success && partitionRes.data?.partitions) {
@@ -253,12 +263,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
         lifecycle: "verified", outcome: "failed", errorCode: "VLT.MOUNT_OPTIONS.READ_FAILED", severity: "warn",
         retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      const fallback = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
-      setAvailableLetters(fallback);
+      setAvailableLetters([]);
+      setMountLetter("");
+      setMountFailure("Free drive letters could not be checked. Close and reopen this dialog to retry.");
     } finally {
       setMountDetailsLoading(false);
     }
-  }, [resetMountForm, getAvailableDriveLetters, getEncryptionPartitions]);
+  }, [resetMountForm, getAvailableDriveLetters, getEncryptionPartitions, refreshVault]);
 
   const handleBrowse = async () => {
     const operationId = newDiagnosticOperationId("vault");
@@ -305,7 +316,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic",
         suggestedNextAction: "await_result", privacyClass: "local_sensitive" });
       const letters = await getAvailableDriveLetters();
-      if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
+      if (!letters.success || !letters.data) throw new Error("Free drive letters could not be checked. Close and reopen this dialog to retry.");
+      setAvailableLetters(letters.data.letters);
+      if (!letters.data.letters.includes(mountLetter)) {
         throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
       }
       const mountRequest: Omit<MountVolumeParams, "volumeKind" | "volumeRole"> = {
@@ -363,6 +376,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       // Operational volume result → Notifications tab, not System Alerts.
       const message = boundedMountError(e);
       setMountFailure(message);
+      void refreshVault(true);
       recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "windows_readback",
         lifecycle: "verified", outcome: "failed", errorCode: vaultMountErrorCode(e), severity: "error",
         retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
@@ -575,6 +589,15 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         }}
       >
         <div className="wc-dialog-body" onKeyDown={handleMountDialogKeyDown}>
+          {existingMountedVolume && <div className="vault-mount-error" role="status">
+            <p>This container is already mounted at {existingMountedVolume.letter}.</p>
+            <Button text="Open in File Explorer" icon="folder-open" onClick={async () => {
+              try {
+                const result = await openEncryptionVolume(existingMountedVolume.letter);
+                if (!result.success) throw new Error(result.error || "Could not open the mounted drive.");
+              } catch (error) { setMountFailure(boundedMountError(error)); }
+            }} />
+          </div>}
           {mountFailure && (
             <div className="mount-error" role="alert">
               <Icon icon="warning-sign" size={16} />

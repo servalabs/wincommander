@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { vaultPolicySaveFailure } from "./VaultAccessTab";
 
 describe("Vault policy save failures", () => {
+  test("shows a drive reservation conflict inline with a free-letter recovery action", () => {
+    const failure = vaultPolicySaveFailure("Drive letter is occupied, reserved, or unavailable");
+    expect(failure.code).toBe("VLT.POLICY.DRIVE_LETTER_CONFLICT");
+    expect(failure.message).toContain("Refresh free letters");
+  });
   test("keeps a malformed service policy reply actionable without exposing its raw details", () => {
     const failure = vaultPolicySaveFailure(new Error("vault_apply_failed: vault policy failed validation — check drive letters"));
 

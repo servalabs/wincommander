@@ -11,6 +11,8 @@ export function patchAuthorizedEntriesFromMountResult(
   entries: VaultAuthorizedEntry[],
   result: VaultMountEntryResult,
 ): VaultAuthorizedEntry[] {
+  // A failed dismount is not evidence that Windows removed the drive.
+  if (result.state === "failed" && result.reason === "dismount_failed") return entries;
   return entries.map(entry => entry.entry_id === result.entry_id
     ? {
       ...entry,

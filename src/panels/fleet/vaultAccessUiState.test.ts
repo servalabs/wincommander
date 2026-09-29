@@ -31,6 +31,17 @@ const entries = [
 ];
 
 describe("patchAuthorizedEntriesFromMountResult", () => {
+  test("a failed dismount retains the mounted drive until a fresh service result confirms removal", () => {
+    expect(patchAuthorizedEntriesFromMountResult(entries, {
+      entry_id: "private", state: "failed", presentation: null, drive_letter: null, reason: "dismount_failed",
+    })).toEqual(entries);
+  });
+
+  test("authorization denial removes the prior mounted drive from the usable projection", () => {
+    expect(patchAuthorizedEntriesFromMountResult(entries, {
+      entry_id: "private", state: "denied", presentation: null, drive_letter: null, reason: "not_authorized",
+    })[1]).toMatchObject({ mount_state: "denied", drive_letter: null });
+  });
   test("patches only the returned entry after a successful mount", () => {
     expect(patchAuthorizedEntriesFromMountResult(entries, {
       entry_id: "shared",
