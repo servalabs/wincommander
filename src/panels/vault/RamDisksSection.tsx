@@ -458,6 +458,7 @@ function RamDisksSection() {
               <FormGroup label="Drive Letter" labelFor="as-letter" className="ramdisk-autostart-field" style={{ marginBottom: 0 }}>
                 <DriveLetterPicker
                   id="as-letter"
+                  variant="grid"
                   value={asLetter}
                   onChange={setAsLetter}
                   letters={autostartLetters}

@@ -62,8 +62,9 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
     reset();
   }, [isOpen, reset]);
   useEffect(() => {
+    if (!isOpen) return;
     if (!driveList.loading && !driveList.unavailable) setLetter(current => driveList.letters.includes(current) ? current : driveList.letters[0] ?? "");
-  }, [driveList.letters, driveList.loading, driveList.unavailable]);
+  }, [isOpen, driveList.letters, driveList.loading, driveList.unavailable]);
 
   const handleCreate = async () => {
     if (sizeMB < MIN_RAM_DISK_SIZE_MB) {
@@ -148,6 +149,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
         <FormGroup label="Drive Letter" labelFor="ramdisk-letter">
           <DriveLetterPicker
             id="ramdisk-letter"
+            variant="grid"
             value={letter}
             onChange={setLetter}
             letters={driveList.letters}
