@@ -34,6 +34,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useUpdater } from "./updaterStore";
 import useProInstall, { isProVersionCompatible, getCachedFreeVersion } from "./useProInstall";
+import { shouldAutomaticallyReplacePro } from "../lib/proUpdateDecision";
 
 export type UpdateFlowPhase =
     | "idle"
@@ -66,7 +67,7 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         manifest: canUpdatePro,
         defender: canUpdatePro,
     });
-    const { refreshForFreeVersion } = pro;
+    const { refreshForFreeVersion, reset: resetProInstall } = pro;
     const [phase, setPhase] = useState<UpdateFlowPhase>("idle");
     const [freeOutcome, setFreeOutcome] = useState<"updated" | "up-to-date" | null>(null);
     const [freeError, setFreeError] = useState<string | null>(null);
@@ -110,6 +111,7 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
     const start = useCallback(async () => {
         if (runningRef.current) return;
         runningRef.current = true;
+        resetProInstall();
         setFreeError(null);
         setProMismatch(false);
         setPhase("checking-free");
@@ -132,7 +134,7 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         } finally {
             runningRef.current = false;
         }
-    }, [runFreeStep, canUpdatePro, refreshForFreeVersion]);
+    }, [runFreeStep, canUpdatePro, refreshForFreeVersion, resetProInstall]);
 
     const retryFree = useCallback(() => { void start(); }, [start]);
 
@@ -175,11 +177,8 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
             setPhase("done"); // Pro already current — nothing to do
             return;
         }
-        // Background automatic updates must never perform the first Pro
-        // install: it requires the one-time Defender consent shown in the
-        // visible install dialog. They may, however, replace an already
-        // installed sidecar without altering Defender configuration.
-        if (!pro.status.installed && automaticProInstallConsent === false) {
+        // A Free update can enter this leg without passing the Pro-only trigger.
+        if (automaticProInstallConsent === false && !shouldAutomaticallyReplacePro(pro.status, pro.manifest)) {
             setPhase("done");
             return;
         }
@@ -194,8 +193,12 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         if (phase !== "pro-step") return;
         if (automaticProInstallConsent === null) return;
         if (proInstallKind !== "idle") return;
+        if (automaticProInstallConsent === false && pro.manifest && !shouldAutomaticallyReplacePro(pro.status, pro.manifest)) {
+            setPhase("done");
+            return;
+        }
         void install(automaticProInstallConsent);
-    }, [phase, automaticProInstallConsent, proInstallKind, install]);
+    }, [phase, automaticProInstallConsent, proInstallKind, pro.status, pro.manifest, install]);
 
     // Pro step reports success → the combined flow is done. (Rendering never
     // shows renderProInstallStep's own "installed" screen in the embedded
@@ -211,12 +214,13 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
     }, []);
 
     const reset = useCallback(() => {
+        resetProInstall();
         setPhase("idle");
         setFreeOutcome(null);
         setFreeError(null);
         setProMismatch(false);
         setTargetFreeVersion(null);
-    }, []);
+    }, [resetProInstall]);
 
     return {
         phase,

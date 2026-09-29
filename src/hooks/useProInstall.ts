@@ -29,6 +29,7 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppState } from "../context/AppContext";
+import { proReleaseCompatibilityError } from "../lib/proReleaseCompatibility";
 
 // Base URL for Pro manifests. The per-version path ensures each Free release
 // only downloads the Pro binary that was tested alongside it, preventing
@@ -58,33 +59,12 @@ export function getCachedFreeVersion(): string | null {
     return cachedFreeVersion;
 }
 
-/** Parse a semver string into [major, minor, patch, ...] parts. */
-function parseSemver(v: string | null | undefined): number[] | null {
-    const m = (v ?? "").trim().replace(/^v/i, "").match(/\d+(?:\.\d+){0,3}/);
-    return m ? m[0].split(".").map(Number) : null;
-}
-
-/** Returns true when proVersion is compatible with freeVersion for auto-install.
- *  Compatible = Pro version is <= Free version (same or older). A Pro that is
- *  strictly NEWER than Free (any part of major.minor.patch) must not be
- *  auto-forced at startup — the user must update Free first. This prevents a
- *  3.0.9 Free from being pushed a 3.0.10 Pro via the /pro/latest.json fallback.
- *  Returns true when either version is unknown (fail-open, don't silently block). */
+/** Download compatibility is a range; the authenticated native Hello remains the runtime gate. */
 export function isProVersionCompatible(
     proVersion: string | null | undefined,
     freeVersion: string | null | undefined,
 ): boolean {
-    const pro = parseSemver(proVersion);
-    const free = parseSemver(freeVersion);
-    if (!pro || !free) return true; // unknown → allow
-    const len = Math.max(pro.length, free.length);
-    for (let i = 0; i < len; i++) {
-        const p = pro[i] ?? 0;
-        const f = free[i] ?? 0;
-        if (p > f) return false; // Pro is ahead of Free at this position
-        if (p < f) return true;  // Pro is behind — compatible
-    }
-    return true; // equal versions — compatible
+    return proReleaseCompatibilityError(proVersion, freeVersion) === null;
 }
 
 async function resolveManifestUrl(): Promise<string> {
@@ -228,6 +208,10 @@ async function fetchManifestOnce(): Promise<ProManifest> {
         if (!body || !body.url || !body.sha256 || !body.version) {
             throw new Error("Pro manifest is missing required fields (version / url / sha256)");
         }
+        const compatibilityError = proReleaseCompatibilityError(body.version, await getFreeVersion());
+        if (compatibilityError) {
+            throw Object.assign(new Error(compatibilityError), { stage: "validation" });
+        }
         return body;
     }
 
@@ -241,34 +225,35 @@ async function fetchManifestOnce(): Promise<ProManifest> {
             resolvedManifestUrl = fallback;
             try {
                 const body = await tryFetch(fallback);
-                // KT: Guard against /pro/latest.json serving a Pro build that is
-                // newer than the running Free version (e.g. a 3.0.9 Free must not
-                // be auto-forced onto a 3.0.10 Pro). If the fallback manifest's
-                // version is incompatible we still return it (so the dialog can
-                // display it), but callers MUST check isProVersionCompatible before
-                // auto-installing at startup.
                 return body;
             } catch (e2) {
                 const m2 = e2 instanceof Error ? e2.message : String(e2);
                 if (m2.startsWith("not_published:")) {
                     const err = new Error(
-                        "No Pro release has been published yet (manifest URL returned 404). Run tools/release.ps1 -Variant pro to publish one."
+                        "A compatible Pro download has not been published yet. Use the matching WinCommander + Pro setup. Nothing was installed."
                     );
                     (err as Error & { stage?: string }).stage = "not_published";
                     throw err;
                 }
-                throw new Error(m2);
+                throw manifestFetchError(e2);
             }
         }
         if (message.startsWith("not_published:")) {
             const err = new Error(
-                "No Pro release has been published yet (manifest URL returned 404). Run tools/release.ps1 -Variant pro to publish one."
+                "A compatible Pro download has not been published yet. Use the matching WinCommander + Pro setup. Nothing was installed."
             );
             (err as Error & { stage?: string }).stage = "not_published";
             throw err;
         }
-        throw new Error(message);
+        throw manifestFetchError(e);
     }
+}
+
+function manifestFetchError(error: unknown): Error & { stage?: string } {
+    if (error instanceof Error) return error;
+    const raw = String(error);
+    const parsed = parseStagedError(raw);
+    return Object.assign(new Error(parsed.message), { stage: parsed.stage });
 }
 
 /** Forces the next manifest fetch to re-resolve the version-pinned manifest
@@ -299,14 +284,14 @@ async function fetchManifest(): Promise<void> {
                 // 404 (release not published) shouldn't trigger retries --
                 // the answer won't change in 1.5s.
                 const stage = (err as Error & { stage?: string })?.stage;
-                if (stage === "not_published") break;
+                if (stage === "not_published" || stage === "validation") break;
                 if (attempt < MANIFEST_FETCH_RETRIES) {
                     await new Promise((r) => setTimeout(r, MANIFEST_RETRY_BACKOFF_MS));
                 }
             }
         }
         const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
-        setState({ manifestError: message });
+        setState({ manifest: null, manifestError: message });
     } finally {
         manifestFetchInFlight = false;
     }
@@ -355,9 +340,14 @@ async function installPro(consentDefenderExclusion: boolean): Promise<void> {
                 kind: "error",
                 stage: "validation",
                 message:
-                    "Pro release manifest hasn't been published yet (winupdates.servalabs.com/pro/latest.json returned 404 or unreachable).",
+                    state.manifestError ?? "A compatible Pro download is unavailable. Refresh License / Pro or use the matching WinCommander + Pro setup. Nothing was installed.",
             },
         });
+        return;
+    }
+    const compatibilityError = proReleaseCompatibilityError(m.version, await getFreeVersion());
+    if (compatibilityError) {
+        setState({ install: { kind: "error", stage: "validation", message: compatibilityError } });
         return;
     }
     setState({ install: { kind: "installing" } });
@@ -368,7 +358,12 @@ async function installPro(consentDefenderExclusion: boolean): Promise<void> {
             consentDefenderExclusion,
             proVersion: m.version,
         });
-        await refreshStatus();
+        const status = await invoke<ProInstallStatus>("get_pro_install_status");
+        setState({ status });
+        if (!status.installed || status.local_sha256?.toLowerCase() !== m.sha256.toLowerCase()
+            || !isProVersionCompatible(status.local_version, getCachedFreeVersion())) {
+            throw new Error("validation:Pro installation could not be verified. Refresh License / Pro before retrying; installation has not been confirmed.");
+        }
         await refreshDefender();
         setState({ install: { kind: "installed", version: m.version } });
     } catch (err) {
@@ -378,8 +373,13 @@ async function installPro(consentDefenderExclusion: boolean): Promise<void> {
     }
 }
 
+export function proInstallStateForNewAttempt(install: InstallState): InstallState {
+    return install.kind === "installing" || install.kind === "idle" ? install : { kind: "idle" };
+}
+
 function resetInstall() {
-    setState({ install: { kind: "idle" } });
+    const install = proInstallStateForNewAttempt(state.install);
+    if (install !== state.install) setState({ install });
 }
 
 export interface ProInstallProbePolicy {

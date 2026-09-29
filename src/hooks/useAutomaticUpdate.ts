@@ -5,18 +5,7 @@ import { showError, showInfo } from "../utils/toast";
 import { useUpdater } from "./updaterStore";
 import useProInstall, { getCachedFreeVersion, isProVersionCompatible } from "./useProInstall";
 import { useUpdateFlow } from "./useUpdateFlow";
-
-export function proNeedsUpdate(
-    localSha256: string | null | undefined,
-    manifestSha256: string | null | undefined,
-): boolean {
-    // Pre-metadata installations have no local hash. They are still an
-    // installed Pro copy, so treat them as needing the verified latest binary
-    // instead of leaving them permanently outside the automatic update path.
-    if (!manifestSha256) return false;
-    if (!localSha256) return true;
-    return localSha256.toLowerCase() !== manifestSha256.toLowerCase();
-}
+import { shouldAutomaticallyReplacePro } from "../lib/proUpdateDecision";
 
 /**
  * Automatic updates may maintain an already installed Pro copy for a paid
@@ -75,7 +64,7 @@ export default function useAutomaticUpdate(
     const canUpdatePro = canAutomaticallyUpdatePro(canUpdatePaidBuilds, pro.status?.installed);
     // Keep the paid leg enabled even while the status probe is in flight. This
     // lets a Free update and an installed Pro update complete in one cycle;
-    // useUpdateFlow skips only a missing first-time Pro installation.
+    // useUpdateFlow independently guards the Pro leg against same-version replacements and downgrades.
     const flow = useUpdateFlow(canUpdatePaidBuilds, false);
     const { start, phase, freeError, needsRestart, pro: flowPro } = flow;
     const startedRef = useRef(false);
@@ -93,7 +82,7 @@ export default function useAutomaticUpdate(
 
         if (!canUpdatePro || !pro.status || !pro.manifest) return;
         if (!pro.status.installed) return;
-        if (!proNeedsUpdate(pro.status.local_sha256, pro.manifest.sha256)) return;
+        if (!shouldAutomaticallyReplacePro(pro.status, pro.manifest)) return;
         if (!isProVersionCompatible(pro.manifest.version, getCachedFreeVersion())) return;
 
         startedRef.current = true;

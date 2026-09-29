@@ -3,6 +3,15 @@ import { describe, expect, test } from "bun:test";
 declare const Bun: { file(path: URL): { text(): Promise<string> } };
 
 describe("Pro startup probe policy", () => {
+  test("withholds an incompatible download and does not report success without installed read-back", async () => {
+    const source = await Bun.file(new URL("./useProInstall.ts", import.meta.url)).text();
+    expect(source).toContain("proReleaseCompatibilityError(body.version, await getFreeVersion())");
+    expect(source).toContain('stage === "not_published" || stage === "validation"');
+    expect(source).toContain("setState({ manifest: null, manifestError: message })");
+    expect(source).toContain("status.local_sha256?.toLowerCase() !== m.sha256.toLowerCase()");
+    expect(source.indexOf("Pro installation could not be verified")).toBeLessThan(source.indexOf('setState({ install: { kind: "installed"'));
+  });
+
   test("gates automatic Pro work and routes it through the shared coordinator", async () => {
     const source = await Bun.file(new URL("./useProInstall.ts", import.meta.url)).text();
 

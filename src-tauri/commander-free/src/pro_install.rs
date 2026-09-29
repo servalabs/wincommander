@@ -657,9 +657,12 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     if !resp.status().is_success() {
         return Err(format!("http_error:HTTP {}", resp.status()));
     }
-    resp.json::<serde_json::Value>()
+    let manifest = resp
+        .json::<serde_json::Value>()
         .await
-        .map_err(|e| format!("parse:{}", e))
+        .map_err(|e| format!("parse:{}", e))?;
+    check_pro_release_minimum(manifest.get("version").and_then(serde_json::Value::as_str))?;
+    Ok(manifest)
 }
 
 #[tauri::command]
@@ -897,39 +900,103 @@ use tokio::io::AsyncWriteExt;
 
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300; // 5 min
 
-/// Parse a semver-ish version string ("3.0.10", "3.0.10-beta.1") into
-/// (major, minor, patch) for a simple numeric ordering comparison.
-/// Returns None if the string doesn't start with at least "major.minor.patch".
-fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
-    let v = v.trim().trim_start_matches('v');
-    let parts: Vec<&str> = v.splitn(4, '.').collect();
-    let major = parts.first()?.parse::<u64>().ok()?;
-    let minor = parts.get(1)?.parse::<u64>().ok()?;
-    // KT: require patch component — a two-part string like "3.0" returns None
-    // so an underspecified version is treated as unparseable rather than "3.0.0".
-    let patch = parts.get(2)?.split('-').next()?.parse::<u64>().ok()?;
-    Some((major, minor, patch))
+const MINIMUM_PRO_VERSION: &str = "3.6.4";
+
+fn parse_semver(v: &str) -> Option<[u64; 4]> {
+    let trimmed = v.trim();
+    let v = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    let parts: Vec<&str> = v.split('.').collect();
+    if !(3..=4).contains(&parts.len()) {
+        return None;
+    }
+    let mut version = [0; 4];
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        version[index] = part.parse().ok()?;
+    }
+    Some(version)
 }
 
-/// Returns Err if `pro_version` is strictly newer than the running Free binary,
-/// which would mean a 3.0.9 Free is being asked to install 3.0.10 Pro — an
-/// inadvertent forced-upgrade that bypasses the signed updater flow.
-fn check_pro_version_not_newer(pro_version: &str) -> Result<(), String> {
+fn check_pro_release_minimum(pro_version: Option<&str>) -> Result<[u64; 4], String> {
+    let pro = pro_version.and_then(parse_semver).ok_or_else(|| {
+        "validation:The Pro release has no valid version. Nothing was installed. Use the matching WinCommander + Pro setup.".to_string()
+    })?;
+    if pro < [3, 6, 4, 0] {
+        return Err(format!(
+            "validation:Compatible Pro {MINIMUM_PRO_VERSION} or later is not available from this update source. Nothing was installed. Use the matching WinCommander + Pro setup; reinstalling the older Pro will not fix Vault mounting."
+        ));
+    }
+    Ok(pro)
+}
+
+fn check_pro_version_compatible(pro_version: Option<&str>) -> Result<(), String> {
     let free_str = env!("CARGO_PKG_VERSION");
-    let Some(free) = parse_semver(free_str) else {
-        // Couldn't parse our own version — allow rather than block.
-        return Ok(());
-    };
-    let Some(pro) = parse_semver(pro_version) else {
-        // Unparseable Pro version — allow; the hash check is the real gate.
-        return Ok(());
-    };
+    let free = parse_semver(free_str)
+        .ok_or_else(|| "validation:WinCommander version could not be verified.".to_string())?;
+    let pro = check_pro_release_minimum(pro_version)?;
     if pro > free {
         return Err(format!(
             "validation:Pro version {} is newer than the running Free version {}. \
              Update WinCommander Free first.",
-            pro_version, free_str
+            pro_version.unwrap_or_default(),
+            free_str
         ));
+    }
+    Ok(())
+}
+
+fn verify_pro_manifest_request(
+    manifest: &serde_json::Value,
+    download_url: &str,
+    expected_sha256: &str,
+    pro_version: Option<&str>,
+) -> Result<(), String> {
+    let published_version = manifest.get("version").and_then(serde_json::Value::as_str);
+    check_pro_version_compatible(published_version)?;
+    if manifest.get("url").and_then(serde_json::Value::as_str) != Some(download_url)
+        || !manifest
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|hash| hash.eq_ignore_ascii_case(expected_sha256))
+        || published_version.and_then(parse_semver) != pro_version.and_then(parse_semver)
+    {
+        return Err("validation:The requested Pro download does not match the published release. Refresh License / Pro before trying again. Nothing was installed.".to_string());
+    }
+    Ok(())
+}
+
+async fn verify_published_pro_request(
+    download_url: &str,
+    expected_sha256: &str,
+    pro_version: Option<&str>,
+) -> Result<(), String> {
+    let pinned_url = format!(
+        "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
+        env!("CARGO_PKG_VERSION")
+    );
+    let manifest = match fetch_pro_manifest(pinned_url).await {
+        Ok(manifest) => manifest,
+        Err(error) if error.starts_with("not_published:") => {
+            fetch_pro_manifest(format!("https://{ALLOWED_UPDATE_HOST}/pro/latest.json")).await?
+        }
+        Err(error) => return Err(error),
+    };
+    verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)
+}
+
+fn verify_pro_package_version(
+    path: &std::path::Path,
+    expected: Option<&str>,
+) -> Result<(), String> {
+    let actual = read_pro_file_version(path);
+    check_pro_version_compatible(actual.as_deref())?;
+    if actual.as_deref().and_then(parse_semver) != expected.and_then(parse_semver) {
+        return Err("validation:The downloaded Pro file version does not match its release. The existing Pro installation was preserved.".to_string());
     }
     Ok(())
 }
@@ -956,8 +1023,8 @@ fn validate_machine_pro_update_request(request: &MachineProUpdateRequest) -> Res
         if version.len() > 128 {
             return Err("validation:Pro version is too long".to_string());
         }
-        check_pro_version_not_newer(version)?;
     }
+    check_pro_version_compatible(request.pro_version.as_deref())?;
     Ok(())
 }
 
@@ -1261,6 +1328,7 @@ pub async fn install_pro_binary(
     consent_defender_exclusion: bool,
     pro_version: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    check_pro_version_compatible(pro_version.as_deref())?;
     #[cfg(windows)]
     if !crate::startup_elevation::is_current_process_elevated() {
         // Do not create a download, touch ProgramData, or attempt to close a
@@ -1294,6 +1362,7 @@ async fn install_pro_binary_machine(
     consent_defender_exclusion: bool,
     pro_version: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    check_pro_version_compatible(pro_version.as_deref())?;
     crate::updater::require_update_administrator().map_err(|error| format!("elevation:{error}"))?;
     // Errors are stage-prefixed so the frontend dialog can render an
     // actionable message per failure mode:
@@ -1307,18 +1376,6 @@ async fn install_pro_binary_machine(
     //   "disk:..."                -- tmp create / write / fsync / rename
     crate::license::require_update_entitlement().map_err(|error| format!("entitlement:{error}"))?;
 
-    #[cfg(windows)]
-    let exclusion_already_set = defender_exclusion_already_set();
-    #[cfg(not(windows))]
-    let exclusion_already_set = false;
-
-    let install_path = pro_install_path().map_err(|e| format!("validation:{}", e))?;
-    let replacing_existing_install = install_path.exists();
-    // Defender exclusion is an optional compatibility choice.  A signed,
-    // hash-verified Pro package can be installed without reducing Defender
-    // coverage; a later AV quarantine remains visible to the user as an AV
-    // event, rather than silently turning into a mandatory security exception.
-    let _ = replacing_existing_install;
     if expected_sha256.len() != 64 || !expected_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("validation:expected_sha256 must be 64-char lowercase hex".to_string());
     }
@@ -1330,11 +1387,14 @@ async fn install_pro_binary_machine(
     // check alone doesn't help when the attacker controls both fields.
     validate_update_url(&download_url, "download_url")?;
 
-    // KT: reject Pro versions that exceed the running Free version — a 3.0.9 Free
-    // binary cannot safely manage a 3.0.10 Pro binary (unknown IPC/feature deltas).
-    if let Some(ref ver) = pro_version {
-        check_pro_version_not_newer(ver)?;
-    }
+    // The renderer cannot make an old artifact current by relabeling its version or hash.
+    verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
+
+    #[cfg(windows)]
+    let exclusion_already_set = defender_exclusion_already_set();
+    #[cfg(not(windows))]
+    let exclusion_already_set = false;
+    let install_path = pro_install_path().map_err(|e| format!("validation:{}", e))?;
 
     let parent = install_path
         .parent()
@@ -1345,6 +1405,7 @@ async fn install_pro_binary_machine(
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))
             .unwrap_or(false)
     {
+        verify_pro_package_version(&install_path, pro_version.as_deref())?;
         clear_disabled_markers();
         write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
         // KT: clean up legacy Roaming copy even on the already-installed fast-path.
@@ -1438,6 +1499,10 @@ async fn install_pro_binary_machine(
         .map_err(|e| format!("disk:tmp fsync: {}", e))?;
     drop(f);
 
+    if let Err(error) = verify_pro_package_version(&tmp_path, pro_version.as_deref()) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
     remove_existing_pro_binary(&install_path).await?;
     std::fs::rename(&tmp_path, &install_path).map_err(|e| format!("disk:atomic rename: {}", e))?;
     clear_disabled_markers();
@@ -1479,7 +1544,8 @@ async fn install_pro_binary_machine(
 #[cfg(test)]
 mod machine_update_tests {
     use super::{
-        parse_machine_pro_update_request, quote_windows_argument, MachineProUpdateRequest,
+        parse_machine_pro_update_request, quote_windows_argument,
+        validate_machine_pro_update_request, MachineProUpdateRequest,
         MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG, MACHINE_PRO_UPDATE_FLAG,
         MACHINE_PRO_UPDATE_JOB_FLAG, MACHINE_PRO_UPDATE_SHA256_FLAG, MACHINE_PRO_UPDATE_URL_FLAG,
         MACHINE_PRO_UPDATE_VERSION_FLAG,
@@ -1497,7 +1563,7 @@ mod machine_update_tests {
             MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG.into(),
             "1".into(),
             MACHINE_PRO_UPDATE_VERSION_FLAG.into(),
-            "3.6.2".into(),
+            "3.6.4".into(),
         ]
     }
 
@@ -1506,7 +1572,7 @@ mod machine_update_tests {
         let request = parse_machine_pro_update_request(&valid_args())
             .expect("valid helper arguments")
             .expect("helper invocation");
-        assert_eq!(request.pro_version.as_deref(), Some("3.6.2"));
+        assert_eq!(request.pro_version.as_deref(), Some("3.6.4"));
         assert!(request.consent_defender_exclusion);
 
         let mut unknown = valid_args();
@@ -1556,5 +1622,84 @@ mod machine_update_tests {
         };
         assert!(!request.consent_defender_exclusion);
         assert!(request.pro_version.is_none());
+        assert!(validate_machine_pro_update_request(&request).is_err());
+    }
+
+    #[test]
+    fn machine_update_rejects_old_or_invalid_pro_before_uac_or_machine_changes() {
+        for version in ["3.6.3", "", "garbage", "3.6.4-beta", "3.6.4.0.1"] {
+            let mut args = valid_args();
+            *args.last_mut().unwrap() = version.into();
+            assert!(
+                parse_machine_pro_update_request(&args).is_err(),
+                "{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_manifest_cannot_be_relabelled_by_the_renderer() {
+        let manifest = serde_json::json!({
+            "version": "3.6.4", "sha256": "a".repeat(64),
+            "url": "https://winupdates.servalabs.com/pro/3.6.4.exe"
+        });
+        let url = manifest["url"].as_str().unwrap();
+        assert!(super::verify_pro_manifest_request(
+            &manifest,
+            url,
+            &"a".repeat(64),
+            Some("3.6.4.0")
+        )
+        .is_ok());
+        assert!(
+            super::verify_pro_manifest_request(&manifest, url, &"b".repeat(64), Some("3.6.4"))
+                .is_err()
+        );
+        assert!(super::verify_pro_manifest_request(
+            &manifest,
+            "https://winupdates.servalabs.com/pro/old.exe",
+            &"a".repeat(64),
+            Some("3.6.4")
+        )
+        .is_err());
+        assert!(
+            super::verify_pro_manifest_request(&manifest, url, &"a".repeat(64), Some("3.6.3"))
+                .is_err()
+        );
+        let old_manifest =
+            serde_json::json!({ "version": "3.6.3", "sha256": "a".repeat(64), "url": url });
+        assert!(super::verify_pro_manifest_request(
+            &old_manifest,
+            url,
+            &"a".repeat(64),
+            Some("3.6.4")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn release_versions_are_known_and_compatible_including_windows_revision_zero() {
+        for version in ["3.6.4", "3.6.4.0", "v3.6.4"] {
+            assert!(super::check_pro_version_compatible(Some(version)).is_ok());
+        }
+        for version in [
+            None,
+            Some("3.6.3"),
+            Some("999.0.0"),
+            Some("vv3.6.4"),
+            Some("3.6.4-beta"),
+        ] {
+            assert!(super::check_pro_version_compatible(version).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn obsolete_install_is_rejected_before_url_access_or_licence_probe() {
+        let result =
+            super::install_pro_binary(String::new(), String::new(), false, Some("3.6.3".into()))
+                .await;
+        assert!(result
+            .unwrap_err()
+            .contains("reinstalling the older Pro will not fix Vault mounting"));
     }
 }
