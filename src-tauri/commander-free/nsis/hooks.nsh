@@ -86,7 +86,22 @@ ${Using:StrFunc} UnStrStr
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "elevated-launchers-configure" "$0" "$1"
   ${If} $0 != 0
-    DetailPrint "Warning: WinCommander could not configure automatic elevated launch for Administrators; normal UAC fallback remains available."
+    Abort "WinCommander could not configure its required automatic startup route. See installer-lifecycle.log."
+  ${EndIf}
+!macroend
+
+; Full uninstall must remove automatic routes before deleting the installed
+; payload. The helper verifies action targets before it deletes any task or
+; registry value, and reports a conflict rather than removing another app.
+!macro WC_REMOVE_AUTOSTART_ROUTES_OR_ABORT stage
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1 "${WC_CONFIGURE_ELEVATED_LAUNCHERS}"
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -RemoveAutostartRoutes -RemoveManualLauncher -RemoveAutostartPreference'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-autostart-cleanup" "$0" "$1"
+  ${If} $0 != 0
+    Abort "WinCommander could not remove all of its automatic startup routes. See installer-lifecycle.log."
   ${EndIf}
 !macroend
 
@@ -296,7 +311,7 @@ ${Using:StrFunc} UnStrStr
   Pop $1
   ${If} $0 != 0
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
-    DetailPrint "Warning: WinCommander could not migrate every legacy user shortcut."
+    Abort "WinCommander could not remove legacy automatic startup routes. See installer-lifecycle.log."
   ${EndIf}
 
   ; Vault-policy changes are authorized by a dedicated local group, not by
@@ -341,23 +356,22 @@ ${Using:StrFunc} UnStrStr
   !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "uninstall"
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "uninstall" "un"
   !insertmacro WC_DELETE_OWNED_SERVICE_OR_ABORT "uninstall"
-  ; Updates remove and immediately recreate these trusted launcher tasks in
-  ; POSTINSTALL; a standalone uninstall leaves no privileged launch route.
-  nsExec::ExecToStack 'schtasks.exe /Delete /TN "WinCommander Elevated Launcher" /F'
-  Pop $0
-  Pop $1
-  nsExec::ExecToStack 'schtasks.exe /Delete /TN "WinCommander Elevated Autostart" /F'
-  Pop $0
-  Pop $1
-
-  ; The normal router is retained across an in-place update so POSTINSTALL can
-  ; preserve the user's autostart preference. A real uninstall removes it.
+  ; Updates retain the canonical task so POSTINSTALL can migrate the legacy
+  ; disabled-task preference. A full uninstall removes verified owned routes.
   ClearErrors
   ${GetOptions} $CMDLINE "/UPDATE" $R7
   ${If} ${Errors}
-    nsExec::ExecToStack 'schtasks.exe /Delete /TN "WinCommander Autostart" /F'
+    !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "uninstall"
+    !insertmacro WC_REMOVE_AUTOSTART_ROUTES_OR_ABORT "uninstall"
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1 "${WC_LEGACY_LAUNCH_MIGRATION}"
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe" -Uninstall'
     Pop $0
     Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-profile-autostart-cleanup" "$0" "$1"
+    ${If} $0 != 0
+      Abort "WinCommander could not remove per-user automatic startup routes. See installer-lifecycle.log."
+    ${EndIf}
   ${EndIf}
 
   ; Tauri marks an in-place replacement with /UPDATE. An update must retain
@@ -400,9 +414,9 @@ ${Using:StrFunc} UnStrStr
       Rename "$PLUGINSDIR\wincommander-license_cache.json" "$R5\WinCommander\license_cache.json"
       IfErrors wc_restore_license_failed
   wc_remove_legacy_current_user:
-    ; A legacy per-user installer used this path.  Remove it for the user
-    ; running uninstall so its old executable cannot shadow the shared build.
-    RMDir /r "$LOCALAPPDATA\WinCommander"
+    ; Per-user state remains intact. The verified migration above removes only
+    ; obsolete wincommander-free.exe/uninstall.exe/resources/scripts payloads
+    ; from every profile, never the complete LocalAppData product directory.
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
     Goto wc_uninstall_cleanup_done
   wc_preserve_license_failed:

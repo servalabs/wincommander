@@ -4,17 +4,18 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$ExecutablePath,
 
-    # Updates must retain an explicit user choice to turn autostart off. A
-    # fresh machine install opts in to the one supported router.
-    [switch]$PreserveAutostartPreference
+    # An update must retain an explicit user preference. A missing marker is
+    # intentionally the product default: automatic startup is on.
+    [switch]$PreserveAutostartPreference,
+
+    # Used only by an explicit NSIS uninstall. It removes every automatic
+    # route, while leaving the manual elevated-launcher task alone unless that
+    # task is also being uninstalled.
+    [switch]$RemoveAutostartRoutes,
+    [switch]$RemoveManualLauncher,
+    [switch]$RemoveAutostartPreference
 )
 
-# UAC correctly prevents a normal process from silently making itself elevated.
-# The Administrators-only task below is the trusted Windows elevation boundary.
-# A separate single, limited Users-group logon task routes every interactive
-# session: Administrator sessions start this trusted task before a window is
-# created, while standard users retain one normal process. Do not install a
-# second elevated logon trigger because it races the router at logon.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -23,12 +24,14 @@ $usersSid = 'S-1-5-32-545'
 $manualTaskName = 'WinCommander Elevated Launcher'
 $autostartTaskName = 'WinCommander Autostart'
 $obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
+$genericAutostartTaskNames = @('System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
 $runValueNames = @('WinCommander', 'WinCommander Free')
+$preferencePath = 'Registry::HKEY_LOCAL_MACHINE\Software\ServaLabs\WinCommander'
+$preferenceName = 'AutostartEnabled'
 
 try {
-    $targetPath = [System.IO.Path]::GetFullPath($ExecutablePath)
-}
-catch {
+    $targetPath = [IO.Path]::GetFullPath($ExecutablePath)
+} catch {
     Write-Error "The WinCommander executable path is invalid: $ExecutablePath"
     exit 1
 }
@@ -36,6 +39,66 @@ catch {
 if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
     Write-Error "The WinCommander executable does not exist: $targetPath"
     exit 1
+}
+
+function Get-OptionalRegistryValue([string]$Path, [string]$Name) {
+    # Do not use Get-ItemPropertyValue for optional values. It reports a
+    # missing value as an error on some PowerShell/registry-provider versions,
+    # although a clean machine is a valid install state.
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
+    $property = $item.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-OwnedExecutablePaths {
+    $paths = @($targetPath)
+    try {
+        $profiles = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*' -ErrorAction Stop
+        foreach ($profile in $profiles) {
+            $profilePath = [Environment]::ExpandEnvironmentVariables([string]$profile.ProfileImagePath)
+            if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
+            $paths += [IO.Path]::GetFullPath((Join-Path $profilePath 'AppData\Local\WinCommander\wincommander-free.exe'))
+        }
+    } catch {
+        throw "Could not enumerate legacy WinCommander executable locations: $($_.Exception.Message)"
+    }
+    return @($paths | Sort-Object -Unique)
+}
+
+function Test-OwnedExecutablePath([AllowNull()][string]$Path, [string[]]$OwnedPaths) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        $resolvedPath = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
+        return @($OwnedPaths | Where-Object { [string]::Equals($_, $resolvedPath, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    } catch {
+        return $false
+    }
+}
+
+function Test-OwnedExecutableCommand([AllowNull()][string]$Command, [string[]]$OwnedPaths) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Command).Trim()
+    # Task Scheduler's Action.Execute is a raw path and is normally unquoted,
+    # even under Program Files. Check that form before parsing a Run command.
+    if (Test-OwnedExecutablePath $expanded $OwnedPaths) { return $true }
+    $match = [regex]::Match($expanded, '^\s*(?:"(?<path>[^"]+)"|(?<path>[^\s]+))(?=\s|$)')
+    return $match.Success -and (Test-OwnedExecutablePath $match.Groups['path'].Value $OwnedPaths)
+}
+
+function Remove-OwnedRunValues([string[]]$Paths, [string[]]$OwnedPaths) {
+    $removed = 0
+    foreach ($path in $Paths) {
+        foreach ($name in $runValueNames) {
+            $value = Get-OptionalRegistryValue $path $name
+            if ($null -ne $value -and (Test-OwnedExecutableCommand ([string]$value) $OwnedPaths)) {
+                Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop
+                $removed++
+            }
+        }
+    }
+    return $removed
 }
 
 function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [string]$Arguments, [bool]$RequireLogonTrigger = $false) {
@@ -46,115 +109,167 @@ function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [strin
     $actions = @($Task.Actions)
     $triggers = @($Task.Triggers)
     $hasOneLogonTrigger = -not $RequireLogonTrigger -or
-        ($triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger')
+        ($triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and
+            $triggers[0].Enabled -and [string]::IsNullOrWhiteSpace($triggers[0].UserId))
     if ($Task.State -eq 'Disabled' -or $actualSid -ne $GroupSid -or $Task.Principal.RunLevel -ne $RunLevel -or
-        $Task.Settings.MultipleInstances -ne 'Parallel' -or $actions.Count -ne 1 -or
-        $actions[0].Execute -ine $targetPath -or $actions[0].Arguments -ne $Arguments -or -not $hasOneLogonTrigger) {
+        $Task.Settings.MultipleInstances -ne 'Parallel' -or $Task.Settings.ExecutionTimeLimit -ne 'PT0S' -or
+        $actions.Count -ne 1 -or $actions[0].Execute -ine $targetPath -or $actions[0].Arguments -ne $Arguments -or
+        -not $hasOneLogonTrigger) {
         throw 'The registered WinCommander task did not match the required security and session contract.'
     }
 }
 
-function Test-OwnedExecutableCommand([AllowNull()][string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
-    $expanded = [Environment]::ExpandEnvironmentVariables($Command).Trim()
-    $match = [regex]::Match($expanded, '^\s*(?:"(?<path>[^"]+)"|(?<path>[^\s]+))(?=\s|$)')
-    if (-not $match.Success) { return $false }
-    try {
-        return [string]::Equals([IO.Path]::GetFullPath($match.Groups['path'].Value), $targetPath, [StringComparison]::OrdinalIgnoreCase)
-    } catch {
-        return $false
+function Set-AutostartPreference([bool]$Enabled) {
+    if (-not (Test-Path -LiteralPath $preferencePath)) {
+        New-Item -Path $preferencePath -Force -ErrorAction Stop | Out-Null
+    }
+    New-ItemProperty -LiteralPath $preferencePath -Name $preferenceName -PropertyType DWord -Value ([int]$Enabled) -Force -ErrorAction Stop | Out-Null
+    $readback = Get-OptionalRegistryValue $preferencePath $preferenceName
+    if ($null -eq $readback -or [int]$readback -ne [int]$Enabled) {
+        throw 'The WinCommander automatic-start preference did not persist.'
     }
 }
 
-function Remove-OwnedLegacyRunValues {
-    # Remove no broad Run keys: a value is touched only when both its known
-    # WinCommander name and executable target match this installed payload.
-    $paths = @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce',
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'
-    )
-    $found = $false
-    foreach ($path in $paths) {
-        foreach ($name in $runValueNames) {
-            $value = Get-ItemPropertyValue -LiteralPath $path -Name $name -ErrorAction SilentlyContinue
-            if (Test-OwnedExecutableCommand $value) {
-                $found = $true
-                Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop
+function Get-AutostartEnabled([bool]$PreservePreference, [string[]]$OwnedPaths) {
+    $value = Get-OptionalRegistryValue $preferencePath $preferenceName
+    if ($null -ne $value) {
+        $number = [Convert]::ToInt32($value)
+        if ($number -eq 0) { return $false }
+        if ($number -eq 1) { return $true }
+        throw 'The WinCommander automatic-start preference is invalid.'
+    }
+
+    # Releases before the persisted marker represented explicit off by leaving
+    # a disabled automatic-start task. Preserve that choice once, then remove
+    # the task so no disabled task remains as a second form of state. Covered
+    # identity releases used the generic task name too, so inspect every known
+    # automatic-start name but only accept an exact owned action as evidence.
+    if ($PreservePreference) {
+        foreach ($taskName in @($autostartTaskName) + $genericAutostartTaskNames) {
+            $legacyTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($null -ne $legacyTask -and $legacyTask.State -eq 'Disabled' -and
+                (Test-TaskActionOwnership $legacyTask '--autostart' $OwnedPaths)) {
+                Set-AutostartPreference $false
+                return $false
             }
         }
     }
-    return $found
+    return $true
 }
 
-function Test-RouterPresent {
-    $task = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction SilentlyContinue
-    return $null -ne $task -and $task.State -ne 'Disabled'
+function Remove-AutostartPreference {
+    if (-not (Test-Path -LiteralPath $preferencePath)) { return }
+    if ($null -ne (Get-OptionalRegistryValue $preferencePath $preferenceName)) {
+        Remove-ItemProperty -LiteralPath $preferencePath -Name $preferenceName -ErrorAction Stop
+    }
+}
+
+function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPaths) {
+    $actions = @($Task.Actions)
+    return $actions.Count -eq 1 -and $actions[0].Arguments -eq $Arguments -and
+        (Test-OwnedExecutableCommand ([string]$actions[0].Execute) $OwnedPaths)
+}
+
+function Assert-TaskNameCanBeReconciled([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths) {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -ne $task -and -not (Test-TaskActionOwnership $task $Arguments $OwnedPaths)) {
+        throw "A task named $TaskName does not belong to WinCommander; refusing to replace it."
+    }
+}
+
+function Remove-OwnedNamedTask([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths) {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -eq $task) { return $false }
+    # Cleanup must never remove a foreign task merely because it reuses one of
+    # our historical names. Registration still calls Assert-TaskNameCanBeReconciled
+    # and therefore reports that conflict instead of overwriting it.
+    if (-not (Test-TaskActionOwnership $task $Arguments $OwnedPaths)) { return $false }
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+    if ($null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+        throw "WinCommander task removal was not confirmed: $TaskName"
+    }
+    return $true
+}
+
+function Test-GenericAutostartTask($Task, [string[]]$OwnedPaths) {
+    return Test-TaskActionOwnership $Task '--autostart' $OwnedPaths
+}
+
+function Remove-GenericOwnedAutostartTasks([string[]]$OwnedPaths) {
+    $removed = 0
+    foreach ($taskName in $genericAutostartTaskNames) {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($null -ne $task -and (Test-GenericAutostartTask $task $OwnedPaths)) {
+            if (Remove-OwnedNamedTask $taskName '--autostart' $OwnedPaths) { $removed++ }
+        }
+    }
+    return $removed
+}
+
+function Remove-OtherAutostartTasks([string[]]$OwnedPaths) {
+    $removed = 0
+    if (Remove-OwnedNamedTask $obsoleteElevatedAutostartTaskName '--elevated-relaunch --autostart' $OwnedPaths) { $removed++ }
+    return $removed + (Remove-GenericOwnedAutostartTasks $OwnedPaths)
+}
+
+function Remove-AllAutostartTasks([string[]]$OwnedPaths) {
+    $removed = 0
+    if (Remove-OwnedNamedTask $autostartTaskName '--autostart' $OwnedPaths) { $removed++ }
+    return $removed + (Remove-OtherAutostartTasks $OwnedPaths)
 }
 
 function Register-ElevatedLauncherTask {
-    param(
-        [Parameter(Mandatory)]
-        [string]$TaskName,
-
-        [Parameter(Mandatory)]
-        [string]$Arguments
-    )
-
-    $action = New-ScheduledTaskAction -Execute $targetPath -Argument $Arguments
-    # Group principal means the interactive user must be an Administrator to
-    # run the task. Highest is mandatory for an Administrators-group task.
+    Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths
+    $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--elevated-relaunch'
     $principal = New-ScheduledTaskPrincipal -GroupId $administratorsSid -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -MultipleInstances Parallel
-
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-
-    $registered = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-    # Task Scheduler normalizes the SID to the localized group display name
-    # (for example, "Administrators") when reading it back. The task was
-    # created with the fixed Administrators SID above; verify the stable
-    # privilege property here rather than comparing localized display text.
-    Assert-TaskContract $registered $administratorsSid 'Highest' $Arguments
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
+    Register-ScheduledTask -TaskName $manualTaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    Assert-TaskContract (Get-ScheduledTask -TaskName $manualTaskName -ErrorAction Stop) $administratorsSid 'Highest' '--elevated-relaunch'
 }
 
 function Register-LogonRouterTask {
+    Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths
     $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--autostart'
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -MultipleInstances Parallel
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $autostartTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    $registered = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction Stop
-    Assert-TaskContract $registered $usersSid 'Limited' '--autostart' $true
+    Assert-TaskContract (Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Limited' '--autostart' $true
 }
 
 try {
-    # Capture the old preference before cleanup. A legacy Run value means the
-    # user had opted in; no router and no owned legacy value means they had
-    # opted out and an update must not silently turn it back on.
-    $routerWasEnabled = Test-RouterPresent
-    $legacyAutostartWasEnabled = Remove-OwnedLegacyRunValues
-    Register-ElevatedLauncherTask -TaskName $manualTaskName -Arguments '--elevated-relaunch'
-    if (-not $PreserveAutostartPreference -or $routerWasEnabled -or $legacyAutostartWasEnabled) {
-        Register-LogonRouterTask
-    } else {
-        # A disabled router should not survive as an alternate launch source.
-        Unregister-ScheduledTask -TaskName $autostartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    $ownedPaths = Get-OwnedExecutablePaths
+    $runPaths = @(
+        'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run',
+        'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\RunOnce',
+        'Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run',
+        'Registry::HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\RunOnce',
+        'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+        'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'
+    )
+    $runValuesRemoved = Remove-OwnedRunValues $runPaths $ownedPaths
+
+    if ($RemoveAutostartRoutes) {
+        $tasksRemoved = Remove-AllAutostartTasks $ownedPaths
+        if ($RemoveManualLauncher) { [void](Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $ownedPaths) }
+        if ($RemoveAutostartPreference) { Remove-AutostartPreference }
+        Write-Output "WinCommander automatic startup cleanup completed: tasks=$tasksRemoved runValues=$runValuesRemoved"
+        exit 0
     }
-    Unregister-ScheduledTask -TaskName $obsoleteElevatedAutostartTaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Output "Configured one WinCommander logon router and the trusted elevated Administrator launcher."
-}
-catch {
-    Write-Error "Could not configure trusted elevated WinCommander launchers: $($_.Exception.Message)"
+
+    Register-ElevatedLauncherTask
+    $autostartEnabled = Get-AutostartEnabled ([bool]$PreserveAutostartPreference) $ownedPaths
+    if ($autostartEnabled) {
+        Register-LogonRouterTask
+        $tasksRemoved = Remove-OtherAutostartTasks $ownedPaths
+        Write-Output "WinCommander automatic startup configured: preference=on task=$autostartTaskName legacyTasks=$tasksRemoved runValues=$runValuesRemoved"
+    } else {
+        $tasksRemoved = Remove-AllAutostartTasks $ownedPaths
+        Write-Output "WinCommander automatic startup configured: preference=off removedTasks=$tasksRemoved runValues=$runValuesRemoved"
+    }
+} catch {
+    Write-Error "Could not reconcile WinCommander automatic startup routes: $($_.Exception.Message)"
     exit 1
 }

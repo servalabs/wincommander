@@ -1,88 +1,201 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$SharedExecutable
+    [string]$SharedExecutable,
+
+    # A full uninstall must not retarget shortcuts to an executable that is
+    # about to be removed or delete profile data.
+    [switch]$Uninstall
 )
 
-# This runs only from the elevated, per-machine NSIS installer. It deliberately
-# changes launch records and old executable payloads only; per-user WinCommander
-# settings, logs, caches, and stores remain private to their Windows profile.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Only old launch payloads/routes are touched. Per-profile store, logs,
+# file-search, caches, and encrypted *.dat settings remain user-owned.
 
 $shared = [IO.Path]::GetFullPath($SharedExecutable)
 if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) {
     throw "The shared WinCommander executable is missing: $shared"
 }
 
-$profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*'
-$profiles = Get-ItemProperty -Path $profileList -ErrorAction Stop |
-    ForEach-Object {
-        $path = [Environment]::ExpandEnvironmentVariables([string]$_.ProfileImagePath)
-        if ($path -and (Test-Path -LiteralPath $path -PathType Container)) {
-            [pscustomobject]@{
-                Sid = [string]$_.PSChildName
-                Path = [IO.Path]::GetFullPath($path)
+$runValueNames = @('WinCommander', 'WinCommander Free')
+$systemProfileSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
+$shell = New-Object -ComObject WScript.Shell
+$summary = [ordered]@{ profiles = 0; runValuesRemoved = 0; startupShortcutsRemoved = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; failures = 0 }
+$failureMessages = [System.Collections.Generic.List[string]]::new()
+
+function Get-OptionalRegistryValue([string]$Path, [string]$Name) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
+    $property = $item.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Test-OwnedExecutablePath([AllowNull()][string]$Path, [string[]]$OwnedPaths) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        $resolved = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
+        return @($OwnedPaths | Where-Object { [string]::Equals($_, $resolved, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    } catch {
+        return $false
+    }
+}
+
+function Test-OwnedExecutableCommand([AllowNull()][string]$Command, [string[]]$OwnedPaths) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Command).Trim()
+    $match = [regex]::Match($expanded, '^\s*(?:"(?<path>[^"]+)"|(?<path>[^\s]+))(?=\s|$)')
+    return $match.Success -and (Test-OwnedExecutablePath $match.Groups['path'].Value $OwnedPaths)
+}
+
+function Remove-OwnedRunValues([string[]]$Paths, [string[]]$OwnedPaths) {
+    $removed = 0
+    foreach ($path in $Paths) {
+        foreach ($name in $runValueNames) {
+            $value = Get-OptionalRegistryValue $path $name
+            if ($null -ne $value -and (Test-OwnedExecutableCommand ([string]$value) $OwnedPaths)) {
+                Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop
+                $removed++
             }
         }
-    } |
-    Sort-Object -Property Path -Unique
+    }
+    return $removed
+}
 
-$shell = New-Object -ComObject WScript.Shell
-$summary = [ordered]@{ profiles = 0; shortcutsUpdated = 0; startupShortcutsRemoved = 0; staleFilesRemoved = 0; failures = 0 }
+function Remove-OwnedStartupShortcuts([string]$Root, [string[]]$OwnedPaths) {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return 0 }
+    $removed = 0
+    Get-ChildItem -LiteralPath $Root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
+        $shortcut = $shell.CreateShortcut($_.FullName)
+        if (Test-OwnedExecutablePath $shortcut.TargetPath $OwnedPaths) {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+            $removed++
+        }
+    }
+    return $removed
+}
+
+function Update-LegacyShortcuts([string]$Root, [string]$StartupRoot, [string]$LegacyExecutable) {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return 0 }
+    $updated = 0
+    Get-ChildItem -LiteralPath $Root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
+        if (-not $_.FullName.StartsWith($StartupRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            $shortcut = $shell.CreateShortcut($_.FullName)
+            if ([string]::Equals($shortcut.TargetPath, $LegacyExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+                $shortcut.TargetPath = $shared
+                $shortcut.WorkingDirectory = Split-Path -Parent $shared
+                $shortcut.IconLocation = "$shared,0"
+                $shortcut.Save()
+                $updated++
+            }
+        }
+    }
+    return $updated
+}
+
+function Invoke-ProfileHive($Profile, [scriptblock]$Action) {
+    $sid = [string]$Profile.Sid
+    $loadedRoot = "Registry::HKEY_USERS\$sid"
+    if (Test-Path -LiteralPath $loadedRoot) {
+        & $Action $loadedRoot
+        return
+    }
+
+    $ntUserDat = Join-Path $Profile.Path 'NTUSER.DAT'
+    if (-not (Test-Path -LiteralPath $ntUserDat -PathType Leaf)) { return }
+    $mountName = "WinCommanderInstallerCleanup_$($sid -replace '[^A-Za-z0-9]', '_')"
+    $mountRoot = "Registry::HKEY_USERS\$mountName"
+    if (Test-Path -LiteralPath $mountRoot) { throw "Temporary profile hive is already mounted: $mountName" }
+
+    $mounted = $false
+    try {
+        $loadOutput = & reg.exe load "HKU\$mountName" $ntUserDat 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Could not load profile hive ${sid}: $loadOutput" }
+        $mounted = $true
+        & $Action $mountRoot
+    } finally {
+        if ($mounted) {
+            $unloadOutput = & reg.exe unload "HKU\$mountName" 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Could not unload profile hive ${sid}: $unloadOutput" }
+        }
+    }
+}
+
+try {
+    $profiles = @(
+        Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*' -ErrorAction Stop |
+            ForEach-Object {
+                $sid = [string]$_.PSChildName
+                $path = [Environment]::ExpandEnvironmentVariables([string]$_.ProfileImagePath)
+                if ($sid -and $sid -notin $systemProfileSids -and $path -and (Test-Path -LiteralPath $path -PathType Container)) {
+                    [pscustomobject]@{ Sid = $sid; Path = [IO.Path]::GetFullPath($path) }
+                }
+            } |
+            Sort-Object -Property Path -Unique
+    )
+} catch {
+    throw "Could not enumerate Windows user profiles for WinCommander launch cleanup: $($_.Exception.Message)"
+}
+
+$allOwnedPaths = @($shared)
+foreach ($profile in $profiles) {
+    $allOwnedPaths += Join-Path $profile.Path 'AppData\Local\WinCommander\wincommander-free.exe'
+}
+$allOwnedPaths = @($allOwnedPaths | ForEach-Object { [IO.Path]::GetFullPath($_) } | Sort-Object -Unique)
 
 foreach ($profile in $profiles) {
     $summary.profiles++
     $legacyRoot = Join-Path $profile.Path 'AppData\Local\WinCommander'
-    $legacyExe = Join-Path $legacyRoot 'wincommander-free.exe'
-    $shortcutRoots = @(
-        (Join-Path $profile.Path 'Desktop'),
-        (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs'),
-        (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup')
-    )
+    $legacyExecutable = Join-Path $legacyRoot 'wincommander-free.exe'
+    $ownedPaths = @($shared, [IO.Path]::GetFullPath($legacyExecutable))
+    $startupRoot = Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
 
-    foreach ($root in $shortcutRoots) {
-        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
-        try {
-            Get-ChildItem -LiteralPath $root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
-                $shortcut = $shell.CreateShortcut($_.FullName)
-                if ($root -like '*\Programs\Startup' -and
-                    ([string]::Equals($shortcut.TargetPath, $legacyExe, [StringComparison]::OrdinalIgnoreCase) -or
-                     [string]::Equals($shortcut.TargetPath, $shared, [StringComparison]::OrdinalIgnoreCase))) {
-                    # Task Scheduler is now the one logon router. Do not
-                    # retarget an old Startup-folder shortcut into a second
-                    # route, but do not touch shortcuts to anything else.
-                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
-                    $summary.startupShortcutsRemoved++
-                } elseif ([string]::Equals($shortcut.TargetPath, $legacyExe, [StringComparison]::OrdinalIgnoreCase)) {
-                    $shortcut.TargetPath = $shared
-                    $shortcut.WorkingDirectory = Split-Path -Parent $shared
-                    $shortcut.IconLocation = "$shared,0"
-                    $shortcut.Save()
-                    $summary.shortcutsUpdated++
-                }
-            }
-        } catch {
-            # Continue with other profiles. Setup must not be blocked by a
-            # profile Windows itself has made inaccessible or redirected.
-            $summary.failures++
+    try {
+        $summary.startupShortcutsRemoved += Remove-OwnedStartupShortcuts $startupRoot $ownedPaths
+        if (-not $Uninstall) {
+            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'Desktop') $startupRoot $legacyExecutable
+            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs') $startupRoot $legacyExecutable
         }
+    } catch {
+        $summary.failures++
+        $failureMessages.Add("shortcuts for $($profile.Sid): $($_.Exception.Message)")
     }
 
-    foreach ($legacyFile in @($legacyExe, (Join-Path $legacyRoot 'uninstall.exe'))) {
+    try {
+        Invoke-ProfileHive $profile {
+            param($hiveRoot)
+            $runPaths = @(
+                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Run",
+                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                "$hiveRoot\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
+                "$hiveRoot\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"
+            )
+            $summary.runValuesRemoved += Remove-OwnedRunValues $runPaths $ownedPaths
+            $uninstallKey = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
+            if (Test-Path -LiteralPath $uninstallKey) {
+                Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction Stop
+            }
+        }
+    } catch {
+        $summary.failures++
+        $failureMessages.Add("registry for $($profile.Sid): $($_.Exception.Message)")
+    }
+
+    # The old payload must not survive an explicit uninstall either. These are
+    # exact product files/directories only; no profile root or user data is
+    # removed here.
+    foreach ($legacyFile in @($legacyExecutable, (Join-Path $legacyRoot 'uninstall.exe'))) {
         if (-not (Test-Path -LiteralPath $legacyFile -PathType Leaf)) { continue }
         try {
             Remove-Item -LiteralPath $legacyFile -Force -ErrorAction Stop
             $summary.staleFilesRemoved++
         } catch {
             $summary.failures++
+            $failureMessages.Add("payload ${legacyFile}: $($_.Exception.Message)")
         }
     }
-
-    # These folders belong to the old per-user application payload. The shared
-    # Program Files build has its own signed resources/scripts, while current
-    # per-user settings and telemetry live in different paths (store, logs,
-    # file-search, and the encrypted *.dat files) and are intentionally kept.
     foreach ($legacyDirectory in @('resources', 'scripts')) {
         $payloadPath = Join-Path $legacyRoot $legacyDirectory
         if (-not (Test-Path -LiteralPath $payloadPath -PathType Container)) { continue }
@@ -91,38 +204,21 @@ foreach ($profile in $profiles) {
             $summary.staleFilesRemoved++
         } catch {
             $summary.failures++
-        }
-    }
-
-    # A loaded profile hive can retain the old per-user uninstall entry even
-    # after its payload is gone. Remove that exact registration only; never
-    # alter unrelated application registrations or user settings.
-    $uninstallKey = "Registry::HKEY_USERS\$($profile.Sid)\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
-    if (Test-Path -LiteralPath $uninstallKey) {
-        try {
-            Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction Stop
-        } catch {
-            $summary.failures++
+            $failureMessages.Add("payload ${payloadPath}: $($_.Exception.Message)")
         }
     }
 }
 
-# A machine-wide Startup folder is also a second logon route. It normally only
-# contains shortcuts to the shared Program Files payload, so remove exactly
-# those WinCommander links and leave every other vendor's startup item alone.
 $commonStartup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Startup'
-if (Test-Path -LiteralPath $commonStartup -PathType Container) {
-    try {
-        Get-ChildItem -LiteralPath $commonStartup -Filter '*.lnk' -File -Force -ErrorAction Stop | ForEach-Object {
-            $shortcut = $shell.CreateShortcut($_.FullName)
-            if ([string]::Equals($shortcut.TargetPath, $shared, [StringComparison]::OrdinalIgnoreCase)) {
-                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
-                $summary.startupShortcutsRemoved++
-            }
-        }
-    } catch {
-        $summary.failures++
-    }
+try {
+    $summary.startupShortcutsRemoved += Remove-OwnedStartupShortcuts $commonStartup $allOwnedPaths
+} catch {
+    $summary.failures++
+    $failureMessages.Add("common Startup folder: $($_.Exception.Message)")
 }
 
-"WinCommander legacy launch migration: profiles=$($summary.profiles) shortcuts=$($summary.shortcutsUpdated) startupShortcuts=$($summary.startupShortcutsRemoved) files=$($summary.staleFilesRemoved) failures=$($summary.failures)"
+if ($summary.failures -gt 0) {
+    throw "WinCommander launch-route cleanup failed: $($failureMessages -join '; ')"
+}
+
+"WinCommander launch-route cleanup: profiles=$($summary.profiles) runValues=$($summary.runValuesRemoved) startupShortcuts=$($summary.startupShortcutsRemoved) shortcuts=$($summary.shortcutsUpdated) files=$($summary.staleFilesRemoved)"
