@@ -1,8 +1,22 @@
 import { VAULT_MOUNT_REASONS, vaultMountResultLabel } from "@/panels/fleet/vaultAccessTypes";
 
+export function isAuthorizedBulkDismountReceipt(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const receipt = value as Record<string, unknown>;
+  return receipt.status === "authorized_dismounted" && receipt.state === "unmounted" && receipt.scope === "authorized"
+    && typeof receipt.dismounted === "number" && Number.isSafeInteger(receipt.dismounted)
+    && receipt.dismounted >= 0 && receipt.dismounted <= 26;
+}
+
 /** Show only known failure categories, never raw service transport or credential data. */
 export function vaultOperationError(error: unknown, operation: "mount" | "dismount" | "open" = "mount"): string {
   const detail = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
+  const partial = detail.match(/(?:^|\s)vault_bulk_dismount_partial:([a-z_]+):(\d+):(\d+)(?:$|\s)/);
+  if (partial && VAULT_MOUNT_REASONS.includes(partial[1] as typeof VAULT_MOUNT_REASONS[number])) {
+    const dismounted = Number(partial[2]);
+    const blocked = Number(partial[3]);
+    if (Number.isSafeInteger(dismounted) && Number.isSafeInteger(blocked)) return `${dismounted} encrypted volume(s) dismounted; ${blocked} not confirmed dismounted. ${vaultOperationError(`vault_${partial[1]}`, "dismount")}`;
+  }
   if (detail.includes("pro_not_installed")) return "The Pro module is not installed. Open License / Pro and install it before mounting. Activating a licence alone does not install the encryption engine.";
   if (detail.includes("vault_owner_required")) return "Only the primary owner can edit this private Vault. Ask its owner to make changes. An administrator may remove the policy only while the Vault is unmounted; this does not unlock its contents.";
   if (detail.includes("vault_mount_readback_unconfirmed")) return "The service has not confirmed that this Vault is mounted for your account. Refresh its status before using the drive. No successful mount was reported.";

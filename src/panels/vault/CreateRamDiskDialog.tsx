@@ -5,6 +5,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { showError, showSuccess } from "../../utils/toast";
 import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB } from "../../lib/ramDisk";
 import DriveLetterPicker from "./DriveLetterPicker";
+import useVaultDriveLetters from "@/hooks/useVaultDriveLetters";
 
 interface Props {
   isOpen: boolean;
@@ -32,7 +33,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
 
   const [sizeMB, setSizeMB] = useState(MIN_RAM_DISK_SIZE_MB);
   const [letter, setLetter] = useState("R");
-  const [letters, setLetters] = useState<string[]>([]);
+  const driveList = useVaultDriveLetters(isOpen);
   const [filesystem, setFilesystem] = useState<Filesystem>("NTFS");
   const [label, setLabel] = useState("TEMP");
   const [readOnly, setReadOnly] = useState(false);
@@ -59,21 +60,10 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
   useEffect(() => {
     if (!isOpen) return;
     reset();
-    void (async () => {
-      try {
-        const r = await getAvailableDriveLetters();
-        if (r?.success && r.data?.letters?.length) {
-          setLetters(r.data.letters);
-          const preferred = r.data.letters.includes("R") ? "R" : r.data.letters[0];
-          setLetter(preferred);
-        } else {
-          setLetters("DEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-        }
-      } catch {
-        setLetters("DEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-      }
-    })();
-  }, [isOpen, getAvailableDriveLetters, reset]);
+  }, [isOpen, reset]);
+  useEffect(() => {
+    if (!driveList.loading && !driveList.unavailable) setLetter(current => driveList.letters.includes(current) ? current : driveList.letters[0] ?? "");
+  }, [driveList.letters, driveList.loading, driveList.unavailable]);
 
   const handleCreate = async () => {
     if (sizeMB < MIN_RAM_DISK_SIZE_MB) {
@@ -82,6 +72,12 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
     }
     setCreating(true);
     try {
+      const available = await getAvailableDriveLetters();
+      if (!available.success || !available.data?.letters.includes(letter)) {
+        showError("The selected drive letter could not be confirmed free. Refresh the drive list before creating a RAM disk.");
+        void driveList.refresh();
+        return;
+      }
       const r = await createRamDisk({
         SizeMB: normalizeRamDiskSizeMB(sizeMB),
         DriveLetter: letter,
@@ -154,7 +150,10 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
             id="ramdisk-letter"
             value={letter}
             onChange={setLetter}
-            letters={letters}
+            letters={driveList.letters}
+            loading={driveList.loading}
+            unavailable={driveList.unavailable}
+            onRefresh={() => void driveList.refresh()}
           />
         </FormGroup>
 
@@ -191,7 +190,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
           text="CREATE"
           onClick={handleCreate}
           loading={creating}
-          disabled={sizeMB < MIN_RAM_DISK_SIZE_MB || overCap || creating}
+          disabled={sizeMB < MIN_RAM_DISK_SIZE_MB || overCap || creating || driveList.loading || driveList.unavailable || !driveList.letters.includes(letter)}
           className="modal-primary-btn"
         />
       </div>

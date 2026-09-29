@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import useBackend from "@/hooks/useBackend";
 import { selectableDriveLetters } from "@/lib/vaultOperationFeedback";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -10,6 +10,7 @@ import { vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets"
 import VaultAccessInfo from "./VaultAccessInfo";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
 import VaultPrincipalPicker from "./VaultPrincipalPicker";
+import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import "./VaultAccessEditor.css";
 
 interface VaultAccessEditorProps {
@@ -45,17 +46,21 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
   const [lettersLoading, setLettersLoading] = useState(true);
   const [letterFailure, setLetterFailure] = useState("");
+  const letterRevision = useRef(0);
   const refreshLetters = useCallback(async () => {
+    const request = ++letterRevision.current;
     setLettersLoading(true);
     setLetterFailure("");
     try {
       const result = await getAvailableDriveLetters(entry.id);
+      if (request !== letterRevision.current) return;
       if (!result.success || !result.data) throw new Error();
       setAvailableLetters(selectableDriveLetters(result.data.letters));
     } catch {
+      if (request !== letterRevision.current) return;
       setAvailableLetters([]);
       setLetterFailure("Free drive letters could not be checked. Refresh before choosing a letter.");
-    } finally { setLettersLoading(false); }
+    } finally { if (request === letterRevision.current) setLettersLoading(false); }
   }, [entry.id, getAvailableDriveLetters]);
   useEffect(() => { void refreshLetters(); }, [refreshLetters]);
   const letterChoices = selectableDriveLetters(availableLetters, otherReservedLetters);
@@ -125,8 +130,8 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
           {letterChoices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
         </select>
         <Button type="button" variant="outline" size="sm" disabled={lettersLoading} onClick={() => void refreshLetters()}>Refresh free letters</Button>
-        {letterFailure && <small role="alert">{letterFailure}</small>}
-        {!lettersLoading && selectedLetter && !letterChoices.includes(selectedLetter) && !locked && <small role="alert">This letter is occupied or reserved. Choose another free letter before saving.</small>}
+        <VaultOperationNotice message={letterFailure} />
+        {!lettersLoading && !letterFailure && selectedLetter && !letterChoices.includes(selectedLetter) && !locked && <VaultOperationNotice message="This letter is occupied or reserved. Choose another free letter before saving." />}
       </Field>
     </div>
 

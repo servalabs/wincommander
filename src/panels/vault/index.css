@@ -1486,3 +1486,7 @@ input::-webkit-credentials-auto-fill-button {
   border-color: var(--color-accent) !important;
   background: var(--color-accent-subtle) !important;
 }
+.vol-actions-group { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.vol-actions-group .vault-operation-notice { max-width: 320px; margin-bottom: 0; text-align: left; }
+.vault-volume-feedback-row td { white-space: normal; }
+.vault-volume-feedback-row .vault-operation-notice { width: 100%; min-width: 0; margin: 0; text-align: left; }

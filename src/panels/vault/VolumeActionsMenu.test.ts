@@ -13,4 +13,14 @@ describe("encrypted-volume dismount", () => {
     expect(source).not.toContain("handleForceDismount");
     expect(source).not.toContain("forceConfirmOpen");
   });
+  test("reports row errors outside the narrow action column and preserves service permission hints", () => {
+    const panel = readFileSync("src/panels/vault/index.tsx", "utf8");
+    expect(source).toContain("onErrorChange?.(");
+    expect(source).toContain("aria-description={permissionHint}");
+    expect(panel).toContain('className="vault-volume-feedback-row"><td colSpan={4}>');
+    expect(panel).toContain("onErrorChange={setVolumeActionFailure}");
+    expect(panel).toContain("loading={refreshing}");
+    expect(panel).toContain("disabled={refreshing}");
+    expect(panel).toContain("onClick={() => refreshVault(false)}");
+  });
 });

@@ -34,6 +34,10 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 - Frequent live metrics share a bounded five-second native disk snapshot while
   CPU and RAM stay live. Identity, licence, portable state, settings, and
   mutation inputs are not cached in that snapshot.
+- Secure Storage refreshes its authorized mount inventory every five seconds
+  while the panel is visible, and on return to the window. Hidden panels do not
+  poll it. Overlapping older replies cannot replace a newer observation; the
+  Refresh control remains busy until outstanding reads finish.
 - The native trace uses one monotonic clock for allowlisted native phases and
   frontend job milestones. It stores no paths, settings values, command
   arguments, licence material, or error text.

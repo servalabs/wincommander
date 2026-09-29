@@ -26,6 +26,10 @@ export type VaultEntryResult =
 export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
 export const VAULT_MOUNT_REASONS = [
   "not_authorized",
+  "administrator_required",
+  "policy_access_denied",
+  "private_owner_required",
+  "mount_state_unknown",
   "invalid_request",
   "already_mounted",
   "broker_unavailable",
@@ -51,6 +55,10 @@ export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
 const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   not_authorized: "This Windows account cannot use this Vault. Ask its owner to review your access. An administrator may remove its policy only while it is unmounted; that does not grant access to its contents",
+  administrator_required: "This machine-wide drive needs administrator approval. Open WinCommander as an administrator to manage it",
+  policy_access_denied: "Your Windows account does not have the required Fleet Vault permission. Ask the Vault owner to review your access",
+  private_owner_required: "This private Vault is available only to its owner in the Windows session where it was mounted; administrator access does not replace ownership",
+  mount_state_unknown: "This drive's mount state could not be verified for your Windows account. Refresh Secure Storage before trying again",
   invalid_request: "The Vault request is invalid",
   already_mounted: "This Vault is already mounted. Open the existing drive, or dismount it before changing its mount settings",
   broker_unavailable: "The secure Vault service is unavailable",

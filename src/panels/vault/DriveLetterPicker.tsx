@@ -2,6 +2,8 @@ import { useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/bp";
 import type { EngineMountScope } from "./mountScope";
+import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
+import { selectableDriveLetters } from "@/lib/vaultOperationFeedback";
 import "./DriveLetterPicker.css";
 
 export type MountTargetMode = "letter" | "folder";
@@ -10,6 +12,9 @@ interface DriveLetterPickerProps {
   id: string;
   value: string;
   letters: string[];
+  loading?: boolean;
+  unavailable?: boolean;
+  onRefresh?: () => void;
   onChange: (letter: string) => void;
   onKeyDown?: React.KeyboardEventHandler<HTMLElement>;
   /** Opt-in mount-target mode. Omitted — every call site before this change
@@ -41,6 +46,9 @@ export default function DriveLetterPicker({
   id,
   value,
   letters,
+  loading = false,
+  unavailable = false,
+  onRefresh,
   onChange,
   onKeyDown,
   mode,
@@ -49,7 +57,7 @@ export default function DriveLetterPicker({
   onMountPointChange,
   effectiveScope,
 }: DriveLetterPickerProps) {
-  const choices = letters;
+  const choices = selectableDriveLetters(letters);
   const showModeToggle = mode !== undefined && onModeChange !== undefined;
   const folderDisabled = effectiveScope === "per-user";
   const showFolderInput = mode === "folder" && !folderDisabled;
@@ -103,21 +111,16 @@ export default function DriveLetterPicker({
           <Button icon="folder-open" minimal aria-label="Browse for a mount-point folder" onClick={handleBrowseMountPoint} />
         </div>
       ) : (
-        <div id={id} className="drive-letter-picker" role="radiogroup" aria-label="Drive letter">
-          {choices.length === 0 && <p role="status">No free drive letters are available. Refresh the drive list before continuing.</p>}
-          {choices.map((letter) => (
-            <button
-              key={letter}
-              type="button"
-              role="radio"
-              aria-checked={value === letter}
-              className={`drive-letter-picker__option ${value === letter ? "drive-letter-picker__option--selected" : ""}`}
-              onClick={() => onChange(letter)}
-              onKeyDown={onKeyDown}
-            >
-              {letter}:
-            </button>
-          ))}
+        <div className="drive-letter-selection">
+          <select id={id} aria-label="Drive letter" className="drive-letter-select" value={choices.includes(value) ? value : ""}
+            disabled={loading || unavailable || choices.length === 0} onChange={event => onChange(event.target.value)} onKeyDown={onKeyDown}>
+            <option value="" disabled>{loading ? "Checking free letters…" : unavailable ? "Drive list unavailable" : "Select a free drive letter"}</option>
+            {choices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
+          </select>
+          {onRefresh && <Button minimal disabled={loading} onClick={onRefresh}>Refresh free letters</Button>}
+          {loading && <p role="status" className="mount-target-hint">Checking available drive letters…</p>}
+          {!loading && unavailable && <VaultOperationNotice message="Free drive letters could not be checked. Refresh the list before continuing." />}
+          {!loading && !unavailable && choices.length === 0 && <VaultOperationNotice message="No free drive letters are available. Refresh after a drive letter becomes free." />}
         </div>
       )}
 

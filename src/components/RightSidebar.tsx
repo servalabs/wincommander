@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
-import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
 import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
@@ -44,7 +44,7 @@ const MetadataScrubberDialog = lazy(() => import("./MetadataScrubberDialog"));
 let _lockdownAudioCtx: AudioContext | null = null;
 
 const ACTION_LABELS: Record<string, string> = {
-    dismount: "Volumes & RAM disks dismounted",
+    dismount: "Dismount completed for authorized volumes and RAM disks",
 };
 function lockdownTone(freq: number, durationMs: number, type: OscillatorType = "sine", gain = 0.14) {
     try {
@@ -256,7 +256,7 @@ export default function RightSidebar() {
         } catch {
             setQmAvailableLetters([]);
             setQmFeedback('Free drive letters could not be checked. Refresh the list before saving or mounting.');
-            return [];
+            return null;
         } finally { setQmLettersLoading(false); }
     }, [getAvailableDriveLetters]);
 
@@ -348,6 +348,7 @@ export default function RightSidebar() {
         if (!path || !letter) return;
         setQmFeedback('');
         const available = await refreshQmLetters();
+        if (!available) return;
         if (!available.includes(letter)) {
             setQmFeedback(`Drive ${letter}: is in use or reserved. Select a free letter from the list.`);
             return;
@@ -399,6 +400,7 @@ export default function RightSidebar() {
                 return;
             }
             const available = await refreshQmLetters();
+            if (!available) return;
             if (!available.includes(slot.driveLetter.toUpperCase())) throw new Error('Drive letter is in use or reserved');
             const r = await mountVolume({
               volumePath: slot.filePath,
@@ -829,14 +831,28 @@ export default function RightSidebar() {
         setLoadingAction(action);
         if (action === "dismount") setDismountFailure('');
         try {
-            await handler();
+            const receipt = await handler();
             if (action === "dismount") {
                 const observed = await refreshVault(true);
-                if (!observed || (observed.volumes?.length ?? 0) > 0) throw new Error('vault_dismount_readback_unconfirmed');
+                if (!observed) throw new Error('vault_dismount_readback_unconfirmed');
+                const remaining = observed.volumes ?? [];
+                const confirmedScope = isAuthorizedBulkDismountReceipt(receipt);
+                if (!confirmedScope) throw new Error('vault_dismount_readback_unconfirmed');
+                if (remaining.length > 0) {
+                    if (remaining.some(volume => (volume as { dismountAllowed?: boolean }).dismountAllowed !== false)) throw new Error('vault_dismount_readback_unconfirmed');
+                    showSuccess('Authorized volumes were dismounted. Protected Vaults remain mounted; their permissions were not changed.');
+                    return;
+                }
             }
             showSuccess(ACTION_LABELS[action] || "Action completed");
         } catch (err) {
-            if (action === "dismount") setDismountFailure(vaultOperationError(err, 'dismount'));
+            if (action === "dismount") {
+                const message = vaultOperationError(err, 'dismount');
+                setDismountFailure(message);
+                showError(message);
+                await refreshVault(true);
+                return;
+            }
             const msg = err instanceof Error ? err.message : String(err);
             showError(`Failed: ${msg}`);
         } finally {
@@ -853,7 +869,7 @@ export default function RightSidebar() {
             );
             return;
         }
-        // Sidebar panic action — dismount everything in one tap. The in-panel
+        // Sidebar action — dismount permitted targets in one tap. The in-panel
         // VolumeActionsMenu / RamDisksSection still expose per-row eject for
         // selective dismounts.
         void handleAction("dismount", async () => {
@@ -875,6 +891,7 @@ export default function RightSidebar() {
             if (ramData?.status === "error" && !/not installed|no ram disks|none found/i.test(String(ramData.error ?? ""))) {
                 throw new Error(ramData.error || "Failed to dismount RAM disks.");
             }
+            return encrypted.data;
         });
     }, [canUse, dismountAllVolumes, handleAction, removeAllRamDisks]);
 
@@ -1106,7 +1123,7 @@ export default function RightSidebar() {
 
             {/* Quick Mount overlay */}
             <Dialog open={Boolean(dismountFailure)} onOpenChange={open => { if (!open) setDismountFailure(''); }}>
-                <DialogContent><DialogHeader><DialogTitle>Dismount needs attention</DialogTitle></DialogHeader><VaultOperationNotice message={dismountFailure} /><button type="button" className="qm-btn qm-btn--primary" onClick={() => setDismountFailure('')}>Close</button></DialogContent>
+                <DialogContent className="vault-dismount-dialog"><DialogHeader><DialogTitle>Dismount needs attention</DialogTitle></DialogHeader><VaultOperationNotice message={dismountFailure} /><button type="button" className="qm-btn qm-btn--primary" onClick={() => setDismountFailure('')}>Close</button></DialogContent>
             </Dialog>
             {qmOpen && (
                 <div className="qm-overlay" role="dialog" aria-modal="true"
@@ -1199,7 +1216,7 @@ export default function RightSidebar() {
                                         onChange={(e) => setQmEditing(ed => ed && ({ ...ed, letter: e.target.value }))}
                                     >
                                         <option value="" disabled>{qmLettersLoading ? 'Checking free letters…' : 'Select a free drive letter'}</option>
-                                        {qmEditing.letter && !qmLetterChoices.includes(qmEditing.letter) && <option value={qmEditing.letter} disabled>{qmEditing.letter}: — unavailable</option>}
+                                        {qmEditing.letter && !qmLetterChoices.includes(qmEditing.letter) && <option value={qmEditing.letter} disabled>{qmEditing.letter}: — {qmLettersLoading ? 'checking' : 'unavailable'}</option>}
                                         {qmLetterChoices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
                                     </select>
                                     <button type="button" className="qm-btn qm-btn--ghost" disabled={qmLettersLoading} onClick={() => void refreshQmLetters()}>Refresh free letters</button>

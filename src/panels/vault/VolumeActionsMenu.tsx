@@ -14,16 +14,21 @@ interface VolumeActionsMenuProps {
   type: string;
   internalDrive?: number;
   accessible?: boolean;
+  dismountAllowed?: boolean;
+  dismountReason?: string | null;
+  onErrorChange?: (message: string) => void;
   onDismounted: () => void;
 }
 
-function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, onDismounted }: VolumeActionsMenuProps) {
+function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
   const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
-  const [failure, setFailure] = useState("");
+  const [failure, setFailureMessage] = useState("");
+  const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
   const driveLabel = letter.endsWith(":") ? letter : `${letter}:`;
+  const permissionHint = dismountAllowed === false && dismountReason ? vaultOperationError(`vault_${dismountReason}`, "dismount") : undefined;
 
   const verifyDismounted = async (): Promise<string | null> => {
     const normalizedLetter = driveLabel.toUpperCase();
@@ -88,8 +93,8 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   };
 
   return (
-    <div className="flex items-center gap-1 flex-shrink-0">
-      <VaultOperationNotice message={failure} />
+    <div className="vol-actions-group">
+      <div className="flex items-center gap-1 flex-shrink-0">
       <Tooltip content="Open in Explorer" position="top">
         <Button
           icon="folder-open"
@@ -124,9 +129,12 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
             onClick={handleDismount}
             className="vol-danger-btn"
             aria-label={`Force dismount ${driveLabel}`}
+            aria-description={permissionHint}
           />
         </Tooltip>
       </TierGate>
+      </div>
+      {!onErrorChange && <VaultOperationNotice message={failure} />}
 
       <VolumePropertiesDialog
         isOpen={propertiesOpen}

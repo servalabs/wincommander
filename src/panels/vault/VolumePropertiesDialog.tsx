@@ -43,7 +43,7 @@ function VolumePropertiesDialog({ isOpen, onClose, letter, path, type }: VolumeP
   const rows: { label: string; value: string }[] = info
     ? [
       { label: "Drive Letter", value: safeLetter },
-      { label: "Container Path", value: path || "Device-hosted" },
+      { label: "Container Path", value: path || "Path unavailable" },
       { label: "Volume Type", value: type === "Hidden" ? "Hidden" : "Standard" },
       { label: "Size", value: info.size || "—" },
       { label: "Filesystem", value: info.filesystem || "—" },

@@ -4,6 +4,12 @@ import { readFileSync } from "node:fs";
 const source = readFileSync("src/components/RightSidebar.tsx", "utf8");
 
 describe("Fleet Vault quick mount", () => {
+  test("requires an authorized receipt before trusting even an empty mount readback", () => {
+    const guard = source.indexOf("if (!confirmedScope)");
+    const remaining = source.indexOf("if (remaining.length > 0)");
+    expect(guard >= 0 && remaining > guard).toBe(true);
+    expect(source).toContain("isAuthorizedBulkDismountReceipt(receipt)");
+  });
   test("uses the caller-filtered service list and opaque entry ids", () => {
     expect(source).toContain("listAuthorizedEntries, mountEntry: mountFleetVaultEntry");
     expect(source).toContain("const entries = await listAuthorizedEntries()");

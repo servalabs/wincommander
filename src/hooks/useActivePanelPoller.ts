@@ -10,7 +10,7 @@
 //   4. Dashboard special case: refreshLiveMetrics runs every 2s (Rust-native,
 //      zero PS spawns) so CPU/RAM gauges stay live.
 //
-// Panels without auto-poll (apps, cleanup, vault, server-apps, search-files, system-identity):
+// Panels without auto-poll (apps, cleanup, server-apps, search-files, system-identity):
 //   → No interval created. User uses manual refresh button.
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -29,7 +29,6 @@ const PANEL_POLL_INTERVAL = 10_000; // 10s — PS-backed panel data
 const MANUAL_REFRESH_PANELS = new Set<PanelId>([
     'apps',
     'cleanup',
-    'vault',
     'server-apps',
     'search-files',
     'system-identity',
@@ -79,6 +78,7 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         refreshHardening,
         refreshMesh,
         refreshProductivity,
+        refreshVault,
     } = appState;
     const { refreshLiveMetrics } = useLiveMetrics();
 
@@ -96,18 +96,19 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         // Module gate — if the panel's module is disabled, skip all backend work
         const mod = getModuleForPanel(activePanel);
         if (mod && !isModuleEnabled(appSettings?.app?.modules, mod)) return null;
-        const refreshers: Record<string, ((silent?: boolean) => Promise<void>) | undefined> = {
+        const refreshers: Record<string, ((silent?: boolean) => Promise<unknown>) | undefined> = {
             refreshDashboard,
             refreshPrivacy,
             refreshNetwork,
             refreshHardening,
             refreshMesh,
             refreshProductivity,
+            refreshVault,
         };
         const fn = refreshers[refreshKey];
         if (typeof fn !== 'function') return null;
         // Most refresh functions accept a `silent` boolean param
-        return () => fn(true);
+        return async () => { await fn(true); };
     }, [
         activePanel,
         appSettings?.app?.modules,
@@ -117,6 +118,7 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         refreshNetwork,
         refreshPrivacy,
         refreshProductivity,
+        refreshVault,
     ]);
 
     // KT: Entering idle-pause should force a fresh one-shot refresh when resuming.
@@ -168,16 +170,28 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
             prevPanelRef.current = activePanel;
             // AppProvider owns the once-per-launch hardware refresh. Returning
             // to the dashboard must not start another PowerShell hardware scan.
-            if (refreshFn) void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
+            if (refreshFn && (activePanel !== 'vault' || document.visibilityState === 'visible')) {
+                void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
+            }
         }
 
         // ── Periodic refresh while panel is active ──
         if (!refreshFn) return;
 
-        const id = setInterval(() => {
+        const refreshVisible = () => {
+            if (activePanel === 'vault' && document.visibilityState !== 'visible') return;
             void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
-        }, PANEL_POLL_INTERVAL);
-        return () => clearInterval(id);
+        };
+        const id = setInterval(refreshVisible, activePanel === 'vault' ? 5_000 : PANEL_POLL_INTERVAL);
+        if (activePanel === 'vault') {
+            window.addEventListener('focus', refreshVisible);
+            document.addEventListener('visibilitychange', refreshVisible);
+        }
+        return () => {
+            clearInterval(id);
+            window.removeEventListener('focus', refreshVisible);
+            document.removeEventListener('visibilitychange', refreshVisible);
+        };
 
     }, [
         activePanel,

@@ -1,5 +1,5 @@
 import { Button, Icon, Dialog, FormGroup, InputGroup, Tooltip, CheckboxControl } from "@/components/ui/bp";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
@@ -33,7 +33,7 @@ const MOUNT_ERROR_MAX_LENGTH = 300;
 const boundedMountError = (error: unknown) => {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Failed to mount volume.";
   const normalized = message.replace(/\s+/g, " ").trim();
-  if (/pro_not_installed|vault_entitlement_denied|vault_owner_required/i.test(normalized)) return vaultOperationError(error);
+  if (/pro_not_installed|vault_entitlement_denied|vault_owner_required|vault_administrator_required|vault_policy_access_denied|vault_private_owner_required|vault_mount_state_unknown|vault_not_authorized/i.test(normalized)) return vaultOperationError(error);
   if (normalized.includes("vault_already_mounted")) {
     return "This container is already mounted. Open its existing drive in Secure Storage, or dismount it before changing mount options.";
   }
@@ -141,6 +141,8 @@ function VaultPanel() {
               volumes={volumes}
               refreshVault={refreshVault}
               initialLoading={loading.vault && encryptionStatus === null}
+              statusUnavailable={!loading.vault && encryptionStatus === null}
+              refreshing={loading.vault}
             />
             <RamDisksSection />
           </div>
@@ -154,13 +156,15 @@ interface EncryptedVolumesTabProps {
   volumes: VaultVolume[];
   refreshVault: (silent?: boolean) => Promise<EncryptionStatus | null>;
   initialLoading: boolean;
+  statusUnavailable: boolean;
+  refreshing: boolean;
 }
 
 // Encrypted Volumes tab: the card body (header, install-prompt, action row,
 // volumes table) plus the Mount Encrypted Volume dialog — its state/handlers
 // used to live on the whole panel; they now live here with the tab that
 // owns them.
-function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
+function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnavailable, refreshing }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
   const confirmAction = useAppConfirm();
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
@@ -174,12 +178,16 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
+  const [mountLettersLoading, setMountLettersLoading] = useState(true);
+  const [mountLettersUnavailable, setMountLettersUnavailable] = useState(false);
+  const mountLetterRevision = useRef(0);
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
   const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
   const [mountFailure, setMountFailure] = useState("");
+  const [volumeActionFailure, setVolumeActionFailure] = useState("");
 
   const {
     mountVolume,
@@ -200,6 +208,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     && (mountPassword || mountKeyfile)
     && validPim(mountPim)
     && availableLetters.includes(mountLetter)
+    && !mountLettersLoading && !mountLettersUnavailable
     && !mountDetailsLoading
     && !existingMountedVolume
     && !mounting
@@ -217,30 +226,38 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setMountType('file');
   }, []);
 
-  // Fetch available (unused) drive letters when the mount dialog opens
+  const refreshMountLetters = useCallback(async () => {
+    const request = ++mountLetterRevision.current;
+    setMountLettersLoading(true);
+    setMountLettersUnavailable(false);
+    try {
+      const result = await getAvailableDriveLetters();
+      if (request !== mountLetterRevision.current) return;
+      if (!result.success || !result.data) throw new Error("Drive list unavailable");
+      const letters = result.data.letters;
+      setAvailableLetters(letters);
+      setMountLetter(current => letters.includes(current) ? current : letters[0] ?? "");
+    } catch {
+      if (request !== mountLetterRevision.current) return;
+      setAvailableLetters([]);
+      setMountLettersUnavailable(true);
+    } finally { if (request === mountLetterRevision.current) setMountLettersLoading(false); }
+  }, [getAvailableDriveLetters]);
+  useEffect(() => { void refreshMountLetters(); }, [refreshMountLetters]);
+
+  // Revalidate the preloaded choices when the mount dialog opens.
   const openMountDialog = useCallback(async () => {
     const operationId = newDiagnosticOperationId("vault");
     resetMountForm();
     setMountDialogOpen(true);
     void refreshVault(true);
     setMountDetailsLoading(true);
-    setAvailableLetters([]);
-    setMountLetter("");
     setPartitions([]);
     try {
-      const [letterRes, partitionRes] = await Promise.all([
-        getAvailableDriveLetters(),
+      const [, partitionRes] = await Promise.all([
+        refreshMountLetters(),
         getEncryptionPartitions()
       ]);
-
-      if (letterRes?.success && letterRes.data?.letters?.length) {
-        setAvailableLetters(letterRes.data.letters);
-        setMountLetter(letterRes.data.letters[0]);
-      } else {
-        setAvailableLetters([]);
-        setMountLetter("");
-        setMountFailure(letterRes?.success ? "No free drive letters are available. Close and reopen this dialog after a letter becomes free." : "Free drive letters could not be checked. Close and reopen this dialog to retry.");
-      }
 
       if (partitionRes?.success && partitionRes.data?.partitions) {
         setPartitions(partitionRes.data.partitions);
@@ -266,13 +283,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
         lifecycle: "verified", outcome: "failed", errorCode: "VLT.MOUNT_OPTIONS.READ_FAILED", severity: "warn",
         retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      setAvailableLetters([]);
-      setMountLetter("");
-      setMountFailure("Free drive letters could not be checked. Close and reopen this dialog to retry.");
+      setMountFailure("Mountable partitions could not be checked. File-container mounting remains available after the drive list is checked.");
     } finally {
       setMountDetailsLoading(false);
     }
-  }, [resetMountForm, getAvailableDriveLetters, getEncryptionPartitions, refreshVault]);
+  }, [resetMountForm, refreshMountLetters, getEncryptionPartitions, refreshVault]);
 
   const handleBrowse = async () => {
     const operationId = newDiagnosticOperationId("vault");
@@ -463,7 +478,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                 icon="refresh"
                 minimal
                 small
-                onClick={() => refreshVault(true)}
+                onClick={() => refreshVault(false)}
+                loading={refreshing}
+                disabled={refreshing}
                 aria-label="Refresh encryption volume status"
               />
             </Tooltip>
@@ -506,6 +523,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <Icon icon="refresh" className="empty-icon" size={32} />
               <p>Checking encrypted volumes…</p>
             </div>
+          ) : statusUnavailable ? (
+            <VaultOperationNotice message="Mounted-volume status could not be checked. Refresh Secure Storage before relying on this list." />
           ) : volumes.length > 0 ? (
             <table className="volumes-table wc-table wc-table--striped">
               <thead>
@@ -545,7 +564,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                       </td>
                       <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
                       <td className="path-cell">
-                        <span className="truncate-path" title={vol.path}>{vol.path}</span>
+                        <span className="truncate-path" title={vol.path || undefined}>{vol.path || "Path unavailable"}</span>
                         {vol.accessible === false && <span className="vault-volume-unavailable">Not available in this Windows sign-in. Dismount, then mount it again.</span>}
                       </td>
                       <td className="actions-cell">
@@ -555,12 +574,16 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                           type={vol.type}
                           internalDrive={vol.internalDrive}
                           accessible={vol.accessible !== false}
+                          dismountAllowed={vol.dismountAllowed}
+                          dismountReason={vol.dismountReason}
+                          onErrorChange={setVolumeActionFailure}
                           onDismounted={() => refreshVault(true)}
                         />
                       </td>
                     </motion.tr>
                   ))}
                 </AnimatePresence>
+                {volumeActionFailure && <tr className="vault-volume-feedback-row"><td colSpan={4}><VaultOperationNotice message={volumeActionFailure} /></td></tr>}
               </tbody>
             </table>
           ) : (
@@ -717,6 +740,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               onChange={setMountLetter}
               onKeyDown={handleMountFieldEnter}
               letters={availableLetters}
+              loading={mountLettersLoading}
+              unavailable={mountLettersUnavailable}
+              onRefresh={() => void refreshMountLetters()}
             />
           </FormGroup>
 

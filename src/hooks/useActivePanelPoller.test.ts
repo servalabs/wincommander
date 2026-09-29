@@ -8,7 +8,8 @@ describe("active panel polling policy", () => {
 
     expect(shouldAutoPollPanel("apps", undefined)).toBe(false);
     expect(shouldAutoPollPanel("cleanup", undefined)).toBe(false);
-    expect(shouldAutoPollPanel("vault", "refreshVault")).toBe(false);
+    expect(shouldAutoPollPanel("vault", "refreshVault")).toBe(true);
+    expect(getAutoPollRefreshKey("vault")).toBe("refreshVault");
   });
 
   test("dashboard only auto-polls dashboard-owned refresh work", () => {

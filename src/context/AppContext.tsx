@@ -35,6 +35,7 @@ import { preserveDashboardPolicyUnknowns } from '../lib/dashboardPolicyObservati
 import { getStartupSettingsFailureMessage } from '../lib/startupSettingsFailure';
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
 import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
+import { createVaultStatusRefresh } from '../lib/vaultStatusRefresh';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -242,6 +243,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const [startupComplete, setStartupComplete] = useState(false);
+    const vaultStatusRefreshRef = useRef(createVaultStatusRefresh<EncryptionStatus>(
+        setEncryptionStatus,
+        busy => setLoading(prev => prev.vault === busy ? prev : { ...prev, vault: busy }),
+    ));
     const [startupError, setStartupError] = useState<string | null>(null);
     const [startupAttempt, setStartupAttempt] = useState(0);
     const retryStartup = useCallback(() => {
@@ -864,24 +869,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMeshInstalled(installed);
     }, []);
 
-    const refreshVault = useCallback(async (silent: boolean = false): Promise<EncryptionStatus | null> => {
-        if (!silent) setLoading(prev => ({ ...prev, vault: true }));
-        try {
-            // This Pro-native endpoint returns only drive links in the current
-            // logon session. The legacy VeraCrypt/PowerShell probe is machine-
-            // scoped and must not be used as a fallback on multi-user hosts.
+    const refreshVault = useCallback(async (_silent: boolean = false): Promise<EncryptionStatus | null> => {
+        // Only the authenticated inventory may expose mounted volumes.
+        return vaultStatusRefreshRef.current(async () => {
             const res = await getEncryptedVolumeStatus();
-            if (res.success && res.data) {
-                setEncryptionStatus(res.data);
-                return res.data;
-            }
-            // Do not leave an old mount list on-screen after a failed probe.
-            // A stale badge can otherwise claim a drive exists when Explorer cannot see it.
-            setEncryptionStatus(null);
-            return null;
-        } finally {
-            if (!silent) setLoading(prev => ({ ...prev, vault: false }));
-        }
+            return res.success && res.data ? res.data : null;
+        });
     }, [getEncryptedVolumeStatus]);
 
     const refreshProductivity = useCallback(async (silent: boolean = false) => {

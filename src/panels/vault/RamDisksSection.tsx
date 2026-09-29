@@ -11,6 +11,7 @@ import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBacke
 import type { RamDiskAutostartSettings } from "../../types/settings";
 import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB, savedRamDiskMountRequest } from "../../lib/ramDisk";
 import CreateRamDiskDialog from "./CreateRamDiskDialog";
+import useVaultDriveLetters from "@/hooks/useVaultDriveLetters";
 
 function fmtMB(mb: number): string {
   if (mb >= 1024) {
@@ -51,6 +52,12 @@ function RamDisksSection() {
   const [asSkipAfterLockdown, setAsSkipAfterLockdown] = useState<boolean>(!!savedAutostart.skipAfterLockdown);
   const [autostartSaving, setAutostartSaving] = useState(false);
   const [autostartConfigOpen, setAutostartConfigOpen] = useState(false);
+  const driveList = useVaultDriveLetters(autostartConfigOpen);
+  const savedMountedLetter = savedAutostart.driveLetter?.replace(/:$/, "").toUpperCase();
+  const ownSavedLetterIsMounted = savedMountedLetter && status?.disks.some(disk => disk.letter?.replace(/:$/, "").toUpperCase() === savedMountedLetter);
+  const autostartLetters = !driveList.loading && !driveList.unavailable && ownSavedLetterIsMounted
+    ? [...new Set([...driveList.letters, savedMountedLetter])]
+    : driveList.letters;
 
   useEffect(() => {
     setAutostartEnabled(!!savedAutostart.enabled);
@@ -453,7 +460,10 @@ function RamDisksSection() {
                   id="as-letter"
                   value={asLetter}
                   onChange={setAsLetter}
-                  letters={"DEFGHIJKLMNOPQRSTUVWXYZ".split("")}
+                  letters={autostartLetters}
+                  loading={driveList.loading}
+                  unavailable={driveList.unavailable}
+                  onRefresh={() => void driveList.refresh()}
                 />
               </FormGroup>
               <FormGroup label="Filesystem" labelFor="as-fs" className="ramdisk-autostart-field" style={{ marginBottom: 0 }}>
@@ -490,6 +500,7 @@ function RamDisksSection() {
                 icon="floppy-disk"
                 text={autostartSaving ? 'Saving…' : 'Save spec'}
                 loading={autostartSaving}
+                disabled={driveList.loading || driveList.unavailable || !autostartLetters.includes(asLetter)}
                 onClick={async () => {
                   if (await saveAutostart()) {
                     setAutostartConfigOpen(false);

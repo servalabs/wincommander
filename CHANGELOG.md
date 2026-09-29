@@ -5,6 +5,16 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage refreshes visible mount status and prevents older responses from
+  restoring stale rows. Refresh stays disabled while requests are running.
+  Windows container-path prefixes are removed for display; unknown paths are
+  labelled unavailable. Dismount errors wrap beneath the row instead of inside
+  the action buttons, and attention dialogs fit smaller windows.
+- Normal Vault workflows use service-authorized inventory and dismounts. Ordinary
+  machine-wide mounts require an elevated administrator; shared Fleet mounts
+  also require policy access. Private mounts remain owner/session-only. Unknown
+  mount identities are preserved and reported, never guessed or silently removed.
+
 - Standard-user startup retains strict service identity verification while
   allowing the connecting account to query the service's process identity.
   The bounded connection retry sends no request before verification; it grants

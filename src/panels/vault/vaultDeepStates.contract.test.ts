@@ -104,7 +104,8 @@ describe("secure storage deep-state contracts", () => {
     expect(sidebarSource).toContain("hardenAcl: true");
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
-    expect(appContextSource).toContain("setEncryptionStatus(null);");
+    expect(appContextSource).toContain("createVaultStatusRefresh");
+    expect(vaultSource).toContain("statusUnavailable={!loading.vault && encryptionStatus === null}");
     expect(vaultSource).not.toContain("Only this Windows account");
     expect(vaultSource).not.toContain("The drive will not appear in other users’ File Explorer sessions.");
     expect(backendSource).toContain("PresentedLetter: letter");
