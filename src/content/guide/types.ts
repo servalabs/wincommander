@@ -6,7 +6,7 @@
 // both removed. `panelId`/`keywords`/`related`/`body` are legacy fields from
 // those two surfaces, kept only because they're still populated on the
 // handful of topics that also carry a `tour` block. See
-// docs/superpowers/specs/2026-06-28-in-app-guide-onboarding-design.md.
+// the historical in-app-guide onboarding design.
 
 import type { ComponentType } from "react";
 import type { PanelId } from "../../types/panels";

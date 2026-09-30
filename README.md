@@ -13,8 +13,6 @@ One command console to switch off Microsoft's tracking, block trackers on your n
 
 [**Download**](https://github.com/servalabs/wincommander/releases) · [Features](FEATURES.md) · [Security](SECURITY.md) · [Why it exists](POSITIONING.md)
 
-![WinCommander demo](docs/img/wc-dashboard.gif)
-
 </div>
 
 ## Why WinCommander
@@ -75,8 +73,6 @@ on the GitHub Release:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public architecture, trust boundaries, and source map         |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
 | [PERFORMANCE.md](PERFORMANCE.md)   | Responsiveness design and public measurement status           |
-| [docs/README.md](docs/README.md)   | Detailed, area-specific documentation map                     |
-| [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |
 | [NON-GOALS.md](NON-GOALS.md)       | What WinCommander deliberately is not                         |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute                                             |

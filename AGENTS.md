@@ -19,38 +19,11 @@ stricter rule when instructions conflict.
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
-- [docs/cli.md](docs/cli.md) — Free command-line interface
-- [docs/README.md](docs/README.md) — detailed documentation map
-- [docs/engineering/ipc.md](docs/engineering/ipc.md) — public Tauri and Free/Pro IPC catalog
-- [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) — public settings and toggle reference
-- [docs/product/flows.md](docs/product/flows.md) — public automation reference
 
-The public code and the linked architecture references are the source of truth
-for public interfaces. Plans, runbooks, mockups, private implementation,
-commercial work, and acceptance records are intentionally maintained only in
+The public code and these root documents are the source of truth for public
+interfaces. Detailed design references, plans, runbooks, mockups, private
+implementation, commercial work, and acceptance records live in
 `wincommander-pro`.
-
-## Documentation layout
-
-- Keep repository-wide documents in the root: `README.md`, architecture,
-  security, performance when present, and primary product-truth documents.
-  Do not move them into `docs/`.
-- Keep detailed, component-specific architecture, security, and performance
-  references in `docs/engineering/`.
-- Keep detailed product references in `docs/product/`; repository-wide features,
-  positioning, roadmap, non-goals, weaknesses, user/owner tasks, and changelog
-  remain at the root when present.
-- Put area-specific references in the relevant `docs/` folder, such as Fleet,
-  operations, integrations, Vault, Investigator, frontend, or backend.
-- Do not add plans, readiness ledgers, internal audits, or private runbooks
-  here. Unfinished private work lives in `wincommander-pro` `STATUS.md`,
-  `USER-TASKS.md`, and `REFACTOR.md`. Public `docs/plans/` is unused.
-- Put exploratory or historical research in `docs/research/`; do not treat it
-  as current product truth without verification.
-- Keep contributor and agent guidance in `docs/agents/`; retain root
-  `AGENTS.md` as the tool-discoverable entry point.
-- When adding or moving documentation, update its Markdown links and
-  `docs/README.md` in the same change.
 
 ## Documentation ownership
 
@@ -70,9 +43,6 @@ commercial work, and acceptance records are intentionally maintained only in
   reach users belongs here as a boundary in `NON-GOALS.md` or a threat-model
   statement in `SECURITY.md`, written for that audience — never as a new
   weaknesses or roadmap file.
-- Detailed command, settings, and automation references own their subject-area
-  contracts. Other documents may keep only a short summary and link to the
-  authoritative reference.
 
 ## Repository shape
 
@@ -115,8 +85,8 @@ manager and task runner.
 
 - Use `rg`/`rg --files` for search.
 - Preserve unrelated working-tree changes.
-- Keep product Markdown at the existing public root or `docs/` locations; do
-  not add plans, readiness ledgers, internal audits, or private runbooks here.
+- Keep product Markdown in the public root; do not add plans, readiness
+  ledgers, internal audits, or private runbooks here.
 - Do not commit `.env`, credentials, signing material, internal endpoints,
   private design URLs, local capture paths, or customer/employee data.
 - Keep paid enforcement server-side/backend-side. UI visibility is not an

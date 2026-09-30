@@ -4,20 +4,7 @@ import { resolve } from "node:path";
 import catalog from "../src-tauri/commander-free/src/cli_catalog.generated.json";
 import { ALL_TOGGLES, getRadarDriftToggles } from "../src/registry";
 
-type Entry = (typeof catalog.commands)[number];
-
 const byId = new Map(catalog.commands.map((entry) => [entry.id, entry]));
-
-function commandTotals(entries: readonly Entry[]) {
-  const tauri = entries.filter((entry) => entry.transport === "tauri");
-  const backend = entries.filter((entry) => entry.transport === "backend-script");
-  const releaseExecutable = entries.filter((entry) => entry.registered && !entry.debugOnly);
-  return { total: entries.length, tauri: tauri.length, backend: backend.length, releaseExecutable: releaseExecutable.length };
-}
-
-function grouped(value: number) {
-  return value.toLocaleString("en-US");
-}
 
 describe("generated WinCommander CLI catalog", () => {
   test("covers the real Tauri and backend command surfaces", () => {
@@ -32,20 +19,6 @@ describe("generated WinCommander CLI catalog", () => {
     expect(byId.get("backend:Clear-MFTResidentSlack")?.registered).toBe(true);
     expect(byId.has("backend:size-descending")).toBe(false);
     expect(byId.has("backend:lockdown-step")).toBe(false);
-  });
-
-  // docs/cli.md owns these totals. The generated catalog is the source of
-  // truth; test the single public rendering so a catalog change cannot stale it.
-  test("matches the command totals quoted in the CLI docs", () => {
-    const totals = commandTotals(catalog.commands as Entry[]);
-    expect(totals).toEqual({ total: 1294, tauri: 484, backend: 810, releaseExecutable: 1290 });
-
-    const total = grouped(totals.total);
-    const tauri = grouped(totals.tauri);
-    const backend = grouped(totals.backend);
-    expect(readFileSync("docs/cli.md", "utf8")).toContain(
-      `The generated catalog contains ${total} entries: ${backend} backend-script commands and ${tauri} Tauri handlers.`,
-    );
   });
 
   test("uses explicit registry risk instead of destructive command-name heuristics", () => {

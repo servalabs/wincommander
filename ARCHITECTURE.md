@@ -1,8 +1,8 @@
 # Architecture — WinCommander
 
 > How it's built. Code blocks and diagrams welcome. Facts here are derived from the source under
-> `src-tauri/` and `src/`; the code is authoritative. Deeper references live in [`docs/`](docs/) —
-> see [docs/engineering/ipc.md](docs/engineering/ipc.md) for the full Free ↔ Pro wire protocol, [docs/cli.md](docs/cli.md) for same-executable automation, and [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) for the settings tree.
+> `src-tauri/` and `src/`; the code is authoritative. The root documentation
+> describes the public architecture, product boundary, and security limits.
 
 ## Overview
 
@@ -79,7 +79,7 @@ flowchart LR
 | Backend dispatcher | AES decrypt, data-driven tier registry (`COMMAND_REGISTRY`) with match fallback, module gate, PS dispatch, settings sync | `src-tauri/commander-free/src/backend.rs` |
 | App-data store | Per-section at-rest encrypted persistence; `load`/`save`/`load_profile`/`save_profile`; current `enc:v2:` + base64(nonce∥ciphertext), Argon2id KDF, AES-256-GCM and authenticated storage context; legacy `enc:v1:` remains read-only compatible and upgrades on the next save; per-install `.install.material` | `src-tauri/commander-free/src/datastore.rs` |
 | Settings engine | `ideal`/`current` model, drift, patch, locked paths; `load_profile_section`/`save_profile_section` seams (P1 wires them) | `src-tauri/commander-free/src/settings.rs` |
-| Personal settings service | Ordinary preferences are independent of Windows password-derived keys. The authenticated pipe token selects the owner; a revision-checked atomic record contains preferences and a separately AES-GCM-protected secret envelope using the existing profile key. Machine policy/PIN settings remain outside this record. See [settings storage](docs/frontend/settings-reference.md) and [security boundaries](SECURITY.md). | `src-tauri/commander-free/src/personal_settings.rs`, `src-tauri/commander-svc/src/personal_settings.rs`, `src-tauri/wincmd-shared/src/personal_settings.rs` |
+| Personal settings service | Ordinary preferences are independent of Windows password-derived keys. The authenticated pipe token selects the owner; a revision-checked atomic record contains preferences and a separately AES-GCM-protected secret envelope using the existing profile key. Machine policy/PIN settings remain outside this record. See [security boundaries](SECURITY.md). | `src-tauri/commander-free/src/personal_settings.rs`, `src-tauri/commander-svc/src/personal_settings.rs`, `src-tauri/wincmd-shared/src/personal_settings.rs` |
 | Licence layer | Ed25519 JWT verify, device binding, trial, grace, entitlement | `src-tauri/commander-free/src/license.rs` |
 | Pro broker | Spawn Pro, handshake, signed dispatch, notifications | `src-tauri/commander-free/src/sidecar.rs` |
 | Endpoint management integration | Endpoint responsibilities are split between session-bound and service-owned components. `commander-svc` (LocalSystem) owns selected machine functions and a durable signed-policy store, but not the full Fleet lifecycle; its `fleet_conn_loop`, `reconciler_loop`, and `command_worker_loop` are declared and not yet implemented. Managed settings with a mapped enable/disable command have an existing probe-and-reapply path; coverage and evidence freshness vary by control. See [SECURITY.md](SECURITY.md) for the operational limits. Planned ownership changes are tracked privately. | `src-tauri/commander-svc/`, `src-tauri/commander-free/src/settings.rs`, `src/hooks/useAutoHeal.ts` |
@@ -119,7 +119,7 @@ flowchart LR
 
 ## Executable open-core model
 
-- **`wincommander-free.exe`** — the general desktop UI, all `free`-tier backend, encrypted free PowerShell modules, the licence/entitlement layer, Privacy Shield orchestration, and the broker that spawns the Pro sidecar. Its `asInvoker` manifest always inherits the signed-in user's token; machine-wide operations must request their own explicit administrator approval. Its explicit `commands` / `audit` / `run` / `help` verbs reuse the same executable for one-shot JSON automation. Backend calls use a windowless Tauri context; native calls use an invisible `cli-runtime.html` WebView bound to the production invoke handler, never the React dashboard, tray, hotkeys, ambient monitors, autostart, or updater loop. The CLI preserves dispatcher enforcement, exact risk-confirmation tokens and mutating/destructive cross-process serialization; risk classification is bound to the `authz::DESTRUCTIVE_COMMANDS` registry rather than command names alone. The [CLI reference](docs/cli.md) owns catalog counts and the automation contract. It does not embed the Investigator workflow.
+- **`wincommander-free.exe`** — the general desktop UI, all `free`-tier backend, encrypted free PowerShell modules, the licence/entitlement layer, Privacy Shield orchestration, and the broker that spawns the Pro sidecar. Its `asInvoker` manifest always inherits the signed-in user's token; machine-wide operations must request their own explicit administrator approval. Its explicit `commands` / `audit` / `run` / `help` verbs reuse the same executable for one-shot JSON automation. Backend calls use a windowless Tauri context; native calls use an invisible `cli-runtime.html` WebView bound to the production invoke handler, never the React dashboard, tray, hotkeys, ambient monitors, autostart, or updater loop. The CLI preserves dispatcher enforcement, exact risk-confirmation tokens and mutating/destructive cross-process serialization; risk classification is bound to the `authz::DESTRUCTIVE_COMMANDS` registry rather than command names alone. The generated catalog owns command counts and the automation contract. It does not embed the Investigator workflow.
 - **`wincommander-pro.exe`** — headless, no UI of its own. Contains the `paid`-tier handlers, dispatched by `feature_id` in `commander-pro/src/handlers.rs`: Defender/USB/BitLocker/RDP tweaks, ~20 Deep Clean clearers + Privacy Clean deep erasers (including the `Invoke-7Erase` shredder — a legacy dispatch name; it runs a single durable NIST SP 800-88 RNG-overwrite pass by default, user-configurable up to 7 — and the `cipher /w` unallocated-space erase), the bundled stdin-credential VeraCrypt-derived volume engine (file and guarded non-system-partition standard/decoy/hidden volumes), Tailscale mesh, identity/activation/branding/Quiet Mode, contingency/USB-key, the auto-erase scheduler, and productivity. It also owns the **behavioural network-intelligence watchers**: network honeypot (`honeypot.rs`), Wi-Fi Guard / rogue-AP detector (`wifi_guard.rs`), ExifTool metadata scrubber (`metadata_scrubber.rs`), WizTree disk analyzer (`disk_analyzer.rs`), and print audit — pushing proactive `Notification` frames over the pipe; the Free-side wrappers are thin `require_paid` + `dispatch_paid_command` stubs. **Fleet-product additions (2026-06):**
 - **`wincommander-investigator.exe`** — a separate private Tauri application downloaded only for verified licences carrying the literal `advanced` entitlement. It owns the case workflow UI and PDF renderer, and calls a version-matched `wincommander-pro.exe` through the authenticated named-pipe protocol.
 - **`wci-verify.exe`** — an independently distributable CLI verifier for case bundles, delivery receipts, and detached report-integrity signatures.
@@ -146,7 +146,7 @@ flowchart LR
 
   **BCU/Appx/Teams debloat and Packages & Apps run in Free. Lockdown Words remains in the Free binary's process** (local keyboard-hook watcher), paid-gated but not in the Pro sidecar. Built from a sibling clone `../commander-pro/` — the Pro crate was split out of this workspace (A-6 split, 2026-05-26; see the comment in `src-tauri/Cargo.toml`).
 - **`wincmd-shared`** — pure data, no side effects; defines the wire format both binaries link. A byte-identical copy lives in the Pro repo so it builds standalone.
-- **`wincmd-search`** — AGPL reusable content-search engine; `commander-free` owns it in-process. It extracts supported text and office formats into a keyword index, applies an enforced folder scope, parses supported query filters before Tantivy, and reuses a reader for queries. The public settings surface is documented in [the settings reference](docs/frontend/settings-reference.md); the current scope of search capabilities is in [FEATURES.md](FEATURES.md).
+- **`wincmd-search`** — AGPL reusable content-search engine; `commander-free` owns it in-process. It extracts supported text and office formats into a keyword index, applies an enforced folder scope, parses supported query filters before Tantivy, and reuses a reader for queries. The current scope of search capabilities is in [FEATURES.md](FEATURES.md).
 
 The workspace (`src-tauri/Cargo.toml`) builds `commander-free`, `wincmd-shared`, `wincmd-search`, `wincmd-volume`, `fleet-proto`, `fleet-agent-core`, `wci-verify` (a standalone bundle-signature verification utility, AGPL-3.0), and `commander-svc` (the SYSTEM service). Workspace profiles are shared at the root; their performance rationale and public verification status are documented in [PERFORMANCE.md](PERFORMANCE.md).
 
@@ -258,7 +258,7 @@ sequenceDiagram
 - **Request/Response:** after handshake every frame is wrapped as `Envelope::Signed { tag, inner }` where `tag = HMAC-SHA256(session_token, serde_json(inner))`, verified constant-time via the `subtle` crate (`verify_body`). `Hello`/`Bye` are unsigned (Hello establishes the key).
 - **Notifications:** Pro pushes UI events (decoy-accessed, dead-man's-switch tick) signed the same way; Free's reader task re-emits them via `app.emit(event, payload)` so existing frontend listeners are unchanged.
 
-The full wire protocol — every envelope variant, field, and frame example — is documented in [docs/engineering/ipc.md](docs/engineering/ipc.md). The spawn-to-signed-traffic sequence:
+The spawn-to-signed-traffic sequence:
 
 ```mermaid
 sequenceDiagram
@@ -306,8 +306,8 @@ settings scope tables separate machine policy from personal preferences.
 Where the current service is installed, personal preferences use SID-owned,
 revision-checked records in `%ProgramData%\WinCommanderPersonalSettings\`, with
 restrictive ACLs and machine DPAPI. Logs, Privacy Shield quota and search state
-remain per-user. The [settings storage reference](docs/frontend/settings-reference.md#where-settings-live)
-owns encryption, migration, key recovery and unavailable-service behavior.
+remain per-user. The source and settings UI own encryption, migration, key
+recovery and unavailable-service behavior.
 
 - `store/settings.dat` — the machine partition of the settings tree, encoded with AES-256-GCM (`enc:v2:` authenticated scope; legacy `enc:v1:` remains readable). The desktop merges the personal partition in memory into `AppSettings`; flows and other sensitive personal fields retain a separate encrypted envelope inside the service's atomic record. Plaintext migration cleanup requires confirmed service-backed personal and machine persistence, a durable hash journal, committed-partition checks, and exclusive-handle source verification before removal. Older no-service fallback writes retain the plaintext and journal. Encrypted legacy originals remain preserved.
 - Licence cache (`%ProgramData%\WinCommander\license_cache.json`, machine-wide) — signed JWT envelope (`payload` + `signature`), `last_verified_at`, optional seat info; verified against the build-embedded Ed25519 pubkey, bound to `current_device_hash()` — now derived from motherboard UUID + disk serial via `Get-CimInstance` (not the removed `wmic`), memoised per process (`license.rs`).
@@ -424,9 +424,6 @@ remain in `wincommander-pro`.
 - [FEATURES.md](FEATURES.md) — capability inventory with entry points.
 - [SECURITY.md](SECURITY.md) — trust boundaries & posture.
 - [OPEN_CORE.md](OPEN_CORE.md) — licence & tier rationale.
-- [docs/engineering/ipc.md](docs/engineering/ipc.md) — full Free ↔ Pro wire protocol reference.
-- [docs/cli.md](docs/cli.md) — same-executable JSON automation and safety contract.
-- [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) — complete settings-tree catalogue.
 - `wincmd-shared/src/lib.rs` — IPC wire-format source of truth.
 - `fleet-proto/src/lib.rs` — fleet wire-protocol SSOT: signing preimages + golden vectors.
 - `fleet-agent-core/src/lib.rs` — generic fleet-client loop (enroll/check-in/verify/dispatch).

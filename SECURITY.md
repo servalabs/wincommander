@@ -146,9 +146,7 @@ exclusive handle before removing that same file. Failed checks preserve it.
 After migration, an unavailable service produces a temporary read-only session
 rather than making the stale legacy copy authoritative again. Corrupt or denied
 service records fail closed. The inactivity watchdog pauses while personal
-settings are unavailable or recovery remains unresolved. See the
-[settings reference](docs/frontend/settings-reference.md#personal-secrets-and-password-reset-recovery)
-for migration and recovery behavior.
+settings are unavailable or recovery remains unresolved.
 
 This boundary does not protect against an administrator/SYSTEM attacker,
 restore keys lost with Windows machine protection, or transfer ownership to a

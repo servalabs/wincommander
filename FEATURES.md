@@ -49,8 +49,7 @@ the backend and private component before execution.
 - Preview-first maintenance flows for supported cleanup categories.
 - Guided Routine Hygiene previews an exact, test-locked cache allowlist and
   refuses bulk clear when any category is missing, busy, failed, or unscanned.
-  Clears run sequentially and publish an authoritative post-action rescan. See
-  [privacy hygiene and Nyx-family coverage](docs/product/privacy-hygiene.md).
+  Clears run sequentially and publish an authoritative post-action rescan.
 - Duplicate, empty-folder, broken-shortcut, package, registry, and firewall
   review surfaces where available in the current build.
 - Backend-owned candidate identifiers and live revalidation before mutations;
@@ -66,10 +65,8 @@ the backend and private component before execution.
 - Selected VeraCrypt folders keep filename/content indexes inside their mounted
   volume. Existing indexes support read-only access; writable mounts reconcile
   changes. Private results disappear after locking. See the
-  [search settings](docs/frontend/settings-reference.md#file-content-search-appfilesearch)
-  and [security boundary](SECURITY.md#private-volume-search).
-- Read-only production CLI for catalog and audit workflows. See
-  [docs/cli.md](docs/cli.md).
+  [security boundary](SECURITY.md#private-volume-search).
+- Read-only production CLI for catalog and audit workflows.
 - Public UI and typed bridges for paid automation without publishing the paid
   engine.
 
@@ -154,4 +151,4 @@ any scoped quantum-resistant claim are in
 Current operational limits that qualify these capabilities are in
 [SECURITY.md](SECURITY.md). Deliberate product exclusions are in
 [NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
-[ARCHITECTURE.md](ARCHITECTURE.md) and the detailed [documentation map](docs/README.md).
+[ARCHITECTURE.md](ARCHITECTURE.md).
