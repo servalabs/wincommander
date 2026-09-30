@@ -1588,13 +1588,7 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "malware_quarantine_list"
         | "security_threat_snapshot"
         | "security_cve_snapshot" => "paid",
-        // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
-        "Create-StegoMp4"
-        | "Extract-StegoMp4"
-        | "Attach-StegoContainer"
-        | "Restore-StegoContainer"
-        | "Refresh-StegoContainer"
-        | "Launch-VeraCryptForSystemEncryption" => "paid",
+        "Launch-VeraCryptForSystemEncryption" => "paid",
         // ── Two-password volume creation (paid; headless engine, Pro-Rust handler) ──
         "Create-DualVolume" => "paid",
         // ── Vault/volumes create+mount+dismount (paid; stdin-based engine, Pro-Rust handler) ──
@@ -2599,11 +2593,6 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Open-EncryptionVolume" => Some("vault/volumes"),
         "Create-EncryptionVolume" => Some("vault/volumes"),
         "Create-DualVolume" => Some("vault/volumes"),
-        "Create-StegoMp4" => Some("vault/volumes"),
-        "Extract-StegoMp4" => Some("vault/volumes"),
-        "Attach-StegoContainer" => Some("vault/volumes"),
-        "Restore-StegoContainer" => Some("vault/volumes"),
-        "Refresh-StegoContainer" => Some("vault/volumes"),
         "Get-VolumeInfo" => Some("vault/volumes"),
         "Get-SystemEncryptionStatus" => Some("vault/volumes"),
         "Get-SystemEncryptionEligibility" => Some("vault/volumes"),
@@ -2795,11 +2784,6 @@ pub fn list_all_commands() -> Vec<String> {
         "Dismount-EncryptionVolume",
         "Create-EncryptionVolume",
         "Create-DualVolume",
-        "Create-StegoMp4",
-        "Extract-StegoMp4",
-        "Attach-StegoContainer",
-        "Restore-StegoContainer",
-        "Refresh-StegoContainer",
         "Get-EncryptedBackupTargetStatus",
         "Provision-EncryptedBackupTarget",
         "Clear-EncryptedBackupTarget",

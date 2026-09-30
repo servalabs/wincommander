@@ -94,12 +94,9 @@ operational risk, or proprietary enforcement logic.
   keyfile to select a standard, outer, or hidden volume automatically. Secure
   Storage and Quick Mount use machine-wide, writable mounts by default;
   Secure Storage also offers explicit read-only mounting. Existing file
-  permissions remain unchanged by default. If they block a recovered personal
-  container on another Windows account or PC, Secure Storage offers **Add This
-  Account and Retry** after unlocking with the original credentials. This adds
-  the signed-in account while preserving existing permission entries; explicit
-  denies and separately protected files can still restrict access. Permission
-  repair requires a writable mount. Fleet-managed
+  permissions remain unchanged. Automatic or prompted account-permission repair
+  is unavailable; an inaccessible container reports an error without changing
+  its permissions. Video-container backup tools are not included. Fleet-managed
   containers retain their separate selected-user and group permission checks.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.

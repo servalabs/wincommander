@@ -484,12 +484,11 @@ version 2 or later before sending a command. An incompatible peer returns
 features do not require this Vault-specific capability. Mount and dismount
 success still require their typed service receipts and current-state checks.
 
-Personal-container account repair is opt-in. The mount request's
-`RepairCurrentAccountAccess` flag reaches the paid component as a JSON boolean,
-even though the desktop command transport uses string parameters. Only literal
-`true` and `false` are accepted for that flag; other fields, including passwords,
-remain unchanged. The service derives the account to add from the authenticated
-caller. This does not change Fleet-managed access rules.
+Personal-container account-permission repair is unavailable. Old clients sending
+`RepairCurrentAccountAccess=true` are rejected before mounting; false is omitted
+from the paid request. The service retains the wire field for compatibility but
+rejects attempts to enable it. Existing filesystem permissions and Fleet-managed
+access rules remain enforced. Video-container backup commands are not registered.
 
 ### AI Security Advisor & appearance
 

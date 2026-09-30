@@ -1,14 +1,13 @@
-export type MountStage = "checking" | "unlocking" | "permission" | "verifying" | "refreshing";
+export type MountStage = "checking" | "unlocking" | "verifying" | "refreshing";
 
 export function mountProgressMessage(stage: MountStage, seconds: number, customPim: boolean): string {
   const label: Record<MountStage, string> = {
     checking: "Checking that the selected drive letter is free…",
     unlocking: "Waiting for the Vault service to unlock and mount the container…",
-    permission: "Waiting for your decision about this account's Windows permissions…",
     verifying: "Checking that Windows can open the mounted drive…",
     refreshing: "Refreshing the mounted-volume list…",
   };
-  const slow = seconds >= 30 && stage !== "permission"
+  const slow = seconds >= 30
     ? " This is taking longer than expected. No result has been confirmed; do not submit another mount request."
     : "";
   const pim = customPim && stage === "unlocking" ? " A custom PIM can take several minutes." : "";

@@ -47,7 +47,7 @@ ReactDOM.createRoot(document.getElementById('fixture')).render(React.createEleme
     await module('**/src/utils/toast.ts*',"export const showError=message=>window.__toasts.push({kind:'error',message});export const showSuccess=message=>window.__toasts.push({kind:'success',message});");
     await module('**/src/components/shared/TierGate.tsx*','export default({children})=>children;');
     await module('**/src/components/shared/PanelHeader.tsx*','export default()=>null;');
-    for(const name of ['CreateVolumeWizard','SystemEncryptionSection','RamDisksSection','StegoBackupSection','VolumePropertiesDialog'])await module('**/src/panels/vault/'+name+'.tsx*','export default()=>null;');
+    for(const name of ['CreateVolumeWizard','SystemEncryptionSection','RamDisksSection','VolumePropertiesDialog'])await module('**/src/panels/vault/'+name+'.tsx*','export default()=>null;');
     await module('**/__vault_controls.js',fixture.replace('REACT_URL',react).replace('QUERY_URL',query));
     await page.route('**/__vault_controls__',route=>route.fulfill({contentType:'text/html',body:html}));
     await page.goto(new URL('/__vault_controls__',origin).href);
@@ -124,12 +124,10 @@ ReactDOM.createRoot(document.getElementById('fixture')).render(React.createEleme
     await dialog.getByRole('button',{name:'MOUNT VOLUME',exact:true}).click();
     await page.waitForFunction(()=>window.__pendingLetters.length>0);
     await page.evaluate(()=>window.__resolveLetters({success:true,data:{letters:['J','Z']}}));
-    const consent=page.getByRole('alertdialog');await consent.waitFor();
-    assert.deepEqual(await page.evaluate(()=>window.__repairAttempts),[false],'Permission changes require an explicit decision');
-    assert.equal(await page.evaluate(()=>window.__toasts.length),0,'Handled permission denial must not produce a raw competing toast');
-    await consent.getByRole('button',{name:'Add This Account and Retry',exact:true}).click();
-    await dialog.getByRole('alert').filter({hasText:'denied this account access'}).waitFor();
-    assert.deepEqual(await page.evaluate(()=>window.__repairAttempts),[false,true],'Consent retries exactly once, not an infinite repair loop');
+    await dialog.getByRole('alert').filter({hasText:/access|permission/i}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.__repairAttempts),[false],'An access denial never retries or changes permissions');
+    assert.deepEqual(await page.evaluate(()=>window.__toasts.map(toast=>toast.kind)),['error'],'Denied mount produces one clear failure notification');
+    assert.equal(await page.evaluate(()=>window.__toasts.some(toast=>toast.message.includes('vault_caller_access_denied'))),false,'Raw backend codes must not leak into the notification');
     assert.equal(await page.getByRole('alertdialog').count(),0);
     assert.equal(await dialog.getByRole('button',{name:'CANCEL',exact:true}).isEnabled(),true);
     await page.evaluate(()=>{window.__backend.error=null;window.__rerender()});

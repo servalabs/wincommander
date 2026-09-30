@@ -54,33 +54,33 @@ test("normal mount does not retry hidden mode for a non-credential failure", asy
   ]);
 });
 
-test("timeouts, interrupted replies and repair denials are never automatically replayed", async () => {
+test("timeouts, interrupted replies and access denials are never automatically replayed", async () => {
   for (const error of ["vault_request_timeout", "vault_operation_unconfirmed", "vault_caller_access_denied", "vault_caller_acl_repair_failed"]) {
     let attempts = 0;
     const result = await mountPasswordSelectedVolume(async () => {
       attempts++;
       return { success: false, error };
-    }, { ...baseRequest, repairCurrentAccountAccess: true });
+    }, baseRequest);
     expect(attempts).toBe(1);
     expect(result).toEqual({ success: false, error });
   }
 });
 
-test("explicit current-account ACL repair consent survives standard-to-hidden detection", async () => {
-  const calls: Array<{ volumeKind?: string; volumeRole?: string; repairCurrentAccountAccess?: boolean }> = [];
+test("access denial after hidden detection stops without requesting permission repair", async () => {
+  const calls: Array<{ volumeKind?: string; volumeRole?: string }> = [];
   await mountPasswordSelectedVolume(async (request) => {
     calls.push(request);
     return calls.length === 1
       ? { success: false, error: "vault_engine_unlock_failed" }
       : { success: false, error: "vault_caller_access_denied" };
-  }, { ...baseRequest, repairCurrentAccountAccess: true });
+  }, baseRequest);
 
-  expect(calls.map(({ volumeKind, volumeRole, repairCurrentAccountAccess }) => ({
+  expect(calls.map(({ volumeKind, volumeRole }) => ({
     volumeKind,
     volumeRole,
-    repairCurrentAccountAccess,
   }))).toEqual([
-    { volumeKind: "standard", volumeRole: "standard", repairCurrentAccountAccess: true },
-    { volumeKind: "dual", volumeRole: "hidden", repairCurrentAccountAccess: true },
+    { volumeKind: "standard", volumeRole: "standard" },
+    { volumeKind: "dual", volumeRole: "hidden" },
   ]);
+  for (const request of calls) expect("repairCurrentAccountAccess" in request).toBe(false);
 });

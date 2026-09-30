@@ -17,7 +17,6 @@ test("post-mount readback is bounded without claiming a failed or cancelled moun
 test("slow work never claims success or suggests a duplicate mount", () => {
   expect(mountProgressMessage("unlocking", 30, false)).toContain("No result has been confirmed");
   expect(mountProgressMessage("unlocking", 30, true)).toContain("custom PIM");
-  expect(mountProgressMessage("permission", 40, false)).toContain("your decision");
 });
 test("read-only option lookups finish or fail with a bounded actionable category", async () => {
   expect(await waitForMountOptions(Promise.resolve(["J"]), 20)).toEqual(["J"]);

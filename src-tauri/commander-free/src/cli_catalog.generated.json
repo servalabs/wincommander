@@ -55,14 +55,6 @@
       ]
     },
     {
-      "id": "backend:Attach\u002dStegoContainer",
-      "name": "Attach\u002dStegoContainer",
-      "transport": "backend\u002dscript",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": []
-    },
-    {
       "id": "backend:Block\u002dAnonymousSamEnumeration",
       "name": "Block\u002dAnonymousSamEnumeration",
       "transport": "backend\u002dscript",
@@ -830,14 +822,6 @@
     {
       "id": "backend:Create\u002dRestorePoint",
       "name": "Create\u002dRestorePoint",
-      "transport": "backend\u002dscript",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": []
-    },
-    {
-      "id": "backend:Create\u002dStegoMp4",
-      "name": "Create\u002dStegoMp4",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -4288,14 +4272,6 @@
       "frontendReferences": []
     },
     {
-      "id": "backend:Extract\u002dStegoMp4",
-      "name": "Extract\u002dStegoMp4",
-      "transport": "backend\u002dscript",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": []
-    },
-    {
       "id": "backend:Get\u002dActivationStatus",
       "name": "Get\u002dActivationStatus",
       "transport": "backend\u002dscript",
@@ -6287,14 +6263,6 @@
       ]
     },
     {
-      "id": "backend:Refresh\u002dStegoContainer",
-      "name": "Refresh\u002dStegoContainer",
-      "transport": "backend\u002dscript",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": []
-    },
-    {
       "id": "backend:Register\u002dUSBKeySerial",
       "name": "Register\u002dUSBKeySerial",
       "transport": "backend\u002dscript",
@@ -6595,14 +6563,6 @@
       "frontendReferences": [
         "src/registry/tweaks.toggles.ts"
       ]
-    },
-    {
-      "id": "backend:Restore\u002dStegoContainer",
-      "name": "Restore\u002dStegoContainer",
-      "transport": "backend\u002dscript",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": []
     },
     {
       "id": "backend:Scan\u002dAcquisitionThreats",

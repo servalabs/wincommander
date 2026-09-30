@@ -6,8 +6,6 @@ test("Secure Storage defaults to machine-wide write and retains explicit read-on
   expect(buildMountVolumeRequest(params)).toMatchObject({ Scope: "machine", ReadOnly: false });
   expect(buildMountVolumeRequest(params)).not.toHaveProperty("RepairCurrentAccountAccess");
   expect(buildMountVolumeRequest({ ...params, readOnly: true })).toMatchObject({ Scope: "machine", ReadOnly: true });
-  expect(buildMountVolumeRequest({ ...params, repairCurrentAccountAccess: true }))
-    .toHaveProperty("RepairCurrentAccountAccess", true);
 });
 
 test("outer-decoy mount sends distinct non-default PIM values and its exact role", () => {
