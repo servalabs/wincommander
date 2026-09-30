@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
-pub(crate) use tests::mounted_test_broker;
+pub(crate) use tests::policy_edit_test_broker;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -1721,6 +1721,55 @@ impl VaultMountBroker {
             .unwrap_or(true)
     }
 
+    /// Called under the operation lock with targets resolved by the policy
+    /// store. Requested renderer identities are not authoritative here.
+    pub(crate) fn reject_policy_changes_while_mounted_locked(
+        &self,
+        changed_entry_ids: &HashSet<String>,
+        changed_container_identities: &HashSet<String>,
+    ) -> Result<(), VaultMountReason> {
+        if changed_entry_ids.is_empty() && changed_container_identities.is_empty() {
+            return Ok(());
+        }
+        let recovery = self
+            .recovery
+            .lock()
+            .map_err(|_| VaultMountReason::MountStateUnknown)?;
+        if recovery.registry_untrusted
+            || !recovery.persistence_pending.is_empty()
+            || !recovery.removal_pending.is_empty()
+        {
+            return Err(VaultMountReason::MountStateUnknown);
+        }
+        drop(recovery);
+        let slots = self
+            .snapshot()
+            .map_err(|_| VaultMountReason::MountStateUnknown)?;
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| VaultMountReason::MountStateUnknown)?;
+        // An unknown or reused slot cannot be assumed to belong to another
+        // container. Match the driver identity, not just its reusable index.
+        for (slot, identity) in &slots {
+            let mut matches = active
+                .iter()
+                .filter(|(_, mount)| mount.internal_drive == *slot);
+            let Some((entry_id, mount)) = matches.next() else {
+                return Err(VaultMountReason::MountStateUnknown);
+            };
+            if matches.next().is_some() || mount.engine_mount_identity.as_ref() != Some(identity) {
+                return Err(VaultMountReason::MountStateUnknown);
+            }
+            if changed_entry_ids.contains(entry_id)
+                || changed_container_identities.contains(&mount.container_identity)
+            {
+                return Err(VaultMountReason::AlreadyMounted);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn dismount_all_locked(
         &self,
         store: &VaultAccessStore,
@@ -2252,6 +2301,7 @@ fn failed(
 mod tests {
     use super::*;
     include!("vault_dismount_tests.rs");
+    include!("vault_policy_mount_tests.rs");
     use crate::vault_access::{AclApplier, AclSnapshot, PrincipalResolver, VaultAclPlan, VaultFs};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2570,9 +2620,13 @@ mod tests {
         }
     }
 
-    pub(crate) fn mounted_test_broker() -> VaultMountBroker {
-        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
-        broker.active.lock().unwrap().insert("vault-1".into(), active_mount_for_owner(7, "S-1-5-21-owner"));
+    pub(crate) fn policy_edit_test_broker(entry_id: &str, container_identity: &str) -> VaultMountBroker {
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.container_identity = container_identity.into();
+        broker.active.lock().unwrap().insert(entry_id.into(), mount);
         broker
     }
 

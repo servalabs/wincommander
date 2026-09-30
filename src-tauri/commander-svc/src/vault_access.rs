@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 mod access_directory_mutation;
+#[cfg(windows)]
+mod local_principals;
+#[cfg(windows)]
+pub use local_principals::local_user_principals;
 
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -438,6 +442,24 @@ struct ResolvedEntry {
 struct ResolvedGrantRecord {
     sid: String,
     access: VaultAccess,
+}
+
+fn policy_entry_plan_unchanged(
+    active: Option<&PersistedPolicy>,
+    policy: &VaultAccessPolicy,
+    entry: &VaultAccessEntry,
+    plan: &VaultAclPlan,
+) -> bool {
+    active.is_some_and(|active| {
+        active.policy.entries.iter().any(|old| policy.entries.iter().any(|incoming|
+            incoming == old && incoming.id == entry.id))
+            && active.resolved.iter().any(|old| old.id == entry.id
+                && Some(old.identity.as_str()) == entry.container_identity.as_deref()
+                && old.grants.iter().map(|grant| (&grant.sid, grant.access))
+                    .eq(plan.grants.iter().map(|grant| (&grant.sid, grant.access)))
+                && old.authorization_grants.iter().map(|grant| (&grant.sid, grant.access))
+                    .eq(plan.authorization_grants.iter().map(|grant| (&grant.sid, grant.access))))
+    })
 }
 
 struct State {
@@ -2055,6 +2077,8 @@ impl VaultAccessStore {
                     .stable_file_identity(Path::new(&entry.container_path))
                     .is_ok();
                 VaultOwnedPolicyEntry {
+                    can_edit_policy: false,
+                    can_remove_policy: false,
                     entry: entry.clone(),
                     container_path_state: if available {
                         VaultContainerPathState::Available
@@ -2298,6 +2322,76 @@ impl VaultAccessStore {
         Ok(())
     }
 
+    pub(crate) fn reject_removed_entry_reidentification(
+        &self,
+        requested: &VaultAccessPolicy,
+        protected_removals: &HashSet<String>,
+    ) -> Result<(), VaultError> {
+        if protected_removals.is_empty() { return Ok(()); }
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let Some(active) = state.active.as_ref() else { return Ok(()); };
+        let mut protected_identities = HashSet::new();
+        for entry in active.policy.entries.iter().filter(|entry| protected_removals.contains(&entry.id)) {
+            if let Some(resolved) = active.resolved.iter().find(|resolved| resolved.id == entry.id) {
+                protected_identities.insert(resolved.identity.clone());
+            }
+            if let Ok(identity) = self.fs.stable_file_identity(Path::new(&entry.container_path)) {
+                protected_identities.insert(identity);
+            }
+        }
+        for entry in requested.entries.iter().filter(|entry| active.policy.entries.iter().all(|old| old.id != entry.id)) {
+            let identity = self.fs.stable_file_identity(Path::new(&entry.container_path))?;
+            if protected_identities.contains(&identity) { return Err(VaultError::Forbidden); }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn policy_removal_targets(
+        &self,
+        entry_id: &str,
+    ) -> Result<(HashSet<String>, HashSet<String>), VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let active = state.active.as_ref().ok_or(VaultError::Validation)?;
+        let entry = active.policy.entries.iter().find(|entry| entry.id == entry_id).ok_or(VaultError::Validation)?;
+        let mut identities = active.resolved.iter().filter(|entry| entry.id == entry_id)
+            .map(|entry| entry.identity.clone()).collect::<HashSet<_>>();
+        if let Ok(identity) = self.fs.stable_file_identity(Path::new(&entry.container_path)) {
+            identities.insert(identity);
+        }
+        Ok((HashSet::from([entry_id.to_owned()]), identities))
+    }
+
+    pub(crate) fn policy_change_targets(
+        &self,
+        requested: &VaultAccessPolicy,
+    ) -> Result<(HashSet<String>, HashSet<String>), VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let previous = state.active.as_ref();
+        let resolved = if requested.entries.is_empty() { Vec::new() } else {
+            self.resolve_and_plan_with_access_directory(requested, &state.access_directory)?
+        };
+        let mut ids = HashSet::new();
+        let mut identities = HashSet::new();
+        for old in previous.into_iter().flat_map(|active| &active.policy.entries) {
+            if resolved.iter().any(|(entry, plan)| entry.id == old.id
+                && policy_entry_plan_unchanged(previous, requested, entry, plan)) { continue; }
+            ids.insert(old.id.clone());
+            if let Some(resolved) = previous.and_then(|active| active.resolved.iter().find(|entry| entry.id == old.id)) {
+                identities.insert(resolved.identity.clone());
+            }
+            if let Ok(identity) = self.fs.stable_file_identity(Path::new(&old.container_path)) {
+                identities.insert(identity);
+            }
+        }
+        for (entry, plan) in &resolved {
+            if policy_entry_plan_unchanged(previous, requested, entry, plan) { continue; }
+            ids.insert(entry.id.clone());
+            // A renderer-supplied identity is never used to authorize an edit.
+            identities.insert(entry.container_identity.clone().ok_or(VaultError::ContainerIdentity)?);
+        }
+        Ok((ids, identities))
+    }
+
     pub fn apply(
         &self,
         mut policy: VaultAccessPolicy,
@@ -2314,6 +2408,9 @@ impl VaultAccessStore {
         validate_policy(&policy)?;
         let access_directory = state.access_directory.clone();
         let resolved = self.resolve_and_plan_with_access_directory(&policy, &access_directory)?;
+        let changed_ids = resolved.iter().filter(|(entry, plan)| {
+            !policy_entry_plan_unchanged(state.active.as_ref(), &policy, entry, plan)
+        }).map(|(entry, _)| entry.id.clone()).collect::<HashSet<_>>();
         let removed = state
             .active
             .as_ref()
@@ -2321,14 +2418,16 @@ impl VaultAccessStore {
             .transpose()?
             .unwrap_or_default();
         let mut snapshots = Vec::new();
-        for (_, plan) in &resolved {
+        for (_, plan) in resolved.iter().filter(|(entry, _)| changed_ids.contains(&entry.id)) {
             snapshots.extend(self.acls.snapshot(plan)?);
         }
         let group_plans = resolved
             .iter()
+            .filter(|(entry, _)| changed_ids.contains(&entry.id))
             .flat_map(|(_, plan)| plan.managed_groups.clone())
             .collect::<Vec<_>>();
-        let retained_group_names = group_plans
+        let retained_groups = resolved.iter().flat_map(|(_, plan)| &plan.managed_groups).collect::<Vec<_>>();
+        let retained_group_names = retained_groups
             .iter()
             .map(|group| group.group.as_str())
             .collect::<HashSet<_>>();
@@ -2353,7 +2452,7 @@ impl VaultAccessStore {
                 return Err(error);
             }
         }
-        for (_, plan) in &resolved {
+        for (_, plan) in resolved.iter().filter(|(entry, _)| changed_ids.contains(&entry.id)) {
             if let Err(error) = self.acls.apply_and_verify(plan) {
                 // JSON replacement has not happened.  Restore every target
                 // already touched before returning the bounded failure.
@@ -4714,6 +4813,7 @@ fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
 
 #[cfg(test)]
 mod tests {
+    include!("vault_access/policy_change_tests.rs");
     #[cfg(windows)]
     #[test]
     fn windows_administrator_directory_resolves_real_user_accounts() {
@@ -5081,7 +5181,7 @@ mod tests {
             }],
         }
     }
-    fn store(files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>) -> VaultAccessStore {
+    pub(super) fn store(files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>) -> VaultAccessStore {
         VaultAccessStore::open(
             Box::new(Fs(files)),
             Box::new(Resolver),
@@ -8368,4 +8468,10 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
         Box::new(NoAcl),
         PathBuf::from("/test-vault-policy"),
     ))
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+pub(crate) fn test_policy_store() -> VaultAccessStore {
+    tests::store(std::sync::Arc::new(Mutex::new(HashMap::new())))
 }

@@ -157,8 +157,12 @@ for password resets, simultaneous standard/admin users, or Windows Server/RDS.
 
 Fleet group-backed Vault operations are authorized by the service using the
 authenticated Windows account and protected group membership. Windows
-administrator status alone does not authorize another group's Vault. Mounted
-policies cannot be edited or removed through the application. This supported
+administrator status alone does not authorize another group's Vault contents,
+mount, dismount, or policy edits. An administrator outside the policy may only
+remove that policy after the service confirms its container is unmounted.
+Mounted policies cannot be edited or removed through the application. Checks
+apply to the affected container, not unrelated mounted Vaults; uncertain mount
+identity fails closed. This supported
 workflow boundary does not prevent a machine administrator or SYSTEM process
 from bypassing Windows protections outside WinCommander.
 

@@ -139,6 +139,11 @@ pub struct VaultOwnedPolicyEntry {
     pub container_path_state: VaultContainerPathState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_container_path: Option<String>,
+    /// Caller-scoped UI hints only; mutations independently reauthorize the caller.
+    #[serde(default)]
+    pub can_edit_policy: bool,
+    #[serde(default)]
+    pub can_remove_policy: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
