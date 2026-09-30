@@ -5,38 +5,54 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::Manager;
 
-pub(crate) struct StartupWindow(AtomicBool);
+pub(crate) struct StartupWindow {
+    armed: AtomicBool,
+    ready: AtomicBool,
+    warned: AtomicBool,
+}
 
 impl StartupWindow {
     pub(crate) fn new() -> Self {
-        Self(AtomicBool::new(false))
+        Self {
+            armed: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
+            warned: AtomicBool::new(false),
+        }
     }
 
     pub(crate) fn arm(&self) {
-        self.0.store(true, Ordering::Release);
+        self.armed.store(true, Ordering::Release);
     }
 
     fn take_reveal(&self) -> bool {
-        self.0.swap(false, Ordering::AcqRel)
+        self.armed.swap(false, Ordering::AcqRel)
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
+    fn needs_warning(&self) -> bool {
+        self.armed.load(Ordering::Acquire)
+            && !self.is_ready()
+            && !self.warned.swap(true, Ordering::AcqRel)
     }
 }
 
-/// Reveal a normal startup that was armed by native setup but never received
-/// the frontend readiness IPC. This is intentionally narrower than the usual
-/// `reveal_main_window` path: an armed state exists only for a normal,
-/// interactive launch, never for hidden or calculator-mode startup.
-pub(crate) fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bool, String> {
+async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bool, String> {
     let Some(state) = window.try_state::<StartupWindow>() else {
         return Ok(false);
     };
     if !state.take_reveal() {
         return window.is_visible().map_err(|error| error.to_string());
     }
-    if let Err(error) = window.show() {
+    if let Err(error) = crate::window_placement::show_maximized(window).await {
         state.arm();
-        return Err(error.to_string());
+        if !state.warned.swap(true, Ordering::AcqRel) {
+            show_native_startup_error(&format!("WinCommander could not open its window. {error} Your saved settings have not been reset."));
+        }
+        return Err(error);
     }
-    let _ = window.maximize();
     crate::set_wincommander_window_icon(window);
     let _ = window.set_focus();
     crate::startup_trace::milestone(window.app_handle(), "main_window_show_requested");
@@ -44,7 +60,7 @@ pub(crate) fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Resu
 }
 
 #[tauri::command]
-pub(crate) fn startup_window_ready(
+pub(crate) async fn startup_window_ready(
     window: tauri::WebviewWindow,
     is_light: bool,
 ) -> Result<bool, String> {
@@ -62,8 +78,48 @@ pub(crate) fn startup_window_ready(
     window
         .set_background_color(Some(background))
         .map_err(|error| error.to_string())?;
-    // Showing before maximizing delivers WebView2's resize on scaled displays.
-    reveal_armed_startup_window(&window)
+    window
+        .state::<StartupWindow>()
+        .ready
+        .store(true, Ordering::Release);
+    reveal_armed_startup_window(&window).await
+}
+
+/// A broken renderer cannot draw its own error. Never expose its blank HWND.
+pub(crate) fn warn_if_unready(window: &tauri::WebviewWindow) {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return;
+    };
+    if !state.needs_warning() {
+        return;
+    }
+    crate::log_message_src(
+        "error",
+        "core",
+        "[Startup] interface readiness was not received; blank window remains hidden",
+    );
+    show_native_startup_error("WinCommander could not finish loading its interface. The empty window has been kept hidden. Close WinCommander from its tray menu and reopen it. If this continues, repair or reinstall the application. Your saved settings have not been reset.");
+}
+
+fn show_native_startup_error(message: &str) {
+    #[cfg(windows)]
+    {
+        let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+        tauri::async_runtime::spawn_blocking(move || {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let title: Vec<u16> = "WinCommander startup\0".encode_utf16().collect();
+            unsafe {
+                MessageBoxW(
+                    std::ptr::null_mut(),
+                    message.as_ptr(),
+                    title.as_ptr(),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    crate::log_message_src("error", "core", message);
 }
 
 #[cfg(test)]
@@ -82,5 +138,25 @@ mod tests {
         state.arm();
         assert!(state.take_reveal());
         assert!(!state.take_reveal());
+    }
+
+    #[test]
+    fn timeout_warns_once_without_consuming_a_late_reveal() {
+        let state = StartupWindow::new();
+        assert!(!state.needs_warning());
+        state.arm();
+        assert!(state.needs_warning());
+        assert!(!state.needs_warning());
+        state.ready.store(true, Ordering::Release);
+        assert!(state.take_reveal());
+    }
+
+    #[test]
+    fn ready_or_suppressed_windows_never_show_timeout_errors() {
+        let state = StartupWindow::new();
+        assert!(!state.needs_warning());
+        state.arm();
+        state.ready.store(true, Ordering::Release);
+        assert!(!state.needs_warning());
     }
 }

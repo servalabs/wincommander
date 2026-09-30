@@ -684,7 +684,10 @@ pub fn enter_calculator_mode_with(
 /// Resize + retitle back to WinCommander after a successful PIN.
 /// Restores the app icon, shows the tray, and unblocks resizing.
 #[tauri::command]
-pub fn exit_calculator_mode(window: tauri::WebviewWindow, title: String) -> Result<(), String> {
+pub async fn exit_calculator_mode(
+    window: tauri::WebviewWindow,
+    title: String,
+) -> Result<(), String> {
     use tauri::Manager;
 
     crate::log_message_src(
@@ -711,19 +714,15 @@ pub fn exit_calculator_mode(window: tauri::WebviewWindow, title: String) -> Resu
     // resize/focus request (common while a packaged app is restoring). The
     // session state above is authoritative; window restoration is best-effort.
     let _ = window.set_resizable(true);
-    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-        width: 1200.0,
-        height: 800.0,
-    }));
-    let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
-        width: 900.0,
-        height: 600.0,
-    })));
     let _ = window.center();
     let _ = window.set_skip_taskbar(false);
-    let _ = window.show();
-    let _ = window.unminimize();
-    let _ = window.maximize();
+    if let Err(error) = crate::window_placement::show_maximized(&window).await {
+        crate::log_message_src(
+            "error",
+            "core",
+            &format!("[Calculator] window restoration: {error}"),
+        );
+    }
     let _ = window.set_focus();
 
     if armed {

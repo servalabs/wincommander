@@ -57,12 +57,26 @@ describe("native and UI-audit entrypoints", () => {
     ]);
 
     expect(startup).toContain("showStartupAnimation(initialAnimation)");
-    expect(startup).toContain("await revealStartupWindow()");
+    expect(startup).toContain("await settleStartupReveal(revealStartupWindow())");
+    expect(startup).toContain("flushSync(() => showStartupAnimation(initialAnimation))");
+    expect(startup.indexOf("flushSync(() => showStartupAnimation(initialAnimation))")).toBeLessThan(
+      startup.indexOf("revealStartupWindow()"),
+    );
+    expect(startup).toContain("startMainWindow().catch");
     expect(startup).not.toContain("waitForStartupAnimationReady");
-    expect(startup.indexOf("await revealStartupWindow()")).toBeLessThan(
+    expect(startup.indexOf("revealStartupWindow()")).toBeLessThan(
       startup.indexOf("await import('./main')"),
     );
     expect(main).not.toContain("Retry startup");
     expect(main).not.toContain("location.reload()");
+  });
+
+  test("a renderer timeout reports an error instead of revealing a blank native window", async () => {
+    const native = await read("src-tauri/commander-free/src/lib.rs");
+    const startup = await read("src-tauri/commander-free/src/startup_window.rs");
+    expect(native).toContain("startup_window::warn_if_unready(&fallback_window)");
+    expect(native).not.toContain("reveal_armed_startup_window(&fallback_window)");
+    expect(startup).toContain("MessageBoxW");
+    expect(startup).toContain("window_placement::show_maximized(window).await");
   });
 });

@@ -2,6 +2,7 @@ import { showStartupAnimation, hideStartupAnimation } from './startup/animationR
 import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
 import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
+import { flushSync } from 'react-dom';
 
 const native = (window as typeof window & {
     __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
@@ -36,7 +37,8 @@ async function startMainWindow(): Promise<void> {
     // Mount content before asking the native side to show the HWND.  Do not
     // gate visibility on a stylesheet, logo decode, web font, or animation
     // frame: any one of those can be delayed or unavailable after an update.
-    showStartupAnimation(initialAnimation);
+    // Native visibility must follow a committed DOM, not a queued React render.
+    flushSync(() => showStartupAnimation(initialAnimation));
     const shown = await revealStartupWindow();
     // The intro clock starts after the real native window is revealed.
     showStartupAnimation({ ...initialAnimation, isWindowVisible: true });
@@ -46,5 +48,17 @@ async function startMainWindow(): Promise<void> {
     await import('./main');
 }
 
-if (isMain) void startMainWindow();
+if (isMain) void startMainWindow().catch(error => {
+    console.error('WinCommander startup failed', error);
+    const status = document.createElement('div');
+    status.setAttribute('role', 'alert');
+    status.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:grid;place-content:center;gap:16px;padding:32px;background:#0a0f12;color:#fff;font:16px system-ui';
+    const message = document.createElement('p');
+    message.textContent = 'WinCommander could not finish opening its interface. Retry startup. Your saved settings have not been reset.';
+    const retry = document.createElement('button');
+    retry.textContent = 'Retry startup';
+    retry.onclick = () => location.reload();
+    status.append(message, retry);
+    document.body.append(status);
+});
 else void import('./main');

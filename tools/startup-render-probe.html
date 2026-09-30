@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Startup rendering test</title></head>
+<body>
+<script type="module">
+import { flushSync } from 'react-dom';
+import { showStartupAnimation, hideStartupAnimation } from '/src/startup/animationRoot.tsx';
+import { readStartupBranding } from '/src/startup/brandingCache.ts';
+const status = document.createElement('div');
+status.style.cssText = 'position:fixed;z-index:2147483647;top:16px;left:16px;background:white;color:black;padding:16px;font:18px system-ui';
+document.body.append(status);
+try {
+  flushSync(() => showStartupAnimation({
+    branding: readStartupBranding(), isLight: false, reducedMotion: true,
+    isAppReady: false, isWindowVisible: false, startupError: null,
+    onComplete() {}, onRetry() {},
+  }));
+  const splash = document.querySelector('#startup-animation').shadowRoot.querySelector('.splash-screen');
+  if (!splash?.querySelector('.sp-sub')?.textContent) throw new Error('Splash content was not committed before native reveal');
+  status.textContent = 'PASS: splash text exists synchronously before native reveal';
+  // Start the animation only after the same committed-content check used at startup.
+  showStartupAnimation({branding:readStartupBranding(),isLight:false,reducedMotion:true,isAppReady:false,isWindowVisible:true,startupError:null,onComplete(){},onRetry(){}});
+} catch (error) {
+  hideStartupAnimation();
+  status.textContent = `FAIL: ${error.message}`;
+}
+</script>
+</body>
+</html>

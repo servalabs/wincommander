@@ -125,6 +125,7 @@ mod startup_window;
 mod storage_probe;
 mod trust_store_audit;
 mod svc_client;
+mod window_placement;
 // This is an executable-free admission contract, covered by its unit tests.
 // It is intentionally excluded from the shipped binary until the signed
 // recovery-environment handoff that consumes it is wired in.
@@ -473,58 +474,70 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     if calculator_mode {
         let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
     } else {
-        let _ = window.set_skip_taskbar(false);
-        let _ = window.unminimize();
-        // Tray and peek-hotkey reveals are the primary way a hidden app is
-        // reopened. Match the normal startup experience instead of leaving a
-        // small/restored window behind after an update relaunch.
-        // A hidden WebView2 window must become visible before it is maximized.
-        // Windows can otherwise calculate its bounds against the full display
-        // instead of the work area, covering the taskbar on scaled desktops.
-        let _ = window.show();
-        let _ = window.maximize();
-        // A hide/show transition forces a new native visibility transition if
-        // Windows still reports the HWND hidden after Tauri's show request.
-        if !window.is_visible().unwrap_or(false) {
-            log_message_src(
-                "warn",
-                "core",
-                "[Reveal] show() left the window invisible — forcing a hide/show transition",
-            );
-            let _ = window.hide();
-            let _ = window.show();
-        }
-        set_wincommander_window_icon(&window);
-        let _ = window.set_focus();
-        // Tray callbacks run on the shell message pump. Yield before activating
-        // so Windows has registered the restored window. A cold post-logon
-        // WebView2 window can miss the first visibility transition, so retry
-        // only while the native HWND remains hidden; never steal focus later
-        // after the user has moved to another application.
-        let window_for_foreground = window.clone();
-        std::thread::spawn(move || {
-            for delay_ms in [50_u64, 250, 800] {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                force_window_foreground(&window_for_foreground);
-                let _ = window_for_foreground.set_focus();
-                if window_for_foreground.is_visible().unwrap_or(true) {
-                    break;
-                }
-                let _ = window_for_foreground.hide();
-                let _ = window_for_foreground.show();
+        if let Some(startup) = window.try_state::<startup_window::StartupWindow>() {
+            if !startup.is_ready() {
+                startup_window::warn_if_unready(&window);
+                return;
             }
+        }
+        let reveal_window = window.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let window = reveal_window;
+            let _ = window.set_skip_taskbar(false);
+            // Tray and peek-hotkey reveals are the primary way a hidden app is
+            // reopened. Match the normal startup experience instead of leaving a
+            // small/restored window behind after an update relaunch.
+            // A hidden WebView2 window must become visible before it is maximized.
+            // Windows can otherwise calculate its bounds against the full display
+            // instead of the work area, covering the taskbar on scaled desktops.
+            if let Err(error) = window_placement::show_maximized(&window).await {
+                log_message_src("error", "core", &format!("[Reveal] {error}"));
+                return;
+            }
+            // A hide/show transition forces a new native visibility transition if
+            // Windows still reports the HWND hidden after Tauri's show request.
+            if !window.is_visible().unwrap_or(false) {
+                log_message_src(
+                    "warn",
+                    "core",
+                    "[Reveal] show() left the window invisible — forcing a hide/show transition",
+                );
+                let _ = window.hide();
+                let _ = window.show();
+            }
+            set_wincommander_window_icon(&window);
+            let _ = window.set_focus();
+            // Tray callbacks run on the shell message pump. Yield before activating
+            // so Windows has registered the restored window. A cold post-logon
+            // WebView2 window can miss the first visibility transition, so retry
+            // only while the native HWND remains hidden; never steal focus later
+            // after the user has moved to another application.
+            let window_for_foreground = window.clone();
+            std::thread::spawn(move || {
+                for delay_ms in [50_u64, 250, 800] {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    force_window_foreground(&window_for_foreground);
+                    let _ = window_for_foreground.set_focus();
+                    if window_for_foreground.is_visible().unwrap_or(true) {
+                        break;
+                    }
+                    let _ = window_for_foreground.hide();
+                    let _ = window_for_foreground.show();
+                }
+            });
+            // Signal the (authenticated) app was revealed so the frontend re-arms the
+            // update prompt — a dismissed-then-reopened window shows it again. Not
+            // emitted on the calc-mode branch: a locked calculator re-entry isn't a
+            // reveal of the real app.
+            let _ = app.emit("wincommander://window-revealed", ());
         });
-        // Signal the (authenticated) app was revealed so the frontend re-arms the
-        // update prompt — a dismissed-then-reopened window shows it again. Not
-        // emitted on the calc-mode branch: a locked calculator re-entry isn't a
-        // reveal of the real app.
-        let _ = app.emit("wincommander://window-revealed", ());
     }
     log_message_src(
         "info",
         "core",
         &format!(
-            "[Reveal] done: visible={}",
+            "[Reveal] requested: visible={}",
             window.is_visible().unwrap_or(false)
         ),
     );
@@ -2009,22 +2022,11 @@ pub fn run() {
                     let _ = window.set_skip_taskbar(false);
                     // Native setup can finish before bundled scripts have painted.
                     app.state::<startup_window::StartupWindow>().arm();
-                    // The first frontend paint normally consumes this arm through
-                    // `startup_window_ready`.  Do not let a missing splash asset,
-                    // font, or renderer IPC leave a normal launch permanently
-                    // invisible: the armed state is never set for hidden or
-                    // calculator-mode startup, so this fallback cannot reveal
-                    // a deliberately concealed window.
+                    // A missing renderer gets a native error, never a blank reveal.
                     let fallback_window = window.clone();
                     tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                        if let Err(error) = startup_window::reveal_armed_startup_window(&fallback_window) {
-                            crate::log_message_src(
-                                "warn",
-                                "core",
-                                &format!("[Startup] native window fallback reveal failed: {error}"),
-                            );
-                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                        startup_window::warn_if_unready(&fallback_window);
                     });
                 }
                 dev_startup_trace("main window reveal prepared");
