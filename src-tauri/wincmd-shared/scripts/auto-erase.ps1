@@ -13,7 +13,7 @@
 # the `$script:AutoEraseScripts` hashtable below. `Set-AutoEraseSchedule`
 # looks up the script by categoryId, writes it beneath an ACL-hardened
 # ProgramData scripts directory, and registers a
-# Windows Scheduled Task named `WinCommander_AutoErase_<categoryId>`.
+# Windows Scheduled Task with a coded name and stable per-user SID scope.
 #
 # Why inline (not call back into commander.exe)
 # ---------------------------------------------
@@ -25,9 +25,9 @@
 #
 # Naming
 # ------
-# `WinCommander_AutoErase_<categoryId>` (the current convention). Legacy tasks
-# (`System_AutoErase_<categoryId>`, `WinCommander_ClipboardErase`, etc.)
-# are detected and migrated/removed by `Invoke-AutoEraseMigration` — see below.
+# `SL-SW-<code>` for SYSTEM; `SL-UW-<code>-<SID>` for a user. Legacy
+# WinCommander_AutoErase/System_AutoErase names are migrated after ownership
+# validation. The task action and description remain inspectable and attributed.
 
 # Self-contained single-pass durable secure-erase functions prepended to every
 # scheduled task script (NIST SP 800-88: one RNG pass clears magnetic media;
@@ -697,7 +697,8 @@ function ConvertTo-AutoEraseTaskArgument {
         [int]$IntervalMinutes,
         [string]$Script,
         [string]$ExecutionScope = 'default',
-        [string]$FirstDueUtc
+        [string]$FirstDueUtc,
+        [int]$PayloadRevision = 0
     )
     # Every scheduled task invocation goes through a small queue/catch-up wrapper:
     #   - one global mutex makes categories run sequentially instead of all at once
@@ -778,7 +779,8 @@ __AUTO_ERASE_BODY__
     $fullScript = $script:EraseFunctions + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
 
     $storage = Initialize-AutoEraseStorage
-    $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey.ps1"
+    $revisionSuffix = if ($PayloadRevision -gt 0) { ".r$PayloadRevision" } else { '' }
+    $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey$revisionSuffix.ps1"
     # UTF8 (with BOM) so Windows PowerShell 5.1 reads it back correctly via -File.
     [System.IO.File]::WriteAllText($scriptPath, $fullScript, [System.Text.Encoding]::UTF8)
 
@@ -796,6 +798,66 @@ function Assert-AutoEraseAdmin {
     }
 }
 
+function Resolve-AutoEraseSid {
+    param([string]$Account)
+    if ($Account -in @('SYSTEM', 'NT AUTHORITY\SYSTEM', 'S-1-5-18')) { return 'S-1-5-18' }
+    if ($Account -match '^S-1-\d+(?:-\d+)+$') { return $Account }
+    ([Security.Principal.NTAccount]::new($Account)).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
+function Get-AutoEraseCategoryCode {
+    param([string]$CategoryId)
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($CategoryId)))).Replace('-', '').Substring(0, 8) }
+    finally { $hash.Dispose() }
+}
+
+function Get-AutoEraseTaskName {
+    param([string]$CategoryId, [string]$OwnerSid)
+    $code = Get-AutoEraseCategoryCode $CategoryId
+    if ($OwnerSid -eq 'S-1-5-18') { return "SL-SW-$code" }
+    "SL-UW-$code-$OwnerSid"
+}
+
+# Name alone is never ownership proof: require a supported category and our
+# protected script location (or a recognizable historical encoded payload).
+function Get-AutoEraseTaskIdentity {
+    param($Task)
+    if ($Task.TaskPath -ne '\') { return $null }
+    $name = [string]$Task.TaskName
+    $category = $null
+    $oldNames = @{ WinCommander_ClipboardErase = 'clipboard'; WinCommander_RDPErase = 'rdpHistory'; WinCommander_EventLogErase = 'eventLogs' }
+    if ($oldNames.ContainsKey($name)) { $category = $oldNames[$name] }
+    foreach ($candidate in $script:AutoEraseScripts.Keys) {
+        if ($name -match ('^(?:WinCommander|System)_AutoErase_' + [regex]::Escape($candidate) + '(?:_.+)?$') -or
+            $name -match ('^SL-(?:SW|UW)-' + (Get-AutoEraseCategoryCode $candidate) + '(?:-S-1-\d+(?:-\d+)+)?$')) {
+            $category = $candidate; break
+        }
+    }
+    if (-not $category -or @($Task.Actions).Count -ne 1) { return $null }
+    $action = @($Task.Actions)[0]
+    if ([IO.Path]::GetFileName([string]$action.Execute) -notin @('powershell.exe', 'pwsh.exe')) { return $null }
+    $arguments = [string]$action.Arguments
+    $owned = $false
+    if ($arguments -match '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') {
+        $path = [IO.Path]::GetFullPath($Matches[1])
+        $root = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'WinCommander\auto-erase\scripts'))
+        $owned = [IO.Path]::GetDirectoryName($path) -eq $root -and
+            [IO.Path]::GetFileName($path) -match ('^' + [regex]::Escape($category) + '(?:\.[A-Za-z0-9._-]+)?\.ps1$')
+    } elseif ($arguments -match '(?i)(?:^|\s)-EncodedCommand\s+([A-Za-z0-9+/=]+)\s*$') {
+        try {
+            $payload = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1]))
+            $owned = $payload.Contains('function Erase-OneFile') -and
+                ($payload.Contains('WinCommander') -or $payload.Contains($script:AutoEraseScripts[$category]))
+        } catch { return $null }
+    }
+    if (-not $owned) { return $null }
+    $sid = Resolve-AutoEraseSid ([string]$Task.Principal.UserId)
+    $canonical = Get-AutoEraseTaskName $category $sid
+    if ($name.StartsWith('SL-') -and $name -ne $canonical) { return $null }
+    @{ categoryId = $category; ownerSid = $sid; taskName = $canonical }
+}
+
 function Set-AutoEraseSchedule {
     [CmdletBinding()]
     param(
@@ -806,11 +868,6 @@ function Set-AutoEraseSchedule {
         # currently logged-in user. Pass a different username to create a
         # per-user task for multi-user mode. Ignored when RunAsSystem=$true.
         [string]$TargetUser = $env:USERNAME,
-        # TaskNameOverride: explicit task name. When not supplied, the name
-        # is auto-generated: WinCommander_AutoErase_<categoryId> for the
-        # current user, WinCommander_AutoErase_<categoryId>_<user>
-        # for other accounts.
-        [string]$TaskNameOverride = '',
         # Bulk scheduling uses this switch so a pre-existing task is reported
         # instead of silently replacing a schedule the user set by hand.  The
         # per-card editor intentionally leaves it off after its own confirmation.
@@ -829,17 +886,16 @@ function Set-AutoEraseSchedule {
     }
 
     try {
-        # Determine task name — keep original format for current-user tasks
-        # so existing schedules are preserved without migration.
-        $taskName = if ($TaskNameOverride) {
-            $TaskNameOverride
-        } elseif ($RunAsSystem -or $TargetUser -eq $env:USERNAME) {
-            "WinCommander_AutoErase_$CategoryId"
-        } else {
-            "WinCommander_AutoErase_${CategoryId}_${TargetUser}"
+        $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
+        $migration = Invoke-AutoEraseMigration -CategoryId $CategoryId
+        if ($migration.error) { throw $migration.message }
+        $taskName = Get-AutoEraseTaskName $CategoryId $ownerSid
+        $existing = Get-ScheduledTask -TaskPath '\' -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existing -and -not (Get-AutoEraseTaskIdentity $existing)) {
+            throw 'A task with this name belongs to another application. It was left unchanged.'
         }
 
-        if ($PreserveExisting -and (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+        if ($PreserveExisting -and $existing) {
             return @{
                 status          = 'alreadyConfigured'
                 categoryId      = $CategoryId
@@ -893,7 +949,6 @@ function Set-AutoEraseSchedule {
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType S4U -RunLevel Highest
         }
 
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         if ($CategoryId -eq 'usbHistory') {
             $description = if ($ManagedByAutoSet) {
                 'WinCommander Auto-set scheduled wipe v3'
@@ -907,8 +962,8 @@ function Set-AutoEraseSchedule {
                 'WinCommander scheduled wipe v2'
             }
         }
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
-                               -Principal $principal -Settings $settings -Description $description -Force | Out-Null
+        Register-ScheduledTask -TaskPath '\' -TaskName $taskName -Action $action -Trigger $triggers `
+                               -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
 
         @{
             status          = 'enabled'
@@ -928,8 +983,7 @@ function Set-AutoEraseSchedule {
 # per category. Each task runs as that user's S4U context so $env:APPDATA
 # and HKCU resolve correctly without any hive loading.
 # TargetUsers: array of usernames. Empty array = all non-system accounts on
-# this machine. Duplicate of the current user collapses to the canonical
-# WinCommander_AutoErase_<categoryId> task (no suffix) for the current user.
+# this machine. Accounts resolving to the same SID use the same task name.
 function Set-MultiUserAutoEraseSchedule {
     [CmdletBinding()]
     param(
@@ -982,39 +1036,21 @@ function Set-MultiUserAutoEraseSchedule {
 # creating; empty = remove for all users (finds all matching task names).
 function Remove-MultiUserAutoEraseSchedule {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)] [string]$CategoryId,
-        [string]$TargetUsers = ''
-    )
+    param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '')
     Assert-AutoEraseAdmin
-
-    $targetArr = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
-        $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-    } else { @() }
-
-    $prefix        = "WinCommander_AutoErase_${CategoryId}"
-    $legacyPrefix  = "System_AutoErase_${CategoryId}"
-    $removed = @()
-
-    if ($targetArr.Count -gt 0) {
-        foreach ($user in $targetArr) {
-            $name       = if ($user -eq $env:USERNAME) { $prefix }       else { "${prefix}_${user}" }
-            $legacyName = if ($user -eq $env:USERNAME) { $legacyPrefix } else { "${legacyPrefix}_${user}" }
-            Unregister-ScheduledTask -TaskName $name       -Confirm:$false -ErrorAction SilentlyContinue
-            Unregister-ScheduledTask -TaskName $legacyName -Confirm:$false -ErrorAction SilentlyContinue
-            $removed += $name
+    try {
+        $owners = @($TargetUsers -split ',' | Where-Object { $_.Trim() } |
+            ForEach-Object { Resolve-AutoEraseSid $_.Trim() })
+        $removed = @()
+        foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+            $identity = Get-AutoEraseTaskIdentity $task
+            if (-not $identity -or $identity.categoryId -ne $CategoryId) { continue }
+            if ($owners.Count -gt 0 -and $identity.ownerSid -notin $owners) { continue }
+            Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
+            $removed += $task.TaskName
         }
-    } else {
-        # Remove the base task + any per-user suffixed tasks (both current and legacy names)
-        Get-ScheduledTask -ErrorAction SilentlyContinue |
-            Where-Object { $_.TaskName -eq $prefix -or $_.TaskName -like "${prefix}_*" -or
-                           $_.TaskName -eq $legacyPrefix -or $_.TaskName -like "${legacyPrefix}_*" } |
-            ForEach-Object {
-                Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
-                $removed += $_.TaskName
-            }
-    }
-    @{ status = 'disabled'; categoryId = $CategoryId; removed = $removed }
+        @{ status = 'disabled'; categoryId = $CategoryId; removed = $removed }
+    } catch { @{ error = $true; message = "Failed to remove schedule: $($_.Exception.Message)" } }
 }
 
 function Remove-AutoEraseSchedule {
@@ -1022,9 +1058,9 @@ function Remove-AutoEraseSchedule {
     param([Parameter(Mandatory)] [string]$CategoryId)
     Assert-AutoEraseAdmin
     try {
-        # Remove current-name task and legacy System_AutoErase_* task if still present
-        Unregister-ScheduledTask -TaskName "WinCommander_AutoErase_$CategoryId" -Confirm:$false -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName "System_AutoErase_$CategoryId" -Confirm:$false -ErrorAction SilentlyContinue
+        $owners = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18')
+        $result = Remove-MultiUserAutoEraseSchedule -CategoryId $CategoryId -TargetUsers ($owners -join ',')
+        if ($result.error) { throw $result.message }
         # A disabled schedule must not leave a catch-up marker behind. Limit
         # cleanup to this caller's base task plus the system scope; explicitly
         # selected other-user schedules have their own remove command/state.
@@ -1047,170 +1083,98 @@ function Remove-AutoEraseSchedule {
 
 function Get-AutoEraseSchedules {
     try {
-        $prefix = 'WinCommander_AutoErase_'
-        $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
-                 Where-Object { $_.TaskName -like "$prefix*" }
+        $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
         $rows = @()
-        foreach ($t in $tasks) {
-            $info = $null
-            try { $info = Get-ScheduledTaskInfo -TaskName $t.TaskName -ErrorAction SilentlyContinue } catch {}
-            $repetition = $t.Triggers[0].Repetition.Interval
-            $minutes = 0
-            if ($repetition -match 'PT(\d+)M') {
-                $minutes = [int]$Matches[1]
-            } elseif ($repetition -match 'PT(\d+)H') {
-                $minutes = [int]$Matches[1] * 60
-            } elseif ($repetition -match 'P(\d+)D') {
-                $minutes = [int]$Matches[1] * 1440
-            }
-            # Parse categoryId and optional per-user suffix from task name.
-            # Format: WinCommander_AutoErase_<categoryId>           (current user, no suffix)
-            #         WinCommander_AutoErase_<categoryId>_<username> (other user)
-            # We match against known category IDs so underscore-containing
-            # usernames don't get mis-parsed.
-            $tail = $t.TaskName.Substring($prefix.Length)  # e.g. "rdpHistory" or "rdpHistory_Bob"
-            $categoryId = $tail
-            # `ownerAccount` comes from Task Scheduler rather than the task
-            # name. The suffix is only the selected-account label and can be
-            # ambiguous for domain-qualified or underscore-containing users.
-            $ownerAccount = $t.Principal.UserId
-            # A base task is the current-user (or SYSTEM) schedule. Only a
-            # suffix identifies an explicitly selected *other* user. Treating
-            # the owner of every base task as TargetUser made the frontend hide
-            # all normal schedules after creating them.
-            $targetUser = $null
-            foreach ($knownCat in $script:AutoEraseScripts.Keys) {
-                if ($tail -eq $knownCat) {
-                    $categoryId = $knownCat; break
-                } elseif ($tail -like "${knownCat}_*") {
-                    $categoryId = $knownCat
-                    $targetUser = $tail.Substring($knownCat.Length + 1)
-                    break
-                }
-            }
+        foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
+            $identity = Get-AutoEraseTaskIdentity $t
+            if (-not $identity) { continue }
+            $info = Get-ScheduledTaskInfo -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction SilentlyContinue
+            $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
+            $minutes = if ($repetition) { [int][Xml.XmlConvert]::ToTimeSpan($repetition).TotalMinutes } else { 0 }
             $rows += [pscustomobject]@{
-                categoryId      = $categoryId
-                taskName        = $t.TaskName
-                enabled         = ($t.State -ne 'Disabled')
-                intervalMinutes = $minutes
-                targetUser      = $targetUser
-                ownerAccount    = $ownerAccount
+                categoryId       = $identity.categoryId
+                taskName         = $t.TaskName
+                enabled          = ($t.State -ne 'Disabled')
+                intervalMinutes  = $minutes
+                targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
+                ownerAccount     = $t.Principal.UserId
                 managedByAutoSet = ($t.Description -like 'WinCommander Auto-set scheduled wipe*')
-                lastRun         = if ($info) { [string]$info.LastRunTime } else { $null }
-                nextRun         = if ($info) { [string]$info.NextRunTime } else { $null }
-                lastResult      = if ($info) { $info.LastTaskResult } else { $null }
+                lastRun          = if ($info) { [string]$info.LastRunTime } else { $null }
+                nextRun          = if ($info) { [string]$info.NextRunTime } else { $null }
+                lastResult       = if ($info) { $info.LastTaskResult } else { $null }
             }
         }
         @{ schedules = $rows; total = $rows.Count }
-    }
-    catch {
-        @{ error = $true; message = "Failed to list auto-erase schedules: $($_.Exception.Message)" }
-    }
+    } catch { @{ error = $true; message = "Failed to list auto-erase schedules: $($_.Exception.Message)" } }
 }
 
-# One-shot migration. Called at app startup so users on legacy task names
-# automatically get rolled over to the current WinCommander_AutoErase_* naming.
-# Idempotent: safe to run on every launch.
+# Copy task XML instead of recreating schedules: dates, disabled state, selected
+# account, scope and settings belong to the user and survive a naming migration.
 function Invoke-AutoEraseMigration {
+    [CmdletBinding()]
+    param([string]$CategoryId = '')
     Assert-AutoEraseAdmin
-    $legacyPrefix = 'System_AutoErase_'
-    $newPrefix    = 'WinCommander_AutoErase_'
     $migrated = @()
-
-    # 1. Migrate legacy System_AutoErase_<category> tasks to WinCommander_AutoErase_
-    $existingLegacyTasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
-                           Where-Object { $_.TaskName -like "$legacyPrefix*" }
-    foreach ($t in $existingLegacyTasks) {
-        $catId = $t.TaskName.Substring($legacyPrefix.Length)
-        $newTaskName = "$newPrefix$catId"
-        $newTask = Get-ScheduledTask -TaskName $newTaskName -ErrorAction SilentlyContinue
-        if (-not $newTask) {
-            $repetition = $t.Triggers[0].Repetition.Interval
-            $minutes = 5
-            if ($repetition -match 'PT(\d+)M') {
-                $minutes = [int]$Matches[1]
-            } elseif ($repetition -match 'PT(\d+)H') {
-                $minutes = [int]$Matches[1] * 60
-            } elseif ($repetition -match 'P(\d+)D') {
-                $minutes = [int]$Matches[1] * 1440
+    $errors = @()
+    foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+        try {
+            $identity = Get-AutoEraseTaskIdentity $task
+            if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
+            $isUsbHistoryTask = $identity.categoryId -eq 'usbHistory'
+            $currentPayload = if ($isUsbHistoryTask) {
+                $task.Description -like 'WinCommander*scheduled wipe v3'
+            } else { $task.Description -like 'WinCommander*scheduled wipe v2' }
+            $argument = [string](@($task.Actions)[0].Arguments)
+            $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
+            if ($task.TaskName -eq $identity.taskName -and -not $upgradePayload) { continue }
+            if ([string]$task.State -eq 'Running') { throw 'An active scheduled cleanup must finish before its task can be migrated.' }
+            $renaming = $task.TaskName -ne $identity.taskName
+            if ($renaming -and (Get-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction SilentlyContinue)) {
+                throw 'The replacement task name is occupied. Both existing tasks were left unchanged.'
             }
-            $runAsSystem = [bool]($t.Principal.UserId -eq 'SYSTEM')
-            $result = Set-AutoEraseSchedule -CategoryId $catId -IntervalMinutes $minutes -RunAsSystem $runAsSystem
-            if (-not $result.error) { $migrated += $catId }
-        }
-        Unregister-ScheduledTask -TaskName $t.TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    }
-
-    # 2. Migrate oldest legacy task formats (WinCommander_ClipboardErase, etc.)
-    $migrations = @(
-        @{ legacy = 'WinCommander_ClipboardErase'; categoryId = 'clipboard';  interval = 5;    runAsSystem = $false }
-        @{ legacy = 'WinCommander_RDPErase';       categoryId = 'rdpHistory'; interval = 5;    runAsSystem = $false }
-        @{ legacy = 'WinCommander_EventLogErase';  categoryId = 'eventLogs';  interval = 1440; runAsSystem = $true  }
-    )
-    foreach ($m in $migrations) {
-        $legacy = Get-ScheduledTask -TaskName $m.legacy -ErrorAction SilentlyContinue
-        if (-not $legacy) { continue }
-        $newTaskName = "$newPrefix$($m.categoryId)"
-        $newTask = Get-ScheduledTask -TaskName $newTaskName -ErrorAction SilentlyContinue
-        if (-not $newTask) {
-            $result = Set-AutoEraseSchedule -CategoryId $m.categoryId -IntervalMinutes $m.interval -RunAsSystem $m.runAsSystem
-            if (-not $result.error) { $migrated += $m.categoryId }
-        }
-        Unregister-ScheduledTask -TaskName $m.legacy -Confirm:$false -ErrorAction SilentlyContinue
-    }
-
-    # 3. Re-register legacy scripts and USB-history v2 payloads. The v3 USB
-    # payload removes only disconnected USBSTOR nodes; older task files also
-    # removed generic USB history and must not remain scheduled.
-    $currentTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
-        Where-Object { $_.TaskName -like "$newPrefix*" })
-    foreach ($t in $currentTasks) {
-        $actionArgs = [string](@($t.Actions)[0].Arguments)
-        # Re-register old script-backed tasks and the unsafe USB-history v2
-        # payload, preserving task name, interval, scope and principal.
-        $isUsbHistoryTask = ($t.TaskName -like "${newPrefix}usbHistory" -or $t.TaskName -like "${newPrefix}usbHistory_*")
-        $currentPayload = if ($isUsbHistoryTask) {
-            $t.Description -like 'WinCommander*scheduled wipe v3'
-        } else {
-            $t.Description -like 'WinCommander*scheduled wipe v2'
-        }
-        if ($actionArgs -like '*WinCommander\auto-erase\scripts*' -and $currentPayload) { continue }
-
-        $tail = $t.TaskName.Substring($newPrefix.Length)
-        $catId = $null
-        $targetUser = [string]$t.Principal.UserId
-        foreach ($knownCat in $script:AutoEraseScripts.Keys) {
-            if ($tail -eq $knownCat) {
-                $catId = $knownCat
-                break
+            $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+            [xml]$xml = $originalXml
+            if ($upgradePayload) {
+                $repetition = @($task.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
+                if (-not $repetition) { throw 'The existing schedule interval could not be checked.' }
+                $minutes = [int][Xml.XmlConvert]::ToTimeSpan($repetition).TotalMinutes
+                if ($minutes -lt 1) { throw 'The existing schedule interval is invalid.' }
+                $owner = [string]$task.Principal.UserId
+                $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
+                $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+                $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
+                $revision = if ($isUsbHistoryTask) { 3 } else { 2 }
+                $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision
+                $xml.Task.RegistrationInfo.Description = if ($task.Description -like 'WinCommander Auto-set scheduled wipe*') { "WinCommander Auto-set scheduled wipe v$revision" } else { "WinCommander scheduled wipe v$revision" }
             }
-            if ($tail -like "${knownCat}_*") {
-                $catId = $knownCat
-                $targetUser = $tail.Substring($knownCat.Length + 1)
-                break
+            if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
+            $enabled = [string]$xml.Task.Settings.Enabled
+            $xml.Task.Settings.Enabled = 'false'
+            # Register disabled so overdue or registration triggers cannot launch a
+            # second wipe while the original task still exists.
+            $register = @{ TaskName = $identity.taskName; TaskPath = '\'; Xml = $xml.OuterXml; ErrorAction = 'Stop' }
+            if (-not $renaming) { $register.Force = $true }
+            Register-ScheduledTask @register | Out-Null
+            try {
+                [xml]$readback = Export-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop
+                foreach ($section in @('Actions', 'Triggers', 'Principals', 'Settings')) {
+                    if ($readback.Task.$section.OuterXml -ne $xml.Task.$section.OuterXml) {
+                        throw "The migrated task's $section could not be verified."
+                    }
+                }
+                if ($renaming) {
+                    Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
+                }
+                if ($enabled -ne 'false') { Enable-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop | Out-Null }
+            } catch {
+                # Restore the exact original before removing a staged replacement.
+                Register-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Xml $originalXml -Force -ErrorAction Stop | Out-Null
+                if ($renaming) { Unregister-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -Confirm:$false -ErrorAction Stop }
+                throw
             }
-        }
-        if (-not $catId) { continue }
-
-        $minutes = 60
-        $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
-        if ($repetition -match 'PT(\d+)M') {
-            $minutes = [int]$Matches[1]
-        } elseif ($repetition -match 'PT(\d+)H') {
-            $minutes = [int]$Matches[1] * 60
-        } elseif ($repetition -match 'P(\d+)D') {
-            $minutes = [int]$Matches[1] * 1440
-        }
-        $runAsSystem = [bool]($t.Principal.UserId -eq 'SYSTEM')
-        $managedByAutoSet = [bool]($t.Description -like 'WinCommander Auto-set scheduled wipe*')
-        $result = Set-AutoEraseSchedule `
-            -CategoryId $catId `
-            -IntervalMinutes $minutes `
-            -RunAsSystem $runAsSystem `
-            -TargetUser $targetUser `
-            -TaskNameOverride $t.TaskName `
-            -ManagedByAutoSet:$managedByAutoSet
-        if (-not $result.error) { $migrated += $t.TaskName }
+            $migrated += $identity.categoryId
+        } catch { $errors += $_.Exception.Message }
     }
+    if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; message = ($errors -join ' '); errors = $errors } }
     @{ status = 'ok'; migrated = $migrated }
 }

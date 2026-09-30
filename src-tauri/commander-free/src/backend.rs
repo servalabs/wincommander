@@ -5253,7 +5253,7 @@ pub(crate) async fn run_backend_script_with_timeout(
     // embed the same source. Prepend them whenever the privacy/cleanup
     // module is loaded so callers from this module can invoke them
     // exactly like local functions.
-    if module_name == "privacy/cleanup" {
+    if module_name == "privacy/cleanup" || module_name == "tweaks/scheduled-tasks" {
         additional_modules.push_str(&load_module("core/auto-erase")?);
         additional_modules.push_str("\n\n");
     }

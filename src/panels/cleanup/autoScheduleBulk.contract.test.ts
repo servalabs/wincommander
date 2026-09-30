@@ -57,7 +57,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("removeAutoEraseSchedule(getSchedulerCategoryId(categoryId))");
     expect(scheduler).toContain("[switch]$ManagedByAutoSet");
     expect(scheduler).toContain("managedByAutoSet =");
-    expect(scheduler).toContain("$targetUser = $null");
+    expect(scheduler).toContain("$identity.ownerSid -notin @($currentSid, 'S-1-5-18')");
   });
 
   test("adds a durable daily SSD/NVMe trim task when bulk scheduling is enabled", async () => {

@@ -46,6 +46,11 @@ the backend and private component before execution.
 
 ### Maintenance
 
+- Scheduled cleanup uses compact Task Scheduler names: `SL-SW-<code>` for
+  system tasks and `SL-UW-<code>-<SID>` for per-user tasks. App updates migrate
+  recognized legacy tasks while preserving their schedules and disabled state.
+- Turning auto-start off removes the app's logon and elevated-launch tasks;
+  turning it on recreates them as `SL-AS` and `SL-EL`. Updates preserve OFF.
 - Preview-first maintenance flows for supported cleanup categories.
 - Guided Routine Hygiene previews an exact, test-locked cache allowlist and
   refuses bulk clear when any category is missing, busy, failed, or unscanned.

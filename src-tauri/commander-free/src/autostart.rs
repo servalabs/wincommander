@@ -17,16 +17,13 @@
 // opt-out across ordinary launches and updates.
 
 const COVERED_TASK_NAME: &str = "System Update Service";
+const AUTOSTART_TASK_NAME: &str = "SL-AS";
 const AUTOSTART_PREFERENCE_PATH: &str = r"HKLM:\Software\ServaLabs\WinCommander";
 const AUTOSTART_PREFERENCE_VALUE: &str = "AutostartEnabled";
 const ELEVATION_REQUIRED_EXIT_CODE: i32 = 77;
 
-fn task_name(covered: bool) -> String {
-    if covered {
-        COVERED_TASK_NAME.to_string()
-    } else {
-        format!("{} Autostart", crate::paths::app_display_name())
-    }
+fn task_name(_covered: bool) -> String {
+    AUTOSTART_TASK_NAME.to_string()
 }
 
 fn covered_identity_active() -> bool {
@@ -149,7 +146,8 @@ $preferencePath = __PREFERENCE_PATH__
 $preferenceValueName = __PREFERENCE_VALUE_NAME__
 $legacyDataDirName = __LEGACY_DATA_DIR_NAME__
 $runValueNames = @(__RUN_VALUE_NAMES__)
-$legacyTaskNames = @('WinCommander Elevated Autostart', 'Sys Health Checker', 'WinCommander Input Service')
+$manualTaskName = 'SL-EL'
+$legacyTaskNames = @('WinCommander Autostart', 'WinCommander Elevated Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service', 'WinCommander Elevated Launcher', $manualTaskName)
 $allTaskNames = @($desiredTaskName, $alternateTaskName) + $legacyTaskNames | Select-Object -Unique
 
 $exeFileName = [IO.Path]::GetFileName($targetExe)
@@ -311,6 +309,9 @@ function Test-OwnedManagedTask {
   if ($actions.Count -ne 1) { return $false }
   $arguments = [string]$actions[0].Arguments
   if (Test-OwnedExecutablePath -Path ([string]$actions[0].Execute)) {
+    if ($Name -in @($manualTaskName, 'WinCommander Elevated Launcher')) {
+      return $arguments -eq '--elevated-relaunch'
+    }
     # Never remove a same-named task merely because its executable happens to
     # be ours. Each known historic route also needs its known launch contract.
     if ($Name -eq 'WinCommander Elevated Autostart') {
@@ -363,7 +364,7 @@ function Get-OwnedTaskEntries {
 
 function Test-AnyOwnedDisabledTask {
   foreach ($entry in @(Get-OwnedTaskEntries)) {
-    if ($entry.Task.State -eq 'Disabled') { return $true }
+    if ($entry.Name -notin @($manualTaskName, 'WinCommander Elevated Launcher') -and $entry.Task.State -eq 'Disabled') { return $true }
   }
   return $false
 }
@@ -501,7 +502,8 @@ function Remove-LegacyReopenMarker {
 function Remove-OwnedTasks {
   param([AllowNull()][string]$KeepTaskName)
   foreach ($entry in @(Get-OwnedTaskEntries)) {
-    if ($null -ne $KeepTaskName -and $entry.Name -eq $KeepTaskName) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($KeepTaskName) -and $entry.Name -eq $KeepTaskName) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($KeepTaskName) -and $entry.Name -eq $manualTaskName -and (Test-CanonicalLauncher -Task $entry.Task)) { continue }
     Unregister-ScheduledTask -TaskName $entry.Name -Confirm:$false -ErrorAction Stop
   }
 }
@@ -515,7 +517,7 @@ function Test-AnyOwnedRoutes {
 
 function Test-AnyOwnedCompetingRoutes {
   foreach ($entry in @(Get-OwnedTaskEntries)) {
-    if ($entry.Name -ne $desiredTaskName) { return $true }
+    if ($entry.Name -ne $desiredTaskName -and -not ($entry.Name -eq $manualTaskName -and (Test-CanonicalLauncher -Task $entry.Task))) { return $true }
   }
   return @(Get-OwnedRunEntries).Count -gt 0 -or
     @(Get-OwnedStartupShortcutEntries).Count -gt 0 -or
@@ -549,12 +551,64 @@ function Register-CanonicalTask {
   $trigger = New-ScheduledTaskTrigger -AtLogOn
   $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-  Register-ScheduledTask -TaskName $desiredTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  Register-ScheduledTask -TaskName $desiredTaskName -Description 'SerVaLabs automatic desktop startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
 
   $registered = Get-TaskOrNull -Name $desiredTaskName
   if (-not (Test-CanonicalTask -Task $registered)) {
     throw "Windows registered '$desiredTaskName' but it did not match the required WinCommander logon-router contract."
   }
+}
+
+function Test-InstalledLauncherEligible {
+  # Only the machine installer location is eligible for a persistent high-token
+  # launcher. Development/portable copies retain normal Windows UAC consent.
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$base)) {
+      $installedPath = Join-Path $base (Join-Path $legacyDataDirName $exeFileName)
+      if ([string]::Equals($targetExe, $installedPath, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+  }
+  return $false
+}
+
+function Test-CanonicalLauncher {
+  param([AllowNull()]$Task)
+  if (-not (Test-InstalledLauncherEligible) -or $null -eq $Task -or $Task.State -eq 'Disabled' -or $null -eq $Task.Principal -or $null -eq $Task.Settings) { return $false }
+  $actions = @($Task.Actions)
+  return $actions.Count -eq 1 -and (Test-CurrentExecutablePath ([string]$actions[0].Execute)) -and
+    [string]$actions[0].Arguments -eq '--elevated-relaunch' -and @($Task.Triggers).Count -eq 0 -and
+    (Resolve-PrincipalSid ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-544' -and
+    $Task.Principal.RunLevel -eq 'Highest' -and $Task.Settings.MultipleInstances -eq 'Parallel' -and
+    $Task.Settings.ExecutionTimeLimit -eq 'PT0S'
+}
+
+function Test-LauncherNeedsRepair {
+  return (Test-InstalledLauncherEligible) -and -not (Test-CanonicalLauncher (Get-TaskOrNull -Name $manualTaskName))
+}
+
+function Assert-CanonicalNamesAvailable {
+  $names = @($desiredTaskName)
+  if (Test-InstalledLauncherEligible) { $names += $manualTaskName }
+  foreach ($name in $names) {
+    $task = Get-TaskOrNull -Name $name
+    if ($null -ne $task -and -not (Test-OwnedManagedTask -Task $task -Name $name)) {
+      throw "Scheduled task '$name' already belongs to another program and was left untouched."
+    }
+  }
+}
+
+function Register-CanonicalLauncher {
+  if (-not (Test-InstalledLauncherEligible)) { return }
+  $existing = Get-TaskOrNull -Name $manualTaskName
+  if ($null -ne $existing -and -not (Test-OwnedManagedTask -Task $existing -Name $manualTaskName)) {
+    throw "Scheduled task '$manualTaskName' already belongs to another program and was left untouched."
+  }
+  if (Test-CanonicalLauncher $existing) { return }
+  $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--elevated-relaunch'
+  $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-544' -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
+  Register-ScheduledTask -TaskName $manualTaskName -Description 'SerVaLabs administrator desktop launcher' -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  if (-not (Test-CanonicalLauncher (Get-TaskOrNull -Name $manualTaskName))) { throw 'Windows did not confirm the administrator launcher.' }
 }
 "#;
 
@@ -588,10 +642,12 @@ if ($preference -eq 0) {
 }
 
 $desiredTask = Get-TaskOrNull -Name $desiredTaskName
-$needsRepair = -not (Test-CanonicalTask -Task $desiredTask) -or (Test-AnyOwnedCompetingRoutes)
+$needsRepair = -not (Test-CanonicalTask -Task $desiredTask) -or (Test-AnyOwnedCompetingRoutes) -or (Test-LauncherNeedsRepair)
 if ($needsRepair) {
   Require-AutostartElevation
+  Assert-CanonicalNamesAvailable
   Register-CanonicalTask
+  Register-CanonicalLauncher
   Remove-OwnedRouteArtifacts -KeepTaskName $desiredTaskName
   Assert-NoOwnedCompetingRoutes
 }
@@ -602,10 +658,12 @@ const POWERSHELL_ENABLE: &str = r#"
 
 $preference = Get-AutostartPreference
 $desiredTask = Get-TaskOrNull -Name $desiredTaskName
-$needsRepair = $preference -ne 1 -or -not (Test-CanonicalTask -Task $desiredTask) -or (Test-AnyOwnedCompetingRoutes)
+$needsRepair = $preference -ne 1 -or -not (Test-CanonicalTask -Task $desiredTask) -or (Test-AnyOwnedCompetingRoutes) -or (Test-LauncherNeedsRepair)
 if ($needsRepair) {
   Require-AutostartElevation
+  Assert-CanonicalNamesAvailable
   Register-CanonicalTask
+  Register-CanonicalLauncher
   Remove-OwnedRouteArtifacts -KeepTaskName $desiredTaskName
   Assert-NoOwnedCompetingRoutes
   # Persist only after the canonical task exists and old routes are gone.
@@ -635,7 +693,7 @@ $preference = Get-AutostartPreference
 $enabled = $preference -ne 0
 if ($enabled) {
   $desiredTask = Get-TaskOrNull -Name $desiredTaskName
-  $enabled = (Test-CanonicalTask -Task $desiredTask) -and -not (Test-AnyOwnedCompetingRoutes)
+  $enabled = (Test-CanonicalTask -Task $desiredTask) -and -not (Test-AnyOwnedCompetingRoutes) -and -not (Test-LauncherNeedsRepair)
 }
 [Console]::Out.Write(([bool]$enabled).ToString().ToLowerInvariant())
 "#;
@@ -881,7 +939,7 @@ mod tests {
         let enable = build_autostart_script(false, AutostartOperation::Enable).unwrap();
         assert!(ensure.contains("$needsRepair = -not (Test-CanonicalTask -Task $desiredTask)"));
         assert!(enable.contains("$needsRepair = $preference -ne 1"));
-        assert!(enable.contains("Register-CanonicalTask\n  Remove-OwnedRouteArtifacts -KeepTaskName $desiredTaskName\n  Assert-NoOwnedCompetingRoutes\n  # Persist only after the canonical task exists and old routes are gone.\n  Set-AutostartPreference 1"));
+        assert!(enable.contains("Register-CanonicalTask\n  Register-CanonicalLauncher\n  Remove-OwnedRouteArtifacts -KeepTaskName $desiredTaskName\n  Assert-NoOwnedCompetingRoutes\n  # Persist only after the canonical task exists and old routes are gone.\n  Set-AutostartPreference 1"));
     }
 
     #[test]

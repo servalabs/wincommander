@@ -15,6 +15,8 @@ ${Using:StrFunc} UnStrStr
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
 !define WC_CONFIGURE_ELEVATED_LAUNCHERS "${__FILEDIR__}\configure-elevated-launchers.ps1"
+!define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
+!define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
@@ -318,6 +320,17 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 
   !insertmacro WC_CONFIGURE_ELEVATED_LAUNCHERS
+
+  ; Rename only verified, owned wipe tasks; never run the wipe actions.
+  File /oname=$PLUGINSDIR\migrate-wipe-tasks.ps1 "${WC_MIGRATE_WIPE_TASKS}"
+  File /oname=$PLUGINSDIR\auto-erase.ps1 "${WC_WIPE_TASK_MODULE}"
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\migrate-wipe-tasks.ps1" -ModulePath "$PLUGINSDIR\auto-erase.ps1"'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "wipe-tasks-migration" "$0" "$1"
+  ${If} $0 != 0
+    Abort "WinCommander could not migrate its scheduled cleanup tasks. See installer-lifecycle.log."
+  ${EndIf}
 
   ; Move every existing local profile away from the obsolete per-user binary.
   ; This is an elevated, machine-wide migration: it changes only shortcuts and

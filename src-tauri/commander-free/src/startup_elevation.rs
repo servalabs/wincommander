@@ -18,7 +18,7 @@ pub enum StartupElevationResult {
 }
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
-const ELEVATED_LAUNCH_TASK: &str = "WinCommander Elevated Launcher";
+const ELEVATED_LAUNCH_TASK: &str = "SL-EL";
 
 /// A UAC prompt is useful for every interactive desktop launch, including the
 /// logon launch. This lets Windows show its normal consent/credential prompt

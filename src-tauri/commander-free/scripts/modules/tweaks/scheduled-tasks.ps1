@@ -80,15 +80,14 @@ function Remove-ScheduledTaskByPath {
     } catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
-# CL-03: Remove all WinCommander_AutoErase_* tasks the app registered. Also
-# removes legacy System_AutoErase_* tasks that may still exist on machines
-# that haven't run Invoke-AutoEraseMigration yet. Called from the Lockdown
+# CL-03: Remove only scheduled cleanup tasks verified as app-owned, including
+# legacy names that have not migrated yet. Called from the Lockdown
 # cascade so that a lockdown run leaves no persistent scheduled re-erasers.
 function Remove-AutoEraseTasks {
     Assert-IsAdmin
     try {
-        $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue |
-            Where-Object { $_.TaskName -like 'WinCommander_AutoErase_*' -or $_.TaskName -like 'System_AutoErase_*' }
+        $tasks = Get-ScheduledTask -ErrorAction Stop |
+            Where-Object { $null -ne (Get-AutoEraseTaskIdentity $_) }
         $removed = 0
         foreach ($t in $tasks) {
             try {

@@ -14,7 +14,7 @@ test("the scheduler exposes only a real, SYSTEM-scoped firewall-log clearer", ()
 
 test("bulk scheduling can preserve a manually configured scheduled task", () => {
   expect(scheduler).toContain("[switch]$PreserveExisting");
-  expect(scheduler).toContain("Get-ScheduledTask -TaskName $taskName");
+  expect(scheduler).toContain("Get-ScheduledTask -TaskPath '\\' -TaskName $taskName");
   expect(scheduler).toContain("status          = 'alreadyConfigured'");
   expect(scheduler).toContain("per-card editor intentionally leaves it off");
 });
