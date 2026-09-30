@@ -83,7 +83,7 @@ const compare = (left, right) => {
     const an = /^\d+$/.test(a.pre[i]), bn = /^\d+$/.test(b.pre[i]);
     if (an && bn) return Number(a.pre[i]) - Number(b.pre[i]);
     if (an !== bn) return an ? -1 : 1;
-    return a.pre[i].localeCompare(b.pre[i]);
+    return a.pre[i] < b.pre[i] ? -1 : 1;
   }
   return 0;
 };
@@ -109,10 +109,43 @@ try {
 
     $current = (& node -e "const fs=require('fs'); process.stdout.write(JSON.parse(fs.readFileSync('package.json','utf8')).version)" --input-type=commonjs 2>$null).Trim()
     if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not read package.json version.' }
+    # A normal release may already have its four version records committed on
+    # main.  With no remote tag, publishing that exact prepared source is the
+    # safe path; recovery mode is reserved for replacing an existing failed tag.
+    $env:WINCOMMANDER_CURRENT_MAIN_VERSION = $current
+    $env:WINCOMMANDER_RELEASE_VERSION = $Version
+    @'
+const parse = (value) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+  if (!match) throw new Error(`Invalid semantic version: ${value}`);
+  return { core: match.slice(1, 4).map(Number), pre: match[4]?.split('.') || [] };
+};
+const compare = (left, right) => {
+  const a = parse(left), b = parse(right);
+  for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i];
+  if (!a.pre.length || !b.pre.length) return a.pre.length ? -1 : b.pre.length ? 1 : 0;
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    if (a.pre[i] === undefined) return -1;
+    if (b.pre[i] === undefined) return 1;
+    if (a.pre[i] === b.pre[i]) continue;
+    const an = /^\d+$/.test(a.pre[i]), bn = /^\d+$/.test(b.pre[i]);
+    if (an && bn) return Number(a.pre[i]) - Number(b.pre[i]);
+    if (an !== bn) return an ? -1 : 1;
+    // SemVer compares nonnumeric identifiers in ASCII sort order. JavaScript
+    // localeCompare varies with the operator's Windows locale, so do not use it
+    // for a release-ordering safety decision.
+    return a.pre[i] < b.pre[i] ? -1 : 1;
+  }
+  return 0;
+};
+if (compare(process.env.WINCOMMANDER_CURRENT_MAIN_VERSION, process.env.WINCOMMANDER_RELEASE_VERSION) > 0) {
+  throw new Error('origin/main already declares a newer version.');
+}
+'@ | node --input-type=commonjs -
+    Remove-Item Env:WINCOMMANDER_CURRENT_MAIN_VERSION
+    Remove-Item Env:WINCOMMANDER_RELEASE_VERSION
+    if ($LASTEXITCODE -ne 0) { Stop-Release 'Requested version is older than origin/main.' }
     $versionAlreadyPrepared = $current -eq $Version
-    if ($versionAlreadyPrepared -and -not $ReplaceUnpublishedTag) {
-        Stop-Release "origin/main already declares $Version. Re-run with -ReplaceUnpublishedTag only to recover an unpublished failed tag."
-    }
 
     $update = @'
 const fs = require('fs');
