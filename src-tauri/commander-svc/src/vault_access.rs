@@ -1983,6 +1983,27 @@ impl VaultAccessStore {
             .clone()
     }
 
+    pub fn caller_status(&self, caller_sid: &str, caller_privileged: bool) -> VaultPolicyStatus {
+        if !valid_windows_sid(caller_sid) {
+            return empty_status();
+        }
+        let Ok(state) = self.state.lock() else { return empty_status(); };
+        let mut status = state.status.clone();
+        if caller_privileged {
+            return status;
+        }
+        if !state.access_directory_healthy || status.validation_state != VaultValidationState::Current {
+            return empty_status();
+        }
+        let owned = state.active.iter().flat_map(|active| &active.policy.entries)
+            .filter(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid)
+                && fleet_group_member_sids(entry, &state.access_directory)
+                    .is_none_or(|members| members.contains(caller_sid)))
+            .map(|entry| entry.id.as_str()).collect::<HashSet<_>>();
+        status.entries.retain(|entry| owned.contains(entry.id.as_str()));
+        status
+    }
+
     pub fn policy(&self) -> Option<VaultAccessPolicy> {
         self.state
             .lock()

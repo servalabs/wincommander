@@ -1,6 +1,48 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[test]
+fn status_projection_does_not_reveal_other_owners_entry_ids() {
+    struct SidResolver;
+    impl PrincipalResolver for SidResolver {
+        fn resolve_sid(&self, name: &str) -> Result<String, VaultError> { Ok(name.into()) }
+    }
+    let store = VaultAccessStore::open(
+        Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+        Box::new(SidResolver), Box::new(Acl), PathBuf::from("/policy"),
+    );
+    let owner = "S-1-5-21-1-2-3-1001";
+    let other = "S-1-5-21-1-2-3-1002";
+    let mut requested = policy(1, 0);
+    requested.entries[0].primary_owner_sid = Some(owner.into());
+    requested.entries[0].owner_account = owner.into();
+    requested.entries[0].grants = vec![wincmd_shared::vault_access::VaultGrantInput {
+        principal_name: owner.into(), access: VaultAccess::Write,
+    }];
+    requested.entries[0].mount.presentation = VaultPresentation::PerUser;
+    let mut foreign = requested.entries[0].clone();
+    foreign.id = "other-private".into();
+    foreign.container_path = r"C:\other\private.hc".into();
+    foreign.primary_owner_sid = Some(other.into());
+    foreign.owner_account = other.into();
+    foreign.grants[0].principal_name = other.into();
+    foreign.mount.preferred_letter = Some("W".into());
+    requested.entries.push(foreign);
+    store.apply(requested, 7).unwrap();
+    let status = store.caller_status(owner, false);
+    assert_eq!(status.entries.len(), 1);
+    assert_eq!(status.entries[0].id, "shared");
+    assert_eq!(status.version, 1);
+    assert_eq!(store.caller_status(other, false).entries[0].id, "other-private");
+    assert!(store.caller_status("S-1-5-21-1-2-3-1003", false).entries.is_empty());
+    assert_eq!(store.caller_status(owner, true).entries.len(), 2);
+    assert_eq!(store.caller_status("", false), empty_status());
+    assert_eq!(store.caller_status("invalid", true), empty_status());
+    store.state.lock().unwrap().status.validation_state = VaultValidationState::Degraded;
+    assert_eq!(store.caller_status(owner, false), empty_status());
+    assert_eq!(store.caller_status(owner, true).entries.len(), 2);
+}
+
+#[test]
 fn outsider_remove_cannot_atomically_recreate_the_same_file_under_a_new_policy_id() {
     let store = store(Arc::new(Mutex::new(HashMap::new())));
     store.apply(policy(1, 0), 1).unwrap();

@@ -630,7 +630,9 @@ async fn dispatch_verb(
         .unwrap_or(serde_json::Value::Null)),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
         "svc.vault.get_status" => {
-            Ok(serde_json::to_value(vault_access.status()).unwrap_or(serde_json::Value::Null))
+            Ok(serde_json::to_value(vault_access.caller_status(
+                peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""), caller_privileged,
+            )).unwrap_or(serde_json::Value::Null))
         }
         // The historical whole-policy wire cannot safely be caller-scoped:
         // an owner would have to receive other owners' records or omission
@@ -1054,7 +1056,9 @@ fn handle_vault_apply_owner_fragment(
         vault_access
             .preflight_apply(policy.clone())
             .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
-        handle_vault_apply(vault_access, policy)
+        handle_vault_apply(vault_access, policy)?;
+        serde_json::to_value(vault_access.caller_status(caller_sid, caller_privileged))
+            .map_err(|_| VerbError::new("vault_apply_failed", "Vault status could not be encoded"))
     })
 }
 
@@ -1245,10 +1249,12 @@ fn merge_owner_fragment(
 ) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
     let previous = vault_access.policy();
     let mut group_scope = HashMap::new();
+    let mut scoped_entry_ids = HashSet::new();
     for entry in previous.iter().flat_map(|policy| &policy.entries)
         .chain(fragment.entries.iter().map(|owned| &owned.entry))
     {
-        if group_scope.contains_key(&entry.id) {
+        // A persisted absence of group authority must also override proposed groups.
+        if !scoped_entry_ids.insert(entry.id.as_str()) {
             continue;
         }
         if let Some(allowed) = vault_access.fleet_group_access(entry, caller_sid)
@@ -1264,6 +1270,31 @@ fn merge_owner_fragment(
 
 fn fleet_group_access_denied() -> VerbError {
     VerbError::new("vault_fleet_group_required", "This Vault belongs to a Fleet group that your Windows account does not belong to. No policy changes were made.")
+}
+
+fn validate_primary_owner_transfer(
+    existing: &wincmd_shared::vault_access::VaultAccessEntry,
+    requested: &wincmd_shared::vault_access::VaultAccessEntry,
+    caller_privileged: bool,
+) -> Result<(), VerbError> {
+    if existing.primary_owner_sid != requested.primary_owner_sid && !caller_privileged
+    {
+        return Err(VerbError::new("vault_owner_transfer_requires_admin",
+            "A standard Windows account cannot transfer Vault ownership. Remove the unmounted policy and ask an administrator to recreate it for the new owner."));
+    }
+    Ok(())
+}
+
+fn new_vault_owner_allowed(
+    entry: &wincmd_shared::vault_access::VaultAccessEntry,
+    caller_sid: &str,
+    caller_privileged: bool,
+    initial_policy: bool,
+) -> bool {
+    let private = entry.mount.presentation == wincmd_shared::vault_access::VaultPresentation::PerUser;
+    entry.primary_owner_sid.as_deref() == Some(caller_sid)
+        || (private && caller_privileged)
+        || (!private && initial_policy)
 }
 
 #[cfg(test)]
@@ -1337,29 +1368,18 @@ fn merge_owner_fragment_policy_with_scope(
                 "vault removal request is invalid",
             ));
         }
-        // Initial policy creation may nominate another valid Windows user as
-        // primary owner.  Once a record exists, its *current* owner may
-        // transfer it while unmounted; comparing the proposed owner here
-        // would incorrectly reject that transfer before the later owner
-        // check could verify it.  A brand-new entry added to an existing
-        // policy must still belong to the caller.
-        if let Some(previous) = previous.as_ref() {
-            match previous
-                .entries
-                .iter()
-                .find(|entry| entry.id == owned.entry.id)
-            {
+        match previous.as_ref().and_then(|policy| policy.entries.iter().find(|entry| entry.id == owned.entry.id)) {
                 Some(existing) if existing.primary_owner_sid.as_deref() != Some(caller_sid) => {
                     let group_administrator = caller_privileged && group_scope.get(&existing.id) == Some(&true);
                     if !group_administrator && owned.entry != *existing {
                         return Err(denied());
                     }
                 }
-                None if owned.entry.primary_owner_sid.as_deref() != Some(caller_sid) => {
+                Some(existing) => validate_primary_owner_transfer(existing, &owned.entry, caller_privileged)?,
+                None if !new_vault_owner_allowed(&owned.entry, caller_sid, caller_privileged, previous.is_none()) => {
                     return Err(denied());
                 }
                 _ => {}
-            }
         }
         if incoming.insert(owned.entry.id.clone(), owned).is_some() {
             return Err(VerbError::new(
@@ -1411,8 +1431,7 @@ fn merge_owner_fragment_policy_with_scope(
         entry.container_kind = existing.container_kind;
         entries.push(entry);
     }
-    // New entries are accepted only for the caller's SID. Their backing path
-    // is subsequently normalized and identity-attested by `apply`.
+    // Newly assigned private entries still undergo principal and file identity validation.
     entries.extend(incoming.into_values().map(|owned| owned.entry));
     Ok(VaultAccessPolicy {
         schema_version: previous.schema_version,
@@ -1435,10 +1454,11 @@ fn validate_vault_owner_mutation(
 ) -> Result<(), VerbError> {
     let previous = vault_access.policy();
     let mut group_scope = HashMap::new();
+    let mut scoped_entry_ids = HashSet::new();
     for entry in previous.iter().flat_map(|policy| &policy.entries)
         .chain(requested.entries.iter())
     {
-        if group_scope.contains_key(&entry.id) {
+        if !scoped_entry_ids.insert(entry.id.as_str()) {
             continue;
         }
         if let Some(allowed) = vault_access.fleet_group_access(entry, caller_sid)
@@ -1503,8 +1523,9 @@ fn validate_vault_owner_policy_mutation_with_scope(
         }
     }
     let Some(previous) = previous else {
-        // The creator may select a different initial owner. Resolve-and-plan
-        // still proves it is a real user/SID before any ACL is written.
+        if requested.entries.iter().any(|entry| !new_vault_owner_allowed(entry, caller_sid, caller_privileged, true)) {
+            return Err(denied());
+        }
         return Ok(());
     };
     let requested_by_id = requested
@@ -1533,6 +1554,7 @@ fn validate_vault_owner_policy_mutation_with_scope(
                 }
             }
             Some(replacement) => {
+                validate_primary_owner_transfer(existing, replacement, caller_privileged)?;
                 if replacement.primary_owner_sid != existing.primary_owner_sid
                     && !owns_existing && !manages_group
                 {
@@ -1543,7 +1565,7 @@ fn validate_vault_owner_policy_mutation_with_scope(
     }
     for entry in &requested.entries {
         if previous.entries.iter().all(|old| old.id != entry.id)
-            && entry.primary_owner_sid.as_deref() != Some(caller_sid)
+            && !new_vault_owner_allowed(entry, caller_sid, caller_privileged, false)
         {
             return Err(denied());
         }
@@ -4313,6 +4335,100 @@ mod tests {
     }
 
     #[test]
+    fn administrator_can_assign_new_private_entries_without_claiming_them_first() {
+        use wincmd_shared::vault_access::{VaultContainerPathState, VaultOwnedPolicyEntry};
+        let previous = removal_test_policy();
+        for initial in [false, true] {
+            for selected_owner in ["S-1-5-21-standard", "S-1-5-21-admin-target"] {
+                let mut entry = previous.entries[0].clone();
+                entry.id = "new-private".into();
+                entry.container_path = r"C:\Vaults\new-private.hc".into();
+                entry.primary_owner_sid = Some(selected_owner.into());
+                let mut fragment = removal_test_fragment(&[]);
+                fragment.entries.push(VaultOwnedPolicyEntry {
+                    entry: entry.clone(), canonical_container_path: None,
+                    container_path_state: VaultContainerPathState::Available,
+                    can_edit_policy: false, can_remove_policy: false,
+                });
+                let base = (!initial).then_some(previous.clone());
+                let merged = merge_owner_fragment_policy_with_scope(base.clone(), fragment,
+                    "S-1-5-21-admin", true, &HashMap::new()).expect("admin may assign a new private vault");
+                validate_vault_owner_policy_mutation(base.as_ref(), &merged, "S-1-5-21-admin", true).unwrap();
+                assert!(merged.entries.contains(&entry));
+                assert_eq!(vault_policy_capabilities(false, true, Ok(None)), (false, true));
+            }
+        }
+    }
+
+    #[test]
+    fn standard_user_can_create_private_entries_only_for_self() {
+        use wincmd_shared::vault_access::{VaultContainerPathState, VaultOwnedPolicyEntry};
+        let previous = removal_test_policy();
+        for initial in [false, true] {
+            for selected_owner in ["S-1-5-21-standard", "S-1-5-21-other"] {
+                let mut requested = previous.clone();
+                requested.entries.clear();
+                let mut entry = previous.entries[0].clone();
+                entry.id = "new-private".into();
+                entry.primary_owner_sid = Some(selected_owner.into());
+                requested.entries.push(entry.clone());
+                let base = (!initial).then_some(&previous);
+                if !initial { requested.entries.extend(previous.entries.clone()); }
+                let result = validate_vault_owner_policy_mutation(base, &requested, "S-1-5-21-standard", false);
+                assert_eq!(result.is_ok(), selected_owner == "S-1-5-21-standard");
+                let mut fragment = removal_test_fragment(&[]);
+                fragment.entries.push(VaultOwnedPolicyEntry {
+                    entry, canonical_container_path: None,
+                    container_path_state: VaultContainerPathState::Available,
+                    can_edit_policy: true, can_remove_policy: true,
+                });
+                assert_eq!(merge_owner_fragment_policy_with_scope(base.cloned(), fragment,
+                    "S-1-5-21-standard", false, &HashMap::new()).is_ok(), selected_owner == "S-1-5-21-standard");
+            }
+        }
+    }
+
+    #[test]
+    fn standard_private_owner_can_edit_but_cannot_transfer_ownership() {
+        use wincmd_shared::vault_access::{VaultContainerPathState, VaultOwnedPolicyEntry};
+        let previous = removal_test_policy();
+        let mut requested = previous.clone();
+        requested.entries[0].label = "Owner label update".into();
+        validate_vault_owner_policy_mutation(Some(&previous), &requested, "S-1-5-21-owner", false).unwrap();
+        requested.entries[0].primary_owner_sid = Some("S-1-5-21-other".into());
+        assert_eq!(validate_vault_owner_policy_mutation(Some(&previous), &requested,
+            "S-1-5-21-owner", false).unwrap_err().kind, "vault_owner_transfer_requires_admin");
+        let mut fragment = removal_test_fragment(&[]);
+        fragment.entries.push(VaultOwnedPolicyEntry {
+            entry: requested.entries[0].clone(), canonical_container_path: None,
+            container_path_state: VaultContainerPathState::Available,
+            can_edit_policy: true, can_remove_policy: true,
+        });
+        assert_eq!(merge_owner_fragment_policy_with_scope(Some(previous.clone()), fragment,
+            "S-1-5-21-owner", false, &HashMap::new()).unwrap_err().kind, "vault_owner_transfer_requires_admin");
+        validate_vault_owner_policy_mutation(Some(&previous), &requested, "S-1-5-21-owner", true).unwrap();
+    }
+
+    #[test]
+    fn standard_owner_cannot_transfer_after_switching_to_shared_presentation() {
+        let mut previous = removal_test_policy();
+        let mut requested = previous.clone();
+        requested.entries[0].mount.presentation = wincmd_shared::vault_access::VaultPresentation::Machine;
+        requested.entries[0].primary_owner_sid = Some("S-1-5-21-other".into());
+        assert_eq!(validate_vault_owner_policy_mutation(Some(&previous), &requested,
+            "S-1-5-21-owner", false).unwrap_err().kind, "vault_owner_transfer_requires_admin");
+        previous.entries[0].mount.presentation = wincmd_shared::vault_access::VaultPresentation::Machine;
+        assert_eq!(validate_vault_owner_policy_mutation(Some(&previous), &requested,
+            "S-1-5-21-owner", false).unwrap_err().kind, "vault_owner_transfer_requires_admin");
+        requested.entries[0].mount.presentation = wincmd_shared::vault_access::VaultPresentation::PerUser;
+        assert_eq!(validate_vault_owner_policy_mutation(Some(&previous), &requested,
+            "S-1-5-21-owner", false).unwrap_err().kind, "vault_owner_transfer_requires_admin");
+        requested.entries[0].primary_owner_sid = previous.entries[0].primary_owner_sid.clone();
+        requested.entries[0].label = "Same owner update".into();
+        validate_vault_owner_policy_mutation(Some(&previous), &requested, "S-1-5-21-owner", false).unwrap();
+    }
+
+    #[test]
     fn outsider_administrator_cannot_hide_ownership_transfer_in_remove_and_recreate() {
         let store = crate::vault_access::test_policy_store();
         let policy: wincmd_shared::vault_access::VaultAccessPolicy = serde_json::from_value(valid_vault_policy_args()).unwrap();
@@ -4331,6 +4447,38 @@ mod tests {
         assert_eq!(validate_vault_owner_mutation(&store, &merged, "S-1-5-21-admin", true)
             .unwrap_err().kind, "vault_owner_required");
         assert_eq!(store.policy().unwrap().entries[0].id, "vault-1");
+    }
+
+    #[test]
+    fn outsider_admin_cannot_replace_private_authority_with_a_proposed_shared_group() {
+        use wincmd_shared::vault_access::{VaultContainerPathState, VaultOwnedPolicyEntry, VaultPresentation};
+        let store = crate::vault_access::test_policy_store();
+        let caller = "S-1-5-21-1-2-3-1002";
+        let directory = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "users": [{ "sid": caller, "username": "Outsider", "display_name": null }],
+            "groups": [{ "id": "outsider", "name": "Outsider", "local_group": "WC_Outsider", "member_sids": [caller] }]
+        })).unwrap();
+        store.save_access_directory(directory).unwrap();
+        let policy = serde_json::from_value(valid_vault_policy_args()).unwrap();
+        store.apply(policy, 1).unwrap();
+        let previous = store.policy().unwrap();
+        let mut requested = previous.clone();
+        requested.entries[0].mount.presentation = VaultPresentation::Machine;
+        requested.entries[0].primary_owner_sid = Some(caller.into());
+        requested.entries[0].owner_account = "WC_Outsider".into();
+        requested.entries[0].grants[0].principal_name = "WC_Outsider".into();
+        assert_eq!(store.fleet_group_access(&previous.entries[0], caller).unwrap(), None);
+        assert_eq!(store.fleet_group_access(&requested.entries[0], caller).unwrap(), Some(true));
+        let mut fragment = removal_test_fragment(&[]);
+        fragment.entries.push(VaultOwnedPolicyEntry {
+            entry: requested.entries[0].clone(), canonical_container_path: None,
+            container_path_state: VaultContainerPathState::Available,
+            can_edit_policy: true, can_remove_policy: true,
+        });
+        assert_eq!(merge_owner_fragment(&store, fragment, caller, true).unwrap_err().kind, "vault_owner_required");
+        assert_eq!(validate_vault_owner_mutation(&store, &requested, caller, true).unwrap_err().kind, "vault_owner_required");
+        assert_eq!(store.policy().unwrap(), previous);
     }
 
     #[test]

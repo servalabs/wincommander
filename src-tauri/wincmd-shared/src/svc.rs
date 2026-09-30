@@ -354,6 +354,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // still derives that fragment from the named-pipe SID; ReadOnly here
         // never makes another owner's data available.
         | "svc.vault.get_policy"
+        | "svc.vault.get_status"
         | "svc.vault.apply_owner_fragment"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
@@ -453,7 +454,7 @@ mod tests {
 
     #[test]
     fn vault_owner_operations_are_caller_bound_in_handlers_not_wts_state() {
-        for verb in ["svc.vault.get_policy", "svc.vault.apply_owner_fragment"] {
+        for verb in ["svc.vault.get_policy", "svc.vault.get_status", "svc.vault.apply_owner_fragment"] {
             assert_eq!(
                 classify_verb(verb),
                 CapabilityClass::ReadOnly,
