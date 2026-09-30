@@ -17,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
-import { confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { confirmedBulkDismountMessage, confirmedMountObservationError, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
 import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
@@ -825,15 +825,8 @@ export default function RightSidebar() {
             const receipt = await handler();
             if (action === "dismount") {
                 const observed = await refreshVault(true);
-                if (!observed) throw new Error('vault_dismount_readback_unconfirmed');
-                const remaining = observed.volumes ?? [];
-                const confirmedScope = isAuthorizedBulkDismountReceipt(receipt);
-                if (!confirmedScope) throw new Error('vault_dismount_readback_unconfirmed');
-                if (remaining.length > 0) {
-                    if (remaining.some(volume => (volume as { dismountAllowed?: boolean }).dismountAllowed !== false)) throw new Error('vault_dismount_readback_unconfirmed');
-                    showSuccess('Authorized volumes were dismounted. Protected Vaults remain mounted; their permissions were not changed.');
-                    return;
-                }
+                showSuccess(confirmedBulkDismountMessage(receipt, observed));
+                return;
             }
             showSuccess(ACTION_LABELS[action] || "Action completed");
         } catch (err) {

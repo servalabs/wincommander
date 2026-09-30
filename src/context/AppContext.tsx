@@ -37,6 +37,7 @@ import { getStartupSettingsFailureMessage } from '../lib/startupSettingsFailure'
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
 import { releasePackageOperation, waitForPackageOperation } from '../lib/packageOperationLock';
 import { createVaultStatusRefresh, vaultInventoryFailureMessage } from '../lib/vaultStatusRefresh';
+import { FLEET_VAULTS_CHANGED_EVENT } from '../lib/vaultChangeEvents';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -893,6 +894,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return res.data;
         }, background);
     }, [authMode, getEncryptedVolumeStatus]);
+
+    useEffect(() => {
+        if (authMode === 'decoy') return;
+        const refreshChangedVaults = () => {
+            void refreshVault(true);
+            void queryClient.invalidateQueries({ queryKey: ['vault', 'available-drive-letters'] });
+        };
+        window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshChangedVaults);
+        return () => window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshChangedVaults);
+    }, [authMode, queryClient, refreshVault]);
 
     const refreshProductivity = useCallback(async (silent: boolean = false) => {
         if (!silent) setLoading(prev => ({ ...prev, dashboard: true }));

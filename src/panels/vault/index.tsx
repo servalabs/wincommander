@@ -554,7 +554,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
                       <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
                       <td className="path-cell">
                         <span className="truncate-path" title={vol.path || undefined}>{vol.path || "Path unavailable"}</span>
-                        {vol.accessible === false && <span className="vault-volume-unavailable">Not available in this Windows sign-in. Dismount, then mount it again.</span>}
+                        {vol.accessible === false && <span className="vault-volume-unavailable">This mounted drive is not accessible to this account. Check its status and Windows permissions.</span>}
                       </td>
                       <td className="actions-cell">
                         <VolumeActionsMenu

@@ -16,9 +16,12 @@ let root;
 export function renderVaultFixture(state) {
   root?.unmount();
   localStorage.clear();
+  const callerSid = 'S-1-5-21-fixture-owner';
+  let mounted = state === 'mounted';
   const entry = {
     id: 'example-vault', label: 'Example vault', container_path: '',
     container_kind: state === 'dual' ? 'dual' : 'standard', owner_account: 'ExampleUser',
+    primary_owner_sid: callerSid,
     grants: [
       { principal_name: 'ExampleTeam', access: 'read' },
       { principal_name: 'ExampleUser', access: 'write' },
@@ -26,27 +29,41 @@ export function renderVaultFixture(state) {
     ],
     mount: { presentation: 'machine' },
   };
+  const ownerEntry = {
+    entry,
+    container_path_state: 'available',
+    canonical_container_path: 'C:\\Vaults\\Example.vc',
+    can_edit_policy: state !== 'outsider',
+    can_remove_policy: true,
+  };
   const policy = { schema_version: 1, policy_id: 'example-policy', version: 1, expected_previous_version: 0, entries: [entry] };
-  const status = {
+  const fragment = { schema_version: 1, policy_id: policy.policy_id, version: 1, expected_previous_version: 0, entries: [ownerEntry] };
+  const status = () => ({
     policy_id: policy.policy_id, version: 1, applied_at: 1,
     validation_state: state === 'degraded' ? 'degraded' : 'current',
-    entries: [{ id: entry.id, result: state === 'degraded' ? 'acl_readback_failed' : 'applied' }],
-  };
-  const authorized = {
+    entries: [{ id: entry.id, result: state === 'degraded' ? 'acl_readback_failed' : 'applied', mount_state: mounted ? 'mounted' : 'unmounted' }],
+  });
+  const authorized = () => ({
     entry_id: entry.id, label: entry.label, access: 'write', presentation: 'machine',
-    container_kind: entry.container_kind, mount_state: state === 'mounted' ? 'mounted' : 'unmounted', drive_letter: null,
-  };
+    container_kind: entry.container_kind, mount_state: mounted ? 'mounted' : 'unmounted', drive_letter: null,
+  });
   const blocked = async () => { throw new Error('Native mutation blocked by UI fixture'); };
   window.__vaultUiService = {
-    getPolicy: async () => {
+    getOwnerPolicyFragment: async () => {
       if (state === 'unavailable') throw new Error('Synthetic unavailable state');
-      return structuredClone(policy);
+      return structuredClone(fragment);
     },
-    getStatus: async () => structuredClone(status),
+    getStatus: async () => structuredClone(status()),
     getCapabilities: async () => ({ can_manage_policy: state !== 'unelevated' }),
-    listAuthorizedEntries: async () => state === 'unauthorized' ? [] : [structuredClone(authorized)],
-    applyPolicy: blocked, mountEntry: blocked, unmountEntry: blocked,
+    listAuthorizedEntries: async () => state === 'unauthorized' ? [] : [structuredClone(authorized())],
+    listOwnerPrincipals: async () => ({ current_caller_sid: callerSid, principals: [
+      { sid: callerSid, display_name: 'Example user', is_local_administrator: true },
+      { sid: 'S-1-5-21-fixture-standard', display_name: 'Example standard user', is_local_administrator: false },
+      { sid: 'S-1-5-21-fixture-admin', display_name: 'Example administrator', is_local_administrator: true },
+    ] }),
+    applyOwnerPolicyFragment: blocked, forgetPolicy: blocked, mountEntry: blocked, unmountEntry: blocked,
   };
+  window.__fixtureSetMounted = value => { mounted = Boolean(value); };
   if (state === 'draft') {
     writeVaultAccessDraft({ ...policy, entries: [{ ...entry, label: 'Example draft' }] }, undefined, policy);
     if (readVaultAccessDraftSnapshot()?.policy.entries[0]?.label !== 'Example draft') {

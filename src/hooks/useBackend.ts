@@ -5,6 +5,7 @@ import { clearCommand, commandId, invokeCommand } from "../lib/commandIds";
 import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
+import { afterVaultMutation } from "../lib/vaultChangeEvents";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1847,19 +1848,19 @@ export function useBackend() {
     clearEncryptedBackupTarget: () =>
       execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget"),
     mountVolume: (params: MountVolumeParams) =>
-      execute<MountVolumeResult>("Mount-EncryptionVolume", buildMountVolumeRequest(params)),
+      afterVaultMutation(() => execute<MountVolumeResult>("Mount-EncryptionVolume", buildMountVolumeRequest(params))),
     verifyVaultDrive: (drive: string) =>
       invoke<{ drive: string; accessible: boolean }>("verify_vault_drive", { drive }),
     dismountVolume: (letter: string, force = false, internalDrive?: number) =>
-      execute("Dismount-EncryptionVolume", {
+      afterVaultMutation(() => execute("Dismount-EncryptionVolume", {
         DriveLetter: letter,
         PresentedLetter: letter,
         Force: force,
         ...(internalDrive !== undefined ? { InternalDrive: internalDrive } : {}),
-      }),
+      })),
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
-    dismountAllVolumes: (force = false) => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force }),
+    dismountAllVolumes: (force = false) => afterVaultMutation(() => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force })),
     createVolume: (params: CreateVolumeParams) =>
       execute("Create-EncryptionVolume", {
         TargetKind: params.TargetKind ?? "file",
@@ -1991,7 +1992,7 @@ export function useBackend() {
       }),
     removeRamDisk: (letter: string) =>
       execute("Remove-RamDisk", { DriveLetter: letter }),
-    removeAllRamDisks: () => execute("Remove-AllRamDisks"),
+    removeAllRamDisks: () => afterVaultMutation(() => execute("Remove-AllRamDisks")),
     openRamDisk: (letter: string) =>
       execute("Open-RamDisk", { DriveLetter: letter }),
 

@@ -6,6 +6,7 @@ import UniversalToggle from "../../components/shared/UniversalToggle";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { useAppState } from "../../context/AppContext";
+import { FLEET_VAULTS_CHANGED_EVENT } from "../../lib/vaultChangeEvents";
 import { showSuccess, showError } from "../../utils/toast";
 import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBackend";
 import type { RamDiskAutostartSettings } from "../../types/settings";
@@ -162,6 +163,9 @@ function RamDisksSection() {
 
   useEffect(() => {
     void refresh();
+    const refreshAfterMutation = () => { void refresh(); };
+    window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterMutation);
+    return () => window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterMutation);
   }, [refresh]);
 
   const handleInstall = async () => {

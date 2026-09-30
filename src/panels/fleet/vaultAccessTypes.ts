@@ -107,6 +107,10 @@ export interface VaultAccessEntry {
   /** Preserves the exact selector choice when a one-owner shared policy has
    * grants that would otherwise be indistinguishable. */
   access_pattern?: VaultAccessPattern | null;
+  /** Service-derived UI capability only. It is stripped from every write. */
+  can_edit_policy?: boolean;
+  /** An outsider administrator may remove an unmounted policy without gaining edit access. */
+  can_remove_policy?: boolean;
   grants: VaultGrantInput[];
   mount: VaultMountPolicy;
 }
@@ -170,6 +174,9 @@ export interface VaultOwnerPolicyEntry {
   entry: VaultAccessEntry;
   container_path_state: "available" | "unavailable";
   canonical_container_path?: string | null;
+  /** Missing on an older service means deny in the UI until it is upgraded. */
+  can_edit_policy?: boolean;
+  can_remove_policy?: boolean;
 }
 
 export interface VaultOwnerPolicyFragment {
@@ -188,10 +195,12 @@ export function vaultPolicyFromOwnerFragment(fragment: VaultOwnerPolicyFragment)
     policy_id: fragment.policy_id,
     version: fragment.version,
     expected_previous_version: fragment.expected_previous_version,
-    entries: fragment.entries.map(({ entry, container_path_state, canonical_container_path }) => ({
+    entries: fragment.entries.map(({ entry, container_path_state, canonical_container_path, can_edit_policy, can_remove_policy }) => ({
       ...entry,
       container_path_state,
       canonical_container_path: canonical_container_path ?? null,
+      can_edit_policy: can_edit_policy === true,
+      can_remove_policy: can_remove_policy === true,
     })),
   };
 }
@@ -207,7 +216,13 @@ export function vaultOwnerFragmentFromPolicy(policy: VaultAccessPolicy, savedPol
     expected_previous_version: policy.expected_previous_version,
     remove_entry_ids: savedPolicy?.entries.filter(saved => !policy.entries.some(entry => entry.id === saved.id)).map(entry => entry.id) ?? [],
     entries: policy.entries.map(entry => {
-      const { container_path_state: _state, canonical_container_path: _canonical, ...requestEntry } = entry;
+      const {
+        container_path_state: _state,
+        canonical_container_path: _canonical,
+        can_edit_policy: _canEdit,
+        can_remove_policy: _canRemove,
+        ...requestEntry
+      } = entry;
       // The shared fragment retains this required field for response-shape
       // compatibility. The service ignores it on writes and independently
       // validates/attests both saved and newly selected container paths.

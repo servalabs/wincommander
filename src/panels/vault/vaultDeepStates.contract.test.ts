@@ -95,7 +95,9 @@ describe("secure storage deep-state contracts", () => {
   test("separates driver-only mounts from drives this Windows session can open", () => {
     expect(vaultSource).toContain('volume.accessible !== false');
     expect(vaultSource).toContain("needs attention");
-    expect(vaultSource).toContain("Not available in this Windows sign-in");
+    expect(vaultSource).toContain("This mounted drive is not accessible to this account");
+    expect(vaultSource).toContain("Check its status and Windows permissions");
+    expect(vaultSource).not.toContain("Not available in this Windows sign-in");
   });
 
   test("Secure Storage mounts machine-wide and verifies the Explorer-facing drive", () => {

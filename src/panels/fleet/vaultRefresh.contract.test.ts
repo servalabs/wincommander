@@ -14,7 +14,7 @@ describe("Vault refresh boundaries", () => {
     expect(apply).toContain("const refreshed = await refresh(!keepDraft, false)");
     expect(apply).toContain("if (!refreshed)");
     expect(apply).toContain("if (saveInProgress.current) return");
-    expect(source).toContain('<fieldset disabled={saving} className="contents">');
+    expect(source).toContain('<fieldset disabled={saving || (statusLoadUnavailable && hasSavedPolicy)} className="contents">');
   });
 
   test("removing a saved row confirms then persists the policy change", async () => {
@@ -77,7 +77,7 @@ describe("Vault refresh boundaries", () => {
     expect(refresh).toContain("setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null)");
     expect(refresh).toContain("const loadedPolicy = await getOwnerPolicyFragment()");
     expect(source).toContain("Windows administrator accounts are unavailable");
-    expect(source).toContain("disabled={saving || !!error || ownerDirectoryUnavailable}");
+    expect(source).toContain("disabled={saving || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)}");
   });
 
   test("the editor mounts the saved authorized container type instead of unsaved fields", async () => {
@@ -92,9 +92,9 @@ describe("Vault refresh boundaries", () => {
 
     expect(source).toContain("function policyEntryIsMounted");
     expect(source).toContain("Dismount this Vault before removing its policy.");
-    expect(source).toContain("disabled={mounted}");
-    expect(source).toContain("locked={isMounted}");
-    expect(editor).toContain("Transfer ownership only while this Vault is unmounted.");
+    expect(source).toContain("disabled={mounted || mountStateUnknown || !canRemoveEntry}");
+    expect(source).toContain("locked={isMounted || mountStateUnknown || !canEditEntry}");
+    expect(editor).toContain("Changing it transfers ownership and is available only while the Vault is unmounted.");
     expect(editor).toContain("<fieldset className=\"vault-access-editor\" disabled={locked}>");
   });
 

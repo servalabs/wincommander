@@ -17,21 +17,31 @@ window.__vite_plugin_react_preamble_installed__ = true;
 </script></head><body><div id="fixture"></div></body></html>`;
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  const channel = process.env.WINCOMMANDER_PLAYWRIGHT_CHANNEL;
+  const executablePath = process.env.WINCOMMANDER_PLAYWRIGHT_EXECUTABLE_PATH;
+  const browser = await chromium.launch({
+    headless: true,
+    // CI may use a downloaded Chromium build. Local Windows verification can
+    // explicitly use an already-installed browser without creating a profile.
+    ...(channel ? { channel } : {}),
+    ...(executablePath ? { executablePath } : {}),
+  });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(15000);
   const browserErrors = [];
   page.on('pageerror', error => browserErrors.push(error.name));
   await page.route('**/src/hooks/useVaultAccess.ts*', route => route.fulfill({
-    contentType: 'application/javascript', body: 'export default function useVaultAccess(){return window.__vaultUiService;}'
+    contentType: 'application/javascript', body: 'export const FLEET_VAULTS_CHANGED_EVENT = "fleet-vaults-changed"; export default function useVaultAccess(){return window.__vaultUiService;}'
   }));
   await page.route('**/__vault_access_ui__', route => route.fulfill({ contentType: 'text/html', body: fixture }));
   const reset = async state => {
     await page.evaluate(value => window.renderVaultFixture(value), state);
     if (state === 'unelevated') {
-      await page.getByRole('alert').filter({ hasText: 'This account needs Vault policy-manager access' }).waitFor();
+      await page.getByRole('alert').filter({ hasText: 'Vault administrator access was not confirmed' }).waitFor();
     } else if (state === 'unavailable') {
       await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).waitFor();
+    } else if (state === 'outsider' || state === 'mounted') {
+      await page.getByRole('button', { name: 'Edit', exact: true }).waitFor();
     } else {
       // Saved policies intentionally start collapsed. The fixture must follow
       // the real explicit-edit workflow, not force the product editor open.
@@ -99,6 +109,12 @@ async function main() {
     await page.keyboard.press('ArrowDown');
     assert.equal(await page.getByLabel('Grant 1 access', { exact: true }).inputValue(), 'write', 'Keyboard can edit access');
     assert.equal(await page.getByText('Draft auto-saved on this PC — not yet applied to Windows.').isVisible(), true);
+    const ownerPicker = page.getByLabel('Vault 1 primary owner', { exact: true });
+    assert.ok((await ownerPicker.locator('option').allTextContents()).some(text => text.includes('Example standard user')), 'Enabled standard users remain selectable as owners');
+    assert.ok((await ownerPicker.locator('option').allTextContents()).some(text => text.includes('Example administrator')), 'Enabled administrators remain selectable as owners');
+    await page.locator('[data-vault-access-preset="shared-write"]').click();
+    assert.equal(await page.locator('[data-vault-access-preset="shared-write"]').getAttribute('aria-checked'), 'true', 'Third permission choice remains shared read/write');
+    assert.equal(await page.locator('[data-vault-access-preset="shared-read"]').getAttribute('aria-checked'), 'false', 'Third permission choice does not collapse to view-only');
     console.log('Vault UI PASS: disclosure, hover/focus/Escape, keyboard and named controls.');
 
     for (const width of [1440, 720, 360]) {
@@ -150,11 +166,22 @@ async function main() {
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Mounting is unavailable until this is fixed' }).isVisible(), true, 'Degraded warning stays visible');
     assert.equal(await page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true }).isDisabled(), true);
     await reset('unelevated');
-    assert.equal(await page.getByRole('alert').filter({ hasText: 'This account needs Vault policy-manager access' }).isVisible(), true);
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'Vault administrator access was not confirmed' }).isVisible(), true);
     await reset('unavailable');
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).isVisible(), true);
     await reset('mounted');
-    assert.equal(await page.locator('.fleet-vault-workspace').getByText('Mounted for this Windows session', { exact: true }).isVisible(), true);
+    assert.equal(await page.getByRole('cell', { name: 'Mounted', exact: true }).isVisible(), true, 'Mounted state is displayed in the saved-Vault table');
+    assert.equal(await page.getByRole('button', { name: 'Remove policy', exact: true }).isDisabled(), true, 'A mounted Vault remains policy-locked');
+    await reset('outsider');
+    assert.equal(await page.getByRole('button', { name: 'Edit', exact: true }).isDisabled(), true, 'Outsider cannot edit a saved Vault');
+    assert.equal(await page.getByRole('button', { name: 'Manage access', exact: true }).isDisabled(), true, 'Outsider cannot manage access');
+    assert.equal(await page.getByRole('button', { name: 'Remove policy', exact: true }).isDisabled(), false, 'Authorized outsider can remove only an unmounted policy');
+    await reset('saved');
+    await page.getByLabel('Grant 1 access', { exact: true }).selectOption('read');
+    await page.evaluate(() => { window.__fixtureSetMounted(true); window.dispatchEvent(new Event('fleet-vaults-changed')); });
+    await page.getByRole('button', { name: 'Edit', exact: true }).waitFor({ state: 'visible' });
+    await page.waitForFunction(() => document.querySelector('[data-vault-editor-mode] button[disabled]') !== null);
+    assert.equal(await page.getByText('Draft auto-saved on this PC — not yet applied to Windows.').isVisible(), true, 'Event status refresh preserves the dirty draft');
     await reset('saved');
     assert.equal(await page.locator('.fleet-validation-errors').isVisible(), true, 'Required-field validation is not hidden in help');
     const mount = page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true });

@@ -106,7 +106,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
           onClick={handleOpen}
           disabled={!accessible || Boolean(statusError)}
           className="vol-inline-btn"
-          aria-label={accessible ? `Open ${driveLabel} in Explorer` : `${driveLabel} is unavailable in this Windows sign-in`}
+          aria-label={accessible ? `Open ${driveLabel} in Explorer` : `${driveLabel} is not accessible to this account`}
         />
       </Tooltip>
 

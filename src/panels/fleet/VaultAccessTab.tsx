@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import useVaultAccess from "@/hooks/useVaultAccess";
+import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "@/hooks/useVaultAccess";
 import useBackend from "@/hooks/useBackend";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
 import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
@@ -140,7 +140,7 @@ interface MountTarget {
 
 function newVaultEntryForOwner(kind: "shared" | "private", principals: readonly VaultOwnerPrincipal[], currentCallerSid: string | null): VaultAccessEntry {
   const entry = newVaultEntry(kind);
-  const owner = principals.find(principal => principal.sid === currentCallerSid && (kind !== "private" || principal.is_local_administrator));
+  const owner = principals.find(principal => principal.sid === currentCallerSid);
   return owner ? applyVaultAccessPreset(
     { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name },
     kind === "private" ? "private" : "shared-write",
@@ -158,6 +158,29 @@ function policyEntryIsMounted(
     || authorized?.mount_state === "mounted";
 }
 
+function mergeObservedPolicyCapabilities(
+  draft: VaultAccessPolicy,
+  observed: VaultAccessPolicy,
+  savedBase: VaultAccessPolicy | null,
+): VaultAccessPolicy {
+  const observedById = new Map(observed.entries.map(entry => [entry.id, entry]));
+  const savedIds = new Set(savedBase?.entries.map(entry => entry.id) ?? []);
+  let changed = false;
+  const entries = draft.entries.map(entry => {
+    // Draft-only entries do not have a service policy to authorize yet. Every
+    // saved entry, however, must use the newest service decision rather than
+    // retaining an old optimistic capability after membership changes.
+    if (!savedIds.has(entry.id)) return entry;
+    const fresh = observedById.get(entry.id);
+    const can_edit_policy = fresh?.can_edit_policy === true;
+    const can_remove_policy = fresh?.can_remove_policy === true;
+    if (entry.can_edit_policy === can_edit_policy && entry.can_remove_policy === can_remove_policy) return entry;
+    changed = true;
+    return { ...entry, can_edit_policy, can_remove_policy };
+  });
+  return changed ? { ...draft, entries } : draft;
+}
+
 export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
   const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
@@ -172,6 +195,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   // as evidence that a browser-local draft has a live counterpart.
   const [hasSavedPolicy, setHasSavedPolicy] = useState(false);
   const [policyLoadUnavailable, setPolicyLoadUnavailable] = useState(false);
+  const [statusLoadUnavailable, setStatusLoadUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
@@ -209,9 +233,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const dirtyRef = useRef(initialDraft !== null);
   const draftWriteTimer = useRef<number | null>(null);
   const focusRefreshTimer = useRef<number | null>(null);
+  const statusRefreshInFlight = useRef(false);
   const lastRefreshErrorAt = useRef(0);
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
+  const vaultChangeRefreshPending = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getOwnerPolicyFragment, getStatus, applyOwnerPolicyFragment, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
@@ -299,7 +325,14 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             } else {
               draftBaseRef.current = null;
             }
-          } else if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+          } else {
+            const draft = policyRef.current;
+            if (draft) {
+              const capabilityFreshDraft = mergeObservedPolicyCapabilities(draft, loadedPolicy, draftBaseRef.current);
+              if (capabilityFreshDraft !== draft) replacePolicy(capabilityFreshDraft, true);
+            }
+            if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+          }
 
           // Status is advisory.  A failure here must not hide an elevated
           // administrator's policy editor or turn into an elevation warning.
@@ -308,9 +341,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               const loadedStatus = await getStatus();
               if (revision !== refreshRevision.current) return false;
               setStatus(loadedStatus);
+              setStatusLoadUnavailable(false);
             } catch {
               if (revision !== refreshRevision.current) return false;
               setStatus(null);
+              setStatusLoadUnavailable(true);
             }
           }
         } catch {
@@ -321,18 +356,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           setPolicyLoadUnavailable(true);
           setHasSavedPolicy(false);
           setStatus(null);
+          setStatusLoadUnavailable(true);
           return false;
         }
       } else {
         setOwnerDirectoryUnavailable(false);
         setHasSavedPolicy(false);
         setStatus(null);
+        setStatusLoadUnavailable(false);
       }
       return true;
     } catch (cause) {
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries([]);
       setMountResults({});
+      setStatusLoadUnavailable(true);
       // A service/status refresh must never destroy an administrator's draft.
       const now = Date.now();
       if (now - lastRefreshErrorAt.current > 30_000) {
@@ -356,8 +394,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       ...current,
       entries: current.entries.map(entry => {
         if (entry.primary_owner_sid) return entry;
-        const owner = ownerPrincipals.find(principal => principal.sid === currentCallerSid
-          && (vaultAccessPreset(entry) !== "private" || principal.is_local_administrator));
+        const owner = ownerPrincipals.find(principal => principal.sid === currentCallerSid);
         return owner ? { ...entry, primary_owner_sid: owner.sid, owner_account: owner.display_name } : entry;
       }),
     }, true);
@@ -366,11 +403,51 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   useEffect(() => { void refresh(); }, [refresh]);
 
   useEffect(() => {
+    const refreshAfterVaultChange = () => {
+      if (saveInProgress.current || mountingEntryId !== null || unmountingEntryId !== null) {
+        vaultChangeRefreshPending.current = true;
+        return;
+      }
+      void refresh(false, true);
+    };
+    window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterVaultChange);
+    return () => window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterVaultChange);
+  }, [mountingEntryId, refresh, unmountingEntryId]);
+
+  useEffect(() => {
+    if (!vaultChangeRefreshPending.current || saveInProgress.current || mountingEntryId !== null || unmountingEntryId !== null) return;
+    vaultChangeRefreshPending.current = false;
+    void refresh(false, true);
+  }, [mountingEntryId, refresh, saving, unmountingEntryId]);
+
+  // A Fleet Vault can be mounted or dismounted by a different Windows
+  // session. Browser events cover this window's own mutations only, so keep a
+  // bounded read-only observation loop while this tab is present. Passing
+  // false preserves an unsaved policy draft; including status keeps mounted
+  // locks truthful even when that draft is dirty.
+  const refreshObservedVaultState = useCallback(() => {
+    if (saveInProgress.current || mountingEntryId !== null || unmountingEntryId !== null) {
+      vaultChangeRefreshPending.current = true;
+      return;
+    }
+    if (statusRefreshInFlight.current) return;
+    statusRefreshInFlight.current = true;
+    void refresh(false, true).finally(() => {
+      statusRefreshInFlight.current = false;
+    });
+  }, [mountingEntryId, refresh, unmountingEntryId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(refreshObservedVaultState, 20_000);
+    return () => window.clearInterval(interval);
+  }, [refreshObservedVaultState]);
+
+  useEffect(() => {
     const refreshOnFocus = () => {
-      if (saveInProgress.current || dirtyRef.current || focusRefreshTimer.current !== null) return;
+      if (focusRefreshTimer.current !== null) return;
       focusRefreshTimer.current = window.setTimeout(() => {
         focusRefreshTimer.current = null;
-        if (!saveInProgress.current && !dirtyRef.current) void refresh();
+        refreshObservedVaultState();
       }, 500);
     };
     window.addEventListener("focus", refreshOnFocus);
@@ -381,7 +458,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         focusRefreshTimer.current = null;
       }
     };
-  }, [refresh]);
+  }, [refreshObservedVaultState]);
 
   useEffect(() => () => {
     if (draftWriteTimer.current !== null) window.clearTimeout(draftWriteTimer.current);
@@ -399,6 +476,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   }, [policy, selectedEntryId]);
 
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
+    if (statusLoadUnavailable && draftBaseRef.current?.entries.some(entry => entry.id === id)) return current;
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
     return {
@@ -488,6 +566,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   };
 
   const requestEntryRemoval = (id: string) => {
+    const isSaved = draftBaseRef.current?.entries.some(entry => entry.id === id) === true;
+    if (isSaved && statusLoadUnavailable) {
+      showError("Vault mount status is unavailable. Refresh before removing this policy.");
+      return;
+    }
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) {
       showError("Dismount this Vault before removing its policy.");
       return;
@@ -495,7 +578,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     // A row created only in this unsaved draft has no service policy to
     // revoke. Removing it locally is safe; a saved row must go through the
     // confirmation and service-backed apply below.
-    if (!draftBaseRef.current?.entries.some(entry => entry.id === id)) {
+    if (!isSaved) {
       removeEntryDraft(id);
       return;
     }
@@ -503,6 +586,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   };
 
   const setAccessPreset = (id: string, preset: Exclude<VaultAccessPreset, "custom">) => editPolicy(current => {
+    if (statusLoadUnavailable && draftBaseRef.current?.entries.some(entry => entry.id === id)) return current;
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     const source = current ?? newVaultPolicy();
     return {
@@ -512,6 +596,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   });
 
   const setOwnerAccount = (id: string, owner: VaultOwnerPrincipal) => editPolicy(current => {
+    if (statusLoadUnavailable && draftBaseRef.current?.entries.some(entry => entry.id === id)) return current;
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     if (ownerDirectoryUnavailable) return current;
     const source = current ?? newVaultPolicy();
@@ -535,6 +620,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   ) => {
     if (saveInProgress.current) return;
     if (!policyToApply) return;
+    if (statusLoadUnavailable && draftBaseRef.current?.entries.length) {
+      const message = "Vault mount status is unavailable. Refresh before changing or removing saved Vault policies.";
+      setOperationFeedback(message);
+      showError(message);
+      return;
+    }
     const policyError = validateVaultAccessIntent(policyToApply);
     if (policyError) { setOperationFeedback(policyError); return void showError(policyError); }
     setOperationFeedback("");
@@ -1000,6 +1091,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         <div><strong>Vault settings could not be loaded yet</strong><p>Your administrator permission is confirmed, but the local service did not return the saved settings. Refresh this page before making changes; your assigned Vaults can still be mounted normally.</p></div>
       </div>}
 
+      {canManagePolicy && !policyLoadUnavailable && statusLoadUnavailable && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="alert">
+        <Icon icon="warning-sign" size={16} />
+        <div><strong>Vault mount status could not be confirmed</strong><p>Saved Vault controls are locked until the local service confirms whether a container is mounted. Refresh before changing or removing a policy.</p></div>
+      </div>}
+
       {canManagePolicy && !policyLoadUnavailable && <Card className="fleet-vault-management">
         <CardHeader>
           <div className="fleet-vault-management-header">
@@ -1027,6 +1123,15 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 const authorized = authorizedById.get(entry.id);
                 const result = status?.entries.find(item => item.id === entry.id)?.result;
                 const mounted = policyEntryIsMounted(entry.id, status, authorized, mountResults[entry.id]);
+                const wasSaved = draftBaseRef.current?.entries.some(saved => saved.id === entry.id) === true;
+                const canEditEntry = !wasSaved || entry.can_edit_policy === true;
+                const canRemoveEntry = !wasSaved || entry.can_remove_policy === true;
+                const mountStateUnknown = wasSaved && statusLoadUnavailable;
+                const editDisabledReason = mounted
+                  ? "Dismount this Vault before editing."
+                  : mountStateUnknown
+                    ? "Vault mount status is unavailable. Refresh before changing this policy."
+                  : "This Windows account cannot edit this Vault policy.";
                 const canRepairSharedAccess = result === "acl_apply_failed" || result === "acl_readback_failed";
                 return <tr className={selectedEntry?.id === entry.id ? "is-selected" : ""} key={entry.id}>
                   <td data-label="Vault"><strong>{entry.label}</strong></td>
@@ -1036,13 +1141,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   <td data-label="Mounted">{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
                   <td data-label="Health" className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
                   <td data-label="Actions"><div className="fleet-vault-policy-actions">
-                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before editing." : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
-                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before managing access or transferring ownership." : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
-                    {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
-                      : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
-                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={repairSharedAccess}>Repair shared access</Button>}
-                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
-                    <Button variant="outline" size="sm" disabled={mounted} title={mounted ? "Dismount this Vault before removing its policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
+                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canEditEntry} title={mounted || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
+                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canEditEntry} title={mounted || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
+                    {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
+                      : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before mounting." : !canEditEntry ? "This Windows account cannot mount this Vault." : undefined} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot repair this Vault policy." : undefined} onClick={repairSharedAccess}>Repair shared access</Button>}
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot change this Vault policy." : undefined} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
+                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canRemoveEntry} title={mounted ? "Dismount this Vault before removing its policy." : mountStateUnknown ? "Vault mount status is unavailable. Refresh before removing this policy." : !canRemoveEntry ? "This Windows account cannot remove this Vault policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
                   </div></td>
                 </tr>;
               })}</tbody>
@@ -1051,7 +1156,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         </CardContent>
       </Card>}
 
-      {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving} className="contents">
+      {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving || (statusLoadUnavailable && hasSavedPolicy)} className="contents">
       <Card>
         <CardHeader>
           <div className="fleet-vault-management-header">
@@ -1097,12 +1202,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
             const isMounted = policyEntryIsMounted(entry.id, status, authorized, mountResult);
+            const wasSaved = draftBaseRef.current?.entries.some(saved => saved.id === entry.id) === true;
+            const canEditEntry = !wasSaved || entry.can_edit_policy === true;
+            const canRemoveEntry = !wasSaved || entry.can_remove_policy === true;
+            const mountStateUnknown = wasSaved && statusLoadUnavailable;
             const entryResult = status?.entries.find(item => item.id === entry.id)?.result;
             const mountGate = vaultMountGate({ authorized, entryResult, draftDirty });
             return <div className="fleet-vault-workspace" key={entry.id} ref={editorRef} data-vault-editor-mode={editorMode}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "Vault details"}</span><strong>{entry.label || `Vault ${entryIndex + 1}`}</strong></div>
-                <Button variant="outline" size="sm" disabled={isMounted} title={isMounted ? "Dismount this Vault before removing its policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove</Button>
+                <Button variant="outline" size="sm" disabled={isMounted || mountStateUnknown || !canRemoveEntry} title={isMounted ? "Dismount this Vault before removing its policy." : mountStateUnknown ? "Vault mount status is unavailable. Refresh before removing this policy." : !canRemoveEntry ? "This Windows account cannot remove this Vault policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove</Button>
               </div>
               <VaultAccessEditor
                 entry={entry}
@@ -1110,7 +1219,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 directory={directory}
                 ownerPrincipals={ownerPrincipals}
                 currentCallerSid={currentCallerSid}
-                locked={isMounted}
+                locked={isMounted || mountStateUnknown || !canEditEntry}
                 ownerDirectoryUnavailable={ownerDirectoryUnavailable}
                 otherReservedLetters={policyEntries.filter(other => other.id !== entry.id).flatMap(other => other.mount.preferred_letter ? [other.mount.preferred_letter] : [])}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
@@ -1130,17 +1239,17 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                           : mountGate.disabledReason ?? "Ready to mount when needed"}
                   </p>
                 </div>
-                {isMounted && authorized?.drive_letter && <Button variant="outline" size="sm" onClick={() => void openMountedEntry(authorized.drive_letter!)}>Open in File Explorer</Button>}
+                {isMounted && authorized?.drive_letter && <Button variant="outline" size="sm" disabled={mountStateUnknown || !canEditEntry} onClick={() => void openMountedEntry(authorized.drive_letter!)}>Open in File Explorer</Button>}
                 {isMounted ? (
-                  <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>
+                  <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>
                     {unmountingEntryId === entry.id ? "Unmounting…" : "Unmount"}
                   </Button>
                 ) : (
                   <Button
                     variant="primary"
                     size="sm"
-                    disabled={saving || mountingEntryId === entry.id || !mountGate.canMount}
-                    title={mountGate.disabledReason ?? undefined}
+                    disabled={saving || mountingEntryId === entry.id || !mountGate.canMount || mountStateUnknown || !canEditEntry}
+                    title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before mounting." : canEditEntry ? mountGate.disabledReason ?? undefined : "This Windows account cannot mount this Vault."}
                     onClick={() => { if (authorized) openMountPrompt(authorized); }}
                   >
                     {mountingEntryId === entry.id ? "Mounting…" : "Mount"}
@@ -1152,7 +1261,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <div className="fleet-action-row">
             <Button variant="outline" onClick={() => addVaultEntryDraft("private")}>Add private vault</Button>
             <Button variant="outline" onClick={() => addVaultEntryDraft("shared")}>Add shared vault</Button>
-            {policy && <Button variant="primary" disabled={saving || !!error || ownerDirectoryUnavailable} title={ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
+            {policy && <Button variant="primary" disabled={saving || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)} title={statusLoadUnavailable && hasSavedPolicy ? "Vault mount status must be confirmed before changing saved Vault settings." : ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}

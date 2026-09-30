@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
+import { confirmedBulkDismountMessage, confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
 import type { EncryptionStatus } from "@/hooks/useBackend";
 
 test("bulk success requires an explicit bounded authorized-subset receipt", () => {
@@ -10,6 +10,17 @@ test("bulk success requires an explicit bounded authorized-subset receipt", () =
     { ...receipt, dismounted: -1 }, { ...receipt, dismounted: 27 }, { ...receipt, dismounted: 1.5 }, { ...receipt, dismounted: "2" }]) {
     expect(isAuthorizedBulkDismountReceipt(value)).toBe(false);
   }
+});
+
+test("a verified dismount receipt is not reversed by a superseded or failed list refresh", () => {
+  const receipt = { status: "authorized_dismounted", state: "unmounted", scope: "authorized", dismounted: 1 };
+  expect(confirmedBulkDismountMessage(receipt, null)).toContain("1 encrypted volume(s) dismounted");
+  expect(confirmedBulkDismountMessage(receipt, { volumes: [{ letter: "J:", dismountAllowed: true }] } as unknown as EncryptionStatus))
+    .toContain("1 encrypted volume(s) dismounted");
+  let failure = "";
+  try { confirmedBulkDismountMessage({ status: "ok" }, { volumes: [] } as unknown as EncryptionStatus); }
+  catch (error) { failure = (error as Error).message; }
+  expect(failure).toBe("vault_dismount_readback_unconfirmed");
 });
 
 test("shows the same unlock guidance for native string and Error rejections", () => {

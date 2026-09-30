@@ -32,12 +32,21 @@ describe("Vault Access service intent", () => {
     const fragment = vaultOwnerFragmentFromPolicy(policy);
     const roundTrip = vaultPolicyFromOwnerFragment({
       ...fragment,
-      entries: [{ ...fragment.entries[0]!, container_path_state: "available", canonical_container_path: "D:\\Vaults\\owner.hc" }],
+      entries: [{ ...fragment.entries[0]!, container_path_state: "available", canonical_container_path: "D:\\Vaults\\owner.hc", can_edit_policy: true, can_remove_policy: true }],
     });
 
     expect(roundTrip?.entries[0]?.primary_owner_sid).toBe("S-1-5-21-owner");
     expect(roundTrip?.entries[0]?.canonical_container_path).toBe("D:\\Vaults\\owner.hc");
+    expect(roundTrip?.entries[0]?.can_edit_policy).toBe(true);
+    expect(roundTrip?.entries[0]?.can_remove_policy).toBe(true);
     expect(Object.hasOwn(fragment.entries[0]?.entry ?? {}, "container_path_state")).toBe(false);
+  });
+  test("locks an older-service entry when policy capability is absent", () => {
+    const policy = newVaultPolicy();
+    const fragment = vaultOwnerFragmentFromPolicy(policy);
+    const roundTrip = vaultPolicyFromOwnerFragment(fragment);
+    expect(roundTrip?.entries[0]?.can_edit_policy).toBe(false);
+    expect(roundTrip?.entries[0]?.can_remove_policy).toBe(false);
   });
   test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
     expect(VAULT_MOUNT_REASONS).toEqual([

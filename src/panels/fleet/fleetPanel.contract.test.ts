@@ -147,6 +147,41 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain(">Close editor</Button>");
   });
 
+  test("uses service-derived per-vault capability so an outsider administrator has remove-only controls", () => {
+    expect(vault).toContain("entry.can_edit_policy === true");
+    expect(vault).toContain("entry.can_remove_policy === true");
+    expect(vault).toContain('disabled={mounted || mountStateUnknown || !canEditEntry}');
+    expect(vault).toContain('disabled={mounted || mountStateUnknown || !canRemoveEntry}');
+    expect(vault).toContain('locked={isMounted || mountStateUnknown || !canEditEntry}');
+    expect(vault).toContain('disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry}');
+  });
+
+  test("refreshes Fleet Vault state from the shared service-change event without overwriting active work", () => {
+    expect(vault).toContain("FLEET_VAULTS_CHANGED_EVENT");
+    expect(vault).toContain("vaultChangeRefreshPending.current = true");
+    expect(vault).toContain("void refresh(false, true)");
+    expect(vault).toContain("saveInProgress.current || mountingEntryId !== null || unmountingEntryId !== null");
+  });
+
+  test("observes cross-session mount changes without replacing a dirty policy draft", () => {
+    expect(vault).toContain("const refreshObservedVaultState = useCallback");
+    expect(vault).toContain("window.setInterval(refreshObservedVaultState, 20_000)");
+    expect(vault).toContain("refresh(false, true)");
+    expect(vault).toContain("statusRefreshInFlight.current");
+    expect(vault).toContain("refreshObservedVaultState();");
+    expect(vault).not.toContain("if (!saveInProgress.current && !dirtyRef.current) void refresh()");
+  });
+
+  test("uses the latest service capability and mount observation even with a dirty draft", () => {
+    expect(vault).toContain("function mergeObservedPolicyCapabilities");
+    expect(vault).toContain("can_edit_policy = fresh?.can_edit_policy === true");
+    expect(vault).toContain("can_remove_policy = fresh?.can_remove_policy === true");
+    expect(vault).toContain("void refresh(false, true)");
+    expect(vault).toContain("const mountStateUnknown = wasSaved && statusLoadUnavailable");
+    expect(vault).toContain("locked={isMounted || mountStateUnknown || !canEditEntry}");
+    expect(vault).toContain("Vault mount status could not be confirmed");
+  });
+
   test("keeps the user and group editor separate from the permissions table layout", () => {
     expect(vaultEditor).toContain('className="fleet-vault-grants"');
     expect(vaultEditor).toContain('className="fleet-vault-grant-row"');

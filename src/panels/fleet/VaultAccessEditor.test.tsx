@@ -67,12 +67,12 @@ describe("Vault access editor presentation", () => {
     const html = renderEditor({ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } });
     expect(html).toContain("Example user (Current user)");
     expect(html).not.toContain(">S-1-5-21-example<");
-    expect(html).toContain("Only service-approved local administrators appear here.");
-    expect(html).toContain("Select an administrator…");
+    expect(html).toContain("The service validates this Windows account.");
+    expect(html).toContain("Select a Windows user…");
     expect(html).not.toContain(">Current Windows user<");
   });
 
-  test("does not offer a non-administrator as a private Vault owner", () => {
+  test("offers every service-approved enabled local Windows user as a private Vault owner", () => {
     const html = renderToStaticMarkup(<VaultAccessEditor
       entry={{ ...entry, primary_owner_sid: "S-1-5-21-example", grants: [{ principal_name: "ExampleUser", access: "write" }], mount: { presentation: "per-user" } }} entryIndex={0} directory={directory}
       ownerPrincipals={[
@@ -84,7 +84,7 @@ describe("Vault access editor presentation", () => {
     />);
     expect(html).toContain("Example admin (Current user)");
     expect(html).not.toContain(">S-1-5-21-example<");
-    expect(html).not.toContain("Example standard user");
+    expect(html).toContain("Example standard user");
   });
 
   test("keeps a confirmed administrator's policy visible while the owner directory is unavailable", () => {
@@ -97,7 +97,7 @@ describe("Vault access editor presentation", () => {
     />);
 
     expect(html).toContain('aria-label="Vault 1 primary owner"');
-    expect(html).toContain("Windows administrator accounts are unavailable right now");
+    expect(html).toContain("Windows users are unavailable right now");
     expect(html).toContain("disabled");
   });
 
