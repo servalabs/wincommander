@@ -2405,6 +2405,11 @@ fn parse_personal_mount_request(
     request.hidden_protection_password = hidden_password;
     request.keyfiles = keyfiles;
     request.hidden_keyfiles = hidden_keyfiles;
+    // Retired recovery clients must not mutate ACLs or start a mount retry.
+    if request.repair_current_account_access {
+        request.zeroize_secrets();
+        return Err(invalid());
+    }
     Ok(request)
 }
 
@@ -4352,6 +4357,30 @@ mod tests {
         let error = prepare_vault_apply_policy(args)
             .expect_err("one machine drive letter must not be promised twice");
         assert_eq!(error.kind, "vault_validation_failed");
+    }
+
+    #[test]
+    fn personal_mount_parser_rejects_retired_repair_before_driver_or_mount_work() {
+        for repair in [None, Some(false), Some(true)] {
+            let mut args = serde_json::json!({
+                "container_path": "C:\\vaults\\personal.hc",
+                "password": "test-only-password",
+                "volume_kind": "standard",
+                "volume_role": "outer"
+            });
+            if let Some(repair) = repair {
+                args["repair_current_account_access"] = serde_json::json!(repair);
+            }
+            let result = parse_personal_mount_request(&mut args);
+            assert!(args.is_null(), "request JSON must not retain credentials");
+            if repair == Some(true) {
+                assert_eq!(result.unwrap_err().kind, "vault_validation_failed");
+            } else {
+                let mut request = result.expect("ordinary and legacy mounts remain supported");
+                assert!(!request.repair_current_account_access);
+                request.zeroize_secrets();
+            }
+        }
     }
 
     #[test]

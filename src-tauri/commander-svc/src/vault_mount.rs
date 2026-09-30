@@ -244,10 +244,6 @@ struct InternalMountRequest {
     /// Service-derived only; this private request cannot be supplied by UI or
     /// named-pipe callers.
     personal: bool,
-    /// A service-derived caller SID to add only after opt-in. This never comes
-    /// from renderer JSON and is passed to the trusted broker only for
-    /// personal mounts.
-    personal_acl_repair_sid: Option<String>,
     pim: Option<u32>,
     keyfiles: Vec<String>,
     hidden_keyfiles: Vec<String>,
@@ -281,7 +277,7 @@ fn broker_mount_args(
         preferred_letter: request.preferred_letter.clone(),
         read_only: request.read_only,
         personal: request.personal,
-        personal_acl_repair_sid: request.personal_acl_repair_sid.clone(),
+        personal_acl_repair_sid: None,
         volume_kind: match request.volume_kind {
             "standard" => VaultContainerKind::Standard,
             "dual" => VaultContainerKind::Dual,
@@ -317,10 +313,6 @@ impl InternalMountRequest {
             hidden_protection_password.zeroize();
         }
         self.hidden_protection_password = None;
-        if let Some(sid) = &mut self.personal_acl_repair_sid {
-            sid.zeroize();
-        }
-        self.personal_acl_repair_sid = None;
         self.keyfiles.iter_mut().for_each(Zeroize::zeroize);
         self.keyfiles.clear();
         self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
@@ -606,6 +598,10 @@ impl VaultMountBroker {
         caller_authentication_id: (u32, i32),
         entry_id: String,
     ) -> Result<(String, u8, bool), VaultMountReason> {
+        if request.repair_current_account_access {
+            request.zeroize_secrets();
+            return Err(VaultMountReason::InvalidRequest);
+        }
         if record.owner_sid != caller_sid
             || record.scope != request.presentation
             || session_id == 0
@@ -684,9 +680,6 @@ impl VaultMountBroker {
             volume_role: profile.volume_role,
             read_only: request.read_only,
             personal: true,
-            personal_acl_repair_sid: request
-                .repair_current_account_access
-                .then(|| caller_sid.to_owned()),
             pim: request.pim,
             keyfiles: std::mem::take(&mut request.keyfiles),
             hidden_keyfiles: std::mem::take(&mut request.hidden_keyfiles),
@@ -733,7 +726,8 @@ impl VaultMountBroker {
                 caller_token,
                 &reply.drive_letter,
                 reply.internal_drive,
-                access == wincmd_shared::vault_access::VaultAccess::Write,
+                // Writable personal devices preserve ACLs; root create rights are not required.
+                false,
             );
             if attestation != CallerPresentationAttestation::Available {
                 let cleanup = self.broker.dismount(BrokerDismountRequest {
@@ -970,7 +964,6 @@ impl VaultMountBroker {
             volume_role: profile.volume_role,
             read_only: false,
             personal: false,
-            personal_acl_repair_sid: None,
             pim: None,
             keyfiles: Vec::new(),
             hidden_keyfiles: Vec::new(),
@@ -1577,7 +1570,7 @@ impl VaultMountBroker {
             caller_token,
             &mount.drive_letter,
             mount.internal_drive,
-            mount.access == wincmd_shared::vault_access::VaultAccess::Write,
+            !mount.personal && mount.access == wincmd_shared::vault_access::VaultAccess::Write,
         ) {
             CallerPresentationAttestation::Available => Ok(()),
             CallerPresentationAttestation::RootAccessDenied
@@ -2852,7 +2845,7 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().personal_acl_repair_sids,
             vec![None],
-            "repair is absent unless the caller explicitly opted in"
+            "ordinary mounts never request permission changes"
         );
         assert_eq!(
             broker.projection(&unmanaged_mount_entry_id(&record)).0,
@@ -2861,7 +2854,7 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_mount_repair_sid_is_derived_from_authenticated_caller_only_after_opt_in() {
+    fn retired_account_repair_is_rejected_without_starting_a_mount() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -2878,24 +2871,21 @@ mod tests {
         request.presentation = VaultPresentation::Machine;
         request.repair_current_account_access = true;
 
-        broker
-            .mount_unmanaged_authorized_locked(
-                41,
-                &store,
-                &record,
-                &mut request,
-                std::ptr::null_mut(),
-                7,
-                "S-1-5-21-1111-2222",
-                (0, 0),
-            )
-            .expect("an explicitly approved account repair should be forwarded");
-
-        assert_eq!(
-            events.lock().unwrap().personal_acl_repair_sids,
-            vec![Some("S-1-5-21-1111-2222".into())],
-            "the broker plan uses the authenticated service caller SID, not request data"
+        let result = broker.mount_unmanaged_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-1111-2222",
+            (0, 0),
         );
+
+        assert_eq!(result, Err(VaultMountReason::InvalidRequest));
+        assert_eq!(events.lock().unwrap().mounted, 0);
+        assert!(events.lock().unwrap().personal_acl_repair_sids.is_empty());
+        assert!(request.password.is_empty());
     }
 
     #[test]
@@ -2932,7 +2922,7 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_machine_mount_checks_the_selected_read_write_mode_without_writing_probe_data() {
+    fn unmanaged_writable_mount_keeps_existing_root_write_restrictions() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -2957,8 +2947,23 @@ mod tests {
             "S-1-5-21-owner",
             (0, 0),
         );
-        assert_eq!(result, Err(VaultMountReason::CallerAccessDenied));
-        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+        assert_eq!(result, Ok(("P:".into(), 12, true)));
+        assert!(events.lock().unwrap().dismounted.is_empty());
+        let active = broker.active.lock().unwrap();
+        let mounted = active.get(&unmanaged_mount_entry_id(&record)).unwrap();
+        assert_eq!(mounted.access, wincmd_shared::vault_access::VaultAccess::Write);
+        assert_eq!(
+            broker.attest_existing_mount(mounted, std::ptr::null_mut()),
+            Ok(())
+        );
+        let mut managed = mounted.clone();
+        managed.personal = false;
+        assert_eq!(
+            broker.attest_existing_mount(&managed, std::ptr::null_mut()),
+            Err(VaultMountReason::CallerAccessDenied),
+            "Fleet write grants must still attest write access"
+        );
+        drop(active);
 
         let events = Arc::new(Mutex::new(BrokerEvents::default()));
         let broker = VaultMountBroker::with_broker_and_attestor(
@@ -3825,7 +3830,6 @@ mod tests {
                 volume_role,
                 read_only: false,
                 personal: false,
-                personal_acl_repair_sid: None,
                 pim: None,
                 keyfiles: Vec::new(),
                 hidden_keyfiles: Vec::new(),

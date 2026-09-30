@@ -293,9 +293,7 @@ pub struct PersonalVaultMountRequest {
     pub hidden_pim: Option<u32>,
     #[serde(default)]
     pub removable: bool,
-    /// Explicit consent to add the authenticated current Windows account to
-    /// this personal container's existing ACL. The service supplies the SID;
-    /// callers must never provide one directly.
+    /// Retained for wire compatibility; the service rejects `true` before mounting.
     #[serde(default)]
     pub repair_current_account_access: bool,
 }
@@ -378,8 +376,7 @@ pub struct VaultMountPlan {
     /// Absence defaults to `false` so older plans remain fail-closed.
     #[serde(default)]
     pub personal: bool,
-    /// Present only after explicit consent on a personal mount. The service
-    /// derives this SID from the authenticated pipe peer, never renderer data.
+    /// Retired wire field. Current services omit it and brokers reject any value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_acl_repair_sid: Option<String>,
     pub volume_kind: VaultContainerKind,
