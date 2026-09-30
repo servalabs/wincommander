@@ -41,10 +41,12 @@ async function main() {
     await page.evaluate(value => window.renderVaultFixture(value), state);
     if (state === 'unelevated') {
       await page.getByRole('alert').filter({ hasText: 'Vault administrator access was not confirmed' }).waitFor();
-    } else if (state === 'unavailable') {
+    } else if (state === 'unavailable' || state === 'standard-owner-policy-unavailable') {
       await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).waitFor();
     } else if (state === 'outsider' || state === 'mounted') {
       await page.getByRole('button', { name: 'Edit', exact: true }).waitFor();
+    } else if (state.startsWith('standard-owner')) {
+      await page.locator('.vault-access-editor').waitFor();
     } else {
       // Saved policies intentionally start collapsed. The fixture must follow
       // the real explicit-edit workflow, not force the product editor open.
@@ -170,15 +172,39 @@ async function main() {
     const newEditor = page.locator('.vault-access-editor').last();
     await newEditor.locator('input[aria-label$="container path"]').fill('C:\\Vaults\\new-free.vc');
     await newEditor.locator('select[aria-label$="preferred drive letter"]').selectOption('K');
+    await newEditor.locator('select[aria-label$="primary owner"]').selectOption('S-1-5-21-fixture-standard');
     await page.evaluate(() => window.__fixtureResetVaultTelemetry());
     await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
     await page.waitForFunction(() => window.__fixtureVaultTelemetry.appliedFragments.length === 1);
     const applyTelemetry = await page.evaluate(() => window.__fixtureVaultTelemetry);
     assert.equal(applyTelemetry.appliedFragments[0].entries.length, 1, 'Only the new Vault is submitted');
     assert.equal(applyTelemetry.appliedFragments[0].entries[0].entry.mount.preferred_letter, 'K');
+    assert.equal(applyTelemetry.appliedFragments[0].entries[0].entry.primary_owner_sid, 'S-1-5-21-fixture-standard', 'Administrator can assign a new private Vault directly to a selectable Windows user');
     assert.deepEqual(applyTelemetry.driveLetterRequests, [applyTelemetry.appliedFragments[0].entries[0].entry.id], 'Only the new Vault receives save-time availability preflight');
     assert.equal(await page.getByText('This drive letter is occupied or reserved. Choose another free letter before saving.').count(), 0, 'Mounted sibling does not produce a false drive-letter banner');
+    const assignedEntry = await page.evaluate(() => window.__fixtureLatestFragment.entries.find(row => row.entry.id === window.__fixtureVaultTelemetry.appliedFragments[0].entries[0].entry.id));
+    assert.equal(assignedEntry.can_edit_policy, false, 'Service projection revokes administrator edit capability after assignment to another owner');
     console.log('Vault UI PASS: mounted same-owner sibling does not block a new free Vault save.');
+
+    await reset('standard-owner');
+    const standardEditor = page.locator('.vault-access-editor');
+    await standardEditor.waitFor();
+    const standardOwnerPicker = standardEditor.locator('select[aria-label$="primary owner"]');
+    assert.equal(await standardOwnerPicker.isDisabled(), true, 'Standard owner cannot transfer a saved private Vault');
+    assert.equal((await standardOwnerPicker.locator('option').allTextContents()).some(text => text.includes('Example administrator')), false, 'Standard owner never receives the Windows owner directory');
+    await standardEditor.locator('input[aria-label$="label"]').fill('Standard owner update');
+    await page.evaluate(() => window.__fixtureResetVaultTelemetry());
+    await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
+    await page.waitForFunction(() => window.__fixtureVaultTelemetry.appliedFragments.length === 1);
+    const standardTelemetry = await page.evaluate(() => window.__fixtureVaultTelemetry);
+    assert.equal(standardTelemetry.appliedFragments[0].entries[0].entry.label, 'Standard owner update', 'Standard owner can save an allowed own update');
+    console.log('Vault UI PASS: standard owner edits own private Vault without an ownership-transfer path.');
+    await reset('standard-owner-degraded');
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'Mounting is unavailable until this is fixed' }).isVisible(), true, 'Standard owner sees their Vault degradation warning');
+    await reset('standard-owner-status-unavailable');
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'Vault mount status could not be confirmed' }).isVisible(), true, 'Standard owner sees why their saved controls are locked after a status read failure');
+    await reset('standard-owner-policy-unavailable');
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).isVisible(), true, 'Standard owner sees why the caller-filtered policy editor is unavailable');
     await reset('degraded');
     assert.equal(await closed(), true);
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Mounting is unavailable until this is fixed' }).isVisible(), true, 'Degraded warning stays visible');

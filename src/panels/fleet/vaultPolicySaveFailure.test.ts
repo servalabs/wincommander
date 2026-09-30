@@ -17,6 +17,12 @@ describe("Vault policy save failures", () => {
     expect(failure.message).not.toContain("not a local administrator");
     expect(failure.message).not.toContain("draft");
   });
+  test("tells a standard owner to use the administrator recreate workflow for transfer", () => {
+    const failure = vaultPolicySaveFailure("vault_owner_transfer_requires_admin");
+    expect(failure.code).toBe("VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN");
+    expect(failure.message).toContain("cannot transfer ownership");
+    expect(failure.message).toContain("administrator recreate");
+  });
   test("shows a drive reservation conflict inline with a free-letter recovery action", () => {
     const failure = vaultPolicySaveFailure("Drive letter is occupied, reserved, or unavailable");
     expect(failure.code).toBe("VLT.POLICY.DRIVE_LETTER_CONFLICT");

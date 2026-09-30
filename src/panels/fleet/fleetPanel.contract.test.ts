@@ -139,10 +139,11 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).toContain('invoke<VaultSaveAccessDirectoryResponse>("save_vault_access_directory", { directory })');
   });
 
-  test("keeps the Vault policy editor closed until an administrator chooses an edit action", () => {
+  test("keeps the administrator editor closed while opening a caller-filtered owner editor", () => {
     expect(vault).toContain("const [editorOpen, setEditorOpen] = useState(false)");
     expect(vault).toContain("Choose Edit or Manage access on a saved Vault to open its policy.");
-    expect(vault).toContain("!editorOpen ? <CardContent");
+    expect(vault).toContain("const policyEditorOpen = canManagePolicy ? editorOpen : canEditVisiblePolicy");
+    expect(vault).toContain("!policyEditorOpen ? <CardContent");
     expect(vault).toContain("setEditorOpen(true);");
     expect(vault).toContain(">Close editor</Button>");
   });
@@ -273,7 +274,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).not.toContain("volumePath");
     expect(vault).toContain("My vaults");
     expect(vault).toContain("Only Vaults that the service has authorized");
-    expect(vault).toContain("{canManagePolicy && !policyLoadUnavailable && <fieldset");
+    expect(vault).toContain("{canOpenPolicyEditor && !policyLoadUnavailable && <fieldset");
+    expect(vault).toContain("My Vault settings");
     expect(vault).toContain("Vault settings could not be loaded yet");
     expect(vault).toContain("const capabilities = await getCapabilities().catch(async () => {");
     expect(vault).toContain("passwordInputRef");

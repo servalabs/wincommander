@@ -64,7 +64,7 @@ function vaultListFailure(cause: unknown, request: "authorized vault list" | "Va
   };
 }
 
-export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -73,6 +73,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROU
   // category instead of every failure becoming the opaque generic fallback.
   const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
   if (detail.includes("vault_fleet_group_required")) return { code: "VLT.POLICY.GROUP_REQUIRED", message: vaultOperationError(cause) };
+  if (detail.includes("vault_owner_transfer_requires_admin")) return { code: "VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN", message: "A standard Windows account can update its own private Vault, but cannot transfer ownership. Dismount it, remove its policy, then have a local administrator recreate it for the intended owner." };
   if (detail.includes("vault_owner_required")) return { code: "VLT.POLICY.OWNER_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_policy_readback_unconfirmed")) return { code: "VLT.POLICY.READBACK_FAILED", message: "The service has not confirmed the saved change. Refresh and review the Vault policy before trying again. No success was reported." };
   if (detail.includes("vault_drive_letters_unavailable")) {
@@ -307,66 +308,82 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       setMountResults({});
       setCanManagePolicy(capabilities.can_manage_policy);
       setPolicyLoadUnavailable(false);
-      if (capabilities.can_manage_policy) {
-        try {
-          const loadedPolicy = await getOwnerPolicyFragment()
-            .then(vaultPolicyFromOwnerFragment)
-            .then(value => value ? normalizeVaultAccessPolicy(value) : null);
-          if (revision !== refreshRevision.current) return false;
-          setHasSavedPolicy(loadedPolicy !== null);
-          if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
-          else if (!loadedPolicy) {
-            // The service has authoritatively removed the saved policy. Keep
-            // the user's unsent draft, but sever its stale saved-policy base
-            // so it cannot display or rebase as if Windows still owned it.
-            // A first service save must be revision 1 against previous 0;
-            // retaining the deleted policy's revision makes every otherwise
-            // valid retry fail the service optimistic-lock check.
-            const draft = policyRef.current;
-            if (draft) {
-              replacePolicy({ ...draft, version: 0, expected_previous_version: 0 }, true, null);
-            } else {
-              draftBaseRef.current = null;
-            }
+      try {
+        const loadedPolicy = await getOwnerPolicyFragment()
+          .then(vaultPolicyFromOwnerFragment)
+          .then((value) => (value ? normalizeVaultAccessPolicy(value) : null));
+        if (revision !== refreshRevision.current) return false;
+        setHasSavedPolicy(loadedPolicy !== null);
+        if (replaceDirtyDraft || !dirtyRef.current)
+          replacePolicy(loadedPolicy, false);
+        else if (!loadedPolicy) {
+          // The service has authoritatively removed the saved policy. Keep
+          // the user's unsent draft, but sever its stale saved-policy base
+          // so it cannot display or rebase as if Windows still owned it.
+          // A first service save must be revision 1 against previous 0;
+          // retaining the deleted policy's revision makes every otherwise
+          // valid retry fail the service optimistic-lock check.
+          const draft = policyRef.current;
+          if (draft) {
+            replacePolicy(
+              { ...draft, version: 0, expected_previous_version: 0 },
+              true,
+              null,
+            );
           } else {
-            const draft = policyRef.current;
-            if (draft) {
-              const capabilityFreshDraft = mergeObservedPolicyCapabilities(draft, loadedPolicy, draftBaseRef.current);
-              if (capabilityFreshDraft !== draft) replacePolicy(capabilityFreshDraft, true);
-            }
-            if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+            draftBaseRef.current = null;
           }
-
-          // Status is advisory.  A failure here must not hide an elevated
-          // administrator's policy editor or turn into an elevation warning.
-          if (includeStatus) {
-            try {
-              const loadedStatus = await getStatus();
-              if (revision !== refreshRevision.current) return false;
-              setStatus(loadedStatus);
-              setStatusLoadUnavailable(false);
-            } catch {
-              if (revision !== refreshRevision.current) return false;
-              setStatus(null);
-              setStatusLoadUnavailable(true);
-            }
+        } else {
+          const draft = policyRef.current;
+          if (draft) {
+            const capabilityFreshDraft = mergeObservedPolicyCapabilities(
+              draft,
+              loadedPolicy,
+              draftBaseRef.current,
+            );
+            if (capabilityFreshDraft !== draft)
+              replacePolicy(capabilityFreshDraft, true);
           }
-        } catch {
-          // Keep the verified capability.  Rendering an editable replacement
-          // policy after a failed read could overwrite real rules, so block
-          // editing until the original policy can be loaded again.
-          if (revision !== refreshRevision.current) return false;
-          setPolicyLoadUnavailable(true);
-          setHasSavedPolicy(false);
-          setStatus(null);
-          setStatusLoadUnavailable(true);
-          return false;
+          if (
+            !draftBaseRef.current &&
+            policyRef.current?.version === loadedPolicy.version
+          )
+            draftBaseRef.current = loadedPolicy;
+          if (
+            !capabilities.can_manage_policy &&
+            loadedPolicy.entries.some((entry) => entry.can_edit_policy === true)
+          ) {
+            setSelectedEntryId(
+              loadedPolicy.entries.find(
+                (entry) => entry.can_edit_policy === true,
+              )?.id ?? null,
+            );
+            setEditorOpen(true);
+          }
         }
-      } else {
-        setOwnerDirectoryUnavailable(false);
+
+        if (includeStatus) {
+          try {
+            const loadedStatus = await getStatus();
+            if (revision !== refreshRevision.current) return false;
+            setStatus(loadedStatus);
+            setStatusLoadUnavailable(false);
+          } catch {
+            if (revision !== refreshRevision.current) return false;
+            setStatus(null);
+            setStatusLoadUnavailable(true);
+          }
+        }
+      } catch {
+        // Keep the verified capability.  Rendering an editable replacement
+        // policy after a failed read could overwrite real rules, so block
+        // editing until the original policy can be loaded again.
+        if (revision !== refreshRevision.current) return false;
+        setPolicyLoadUnavailable(true);
         setHasSavedPolicy(false);
         setStatus(null);
-        setStatusLoadUnavailable(false);
+        setStatusLoadUnavailable(true);
+        return false;
       }
       return true;
     } catch (cause) {
@@ -602,6 +619,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     if (statusLoadUnavailable && draftBaseRef.current?.entries.some(entry => entry.id === id)) return current;
     if (policyEntryIsMounted(id, status, authorizedEntries.find(entry => entry.entry_id === id), mountResults[id])) return current;
     if (ownerDirectoryUnavailable) return current;
+    const savedEntry = draftBaseRef.current?.entries.find(entry => entry.id === id);
+    if (!canManagePolicy && savedEntry
+      && savedEntry.primary_owner_sid !== owner.sid) return current;
     const source = current ?? newVaultPolicy();
     return {
       ...source,
@@ -1025,7 +1045,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const activePolicy = policy;
   const authorizedById = new Map(authorizedEntries.map(entry => [entry.entry_id, entry]));
   const policyEntries = activePolicy?.entries ?? [];
-  const selectedEntry = policyEntries.find(entry => entry.id === selectedEntryId) ?? policyEntries[0] ?? null;
+  const canEditVisiblePolicy = policyEntries.some(entry => entry.can_edit_policy === true);
+  const canOpenPolicyEditor = canManagePolicy || canEditVisiblePolicy;
+  const policyEditorOpen = canManagePolicy ? editorOpen : canEditVisiblePolicy;
+  const selectedEntry = policyEntries.find(entry => entry.id === selectedEntryId)
+    ?? policyEntries.find(entry => entry.can_edit_policy === true)
+    ?? policyEntries[0] ?? null;
   const verification = draftDirty ? null : vaultPolicyVerification(status);
   const mountTargetEntry = authorizedEntries.find(entry => entry.entry_id === mountTarget?.entryId)
     ?? activePolicy?.entries.find(entry => entry.id === mountTarget?.entryId);
@@ -1095,12 +1120,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         <div><strong>Vault administrator access was not confirmed</strong><p>The local Vault service has not confirmed this elevated Windows account yet. Refresh after the service has finished starting. Your assigned Vaults can still be mounted normally.</p></div>
       </div>}
 
-      {canManagePolicy && policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
+      {policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
         <Icon icon="warning-sign" size={16} />
-        <div><strong>Vault settings could not be loaded yet</strong><p>Your administrator permission is confirmed, but the local service did not return the saved settings. Refresh this page before making changes; your assigned Vaults can still be mounted normally.</p></div>
+        <div><strong>Vault settings could not be loaded yet</strong><p>The local service did not return your saved Vault settings. Refresh this page before making changes; assigned Vaults can still be mounted normally.</p></div>
       </div>}
 
-      {canManagePolicy && !policyLoadUnavailable && statusLoadUnavailable && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="alert">
+      {canOpenPolicyEditor && !policyLoadUnavailable && statusLoadUnavailable && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="alert">
         <Icon icon="warning-sign" size={16} />
         <div><strong>Vault mount status could not be confirmed</strong><p>Saved Vault controls are locked until the local service confirms whether a container is mounted. Refresh before changing or removing a policy.</p></div>
       </div>}
@@ -1165,18 +1190,18 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         </CardContent>
       </Card>}
 
-      {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving || (statusLoadUnavailable && hasSavedPolicy)} className="contents">
+      {canOpenPolicyEditor && !policyLoadUnavailable && <fieldset disabled={saving || (statusLoadUnavailable && hasSavedPolicy)} className="contents">
       <Card>
         <CardHeader>
           <div className="fleet-vault-management-header">
             <div>
-              <CardTitle>Vault access</CardTitle>
-              <CardDescription>{editorOpen ? "Choose who can access this vault. Save vault settings to apply your changes." : "Choose Edit or Manage access on a saved Vault to open its policy."}</CardDescription>
+              <CardTitle>{canManagePolicy ? "Vault access" : "My Vault settings"}</CardTitle>
+              <CardDescription>{policyEditorOpen ? canManagePolicy ? "Choose who can access this vault. Save vault settings to apply your changes." : "Update your own private Vault settings. Ownership changes require an administrator." : "Choose Edit or Manage access on a saved Vault to open its policy."}</CardDescription>
             </div>
-            {editorOpen && <Button variant="outline" size="sm" onClick={() => setEditorOpen(false)}>Close editor</Button>}
+            {canManagePolicy && editorOpen && <Button variant="outline" size="sm" onClick={() => setEditorOpen(false)}>Close editor</Button>}
           </div>
         </CardHeader>
-        {!editorOpen ? <CardContent className="fleet-admin-stack">
+        {!policyEditorOpen ? <CardContent className="fleet-admin-stack">
           {!activePolicy ? <div className="fleet-vault-empty-setup">
             <div><strong>No vault access is configured yet</strong><span>Create a Vault policy to start assigning Windows users or groups.</span></div>
             <div className="fleet-action-row">
@@ -1185,7 +1210,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>
           </div> : <p className="fleet-field-hint">Policies stay collapsed until you choose Edit or Manage access for a saved Vault above.</p>}
         </CardContent> : <CardContent className="fleet-admin-stack">
-          {!activePolicy && <div className="fleet-vault-empty-setup">
+          {!activePolicy && canManagePolicy && <div className="fleet-vault-empty-setup">
             <div><strong>No vault access is configured yet</strong><span>Start with one shared vault, or use the recommended personal-and-shared starter.</span></div>
             <div className="fleet-action-row">
               <Button onClick={createSharedDraft}>Create first shared vault</Button>
@@ -1204,6 +1229,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               <p>Windows already has a saved Vault policy. Your local draft has not been applied yet.</p>
               <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Show saved settings</Button>
             </div>
+          </div>}
+          {!canManagePolicy && policyEntries.filter(entry => entry.can_edit_policy === true).length > 1 && <div className="fleet-vault-lifecycle">
+            <div><strong>My saved Vaults</strong><p className="fleet-field-hint">Choose one of your Vaults to update. Other users&apos; Vaults are not shown here.</p></div>
+            <div className="fleet-action-row">{policyEntries.filter(entry => entry.can_edit_policy === true).map(entry => <Button key={entry.id} variant={selectedEntry?.id === entry.id ? "primary" : "outline"} size="sm" onClick={() => setSelectedEntryId(entry.id)}>{entry.label || "Vault"}</Button>)}</div>
           </div>}
           {selectedEntry && (() => {
             const entry = selectedEntry;
@@ -1230,6 +1259,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 currentCallerSid={currentCallerSid}
                 locked={isMounted || mountStateUnknown || !canEditEntry}
                 ownerDirectoryUnavailable={ownerDirectoryUnavailable}
+                ownerSelectionLocked={wasSaved && !canManagePolicy}
                 otherReservedLetters={policyEntries.filter(other => other.id !== entry.id).flatMap(other => other.mount.preferred_letter ? [other.mount.preferred_letter] : [])}
                 onEntryChange={patch => updateEntry(entry.id, patch)}
                 onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
@@ -1268,8 +1298,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>;
           })()}
           <div className="fleet-action-row">
+            {canManagePolicy && <>
             <Button variant="outline" onClick={() => addVaultEntryDraft("private")}>Add private vault</Button>
             <Button variant="outline" onClick={() => addVaultEntryDraft("shared")}>Add shared vault</Button>
+            </>}
             {policy && <Button variant="primary" disabled={saving || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)} title={statusLoadUnavailable && hasSavedPolicy ? "Vault mount status must be confirmed before changing saved Vault settings." : ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
@@ -1278,7 +1310,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             <Icon icon="warning-sign" size={16} />
             <div><strong>{verification.title}</strong><p>{verification.detail}</p></div>
           </div>}
-          <details className="fleet-vault-advanced">
+          {canManagePolicy && <details className="fleet-vault-advanced">
             <summary>Advanced and recovery</summary>
             <p>Use these only to import an older planner draft, discard local edits, repair a degraded shared-access policy, or remove an unrecoverable policy record without changing Windows permissions.</p>
             <div className="fleet-action-row">
@@ -1288,7 +1320,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               {status?.validation_state === "degraded" && <Button variant="outline" size="sm" onClick={repairSharedAccess}>Repair shared access</Button>}
             </div>
             {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
-          </details>
+          </details>}
         </CardContent>}
       </Card>
 

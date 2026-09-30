@@ -16,19 +16,21 @@ let root;
 export function renderVaultFixture(state) {
   root?.unmount();
   localStorage.clear();
-  const callerSid = 'S-1-5-21-fixture-owner';
+  const standardOwner = state.startsWith('standard-owner');
+  const degraded = state === 'degraded' || state === 'standard-owner-degraded';
+  const callerSid = standardOwner ? 'S-1-5-21-fixture-standard' : 'S-1-5-21-fixture-owner';
   const sameOwnerMountedSibling = state === 'apply-sibling';
   let mounted = state === 'mounted';
   const entry = {
-    id: 'example-vault', label: 'Example vault', container_path: sameOwnerMountedSibling ? 'C:\\Vaults\\existing-unmounted.vc' : '',
-    container_kind: state === 'dual' ? 'dual' : 'standard', owner_account: 'ExampleUser',
+    id: 'example-vault', label: 'Example vault', container_path: sameOwnerMountedSibling || standardOwner ? 'C:\\Vaults\\existing-unmounted.vc' : '',
+    container_kind: state === 'dual' ? 'dual' : 'standard', owner_account: standardOwner ? 'Example standard user' : 'ExampleUser',
     primary_owner_sid: callerSid,
-    grants: [
+    grants: standardOwner ? [{ principal_name: 'Example standard user', access: 'write' }] : [
       { principal_name: 'ExampleTeam', access: 'read' },
       { principal_name: 'ExampleUser', access: 'write' },
       { principal_name: 'ExampleReader', access: 'read' },
     ],
-    mount: { presentation: 'machine' },
+    mount: { presentation: standardOwner ? 'per-user' : 'machine' },
   };
   const ownerEntry = {
     entry,
@@ -56,8 +58,8 @@ export function renderVaultFixture(state) {
   const telemetry = { driveLetterRequests: [], appliedFragments: [] };
   const status = () => ({
     policy_id: policy.policy_id, version: 1, applied_at: 1,
-    validation_state: state === 'degraded' ? 'degraded' : 'current',
-    entries: policy.entries.map(current => ({ id: current.id, result: state === 'degraded' ? 'acl_readback_failed' : 'applied', mount_state: (current.id === entry.id && mounted) || current.id === mountedSibling?.id ? 'mounted' : 'unmounted' })),
+    validation_state: degraded ? 'degraded' : 'current',
+    entries: policy.entries.map(current => ({ id: current.id, result: degraded ? 'acl_readback_failed' : 'applied', mount_state: (current.id === entry.id && mounted) || current.id === mountedSibling?.id ? 'mounted' : 'unmounted' })),
   });
   const authorized = () => ({
     entry_id: entry.id, label: entry.label, access: 'write', presentation: 'machine',
@@ -66,11 +68,14 @@ export function renderVaultFixture(state) {
   const blocked = async () => { throw new Error('Native mutation blocked by UI fixture'); };
   window.__vaultUiService = {
     getOwnerPolicyFragment: async () => {
-      if (state === 'unavailable') throw new Error('Synthetic unavailable state');
+      if (state === 'unavailable' || state === 'standard-owner-policy-unavailable') throw new Error('Synthetic unavailable state');
       return structuredClone(fragment);
     },
-    getStatus: async () => structuredClone(status()),
-    getCapabilities: async () => ({ can_manage_policy: state !== 'unelevated' }),
+    getStatus: async () => {
+      if (state === 'standard-owner-status-unavailable') throw new Error('Synthetic status unavailable');
+      return structuredClone(status());
+    },
+    getCapabilities: async () => ({ can_manage_policy: state !== 'unelevated' && !standardOwner }),
     listAuthorizedEntries: async () => state === 'unauthorized' ? [] : [structuredClone(authorized())],
     listOwnerPrincipals: async () => ({ current_caller_sid: callerSid, principals: [
       { sid: callerSid, display_name: 'Example user', is_local_administrator: true },
@@ -79,9 +84,19 @@ export function renderVaultFixture(state) {
     ] }),
     applyOwnerPolicyFragment: async submitted => {
       telemetry.appliedFragments.push(structuredClone(submitted));
-      const additions = submitted.entries.map(row => row.entry);
-      policy = { ...policy, version: submitted.version, expected_previous_version: submitted.expected_previous_version, entries: [...policy.entries, ...additions] };
-      fragment = { ...fragment, version: policy.version, expected_previous_version: policy.expected_previous_version, entries: [...fragment.entries, ...additions.map(added => ({ entry: added, container_path_state: 'available', canonical_container_path: added.container_path, can_edit_policy: true, can_remove_policy: true }))] };
+      const replacements = new Map(submitted.entries.map(row => [row.entry.id, row.entry]));
+      const additions = submitted.entries.map(row => row.entry).filter(added => !policy.entries.some(existing => existing.id === added.id));
+      policy = { ...policy, version: submitted.version, expected_previous_version: submitted.expected_previous_version, entries: [...policy.entries.map(existing => replacements.get(existing.id) ?? existing), ...additions] };
+      fragment = {
+        ...fragment,
+        version: policy.version,
+        expected_previous_version: policy.expected_previous_version,
+        entries: [
+          ...fragment.entries.map(row => replacements.has(row.entry.id) ? { ...row, entry: replacements.get(row.entry.id) } : row),
+          ...additions.map(added => ({ entry: added, container_path_state: 'available', canonical_container_path: added.container_path, can_edit_policy: added.primary_owner_sid === callerSid, can_remove_policy: true })),
+        ],
+      };
+      window.__fixtureLatestFragment = structuredClone(fragment);
       return structuredClone(status());
     },
     forgetPolicy: blocked, mountEntry: blocked, unmountEntry: blocked,
@@ -115,5 +130,5 @@ export function renderVaultFixture(state) {
   };
   root = createRoot(document.getElementById('fixture'));
   root.render(React.createElement('div', { className: 'panel-container fleet-panel fixture-panel' },
-    React.createElement(VaultAccessTab, { isAdmin: true, directory })));
+    React.createElement(VaultAccessTab, { isAdmin: !standardOwner, directory })));
 }

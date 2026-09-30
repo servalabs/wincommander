@@ -101,6 +101,22 @@ describe("Vault access editor presentation", () => {
     expect(html).toContain("disabled");
   });
 
+  test("locks a saved owner's selector without exposing other Windows users", () => {
+    const html = renderToStaticMarkup(<VaultAccessEditor
+      entry={{ ...entry, primary_owner_sid: "S-1-5-21-standard", owner_account: "Example standard user", grants: [{ principal_name: "Example standard user", access: "write" }], mount: { presentation: "per-user" } }} entryIndex={0} directory={directory}
+      ownerPrincipals={[]}
+      currentCallerSid={null}
+      ownerSelectionLocked
+      onEntryChange={() => undefined} onOwnerChange={() => undefined} onPresetChange={() => undefined}
+    />);
+
+    expect(html).toContain('aria-label="Vault 1 primary owner"');
+    expect(html).toContain("Example standard user (Primary owner)");
+    expect(html).toContain("Only a local administrator can assign this saved private Vault");
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("Example administrator");
+  });
+
   test("keeps exact-file policy and sibling-container guidance outside collapsed help", () => {
     const visible = renderEditor().split('<details class="vault-access-details">')[0];
     expect(visible).toContain("exact encrypted file");

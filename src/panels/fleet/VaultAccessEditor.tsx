@@ -41,7 +41,7 @@ function ownerOptionLabel(principal: VaultOwnerPrincipal, currentCallerSid: stri
   return `${name}${principal.sid === currentCallerSid ? " (Current user)" : ""}`;
 }
 
-export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, otherReservedLetters = [], onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps) {
+export default function VaultAccessEditor({ entry, entryIndex, directory, ownerPrincipals, currentCallerSid, locked = false, ownerDirectoryUnavailable = false, ownerSelectionLocked = false, otherReservedLetters = [], onEntryChange, onOwnerChange, onPresetChange }: VaultAccessEditorProps & { ownerSelectionLocked?: boolean }) {
   const { getAvailableDriveLetters } = useBackend();
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
   const [lettersLoading, setLettersLoading] = useState(true);
@@ -106,17 +106,20 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
         <select
           aria-label={`Vault ${vaultNumber} primary owner`}
           value={entry.primary_owner_sid ?? ""}
-          disabled={ownerDirectoryUnavailable}
+          disabled={ownerDirectoryUnavailable || ownerSelectionLocked}
           onChange={event => {
             const selected = eligibleOwnerPrincipals.find(principal => principal.sid === event.target.value);
             if (selected) onOwnerChange(selected);
           }}
         >
           <option value="" disabled>{eligibleOwnerPrincipals.length > 0 ? "Select a Windows user…" : "No eligible Windows users found"}</option>
+          {ownerSelectionLocked && entry.primary_owner_sid && <option value={entry.primary_owner_sid}>{entry.owner_account} (Primary owner)</option>}
           {eligibleOwnerPrincipals.map(principal => <option key={principal.sid} value={principal.sid}>{ownerOptionLabel(principal, currentCallerSid)}</option>)}
         </select>
         <small>{ownerDirectoryUnavailable
           ? "Windows users are unavailable right now, so owner selection and policy saving are disabled. Refresh this page after the local Vault service is ready."
+          : ownerSelectionLocked
+            ? "Only a local administrator can assign this saved private Vault to another Windows user. To change its owner, remove its unmounted policy and have an administrator recreate it for the intended owner."
           : "The service validates this Windows account."} WinCommander saves the selected Windows account securely, not merely by its displayed name.</small>
       </Field>
       <Field label="Drive letter" help="The preferred letter in File Explorer. Only letters that are free and not reserved by another Vault can be selected. Leave blank for Windows to choose.">
