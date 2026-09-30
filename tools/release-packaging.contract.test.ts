@@ -33,6 +33,7 @@ const elevatedLaunchers = readFileSync(
   "utf8",
 );
 const proInstaller = readFileSync("src-tauri/commander-free/src/pro_install.rs", "utf8");
+const proProcessUpdate = readFileSync("src-tauri/commander-free/src/pro_update_process.rs", "utf8");
 const sharedSettingsRepair = readFileSync(
   "src-tauri/commander-free/nsis/repair-shared-settings.ps1",
   "utf8",
@@ -82,9 +83,12 @@ describe("Free machine-wide release packaging", () => {
     expect(closeInstalledApp).toContain("Normal close request for WinCommander process ID $processId was refused; waiting before forced shutdown");
     expect(closeInstalledApp).toContain("Forced close request for WinCommander process ID $processId");
     expect(closeInstalledApp).not.toContain(" /IM ");
-    expect(proInstaller).toContain("Name = 'wincommander-pro.exe'");
-    expect(proInstaller).toContain("$_.ExecutablePath -and ($_.ExecutablePath -ieq $target)");
-    expect(proInstaller).toContain("verified Pro process still running");
+    expect(proProcessUpdate).toContain("QueryFullProcessImageNameW");
+    expect(proProcessUpdate).toContain("std::fs::canonicalize(image)");
+    expect(proProcessUpdate).toContain("TerminateProcess(handle.as_raw_handle()");
+    expect(proProcessUpdate).toContain("WaitForSingleObject(handle.as_raw_handle()");
+    expect(proInstaller).toContain("update_guard::Maintenance::begin(&install_path)");
+    expect(proInstaller).toContain("update_replace::replace_with_metadata");
     expect(proInstaller).toContain("atomic_replace_shared_file");
     expect(proInstaller).toContain("MACHINE_PRO_UPDATE_FLAG");
     expect(proInstaller).toContain("ShellExecuteExW");

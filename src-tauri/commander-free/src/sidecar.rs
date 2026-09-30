@@ -835,6 +835,18 @@ fn resolve_pro_binary() -> Result<PathBuf, String> {
 /// test entrypoint for phase 7b verification, not the long-lived
 /// session that phase 7c will introduce.
 pub async fn handshake_pro_once() -> HandshakeResult {
+    let _operation = match crate::pro_install::pro_operation_lease() {
+        Ok(lease) => lease,
+        Err(error) => {
+            return HandshakeResult {
+                ok: false,
+                pipe: None,
+                pro_version: None,
+                binary_hash: None,
+                error: Some(error),
+            }
+        }
+    };
     crate::log_message_src(
         "info",
         "core",
@@ -1041,7 +1053,11 @@ async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, St
     // needed only until the first confirmed launch or after a failure.
     if PRO_SPAWN_IS_HEALTHY.load(Ordering::Acquire) {
         let result = spawn_pro_session_unlocked(role).await;
-        if result.is_err() {
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| !error.starts_with("PRO_UPDATE_IN_PROGRESS:"))
+        {
             PRO_SPAWN_IS_HEALTHY.store(false, Ordering::Release);
             record_pro_spawn_failure();
         }
@@ -1061,7 +1077,11 @@ async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, St
     if result.is_ok() {
         PRO_SPAWN_IS_HEALTHY.store(true, Ordering::Release);
         clear_pro_spawn_cooldown();
-    } else {
+    } else if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| !error.starts_with("PRO_UPDATE_IN_PROGRESS:"))
+    {
         PRO_SPAWN_IS_HEALTHY.store(false, Ordering::Release);
         record_pro_spawn_failure();
     }
@@ -1069,6 +1089,7 @@ async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, St
 }
 
 async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, String> {
+    let _operation = crate::pro_install::pro_operation_lease()?;
     crate::log_message_src("info", "core", "[Sidecar] spawn_pro_session: start");
     let pro_path = resolve_pro_binary()?;
     let pipe_name = random_pipe_name();
@@ -1676,6 +1697,7 @@ pub async fn dispatch_paid_command(
     feature_id: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let _operation = crate::pro_install::pro_operation_lease()?;
     crate::log_message(
         "info",
         &format!(

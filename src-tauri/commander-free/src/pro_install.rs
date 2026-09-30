@@ -26,6 +26,23 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[path = "../../runtime-support/pro_update_guard.rs"]
+pub(crate) mod update_guard;
+#[path = "pro_update_process.rs"]
+mod update_process;
+#[path = "pro_update_replace.rs"]
+mod update_replace;
+use update_process::stop_running_pro_at_path;
+
+pub(crate) fn pro_operation_lease() -> Result<Option<update_guard::ImageLease>, String> {
+    let resolved = pro_resolve_path();
+    // Portable/dev siblings must remain usable without write access to ProgramData.
+    let Some(managed) = pro_install_path().ok().or_else(|| resolved.clone()) else {
+        return Ok(None);
+    };
+    update_guard::operation_lease(resolved.as_deref(), &managed.with_extension("maintenance"))
+}
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
@@ -42,7 +59,7 @@ const MACHINE_PRO_UPDATE_URL_FLAG: &str = "--machine-pro-url";
 const MACHINE_PRO_UPDATE_SHA256_FLAG: &str = "--machine-pro-sha256";
 const MACHINE_PRO_UPDATE_VERSION_FLAG: &str = "--machine-pro-version";
 const MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG: &str = "--machine-pro-defender-consent";
-const MACHINE_PRO_UPDATE_TIMEOUT_MS: u32 = 310_000;
+const MACHINE_PRO_UPDATE_TIMEOUT_MS: u32 = 420_000;
 
 #[derive(Debug, Clone)]
 struct MachineProUpdateRequest {
@@ -340,64 +357,12 @@ fn compute_pro_sha256_at(path: &std::path::Path) -> Option<String> {
     )
 }
 
-#[cfg(windows)]
-fn stop_running_pro_at_path(path: &std::path::Path) -> Result<bool, String> {
-    let literal = path.display().to_string().replace('\'', "''");
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        &format!(
-            "$target='{}'; \
-             $procs=Get-CimInstance Win32_Process -Filter \"Name = 'wincommander-pro.exe'\" -ErrorAction SilentlyContinue | \
-               Where-Object {{ $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) }}; \
-             foreach ($p in $procs) {{ Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop }}; \
-             $remaining=Get-CimInstance Win32_Process -Filter \"Name = 'wincommander-pro.exe'\" -ErrorAction SilentlyContinue | \
-               Where-Object {{ $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) }}; \
-             if (@($remaining).Count -gt 0) {{ throw ('verified Pro process still running: ' + (@($remaining | ForEach-Object ProcessId) -join ',')) }}; \
-             @($procs).Count",
-            literal
-        ),
-    ]);
-    let out = cmd
-        .output()
-        .map_err(|e| format!("stop running pro spawn: {}", e))?;
-    if !out.status.success() {
-        return Err(format!(
-            "stop running pro failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let count = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<usize>()
-        .unwrap_or(0);
-    Ok(count > 0)
-}
-
-#[cfg(not(windows))]
-fn stop_running_pro_at_path(_path: &std::path::Path) -> Result<bool, String> {
-    Ok(false)
-}
-
 async fn remove_existing_pro_binary(path: &std::path::Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
     crate::sidecar::close_pro_session().await;
-    if let Err(e) = stop_running_pro_at_path(path) {
-        crate::log_message(
-            "warn",
-            &format!(
-                "[ProInstall] could not stop running Pro before replace: {}",
-                e
-            ),
-        );
-    }
+    stop_running_pro_at_path(path)?;
     let mut last_err: Option<std::io::Error> = None;
     for _ in 0..12 {
         match std::fs::remove_file(path) {
@@ -1295,7 +1260,7 @@ fn launch_elevated_machine_pro_update(
     if wait != WAIT_OBJECT_0 {
         unsafe { CloseHandle(info.h_process) };
         return Err(
-            "elevation:The elevated shared Pro update did not finish within five minutes."
+            "elevation:The elevated shared Pro update did not finish within seven minutes."
                 .to_string(),
         );
     }
@@ -1400,6 +1365,7 @@ async fn install_pro_binary_machine(
         .parent()
         .ok_or_else(|| "validation:install path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("disk:create install dir: {}", e))?;
+    let _install_reservation = update_guard::reserve_install(&install_path)?;
     if install_path.exists()
         && compute_pro_sha256_at(&install_path)
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))
@@ -1444,8 +1410,8 @@ async fn install_pro_binary_machine(
     }
 
     // 2. Download to a sibling .tmp.
-    let tmp_path = install_path.with_extension("exe.tmp");
-    let _ = std::fs::remove_file(&tmp_path); // clear any half-finished download
+    let temporary = update_replace::StagedFile::new(&install_path);
+    let tmp_path = &temporary.0;
 
     // DoH-aware resolver (same ISP-DNS-block exposure as the manifest fetch
     // above and the license/update hosts in license.rs/updater.rs). We build
@@ -1503,10 +1469,18 @@ async fn install_pro_binary_machine(
         let _ = std::fs::remove_file(&tmp_path);
         return Err(error);
     }
-    remove_existing_pro_binary(&install_path).await?;
-    std::fs::rename(&tmp_path, &install_path).map_err(|e| format!("disk:atomic rename: {}", e))?;
+    let _maintenance = update_guard::Maintenance::begin(&install_path).await?;
+    crate::sidecar::close_pro_session().await;
+    if install_path.exists() {
+        let target = install_path.clone();
+        tokio::task::spawn_blocking(move || stop_running_pro_at_path(&target))
+            .await
+            .map_err(|error| format!("disk:Pro stop worker failed: {error}"))??;
+    }
+    update_replace::replace_with_metadata(&install_path, tmp_path, || {
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256)
+    })?;
     clear_disabled_markers();
-    write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
 
     // KT: remove legacy Roaming copy after a successful ProgramData install so only
     // one canonical binary remains and pro_resolve_path never picks the stale copy.
@@ -1543,6 +1517,27 @@ async fn install_pro_binary_machine(
 
 #[cfg(test)]
 mod machine_update_tests {
+    #[cfg(windows)]
+    #[test]
+    fn failed_atomic_metadata_publication_keeps_previous_metadata() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = std::env::temp_dir().join(format!("pro-metadata-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("pro.json");
+        super::atomic_replace_shared_file(&path, br#"{"sha256":"previous"}"#).unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(super::atomic_replace_shared_file(&path, br#"{"sha256":"new"}"#).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"sha256":"previous"}"#);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        drop(locked);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
     use super::{
         parse_machine_pro_update_request, quote_windows_argument,
         validate_machine_pro_update_request, MachineProUpdateRequest,

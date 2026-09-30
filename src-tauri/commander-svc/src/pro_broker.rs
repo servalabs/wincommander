@@ -3,6 +3,10 @@
 
 #![allow(dead_code)]
 
+#[cfg(windows)]
+#[path = "../../runtime-support/pro_update_guard.rs"]
+mod update_guard;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct HashAcceptance {
     current: Option<String>,
@@ -215,6 +219,15 @@ pub async fn vault_call(
     use wincmd_shared::{
         read_envelope, write_envelope, Envelope, Hello, Request, PROTOCOL_VERSION,
     };
+
+    vault_payload_readiness()?;
+    let pro_path = fixed_pro_path();
+    let _operation =
+        update_guard::operation_lease(Some(&pro_path), &pro_path.with_extension("maintenance"))
+            .map_err(|error| {
+                eprintln!("[wincommander-svc] Pro operation paused: {error}");
+                VaultMountReason::BrokerUnavailable
+            })?;
 
     let VaultCall {
         request_id,
