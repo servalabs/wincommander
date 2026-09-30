@@ -622,6 +622,49 @@ export const buildMountVolumeRequest = (params: MountVolumeParams) => ({
   HardenAcl: params.hardenAcl ?? true,
 });
 
+export interface CreateStegoMp4Params {
+  /** Carrier MP4 the container is appended to. */
+  carrierMp4: string;
+  /** Where to write the combined stego MP4. */
+  outputPath: string;
+  /** Container size, e.g. "20" or "20MB". */
+  size: string;
+  password: string;
+}
+
+export interface ExtractStegoMp4Params {
+  /** The stego MP4 to read. */
+  inputPath: string;
+  /** Where to write the recovered encrypted container. */
+  outputPath: string;
+}
+
+/** Attach an existing encrypted container to a carrier video without decrypting it. */
+export interface AttachStegoContainerParams {
+  carrierPath: string;
+  containerPath: string;
+  /** Omit to update the selected existing Stego video in place. */
+  outputPath?: string;
+  /** Required when outputPath is omitted because that replaces the video. */
+  replaceExisting?: boolean;
+}
+
+/** Restore the embedded container into a directory using its stored original filename. */
+export interface RestoreStegoContainerParams {
+  inputPath: string;
+  destinationDir: string;
+  /** Must be explicitly true to replace a same-named restored container. */
+  replaceExisting?: boolean;
+}
+
+/** Replace the embedded payload in an existing backup video with a dismounted container. */
+export interface RefreshStegoContainerParams {
+  backupVideoPath: string;
+  containerPath: string;
+  /** Must be explicitly true because this replaces the backup video. */
+  replaceExisting: true;
+}
+
 export interface VolumeInfo {
   size: string | null;
   filesystem: string | null;
@@ -1868,6 +1911,37 @@ export function useBackend() {
           DeviceDiskUniqueId: params.Device.diskUniqueId,
           DeviceLabel: params.Device.label,
         } : {}),
+      }),
+    createStegoMp4: (params: CreateStegoMp4Params) =>
+      execute<{ outputPath?: string }>("Create-StegoMp4", {
+        CarrierMp4: params.carrierMp4,
+        OutputPath: params.outputPath,
+        SizeMB: parseSizeToMB(params.size),
+        Password: params.password,
+      }),
+    extractStegoMp4: (params: ExtractStegoMp4Params) =>
+      execute("Extract-StegoMp4", {
+        InputPath: params.inputPath,
+        OutputPath: params.outputPath,
+      }),
+    attachStegoContainer: (params: AttachStegoContainerParams) =>
+      execute("Attach-StegoContainer", {
+        CarrierPath: params.carrierPath,
+        ContainerPath: params.containerPath,
+        ...(params.outputPath ? { OutputPath: params.outputPath } : {}),
+        ReplaceExisting: params.replaceExisting === true,
+      }),
+    restoreStegoContainer: (params: RestoreStegoContainerParams) =>
+      execute<{ outputPath: string }>("Restore-StegoContainer", {
+        InputPath: params.inputPath,
+        DestinationDir: params.destinationDir,
+        ReplaceExisting: params.replaceExisting === true,
+      }),
+    refreshStegoContainer: (params: RefreshStegoContainerParams) =>
+      execute("Refresh-StegoContainer", {
+        BackupVideoPath: params.backupVideoPath,
+        ContainerPath: params.containerPath,
+        ReplaceExisting: params.replaceExisting === true,
       }),
     getVolumeInfo: (letter: string) =>
       execute<VolumeInfo>("Get-VolumeInfo", { DriveLetter: letter }),

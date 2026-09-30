@@ -1130,7 +1130,8 @@ input::-webkit-credentials-auto-fill-button {
   gap: 14px;
 }
 
-/* Encrypted Volumes and RAM Disks share the available row. */
+/* Encrypted Volumes and RAM Disks sit together at the top; Stego Backup uses
+   the full row beneath them so its two workflows have room to breathe. */
 .vault-volumes-ramdisks-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

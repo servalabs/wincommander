@@ -13,6 +13,7 @@ import CreateVolumeWizard from "./CreateVolumeWizard";
 import VolumeActionsMenu from "./VolumeActionsMenu";
 import SystemEncryptionSection from "./SystemEncryptionSection";
 import RamDisksSection from "./RamDisksSection";
+import StegoBackupSection from "./StegoBackupSection";
 import { showSuccess, showError } from "../../utils/toast";
 import type { EncryptionPartition } from "../../hooks/useBackend";
 import PanelHeader from "../../components/shared/PanelHeader";
@@ -146,6 +147,7 @@ function VaultPanel() {
             />
             <RamDisksSection />
           </div>
+          <StegoBackupSection />
       </div>
     </div>
   );

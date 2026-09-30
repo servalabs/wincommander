@@ -93,7 +93,9 @@ operational risk, or proprietary enforcement logic.
   Secure Storage also offers explicit read-only mounting. Existing file
   permissions remain unchanged. Automatic or prompted account-permission repair
   is unavailable; an inaccessible container reports an error without changing
-  its permissions. Video-container backup tools are not included. Fleet-managed
+  its permissions. Stego video backups can create, attach, restore, and refresh
+  encrypted-container snapshots with explicit replacement confirmation; restoring
+  a snapshot does not grant new Windows account permissions. Fleet-managed
   containers retain their separate selected-user and group permission checks.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.

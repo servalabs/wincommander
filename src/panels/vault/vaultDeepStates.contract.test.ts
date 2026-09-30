@@ -16,10 +16,11 @@ const systemEncryptionSource = readFileSync("src/panels/vault/SystemEncryptionSe
 const createVolumeWizardSource = readFileSync("src/panels/vault/CreateVolumeWizard.tsx", "utf8");
 
 describe("secure storage deep-state contracts", () => {
-  test("Stego backup and account-repair actions are absent from standard mounting", () => {
-    expect(vaultSource).not.toContain("StegoBackupSection");
-    expect(backendSource).not.toContain("StegoContainer");
-    expect(backendSource).not.toContain("StegoMp4");
+  test("Stego backup is restored without coupling account repair to standard mounting", () => {
+    expect(vaultSource).toContain("<StegoBackupSection />");
+    expect(backendSource).toContain("StegoContainer");
+    expect(backendSource).toContain("StegoMp4");
+    expect(mountHandlerSource).not.toContain("Stego");
     expect(mountHandlerSource.match(/await mountPasswordSelectedVolume\(/g)).toHaveLength(1);
     expect(mountHandlerSource).not.toContain("confirmAction");
   });
