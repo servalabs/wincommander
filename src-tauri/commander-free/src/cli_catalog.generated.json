@@ -9159,6 +9159,7 @@
         "src/components/LicenseGate.tsx",
         "src/hooks/useDecoyMonitor.ts",
         "src/hooks/useProInstall.ts",
+        "src/hooks/useUpdateFlow.ts",
         "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
@@ -9644,6 +9645,7 @@
       "frontendReferences": [
         "src/components/Sidebar.tsx",
         "src/hooks/useAutomaticUpdate.ts",
+        "src/hooks/useResumeProUpdate.ts",
         "src/panels/dev/index.tsx"
       ]
     },

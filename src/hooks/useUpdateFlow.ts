@@ -6,10 +6,9 @@
 // Sequence:
 //   1. Free: reuse whatever the background scheduler already knows (updater
 //      phase "staged" → install the already-downloaded bytes; anything else →
-//      a fresh check, then install if available). Installing writes the new
-//      binary to disk WITHOUT relaunching — the running process keeps
-//      executing the old code in memory until relaunch() is explicitly
-//      called, so it's safe to keep going.
+//      a fresh check, then install if available). On Windows the updater exits
+//      this process to run NSIS; useResumeProUpdate continues an installed Pro
+//      update after relaunch. Other platforms can continue in this session.
 //   2. If the signed licence does not cover paid updates, stop here.
 //   3. Pro: reuse useProInstall's existing manifest/status/consent/install
 //      state machine (same one InstallProDialog already drives) — this step
@@ -35,6 +34,8 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { useUpdater } from "./updaterStore";
 import useProInstall, { isProVersionCompatible, getCachedFreeVersion } from "./useProInstall";
 import { shouldAutomaticallyReplacePro } from "../lib/proUpdateDecision";
+import { handoffFreeUpdate } from "../lib/pendingProUpdate";
+import type { ProInstallStatus } from "./useProInstall";
 
 export type UpdateFlowPhase =
     | "idle"
@@ -78,6 +79,14 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
     const [targetFreeVersion, setTargetFreeVersion] = useState<string | null>(null);
     const runningRef = useRef(false);
 
+    const handOffFreeInstall = useCallback(async (installFree: () => Promise<unknown>, version: string | null) => {
+        // Windows' native updater starts NSIS and exits this process. Persist
+        // only the continuation intent; the next launch rechecks all native gates.
+        await handoffFreeUpdate(localStorage, version, canUpdatePro,
+            async () => (await invoke<ProInstallStatus>("get_pro_install_status")).installed,
+            installFree);
+    }, [canUpdatePro]);
+
     const runFreeStep = useCallback(async (): Promise<{
         outcome: "updated" | "up-to-date";
         targetVersion: string | null;
@@ -93,7 +102,7 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         }
         if (updater.phase === "staged") {
             setPhase("installing-free");
-            await invoke("app_install_staged_update");
+            await handOffFreeInstall(() => invoke("app_install_staged_update"), updater.version);
             return { outcome: "updated", targetVersion: updater.version };
         }
         const info = await invoke<DohUpdateInfo>("app_check_for_updates_doh");
@@ -104,9 +113,9 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         // verify, and hand off to NSIS.  Showing this separately prevents a
         // long install from looking like an indefinitely stuck check.
         setPhase("installing-free");
-        await invoke("app_install_update_doh");
+        await handOffFreeInstall(() => invoke("app_install_update_doh"), info.version ?? null);
         return { outcome: "updated", targetVersion: info.version ?? null };
-    }, [updater.phase, updater.version]);
+    }, [updater.phase, updater.version, handOffFreeInstall]);
 
     const start = useCallback(async () => {
         if (runningRef.current) return;

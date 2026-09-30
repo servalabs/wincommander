@@ -6,6 +6,7 @@ import { useUpdater } from "./updaterStore";
 import useProInstall, { getCachedFreeVersion, isProVersionCompatible } from "./useProInstall";
 import { useUpdateFlow } from "./useUpdateFlow";
 import { shouldAutomaticallyReplacePro } from "../lib/proUpdateDecision";
+import { useResumeProUpdate } from "./useResumeProUpdate";
 
 /**
  * Automatic updates may maintain an already installed Pro copy for a paid
@@ -42,6 +43,7 @@ export default function useAutomaticUpdate(
     processElevated: boolean,
     canUpdatePaidBuilds: boolean,
 ) {
+    const resumingPro = useResumeProUpdate(canUpdatePaidBuilds, processElevated);
     const [isDevBuild, setIsDevBuild] = useState<boolean | null>(null);
     useEffect(() => {
         invoke<boolean>("is_dev_build")
@@ -51,7 +53,7 @@ export default function useAutomaticUpdate(
     const runtimeEnabled = canAutomaticallyInstallMachineUpdate(
         automaticUpdatesEnabled,
         processElevated,
-    ) && automaticUpdatesAllowedForBuild(isDevBuild);
+    ) && automaticUpdatesAllowedForBuild(isDevBuild) && !resumingPro;
     const updater = useUpdater();
     const pro = useProInstall({
         status: runtimeEnabled && canUpdatePaidBuilds,

@@ -119,6 +119,15 @@ flowchart LR
 
 ## Executable open-core model
 
+The Pro updater holds a machine-wide maintenance reservation while replacing
+the shared component. Desktop and service brokers pause new calls, active
+requests drain, and only processes verified against the target executable are
+stopped. Replacement retains the previous image on failure. Because Windows'
+NSIS updater exits the desktop, the combined update flow persists a bounded
+continuation request before handoff and rechecks entitlement, elevation and
+the compatible published Pro release after restart. The saved request does
+not grant installation authority or contain credentials.
+
 - **`wincommander-free.exe`** — the general desktop UI, all `free`-tier backend, encrypted free PowerShell modules, the licence/entitlement layer, Privacy Shield orchestration, and the broker that spawns the Pro sidecar. Its `asInvoker` manifest always inherits the signed-in user's token; machine-wide operations must request their own explicit administrator approval. Its explicit `commands` / `audit` / `run` / `help` verbs reuse the same executable for one-shot JSON automation. Backend calls use a windowless Tauri context; native calls use an invisible `cli-runtime.html` WebView bound to the production invoke handler, never the React dashboard, tray, hotkeys, ambient monitors, autostart, or updater loop. The CLI preserves dispatcher enforcement, exact risk-confirmation tokens and mutating/destructive cross-process serialization; risk classification is bound to the `authz::DESTRUCTIVE_COMMANDS` registry rather than command names alone. The generated catalog owns command counts and the automation contract. It does not embed the Investigator workflow.
 - **`wincommander-pro.exe`** — headless, no UI of its own. Contains the `paid`-tier handlers, dispatched by `feature_id` in `commander-pro/src/handlers.rs`: Defender/USB/BitLocker/RDP tweaks, ~20 Deep Clean clearers + Privacy Clean deep erasers (including the `Invoke-7Erase` shredder — a legacy dispatch name; it runs a single durable NIST SP 800-88 RNG-overwrite pass by default, user-configurable up to 7 — and the `cipher /w` unallocated-space erase), the bundled stdin-credential VeraCrypt-derived volume engine (file and guarded non-system-partition standard/decoy/hidden volumes), Tailscale mesh, identity/activation/branding/Quiet Mode, contingency/USB-key, the auto-erase scheduler, and productivity. It also owns the **behavioural network-intelligence watchers**: network honeypot (`honeypot.rs`), Wi-Fi Guard / rogue-AP detector (`wifi_guard.rs`), ExifTool metadata scrubber (`metadata_scrubber.rs`), WizTree disk analyzer (`disk_analyzer.rs`), and print audit — pushing proactive `Notification` frames over the pipe; the Free-side wrappers are thin `require_paid` + `dispatch_paid_command` stubs. **Fleet-product additions (2026-06):**
 - **`wincommander-investigator.exe`** — a separate private Tauri application downloaded only for verified licences carrying the literal `advanced` entitlement. It owns the case workflow UI and PDF renderer, and calls a version-matched `wincommander-pro.exe` through the authenticated named-pipe protocol.

@@ -167,7 +167,7 @@ let state: SnapShot = {
 };
 
 const subscribers = new Set<() => void>();
-let manifestFetchInFlight = false;
+let manifestFetchInFlight: Promise<void> | null = null;
 let statusFetchInFlight = false;
 let defenderFetchInFlight = false;
 
@@ -270,31 +270,30 @@ function invalidateManifestCache(freeVersion: string | null): void {
 }
 
 async function fetchManifest(): Promise<void> {
-    if (manifestFetchInFlight) return;
-    manifestFetchInFlight = true;
+    if (manifestFetchInFlight) return manifestFetchInFlight;
+    manifestFetchInFlight = runManifestFetch().finally(() => { manifestFetchInFlight = null; });
+    return manifestFetchInFlight;
+}
+
+async function runManifestFetch(): Promise<void> {
     let lastErr: unknown = null;
-    try {
-        for (let attempt = 0; attempt <= MANIFEST_FETCH_RETRIES; attempt++) {
-            try {
-                const body = await fetchManifestOnce();
-                setState({ manifest: body, manifestError: null });
-                return;
-            } catch (err) {
-                lastErr = err;
-                // 404 (release not published) shouldn't trigger retries --
-                // the answer won't change in 1.5s.
-                const stage = (err as Error & { stage?: string })?.stage;
-                if (stage === "not_published" || stage === "validation") break;
-                if (attempt < MANIFEST_FETCH_RETRIES) {
-                    await new Promise((r) => setTimeout(r, MANIFEST_RETRY_BACKOFF_MS));
-                }
+    for (let attempt = 0; attempt <= MANIFEST_FETCH_RETRIES; attempt++) {
+        try {
+            const body = await fetchManifestOnce();
+            setState({ manifest: body, manifestError: null });
+            return;
+        } catch (err) {
+            lastErr = err;
+            // An unpublished or incompatible release will not change during a retry.
+            const stage = (err as Error & { stage?: string })?.stage;
+            if (stage === "not_published" || stage === "validation") break;
+            if (attempt < MANIFEST_FETCH_RETRIES) {
+                await new Promise((r) => setTimeout(r, MANIFEST_RETRY_BACKOFF_MS));
             }
         }
-        const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
-        setState({ manifest: null, manifestError: message });
-    } finally {
-        manifestFetchInFlight = false;
     }
+    const message = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    setState({ manifest: null, manifestError: message });
 }
 
 async function refreshStatus(): Promise<void> {
@@ -333,6 +332,7 @@ async function refreshDefender(): Promise<void> {
 }
 
 async function installPro(consentDefenderExclusion: boolean): Promise<void> {
+    if (state.install.kind === "installing") return;
     const m = state.manifest;
     if (!m) {
         setState({
@@ -345,13 +345,10 @@ async function installPro(consentDefenderExclusion: boolean): Promise<void> {
         });
         return;
     }
-    const compatibilityError = proReleaseCompatibilityError(m.version, await getFreeVersion());
-    if (compatibilityError) {
-        setState({ install: { kind: "error", stage: "validation", message: compatibilityError } });
-        return;
-    }
     setState({ install: { kind: "installing" } });
     try {
+        const compatibilityError = proReleaseCompatibilityError(m.version, await getFreeVersion());
+        if (compatibilityError) throw new Error(`validation:${compatibilityError}`);
         await invoke("install_pro_binary", {
             downloadUrl: m.url,
             expectedSha256: m.sha256,
@@ -440,7 +437,9 @@ export default function useProInstall(policy: ProInstallProbePolicy) {
     // version within the same flow -- see invalidateManifestCache above for why
     // the passive per-session cache can't self-correct until relaunch.
     const refreshForFreeVersion = useCallback(async (freeVersion: string | null) => {
+        await manifestFetchInFlight;
         invalidateManifestCache(freeVersion);
+        setState({ manifest: null, manifestError: null });
         await fetchManifest();
     }, []);
 
