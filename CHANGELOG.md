@@ -8,9 +8,11 @@ Public release notes are published with each versioned
 - Restored Stego video backup, container attachment, extraction, and snapshot
   refresh. Ordinary mounts retain existing Windows permissions and do not open
   the retired account-repair prompt. Fleet access restrictions remain unchanged.
+- Stego backup replacement and refresh preserve explicit confirmation through
+  the desktop-to-Pro interface; malformed confirmation values are rejected.
 - Secure Storage reports recovery permission failures through the active mount
-  dialog, without a competing raw-error toast. Approval retries once; a denied
-  repair explains that existing Windows permissions may still block access.
+  dialog, without a competing raw-error toast or an account-repair retry.
+  Existing Windows permissions may still block access.
   Post-mount drive and inventory checks have bounded waits and never turn an
   unavailable observation into a successful mount notification.
 - Secure Storage refreshes visible mount status and prevents older responses from

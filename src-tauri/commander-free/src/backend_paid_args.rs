@@ -10,6 +10,19 @@ pub(super) fn paid_command_args(
         .iter()
         .map(|(key, value)| (key.clone(), Value::String(value.clone())))
         .collect();
+    if matches_parts(command, &["Attach-~", "Stego~", "Container~"])
+        || matches_parts(command, &["Restore-~", "Stego~", "Container~"])
+        || matches_parts(command, &["Refresh-~", "Stego~", "Container~"])
+    {
+        if let Some(raw) = params.get("ReplaceExisting") {
+            let confirmed = match raw.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err("ReplaceExisting must be true or false".into()),
+            };
+            args.insert("ReplaceExisting".into(), Value::Bool(confirmed));
+        }
+    }
     // Old clients cannot reactivate permission repair through the string transport.
     if matches_parts(command, &["Mount-~", "Encryption~", "Volume~"]) {
         const REPAIR_PARAM: &str = "RepairCurrentAccountAccess";
@@ -29,6 +42,36 @@ mod tests {
 
     const MOUNT_COMMAND: &str = "Mount-EncryptionVolume";
     const REPAIR_PARAM: &str = "RepairCurrentAccountAccess";
+
+    #[test]
+    fn stego_replacement_confirmation_survives_the_string_transport() {
+        for command in ["Attach-StegoContainer", "Restore-StegoContainer", "Refresh-StegoContainer"] {
+            for consent in [false, true] {
+                let params = HashMap::from([
+                    ("ReplaceExisting".into(), consent.to_string()),
+                    ("Password".into(), "true".into()),
+                    ("ContainerPath".into(), "false".into()),
+                ]);
+                let args = paid_command_args(command, &params).unwrap();
+                assert_eq!(args["ReplaceExisting"].as_bool(), Some(consent));
+                assert_eq!(args["Password"].as_str(), Some("true"));
+                assert_eq!(args["ContainerPath"].as_str(), Some("false"));
+            }
+            assert!(paid_command_args(command, &HashMap::new()).unwrap().get("ReplaceExisting").is_none());
+        }
+    }
+
+    #[test]
+    fn stego_replacement_rejects_malformed_confirmation_without_coercing_other_commands() {
+        for command in ["Attach-StegoContainer", "Restore-StegoContainer", "Refresh-StegoContainer"] {
+            for invalid in ["", "1", "yes", "True", " true ", "null", "{}"] {
+                let params = HashMap::from([("ReplaceExisting".into(), invalid.into())]);
+                assert!(paid_command_args(command, &params).is_err(), "{command}: {invalid}");
+            }
+        }
+        let params = HashMap::from([("ReplaceExisting".into(), "true".into())]);
+        assert_eq!(paid_command_args("Get-EncryptionStatus", &params).unwrap()["ReplaceExisting"].as_str(), Some("true"));
+    }
 
     #[test]
     fn mount_rejects_old_repair_requests_and_omits_false() {
