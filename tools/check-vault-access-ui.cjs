@@ -30,6 +30,9 @@ async function main() {
   page.setDefaultTimeout(15000);
   const browserErrors = [];
   page.on('pageerror', error => browserErrors.push(error.name));
+  await page.route('**/src/hooks/useBackend.ts*', route => route.fulfill({
+    contentType: 'application/javascript', body: 'export default function useBackend(){return window.__vaultBackend;}'
+  }));
   await page.route('**/src/hooks/useVaultAccess.ts*', route => route.fulfill({
     contentType: 'application/javascript', body: 'export const FLEET_VAULTS_CHANGED_EVENT = "fleet-vaults-changed"; export default function useVaultAccess(){return window.__vaultUiService;}'
   }));
@@ -45,7 +48,7 @@ async function main() {
     } else {
       // Saved policies intentionally start collapsed. The fixture must follow
       // the real explicit-edit workflow, not force the product editor open.
-      const edit = page.getByRole('button', { name: 'Edit', exact: true });
+      const edit = page.getByRole('button', { name: 'Edit', exact: true }).first();
       await edit.waitFor();
       assert.equal(await page.locator('.vault-access-editor').count(), 0, 'Saved policy editor starts closed');
       await edit.click();
@@ -161,6 +164,21 @@ async function main() {
     assert.equal(await page.getByLabel('Hidden volume protection password', { exact: true }).isVisible(), true, 'Writable outer mount requests hidden protection');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    await reset('apply-sibling');
+    await page.getByRole('button', { name: 'Add private vault', exact: true }).click();
+    const newEditor = page.locator('.vault-access-editor').last();
+    await newEditor.locator('input[aria-label$="container path"]').fill('C:\\Vaults\\new-free.vc');
+    await newEditor.locator('select[aria-label$="preferred drive letter"]').selectOption('K');
+    await page.evaluate(() => window.__fixtureResetVaultTelemetry());
+    await page.getByRole('button', { name: 'Save vault settings', exact: true }).click();
+    await page.waitForFunction(() => window.__fixtureVaultTelemetry.appliedFragments.length === 1);
+    const applyTelemetry = await page.evaluate(() => window.__fixtureVaultTelemetry);
+    assert.equal(applyTelemetry.appliedFragments[0].entries.length, 1, 'Only the new Vault is submitted');
+    assert.equal(applyTelemetry.appliedFragments[0].entries[0].entry.mount.preferred_letter, 'K');
+    assert.deepEqual(applyTelemetry.driveLetterRequests, [applyTelemetry.appliedFragments[0].entries[0].entry.id], 'Only the new Vault receives save-time availability preflight');
+    assert.equal(await page.getByText('This drive letter is occupied or reserved. Choose another free letter before saving.').count(), 0, 'Mounted sibling does not produce a false drive-letter banner');
+    console.log('Vault UI PASS: mounted same-owner sibling does not block a new free Vault save.');
     await reset('degraded');
     assert.equal(await closed(), true);
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Mounting is unavailable until this is fixed' }).isVisible(), true, 'Degraded warning stays visible');

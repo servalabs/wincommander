@@ -22,6 +22,12 @@ describe("Vault policy save failures", () => {
     expect(failure.code).toBe("VLT.POLICY.DRIVE_LETTER_CONFLICT");
     expect(failure.message).toContain("Refresh free letters");
   });
+  test("does not call an unavailable drive check an occupied letter", () => {
+    const failure = vaultPolicySaveFailure("vault_drive_letters_unavailable");
+    expect(failure.code).toBe("VLT.POLICY.DRIVE_LETTER_UNAVAILABLE");
+    expect(failure.message).toContain("could not check");
+    expect(failure.message).not.toContain("occupied");
+  });
   test("keeps a malformed service policy reply actionable without exposing its raw details", () => {
     const failure = vaultPolicySaveFailure(new Error("vault_apply_failed: vault policy failed validation — check drive letters"));
 

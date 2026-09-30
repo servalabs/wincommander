@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { newVaultPolicy } from "./vaultAccessTypes";
+import { newVaultEntry, newVaultPolicy } from "./vaultAccessTypes";
 import {
   clearVaultAccessDraft,
   readVaultAccessDraft,
   readVaultAccessDraftSnapshot,
   prepareVaultAccessSave,
   retainVaultDraftAfterSave,
+  vaultAccessEntryChangedSince,
   vaultAccessEntryIntentEqual,
   rebaseVaultAccessDraft,
   writeVaultAccessDraft,
@@ -53,6 +54,29 @@ describe("Vault access draft persistence", () => {
       ...Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "mount").reverse()) } as typeof entry;
     expect(vaultAccessEntryIntentEqual(original, reordered)).toBe(true);
     expect(vaultAccessEntryIntentEqual(original, { ...reordered, owner_account: "Changed" })).toBe(false);
+  });
+
+  test("does not resubmit or check an unchanged mounted Vault while adding another", () => {
+    const saved = newVaultPolicy();
+    const unchanged = {
+      ...saved.entries[0]!,
+      access_pattern: null,
+      can_edit_policy: true,
+      container_identity: "service-only-observation",
+      mount: { ...saved.entries[0]!.mount, preferred_letter: "J" },
+    };
+    const latest = { ...saved, entries: [unchanged] };
+    const draftEquivalent = {
+      ...unchanged,
+      access_pattern: undefined,
+      can_edit_policy: false,
+      container_identity: null,
+    };
+    const added = { ...newVaultEntry("private"), mount: { presentation: "per-user" as const, preferred_letter: "K" } };
+
+    expect(vaultAccessEntryChangedSince(draftEquivalent, latest)).toBe(false);
+    expect(vaultAccessEntryChangedSince(added, latest)).toBe(true);
+    expect(vaultAccessEntryChangedSince({ ...draftEquivalent, mount: { ...draftEquivalent.mount, preferred_letter: "L" } }, latest)).toBe(true);
   });
 
   test("saves a never-saved starter onto an existing service policy without replacing saved vaults", () => {

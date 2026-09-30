@@ -7,13 +7,13 @@ import { Input } from "@/components/ui/input";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "@/hooks/useVaultAccess";
 import useBackend from "@/hooks/useBackend";
-import { vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
 import { vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
-  clearVaultAccessDraft, prepareVaultAccessSave, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, retainVaultDraftAfterSave, vaultAccessEntryIntentEqual, writeVaultAccessDraft,
+  clearVaultAccessDraft, prepareVaultAccessSave, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, retainVaultDraftAfterSave, vaultAccessEntryChangedSince, vaultAccessEntryIntentEqual, writeVaultAccessDraft,
 } from "./vaultAccessDraft";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
@@ -64,7 +64,7 @@ function vaultListFailure(cause: unknown, request: "authorized vault list" | "Va
   };
 }
 
-export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -75,8 +75,11 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROU
   if (detail.includes("vault_fleet_group_required")) return { code: "VLT.POLICY.GROUP_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_owner_required")) return { code: "VLT.POLICY.OWNER_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_policy_readback_unconfirmed")) return { code: "VLT.POLICY.READBACK_FAILED", message: "The service has not confirmed the saved change. Refresh and review the Vault policy before trying again. No success was reported." };
+  if (detail.includes("vault_drive_letters_unavailable")) {
+    return { code: "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE", message: "WinCommander could not check which drive letters are free, so no Vault settings were changed. Refresh free letters in the Vault editor, then save again." };
+  }
   if (/drive[_ ]letter.*(?:occupied|reserved|unavailable|in use)/.test(detail)) {
-    return { code: "VLT.POLICY.DRIVE_LETTER_CONFLICT", message: "This drive letter is occupied, reserved, or could not be checked. Refresh free letters in the Vault editor and choose an available letter before saving." };
+    return { code: "VLT.POLICY.DRIVE_LETTER_CONFLICT", message: "This drive letter is occupied or reserved. Refresh free letters in the Vault editor and choose an available letter before saving." };
   }
   if (detail.includes("forbidden") || detail.includes("privileged") || detail.includes("vault policy administrator")) {
     return {
@@ -654,11 +657,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // Keep the UI reference, desktop diagnostic and service event correlated.
       // Without this, a support reference could not identify the failed save.
       const fragment = vaultOwnerFragmentFromPolicy(submittedPolicy, latest);
-      // The service preserves omitted rows. Do not submit another owner's
-      // unchanged record as an edit just because an administrator can see it.
-      fragment.entries = fragment.entries.filter(({ entry }) =>
-        entry.primary_owner_sid === currentCallerSid || !latest?.entries.some(saved =>
-          saved.id === entry.id && vaultAccessEntryIntentEqual(saved, entry)));
+      // The service preserves omitted rows. Submit only actual edits, including
+      // a new row. In particular, do not preflight an unchanged Vault that is
+      // already mounted: its live drive letter is correctly unavailable but it
+      // has nothing to do with this save.
+      fragment.entries = fragment.entries.filter(({ entry }) => vaultAccessEntryChangedSince(entry, latest));
       const retainedDraft = draftToKeepAfterSave ? retainVaultDraftAfterSave(
         draftToKeepAfterSave, draftBaseRef.current, submittedPolicy, fragment.remove_entry_ids ?? [],
       ) : null;
@@ -668,7 +671,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         const letter = entry.mount.preferred_letter?.toUpperCase();
         if (!letter) continue;
         const available = await getAvailableDriveLetters(entry.id);
-        if (!available.success || !available.data?.letters.includes(letter)) throw new Error("Drive letter is occupied, reserved, or unavailable");
+        // The native result is normally uppercase bare letters. Use the same
+        // normalizer as the picker so a benign legacy `J:`/`j` representation
+        // cannot turn a genuinely free selection into a false conflict.
+        if (!available.success || !available.data) throw new Error("vault_drive_letters_unavailable");
+        if (!selectableDriveLetters(available.data.letters).includes(letter)) {
+          throw new Error("Drive letter is occupied, reserved, or unavailable");
+        }
       }
       const appliedStatus = await applyOwnerPolicyFragment(fragment, operationId);
       const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);

@@ -17,9 +17,10 @@ export function renderVaultFixture(state) {
   root?.unmount();
   localStorage.clear();
   const callerSid = 'S-1-5-21-fixture-owner';
+  const sameOwnerMountedSibling = state === 'apply-sibling';
   let mounted = state === 'mounted';
   const entry = {
-    id: 'example-vault', label: 'Example vault', container_path: '',
+    id: 'example-vault', label: 'Example vault', container_path: sameOwnerMountedSibling ? 'C:\\Vaults\\existing-unmounted.vc' : '',
     container_kind: state === 'dual' ? 'dual' : 'standard', owner_account: 'ExampleUser',
     primary_owner_sid: callerSid,
     grants: [
@@ -36,12 +37,27 @@ export function renderVaultFixture(state) {
     can_edit_policy: state !== 'outsider',
     can_remove_policy: true,
   };
-  const policy = { schema_version: 1, policy_id: 'example-policy', version: 1, expected_previous_version: 0, entries: [entry] };
-  const fragment = { schema_version: 1, policy_id: policy.policy_id, version: 1, expected_previous_version: 0, entries: [ownerEntry] };
+  const mountedSibling = sameOwnerMountedSibling ? {
+    ...entry,
+    id: 'mounted-same-owner-sibling',
+    label: 'Mounted same-owner sibling',
+    container_path: 'C:\\Vaults\\mounted-sibling.vc',
+    mount: { presentation: 'machine', preferred_letter: 'V' },
+  } : null;
+  const siblingOwnerEntry = mountedSibling && {
+    entry: mountedSibling,
+    container_path_state: 'available',
+    canonical_container_path: mountedSibling.container_path,
+    can_edit_policy: true,
+    can_remove_policy: true,
+  };
+  let policy = { schema_version: 1, policy_id: 'example-policy', version: 1, expected_previous_version: 0, entries: [...(mountedSibling ? [entry, mountedSibling] : [entry])] };
+  let fragment = { schema_version: 1, policy_id: policy.policy_id, version: 1, expected_previous_version: 0, entries: [...(siblingOwnerEntry ? [ownerEntry, siblingOwnerEntry] : [ownerEntry])] };
+  const telemetry = { driveLetterRequests: [], appliedFragments: [] };
   const status = () => ({
     policy_id: policy.policy_id, version: 1, applied_at: 1,
     validation_state: state === 'degraded' ? 'degraded' : 'current',
-    entries: [{ id: entry.id, result: state === 'degraded' ? 'acl_readback_failed' : 'applied', mount_state: mounted ? 'mounted' : 'unmounted' }],
+    entries: policy.entries.map(current => ({ id: current.id, result: state === 'degraded' ? 'acl_readback_failed' : 'applied', mount_state: (current.id === entry.id && mounted) || current.id === mountedSibling?.id ? 'mounted' : 'unmounted' })),
   });
   const authorized = () => ({
     entry_id: entry.id, label: entry.label, access: 'write', presentation: 'machine',
@@ -61,7 +77,26 @@ export function renderVaultFixture(state) {
       { sid: 'S-1-5-21-fixture-standard', display_name: 'Example standard user', is_local_administrator: false },
       { sid: 'S-1-5-21-fixture-admin', display_name: 'Example administrator', is_local_administrator: true },
     ] }),
-    applyOwnerPolicyFragment: blocked, forgetPolicy: blocked, mountEntry: blocked, unmountEntry: blocked,
+    applyOwnerPolicyFragment: async submitted => {
+      telemetry.appliedFragments.push(structuredClone(submitted));
+      const additions = submitted.entries.map(row => row.entry);
+      policy = { ...policy, version: submitted.version, expected_previous_version: submitted.expected_previous_version, entries: [...policy.entries, ...additions] };
+      fragment = { ...fragment, version: policy.version, expected_previous_version: policy.expected_previous_version, entries: [...fragment.entries, ...additions.map(added => ({ entry: added, container_path_state: 'available', canonical_container_path: added.container_path, can_edit_policy: true, can_remove_policy: true }))] };
+      return structuredClone(status());
+    },
+    forgetPolicy: blocked, mountEntry: blocked, unmountEntry: blocked,
+  };
+  window.__vaultBackend = {
+    getAvailableDriveLetters: async entryId => {
+      telemetry.driveLetterRequests.push(entryId ?? null);
+      return { success: true, data: { letters: ['J:', 'k', 'W'] } };
+    },
+    openEncryptionVolume: blocked,
+  };
+  window.__fixtureVaultTelemetry = telemetry;
+  window.__fixtureResetVaultTelemetry = () => {
+    telemetry.driveLetterRequests.length = 0;
+    telemetry.appliedFragments.length = 0;
   };
   window.__fixtureSetMounted = value => { mounted = Boolean(value); };
   if (state === 'draft') {

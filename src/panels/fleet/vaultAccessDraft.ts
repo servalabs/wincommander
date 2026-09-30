@@ -63,13 +63,37 @@ function clonePolicy(policy: VaultAccessPolicy): VaultAccessPolicy {
 }
 
 export function vaultAccessEntryIntentEqual(left: VaultAccessEntry, right: VaultAccessEntry): boolean {
-  // Path availability is a service observation, not an administrator edit.
-  const { container_path_state: _leftState, canonical_container_path: _leftPath, ...leftIntent } = left;
-  const { container_path_state: _rightState, canonical_container_path: _rightPath, ...rightIntent } = right;
+  // These are service observations/capabilities, not administrator edits.
+  // Normalising also makes a legacy null access_pattern compare the same as
+  // the omitted field emitted by current drafts.
+  const intent = (entry: VaultAccessEntry) => {
+    const normalized = normalizeVaultAccessPolicy({
+      schema_version: 1, policy_id: "intent", version: 0, expected_previous_version: 0, entries: [entry],
+    }).entries[0]!;
+    const {
+      container_path_state: _state,
+      canonical_container_path: _canonical,
+      container_identity: _identity,
+      can_edit_policy: _canEdit,
+      can_remove_policy: _canRemove,
+      ...requestIntent
+    } = normalized;
+    return requestIntent;
+  };
+  const leftIntent = intent(left);
+  const rightIntent = intent(right);
   const orderedFields = (_key: string, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
     ? Object.fromEntries(Object.entries(value).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)))
     : value;
   return JSON.stringify(leftIntent, orderedFields) === JSON.stringify(rightIntent, orderedFields);
+}
+
+/** Whether this row is new or has a real policy edit relative to the newest
+ * service snapshot. Unchanged rows are omitted from an owner fragment: that
+ * prevents a currently mounted, unrelated Vault from failing a new save's
+ * drive-letter preflight. The service still validates every submitted edit. */
+export function vaultAccessEntryChangedSince(entry: VaultAccessEntry, savedPolicy: VaultAccessPolicy | null): boolean {
+  return !savedPolicy?.entries.some(saved => saved.id === entry.id && vaultAccessEntryIntentEqual(saved, entry));
 }
 
 /**
