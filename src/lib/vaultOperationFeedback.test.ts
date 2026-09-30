@@ -29,6 +29,17 @@ test("shows the same unlock guidance for native string and Error rejections", ()
   expect(vaultOperationError(new Error("vault_engine_unlock_failed"))).toBe(message);
 });
 
+test("failed mount rollback reports uncertain cleanup without claiming dismount success", () => {
+  for (const code of ["vault_cleanup_failed", "vault_dismount_failed", "dismount_failed"]) {
+    const message = vaultOperationError(code, "mount");
+    expect(message).toContain("cleanup could not be confirmed");
+    expect(message).toContain("may still be mounted");
+    expect(message).not.toContain("No mount");
+    expect(message).not.toContain("password");
+  }
+  expect(vaultOperationError("vault_dismount_failed", "dismount")).not.toContain("Mounting failed");
+});
+
 test("runtime incompatibility distinguishes preflight denial from unverified post-operation status", () => {
   const preflight = vaultOperationError("vault_runtime_update_required");
   expect(preflight).toContain("matching Pro update from License / Pro");
