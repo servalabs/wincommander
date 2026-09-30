@@ -4011,6 +4011,41 @@ mod tests {
         assert!(validate_policy_drive_letters(&policy, Some(&previous), &occupied).is_ok());
     }
 
+    #[test]
+    fn new_free_letter_policy_saves_while_an_unchanged_other_vault_is_mounted() {
+        let store = crate::vault_access::test_policy_store();
+        let previous: wincmd_shared::vault_access::VaultAccessPolicy =
+            serde_json::from_value(valid_vault_policy_args()).unwrap();
+        store.apply(previous.clone(), 1).unwrap();
+        let broker = crate::vault_mount::policy_edit_test_broker(
+            "vault-1", r"volume:1:c:\vaults\finance.hc",
+        );
+        let mut requested = previous.clone();
+        requested.version = 2;
+        requested.expected_previous_version = 1;
+        let mut added = previous.entries[0].clone();
+        added.id = "new-vault".into();
+        added.container_path = r"C:\Vaults\new-container.hc".into();
+        added.mount.preferred_letter = Some("W".into());
+        requested.entries.push(added);
+        broker.with_exclusive_operation(|| {
+            let occupied = broker.occupied_letters_locked().unwrap();
+            assert!(occupied.contains("V"));
+            assert!(!occupied.contains("W"));
+            validate_vault_changed_targets_unmounted(&store, &broker, &requested).unwrap();
+            validate_policy_drive_letters(&requested, Some(&previous), &occupied).unwrap();
+            store.preflight_apply(requested.clone()).unwrap();
+            let mut colliding = requested.clone();
+            colliding.entries[1].mount.preferred_letter = Some("V".into());
+            assert_eq!(validate_policy_drive_letters(&colliding, Some(&previous), &occupied)
+                .unwrap_err().kind, "vault_engine_drive_letter_unavailable");
+            store.apply(requested.clone(), 2).unwrap();
+            assert!(broker.has_active_mounts_locked(), "saving must not dismount the other Vault");
+        });
+        assert_eq!(store.policy().unwrap().entries, requested.entries);
+        assert_eq!(store.policy().unwrap().entries[0], previous.entries[0]);
+    }
+
     fn removal_test_policy() -> wincmd_shared::vault_access::VaultAccessPolicy {
         let mut value = valid_vault_policy_args();
         value["entries"][0]["primary_owner_sid"] = serde_json::json!("S-1-5-21-owner");

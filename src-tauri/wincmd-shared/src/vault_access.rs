@@ -66,8 +66,8 @@ pub struct VaultKnownPrincipal {
     pub sid: String,
     pub display_name: String,
     /// Whether Windows currently recognizes this user as a local
-    /// administrator. Private (`PerUser`) Vault ownership is restricted to
-    /// these principals; shared Vaults may use the ordinary access directory.
+    /// administrator. This is a display hint, not a private-owner eligibility
+    /// restriction; enabled standard users may also own private Vaults.
     #[serde(default)]
     pub is_local_administrator: bool,
 }
