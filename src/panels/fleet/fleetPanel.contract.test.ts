@@ -131,8 +131,8 @@ describe("Fleet access-control panel contracts", () => {
 
   test("hydrates and saves access groups through the protected service instead of browser storage", () => {
     expect(panel).toContain("getAccessDirectory");
-    expect(panel).toContain("saveAccessDirectory(toVaultAccessDirectory(candidate))");
-    expect(panel).toContain("fromVaultAccessDirectory(saved.directory)");
+    expect(panel).toContain("useFleetAccessDirectory(isAdmin, activeTab, getAccessDirectory, saveAccessDirectory)");
+    expect(panel).toContain("onSave={groups.save}");
     expect(access).toContain("onSave: (directory: FleetAccessDirectory) => Promise<VaultSaveAccessDirectoryResponse>");
     expect(access).toContain("await onSave(directory)");
     expect(vaultHook).toContain('invoke<VaultAccessDirectory>("get_vault_access_directory")');

@@ -1,0 +1,10 @@
+.fleet-save-notice {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.fleet-save-notice-success { color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.fleet-save-notice-danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.fleet-save-notice-warning { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); }

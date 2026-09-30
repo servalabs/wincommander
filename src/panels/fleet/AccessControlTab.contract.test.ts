@@ -38,8 +38,9 @@ describe("Save groups persists through the protected Vault access service", () =
 
   test("reconciles the just-saved directory against a fresh Windows discovery", () => {
     const save = source.slice(source.indexOf("const save = async ()"), source.lastIndexOf("return ("));
-    expect(save).toContain("const refreshedUsers = await discoverUsers(true, fromVaultAccessDirectory(saved.directory))");
-    expect(source).toContain("reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered)");
+    expect(save).toContain("const refreshedUsers = await discoverUsers(true)");
+    expect(source).toContain("reconcileAccessDirectoryUsers(current, discovered)");
+    expect(source).not.toContain("savedDirectory ?? current");
   });
 
   test("hides the previous account list while Save groups refreshes Windows discovery", () => {
@@ -49,20 +50,30 @@ describe("Save groups persists through the protected Vault access service", () =
   });
 
   test("keeps the last confirmed directory only when a fresh discovery fails", () => {
-    expect(source).toContain("if (!refreshedUsers) void showError(\"Access groups were saved, but WinCommander could not refresh the current Windows users.");
+    expect(source).toContain("if (!refreshedUsers) {");
+    expect(source).toContain("Access groups were saved, but WinCommander could not refresh the current Windows users.");
+    expect(source).toContain('showWarning(message, undefined, { kind: "notification" })');
   });
 
   test("reports the service's per-group Windows reconciliation outcomes honestly", () => {
-    expect(source).toContain("summarizeReconcileResults(results)");
+    expect(source).toContain("accessGroupSaveOutcome(saved)");
     expect(source).toContain('outcome.intent === "danger"');
   });
 
   test("a rejected call is classified instead of surfacing a raw or silent failure", () => {
-    expect(source).toContain("showError(accessGroupSaveFailure(cause))");
+    expect(source).toContain("const message = accessGroupSaveFailure(cause)");
+    expect(source).toContain('showError(message, undefined, { kind: "notification" })');
     expect(source).not.toContain("${detail}");
   });
 
   test("does not invent a manual account row (that regression is Access Control's other rule)", () => {
     expect(source).not.toContain("addManualUser");
+  });
+  test("confirmed save is visible before optional discovery and remains in-app", () => {
+    const save = source.slice(source.indexOf("const save = async ()"), source.lastIndexOf("return ("));
+    expect(save.indexOf("showSuccess(outcome.message")).toBeLessThan(save.indexOf("await discoverUsers"));
+    expect(save).toContain('showSuccess(outcome.message, undefined, { kind: "notification" })');
+    expect(source).toContain('role={saveFeedback.intent === "danger" ? "alert" : "status"}');
+    expect(source).toContain("setSaveFeedback(outcome)");
   });
 });

@@ -2,18 +2,15 @@
 // Access Control owns reusable Windows-user membership. Feature tabs reference
 // stable group IDs without duplicating the Windows-user directory.
 
-import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import AccessControlTab from "./AccessControlTab";
 import FleetConnectView from "./FleetConnectView";
 import VaultAccessTab from "./VaultAccessTab";
-import {
-  clearLegacyAccessDirectory, DEFAULT_ACCESS_DIRECTORY, fromVaultAccessDirectory, loadAccessDirectory,
-  toVaultAccessDirectory,
-} from "./accessControlPolicy";
-import type { FleetAccessDirectory } from "./accessControlTypes";
+import { loadAccessDirectory } from "./accessControlPolicy";
+import { useFleetAccessDirectory } from "./useFleetAccessDirectory";
 import "./index.css";
 
 export default function FleetPanel() {
@@ -22,8 +19,10 @@ export default function FleetPanel() {
   const [activeTab, setActiveTab] = useState("vault");
   const lastCapability = useRef<boolean | null>(null);
   const { getCapabilities, getAccessDirectory, saveAccessDirectory } = useVaultAccess<never, never>();
-  const [directory, setDirectory] = useState<FleetAccessDirectory>(DEFAULT_ACCESS_DIRECTORY);
   const isAdmin = capabilityState === "admin";
+  const groups = useFleetAccessDirectory(isAdmin, activeTab, getAccessDirectory, saveAccessDirectory);
+  const { directory } = groups;
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -59,44 +58,6 @@ export default function FleetPanel() {
     };
   }, [capabilityRefresh, getCapabilities]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    let active = true;
-    void getAccessDirectory().then(serviceDirectory => {
-      if (!active) return;
-      const restored = fromVaultAccessDirectory(serviceDirectory);
-      // This is a one-time migration bridge for the previous renderer-only
-      // directory. A non-empty protected service record always wins; after
-      // Save groups the browser cache is no longer the source of truth.
-      if (restored.users.length === 0 && restored.groups.length === 0) {
-        const legacy = loadAccessDirectory();
-        if (legacy.users.length > 0 || legacy.groups.length > 0) {
-          setDirectory(legacy);
-          return;
-        }
-      }
-      setDirectory(restored);
-    }).catch(() => {
-      // Never replace a protected record with browser data when the service
-      // cannot be reached. The permission check above remains the retry path.
-    });
-    return () => { active = false; };
-  }, [getAccessDirectory, isAdmin]);
-
-  const updateDirectory = useCallback((action: SetStateAction<FleetAccessDirectory>) => {
-    setDirectory(current => {
-      const next = typeof action === "function" ? action(current) : action;
-      return next;
-    });
-  }, []);
-
-  const saveDirectory = useCallback(async (candidate: FleetAccessDirectory) => {
-    const saved = await saveAccessDirectory(toVaultAccessDirectory(candidate));
-    clearLegacyAccessDirectory();
-    setDirectory(fromVaultAccessDirectory(saved.directory));
-    return saved;
-  }, [saveAccessDirectory]);
-
   return (
     <div className="panel-container fleet-panel">
       <div className="fleet-panel-heading">
@@ -124,7 +85,17 @@ export default function FleetPanel() {
           <FleetConnectView />
         </TabsContent>}
         {isAdmin && <TabsContent value="access-control" className="fleet-tab-content">
-          <AccessControlTab directory={directory} onChange={updateDirectory} onSave={saveDirectory} />
+          <div className="fleet-action-row">
+            <span>{groups.dirty ? "Unsaved group changes are kept in this window." : "Saved groups are shared across authorized accounts on this PC."}</span>
+            <Button size="sm" variant="outline" disabled={groups.loading || groups.saving} onClick={() => {
+              if (groups.dirty) setConfirmRefresh(true);
+              else void groups.refresh();
+            }}>{groups.loading ? "Refreshing groups…" : "Refresh groups"}</Button>
+            {confirmRefresh && <><span>Discard this window's unsaved group changes and reload?</span><Button size="sm" variant="danger" onClick={() => { setConfirmRefresh(false); void groups.refresh(true); }}>Discard draft and refresh</Button><Button size="sm" variant="outline" onClick={() => setConfirmRefresh(false)}>Keep draft</Button></>}
+            {groups.loaded && directory.groups.length === 0 && loadAccessDirectory().groups.length > 0 && <Button size="sm" variant="outline" onClick={() => groups.update(loadAccessDirectory())}>Import old local draft</Button>}
+          </div>
+          {groups.error && <p className="fleet-inline-error" role="alert">{groups.error}</p>}
+          {groups.loaded ? <AccessControlTab directory={directory} onChange={groups.update} onSave={groups.save} /> : <p role="status">{groups.loading ? "Loading saved groups from this PC…" : "Refresh groups to load the machine's saved directory before editing."}</p>}
         </TabsContent>}
         <TabsContent value="vault" className="fleet-tab-content">
           <VaultAccessTab isAdmin={isAdmin} directory={directory} />

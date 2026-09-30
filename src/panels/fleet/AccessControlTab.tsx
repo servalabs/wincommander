@@ -8,15 +8,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useBackend from "@/hooks/useBackend";
-import { showError, showSuccess } from "@/utils/toast";
+import { showError, showSuccess, showWarning } from "@/utils/toast";
 import {
-  createAccessGroup, fromVaultAccessDirectory, membershipCount, reconcileAccessDirectoryUsers,
-  summarizeReconcileResults, validateAccessDirectory,
+  createAccessGroup, membershipCount, reconcileAccessDirectoryUsers,
+  validateAccessDirectory,
 } from "./accessControlPolicy";
 import type { FleetAccessDirectory, FleetAccessGroup, VaultSaveAccessDirectoryResponse } from "./accessControlTypes";
 import FleetField from "./FleetField";
 import FleetInfoPopover from "./FleetInfoPopover";
 import { accessGroupSaveFailure } from "./accessGroupSaveFailure";
+import { accessGroupSaveOutcome } from "./accessGroupSaveOutcome";
+import "./accessGroupSaveFeedback.css";
 
 interface AccessControlTabProps {
   directory: FleetAccessDirectory;
@@ -31,6 +33,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const [pendingDelete, setPendingDelete] = useState<FleetAccessGroup>();
   const [discovering, setDiscovering] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{ intent: "success" | "danger" | "warning"; message: string }>();
   const discoveredOnce = useRef(false);
   const discoveryRevision = useRef(0);
   const { getFleetAccessUsers } = useBackend();
@@ -42,7 +45,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
     setSelectedGroupId(directory.groups[0].id);
   }, [directory.groups, selectedGroup]);
 
-  const discoverUsers = async (quiet = false, savedDirectory?: FleetAccessDirectory) => {
+  const discoverUsers = async (quiet = false) => {
     const revision = ++discoveryRevision.current;
     setDiscovering(true);
     try {
@@ -66,11 +69,14 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
         // current Windows-account inventory. Reconcile that authoritative save
         // with this fresh discovery so deleted accounts remain unavailable and
         // cannot reappear in the picker after Save groups.
-        const reconciled = reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered);
+        const reconciled = reconcileAccessDirectoryUsers(current, discovered);
         return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
       });
       if (!quiet) void showSuccess(`Found ${discovered.length} Windows user${discovered.length === 1 ? "" : "s"}.`);
       return true;
+    } catch {
+      if (revision === discoveryRevision.current && !quiet) void showError("Windows user discovery failed. The saved groups were not changed.", undefined, { kind: "notification" });
+      return false;
     } finally {
       if (revision === discoveryRevision.current) setDiscovering(false);
     }
@@ -134,20 +140,32 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const save = async () => {
     if (errors.length) return void showError(errors[0]);
     setSaving(true);
+    setSaveFeedback(undefined);
     try {
       const saved = await onSave(directory);
+      const outcome = accessGroupSaveOutcome(saved);
+      setSaveFeedback(outcome);
+      if (outcome.intent === "danger") {
+        void showError(outcome.message, undefined, { kind: "notification" });
+        return;
+      }
+      // The protected save/readback is confirmed now. Optional account discovery
+      // must not suppress this result or turn a saved directory into "save failed".
+      void showSuccess(outcome.message, undefined, { kind: "notification" });
       // Saving persists membership, but Windows user discovery is the
       // authority for which accounts currently exist. Match the explicit
       // Refresh behavior immediately so the post-save view cannot show stale
       // service records as assignable users.
-      const refreshedUsers = await discoverUsers(true, fromVaultAccessDirectory(saved.directory));
-      const { results } = saved;
-      const outcome = summarizeReconcileResults(results);
-      if (!refreshedUsers) void showError("Access groups were saved, but WinCommander could not refresh the current Windows users. The previous list is preserved; refresh it before changing membership.");
-      else if (outcome.intent === "danger") void showError(outcome.message);
-      else void showSuccess(outcome.message);
+      const refreshedUsers = await discoverUsers(true);
+      if (!refreshedUsers) {
+        const message = "Access groups were saved, but WinCommander could not refresh the current Windows users. Refresh the account list before changing membership.";
+        setSaveFeedback({ intent: "warning", message });
+        void showWarning(message, undefined, { kind: "notification" });
+      }
     } catch (cause) {
-      void showError(accessGroupSaveFailure(cause));
+      const message = accessGroupSaveFailure(cause);
+      setSaveFeedback({ intent: "danger", message });
+      void showError(message, undefined, { kind: "notification" });
     } finally {
       setSaving(false);
     }
@@ -155,11 +173,12 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
 
   return (
     <div className="fleet-access-layout">
+      {saveFeedback && <div className={`fleet-save-notice fleet-save-notice-${saveFeedback.intent}`} role={saveFeedback.intent === "danger" ? "alert" : "status"} aria-live="polite" style={{ gridColumn: "1 / -1" }}>{saveFeedback.message}</div>}
       <Card className="fleet-access-pane">
         <CardHeader className="fleet-access-pane-header">
           <div className="fleet-access-title-row">
             <div><CardTitle>Access groups</CardTitle><CardDescription>{directory.groups.length} group{directory.groups.length === 1 ? "" : "s"}</CardDescription></div>
-            <Button size="sm" onClick={addGroup}><Icon icon="plus" />Add group</Button>
+            <Button size="sm" disabled={saving} onClick={addGroup}><Icon icon="plus" />Add group</Button>
           </div>
           <Input aria-label="Search access groups" placeholder="Search groups" value={groupSearch} onChange={event => setGroupSearch(event.target.value)} />
         </CardHeader>
@@ -206,8 +225,8 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
           </CardHeader>
           <CardContent className="fleet-access-details">
             <div className="fleet-access-fields">
-              <FleetField label="Group name"><Input value={selectedGroup.name} onChange={event => updateGroup({ name: event.target.value })} /></FleetField>
-              <FleetField label="Windows group"><Input value={selectedGroup.localGroup} onChange={event => updateGroup({ localGroup: event.target.value })} /></FleetField>
+              <FleetField label="Group name"><Input disabled={saving} value={selectedGroup.name} onChange={event => updateGroup({ name: event.target.value })} /></FleetField>
+              <FleetField label="Windows group"><Input disabled={saving} value={selectedGroup.localGroup} onChange={event => updateGroup({ localGroup: event.target.value })} /></FleetField>
             </div>
             <div className="fleet-access-user-tools">
               <Input aria-label="Search Windows users" placeholder="Search Windows users" value={userSearch} onChange={event => setUserSearch(event.target.value)} />
@@ -236,7 +255,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
             </div>
             {errors.length > 0 && <p className="fleet-inline-error">{errors[0]}</p>}
             <div className="fleet-access-actions">
-              <Button size="sm" variant="danger" onClick={() => setPendingDelete(selectedGroup)}><Icon icon="trash" />Delete group</Button>
+              <Button size="sm" variant="danger" disabled={saving} onClick={() => setPendingDelete(selectedGroup)}><Icon icon="trash" />Delete group</Button>
               <Button size="sm" variant="primary" disabled={usersRefreshing} onClick={() => void save()}>{saving ? "Saving…" : "Save groups"}</Button>
             </div>
           </CardContent>

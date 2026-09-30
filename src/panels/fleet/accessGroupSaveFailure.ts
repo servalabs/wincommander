@@ -1,6 +1,15 @@
 /** Fixed service categories only: never display raw account, path or transport details. */
 export function accessGroupSaveFailure(cause: unknown): string {
   const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
+  if (detail.includes("vault_group_refresh_required")) {
+    return "The saved groups changed in another window or could not be checked. Your changes were not sent. Refresh groups and review your draft before saving.";
+  }
+  if (detail.includes("vault_group_readback_unconfirmed")) {
+    return "The group save was sent, but its saved state could not be confirmed. Refresh groups before retrying; no success has been assumed.";
+  }
+  if (detail.includes("vault_group_directory_not_loaded")) {
+    return "Load the saved groups from this PC before saving changes. Use Refresh groups, then retry.";
+  }
   if (detail.includes("vault_not_authorized") || detail.includes("vault_fleet_group_required")) {
     return "These access groups were not saved. You must already belong to a Fleet group to change or remove it; being a Windows administrator does not grant membership.";
   }

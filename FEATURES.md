@@ -129,6 +129,13 @@ Fleet adds organization-managed behavior and server-backed operations:
   containers, including group-authorized entries and one-request mount roles;
 - organization productivity and security reporting where configured.
 
+Local Fleet Vault management uses machine-wide Windows access groups.
+Administrators can assign a new private Vault directly to an enabled Windows
+user. Once saved, only its owner can edit the private policy while unmounted;
+a standard owner cannot transfer ownership. Group membership changes remain
+restricted to authorized administrators. Seeing a group does not grant access
+to its Vaults.
+
 Fleet enrollment is an administrative boundary. On an enrolled device, the
 organization's configured productivity collection can include application
 names, window titles, URLs/page titles, source-file paths, project/language
