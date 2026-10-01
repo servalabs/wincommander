@@ -163,10 +163,11 @@ fn recent_summaries_at(
             continue;
         };
         if operation_id.map_or(true, |id| id == event.operation_id) {
+            let occurred_at = effective_occurred_at(&event);
             summaries.push(DiagnosticSummary {
                 event_id: event.event_id,
                 operation_id: event.operation_id,
-                occurred_at: event.occurred_at,
+                occurred_at,
                 feature: event.feature,
                 action: event.action,
                 stage: event.stage,
@@ -261,14 +262,10 @@ where
 {
     let mut result = RetentionResult::default();
     for line in content.lines() {
-        let Some(date) = parse_envelope_date(line) else {
+        let Some(_) = parse_envelope_date(line) else {
             result.corrupt += 1;
             continue;
         };
-        if date < cutoff.as_str() {
-            result.pruned += 1;
-            continue;
-        }
         let Some(body) = decrypt(line) else {
             result.corrupt += 1;
             continue;
@@ -279,6 +276,13 @@ where
         };
         if event.occurred_at.get(..10) != Some(&line[3..13]) {
             result.corrupt += 1;
+            continue;
+        }
+        if effective_occurred_at(&event)
+            .get(..10)
+            .is_some_and(|date| date < cutoff.as_str())
+        {
+            result.pruned += 1;
             continue;
         }
         result.content.push_str(line);
@@ -355,7 +359,7 @@ fn recovery_event() -> DiagnosticEvent {
         event_id: format!("svc-diag-recovery-{sequence}"),
         operation_id: format!("DIA-SVC-RECOVERY-{sequence}"),
         parent_operation_id: None,
-        occurred_at: format!("{}T00:00:00Z", today_utc()),
+        occurred_at: utc_timestamp_from_ms(unix_ms()),
         component: "service".into(),
         feature: "diagnostics".into(),
         action: "storage".into(),
@@ -498,11 +502,12 @@ fn vault_event(
     started: Instant,
     context: BTreeMap<String, String>,
 ) -> DiagnosticEvent {
+    let occurred_ms = unix_ms();
     DiagnosticEvent {
-        event_id: format!("svc-vlt-{operation_id}-{}", unix_ms()),
+        event_id: format!("svc-vlt-{operation_id}-{occurred_ms}"),
         operation_id: operation_id.to_string(),
         parent_operation_id: None,
-        occurred_at: format!("{}T00:00:00Z", today_utc()),
+        occurred_at: utc_timestamp_from_ms(occurred_ms),
         component: "service".into(),
         feature: "vault".into(),
         action: action.into(),
@@ -672,16 +677,28 @@ fn reason_fields(
             "review_request",
         ),
         Some(VaultMountReason::AdministratorRequired) => (
-            "VLT.AUTH.ADMINISTRATOR_REQUIRED", DiagnosticSeverity::Error, false, "request_administrator_approval",
+            "VLT.AUTH.ADMINISTRATOR_REQUIRED",
+            DiagnosticSeverity::Error,
+            false,
+            "request_administrator_approval",
         ),
         Some(VaultMountReason::PolicyAccessDenied) => (
-            "VLT.AUTH.POLICY_ACCESS_DENIED", DiagnosticSeverity::Error, false, "request_authorization",
+            "VLT.AUTH.POLICY_ACCESS_DENIED",
+            DiagnosticSeverity::Error,
+            false,
+            "request_authorization",
         ),
         Some(VaultMountReason::PrivateOwnerRequired) => (
-            "VLT.AUTH.PRIVATE_OWNER_REQUIRED", DiagnosticSeverity::Error, false, "ask_primary_owner",
+            "VLT.AUTH.PRIVATE_OWNER_REQUIRED",
+            DiagnosticSeverity::Error,
+            false,
+            "ask_primary_owner",
         ),
         Some(VaultMountReason::MountStateUnknown) => (
-            "VLT.MOUNT.STATE_UNKNOWN", DiagnosticSeverity::Error, false, "refresh_status",
+            "VLT.MOUNT.STATE_UNKNOWN",
+            DiagnosticSeverity::Error,
+            false,
+            "refresh_status",
         ),
         Some(VaultMountReason::BrokerUnavailable) => (
             "VLT.BROKER.UNAVAILABLE",
@@ -819,8 +836,41 @@ fn unix_ms() -> u128 {
         .map(|v| v.as_millis())
         .unwrap_or_default()
 }
-fn today_utc() -> String {
-    utc_date_from_days((unix_ms() / 86_400_000) as i64)
+fn utc_timestamp_from_ms(ms: u128) -> String {
+    let date = utc_date_from_days((ms / 86_400_000) as i64);
+    let seconds = (ms / 1_000) % 86_400;
+    format!(
+        "{date}T{:02}:{:02}:{:02}.{:03}Z",
+        seconds / 3_600,
+        seconds / 60 % 60,
+        seconds % 60,
+        ms % 1_000
+    )
+}
+
+// Older service records have a reversed year adjustment and a midnight placeholder.
+// Only an exact match can be recovered from the authenticated event's own epoch suffix.
+fn effective_occurred_at(event: &DiagnosticEvent) -> String {
+    let prefix = format!("svc-vlt-{}-", event.operation_id);
+    let Some(ms) = event
+        .event_id
+        .strip_prefix(&prefix)
+        .and_then(|value| value.parse::<u128>().ok())
+    else {
+        return event.occurred_at.clone();
+    };
+    if event.component != "service" || event.feature != "vault" || ms > 253_402_300_799_999 {
+        return event.occurred_at.clone();
+    }
+    let actual = utc_timestamp_from_ms(ms);
+    let year = actual[..4].parse::<i32>().unwrap_or_default();
+    let month = actual[5..7].parse::<u32>().unwrap_or_default();
+    let legacy_year = year + if month >= 3 { 1 } else { -1 };
+    if event.occurred_at == format!("{legacy_year:04}{}T00:00:00Z", &actual[4..10]) {
+        actual
+    } else {
+        event.occurred_at.clone()
+    }
 }
 
 fn utc_date_from_days(days: i64) -> String {
@@ -833,7 +883,7 @@ fn utc_date_from_days(days: i64) -> String {
     let mp = (5 * doy + 2) / 153;
     format!(
         "{:04}-{:02}-{:02}",
-        y + (mp < 10) as i64,
+        y + (mp >= 10) as i64,
         mp + if mp < 10 { 3 } else { -9 },
         doy - (153 * mp + 2) / 5 + 1
     )
@@ -907,8 +957,23 @@ mod tests {
         assert!(!raw.contains("disk_unique_id"));
     }
     #[test]
-    fn time_has_a_valid_date_prefix() {
-        assert_eq!(today_utc().len(), 10);
+    fn service_timestamps_preserve_hours_minutes_seconds_and_milliseconds() {
+        assert_eq!(
+            utc_timestamp_from_ms(1_790_854_510_123),
+            "2026-10-01T11:35:10.123Z"
+        );
+        assert_eq!(
+            utc_timestamp_from_ms(951_868_799_999),
+            "2000-02-29T23:59:59.999Z"
+        );
+        assert_eq!(utc_timestamp_from_ms(0), "1970-01-01T00:00:00.000Z");
+    }
+    #[test]
+    fn service_dates_preserve_the_calendar_year_and_leap_day() {
+        assert_eq!(utc_date_from_days(0), "1970-01-01");
+        assert_eq!(utc_date_from_days(59), "1970-03-01");
+        assert_eq!(utc_date_from_days(11_016), "2000-02-29");
+        assert_eq!(utc_date_from_days(20_727), "2026-10-01");
     }
     fn retention_event(date: &str) -> DiagnosticEvent {
         let mut event = vault_event(
@@ -929,6 +994,56 @@ mod tests {
     fn retention_line(date: &str) -> String {
         let body = serde_json::to_string(&retention_event(date)).unwrap();
         format!("D1:{date}:test-{date}:{body}")
+    }
+
+    #[test]
+    fn legacy_midnight_dates_are_recovered_only_from_the_exact_service_event_id() {
+        let mut event = retention_event("2027-10-01");
+        event.event_id = format!("svc-vlt-{}-1790854510123", event.operation_id);
+        assert_eq!(effective_occurred_at(&event), "2026-10-01T11:35:10.123Z");
+        assert_eq!(event.occurred_at, "2027-10-01T00:00:00Z");
+        event.event_id = "svc-vlt-another-operation-1790854510123".into();
+        assert_eq!(effective_occurred_at(&event), event.occurred_at);
+        event.event_id = format!("svc-vlt-{}-1790854510123", event.operation_id);
+        event.occurred_at = "2027-10-01T11:35:10Z".into();
+        assert_eq!(effective_occurred_at(&event), event.occurred_at);
+        event.occurred_at = "2026-10-01T00:00:00Z".into();
+        assert_eq!(effective_occurred_at(&event), event.occurred_at);
+        event.occurred_at = "2027-10-01T00:00:00Z".into();
+        event.component = "desktop".into();
+        assert_eq!(effective_occurred_at(&event), event.occurred_at);
+        let recovery = recovery_event();
+        assert_eq!(effective_occurred_at(&recovery), recovery.occurred_at);
+    }
+
+    #[test]
+    fn legacy_vault_retention_uses_the_recoverable_date_without_rewriting_archives() {
+        let mut event = retention_event("2027-10-01");
+        event.event_id = format!("svc-vlt-{}-1790854510123", event.operation_id);
+        let line = format!(
+            "D1:2027-10-01:legacy:{}\n",
+            serde_json::to_string(&event).unwrap()
+        );
+        let decrypt = |value: &str| {
+            value
+                .find('{')
+                .map(|index| value[index..].as_bytes().to_vec())
+        };
+        let retained = retain_diagnostic_records(&line, "2026-10-01".into(), decrypt);
+        assert_eq!(retained.content, line);
+        assert_eq!(retained.corrupt, 0);
+        let expired = retain_diagnostic_records(&line, "2026-10-02".into(), decrypt);
+        assert_eq!(expired.pruned, 1);
+        assert!(expired.content.is_empty());
+        event.event_id = format!("svc-vlt-{}-1767225600000", event.operation_id);
+        event.occurred_at = "2025-01-01T00:00:00Z".into();
+        let january = format!(
+            "D1:2025-01-01:legacy:{}\n",
+            serde_json::to_string(&event).unwrap()
+        );
+        let retained = retain_diagnostic_records(&january, "2026-01-01".into(), decrypt);
+        assert_eq!(retained.content, january);
+        assert_eq!(retained.pruned, 0);
     }
 
     #[test]
