@@ -58,17 +58,68 @@ export function normalizeStartupSettings(settings: AppSettings): AppSettings {
   };
 }
 
-/** Bound the UI wait and reject late hydration without claiming native cancellation. */
+export type BudgetedHydration<T> =
+  | { outcome: "ready"; value: T }
+  | { outcome: "timed-out" }
+  | { outcome: "failed" };
+
+/**
+ * Separates a merely late native read from an actual rejected/null result.
+ * Callers need that distinction: only a timeout may continue in the
+ * background; a known failure must show its recovery path immediately.
+ */
+export async function hydrateWithStatus<T>(
+  load: (signal: AbortSignal) => Promise<T | null>,
+  timeoutMs = 8_000,
+): Promise<BudgetedHydration<T>> {
+  const controller = new AbortController();
+  try {
+    const result = await waitForSoftTimeout(load(controller.signal), timeoutMs);
+    if (result.status === "timed-out") return { outcome: "timed-out" };
+    return result.value === null ? { outcome: "failed" } : { outcome: "ready", value: result.value };
+  } catch {
+    return { outcome: "failed" };
+  } finally {
+    controller.abort();
+  }
+}
+
+/** Compatibility convenience for callers that only need a value/null. */
 export async function hydrateWithinBudget<T>(
   load: (signal: AbortSignal) => Promise<T | null>,
   timeoutMs = 8_000,
 ): Promise<T | null> {
+  const result = await hydrateWithStatus(load, timeoutMs);
+  return result.outcome === "ready" ? result.value : null;
+}
+
+export type StartupHydrationContinuation<T> =
+  | { outcome: "ready"; value: T }
+  | { outcome: "failed" }
+  | { outcome: "cancelled" };
+
+/**
+ * The initial budget protects responsiveness, but it cannot cancel a shared
+ * native DPAPI/filesystem read. When that budget expires, surface a neutral
+ * status and keep waiting for the same read. A true rejection/null result is
+ * still reported to the caller as a failure; no default settings are invented.
+ */
+export async function continueStartupSettingsHydration<T>(
+  load: (signal: AbortSignal) => Promise<T | null>,
+  onSlow: () => boolean | void,
+  timeoutMs = 8_000,
+): Promise<StartupHydrationContinuation<T>> {
+  const withinBudget = await hydrateWithStatus(load, timeoutMs);
+  if (withinBudget.outcome === "ready") return withinBudget;
+  if (withinBudget.outcome === "failed") return withinBudget;
+
+  if (onSlow() === false) return { outcome: "cancelled" };
   const controller = new AbortController();
   try {
-    const result = await waitForSoftTimeout(load(controller.signal), timeoutMs);
-    return result.status === "completed" ? result.value : null;
+    const eventual = await load(controller.signal);
+    return eventual === null ? { outcome: "failed" } : { outcome: "ready", value: eventual };
   } catch {
-    return null;
+    return { outcome: "failed" };
   } finally {
     controller.abort();
   }

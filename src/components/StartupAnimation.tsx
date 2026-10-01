@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LOGO_URL } from '../assets/logoUrl';
 import StartupRecovery from './startup/StartupRecovery';
+import StartupNotice from './startup/StartupNotice';
 
 const SPLASH_DURATION_MS = 1500;
 
@@ -37,6 +38,7 @@ export interface StartupAnimationProps {
     isAppReady: boolean;
     isWindowVisible?: boolean;
     startupError: string | null;
+    startupNotice?: string | null;
     onRetry: () => void;
 }
 
@@ -53,7 +55,7 @@ function scrambleWord(target: string, resolved: number): string {
 
 const rc = () => RAIN_CHARS[Math.floor(Math.random() * RAIN_CHARS.length)];
 
-export default function StartupAnimation({ onComplete, isAppReady, isWindowVisible = true, startupError, onRetry, branding, isLight, reducedMotion }: StartupAnimationProps) {
+export default function StartupAnimation({ onComplete, isAppReady, isWindowVisible = true, startupError, startupNotice = null, onRetry, branding, isLight, reducedMotion }: StartupAnimationProps) {
     const calledRef = useRef(false);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
@@ -268,7 +270,7 @@ export default function StartupAnimation({ onComplete, isAppReady, isWindowVisib
     }, [branding.companyLabel, reducedMotion, isWindowVisible]);
 
     return (
-        <div className={`splash-screen${isLight ? ' splash-screen--light' : ''}${reducedMotion ? ' splash-screen--reduced' : ''}${startupError ? ' splash-screen--failed' : ''}${!isWindowVisible ? ' splash-screen--waiting' : ''}`}>
+        <div className={`splash-screen${isLight ? ' splash-screen--light' : ''}${reducedMotion ? ' splash-screen--reduced' : ''}${startupError ? ' splash-screen--failed' : ''}${startupNotice && !startupError ? ' splash-screen--notice' : ''}${!isWindowVisible ? ' splash-screen--waiting' : ''}`}>
             <div className="sp-scanlines" />
             <div className="sp-glow" />
             <div className="sp-grid" />
@@ -298,6 +300,7 @@ export default function StartupAnimation({ onComplete, isAppReady, isWindowVisib
 
                 <h1 className="sp-brand sp-scramble">{scrambleText}</h1>
                 <p className="sp-sub">{branding.productLabel}</p>
+                <StartupNotice message={startupNotice} onRetry={onRetry} />
                 <StartupRecovery error={startupError} onRetry={onRetry} />
             </div>
         </div>

@@ -18,10 +18,16 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 - Packaged startup uses a bundled stylesheet accepted by the release CSP.
   The native window is revealed after the splash DOM is committed; artwork,
   fonts and animation frames do not gate visibility. Animation clocks wait for
-  the reveal acknowledgement. Suppressed launches stay hidden.
+  the reveal acknowledgement or its soft time budget. A late acknowledgement
+  keeps the animation running; explicitly suppressed launches stay hidden.
 - Settings hydrate from the local cache before background system probes.
-  A failed initial read has one bounded recovery wait, then the splash offers
-  Retry startup while the dashboard remains gated.
+  A slow initial read stays shared after the soft recovery budget expires.
+  Only a confirmed read failure offers Retry startup; elapsed time alone does
+  not fail the launch. The dashboard remains gated until settings are known.
+  Routine cold reads do not persist launch metadata before publishing their
+  cache; first-run identity and legacy migration retain their initial save.
+  Best-effort user-directory ACL helpers and service disconnect cleanup have
+  five-second limits, so those helpers cannot wait indefinitely during startup.
   Settings observers run after the settings write lock is released; settings
   IPC and slow diagnostics/network checks run outside the window event thread.
 - One startup coordinator shares duplicate work and permits one expensive launch

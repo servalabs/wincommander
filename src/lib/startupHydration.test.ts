@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { getStartupSettingsRecoveryMessage, hydrateWithinBudget, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus } from "./startupHydration";
+import { continueStartupSettingsHydration, getStartupSettingsRecoveryMessage, hydrateWithStatus, hydrateWithinBudget, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus } from "./startupHydration";
 import { getDefaultModules, getFirstRunModules } from "../types/modules";
 import type { AppSettings } from "../types/settings";
 import { createStartupProbeStore } from '../services/startupProbeStore';
@@ -54,6 +54,13 @@ test("failed settings read settles without making startup ready", async () => {
   expect(await hydrateWithinBudget(async () => { throw new Error("unavailable"); })).toBeNull();
 });
 
+test("hydration status distinguishes a known failure from a late native read", async () => {
+  expect(await hydrateWithStatus(async () => { throw new Error("unavailable"); }, 5))
+    .toEqual({ outcome: "failed" });
+  expect(await hydrateWithStatus(async () => null, 5))
+    .toEqual({ outcome: "failed" });
+});
+
 test("hung settings read expires and late consumer is aborted", async () => {
   let signal!: AbortSignal;
   let resolve!: (value: string) => void;
@@ -79,6 +86,57 @@ test('repeated startup recovery waits share one native read and accept its event
   const recovery = hydrateWithinBudget(read, 100);
   finish('saved choices');
   expect(await recovery).toBe('saved choices');
+  expect(calls).toBe(1);
+});
+
+test('a settings read delayed beyond the UI budget stays nonfatal and completes from the shared native read', async () => {
+  const store = createStartupProbeStore<string>();
+  let finish!: (value: string) => void;
+  let nativeCalls = 0;
+  const nativeRead = new Promise<string>(resolve => { finish = resolve; });
+  const states: string[] = [];
+
+  const completion = continueStartupSettingsHydration(
+    signal => store.refresh(() => {
+      nativeCalls += 1;
+      return nativeRead;
+    }, signal),
+    () => { states.push('waiting'); },
+    5,
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(states).toEqual(['waiting']);
+  expect(nativeCalls).toBe(1);
+  finish('saved choices');
+  expect(await completion).toEqual({ outcome: 'ready', value: 'saved choices' });
+  expect(nativeCalls).toBe(1);
+});
+
+test('a genuine settings read failure does not show slow status or start another read', async () => {
+  const states: string[] = [];
+  let calls = 0;
+  const result = await continueStartupSettingsHydration(
+    async () => { calls += 1; throw new Error('service unavailable'); },
+    () => { states.push('waiting'); },
+    5,
+  );
+
+  expect(states).toEqual([]);
+  expect(calls).toBe(1);
+  expect(result).toEqual({ outcome: 'failed' });
+});
+
+test('cancelling before slow status does not update UI or attach another consumer', async () => {
+  let calls = 0;
+  const pending = new Promise<string>(() => {});
+  const result = await continueStartupSettingsHydration(
+    async () => { calls += 1; return pending; },
+    () => false,
+    5,
+  );
+
+  expect(result).toEqual({ outcome: 'cancelled' });
   expect(calls).toBe(1);
 });
 

@@ -3,14 +3,15 @@ import { describe, expect, test } from "bun:test";
 declare const Bun: { file(path: string): { text(): Promise<string> } };
 
 describe("AppContext startup coordination", () => {
-  test("offers recovery after bounded hydration and keeps eligibility out of startup effect dependencies", async () => {
+  test("continues a shared settings read after bounded hydration and keeps eligibility out of startup effect dependencies", async () => {
     const source = await Bun.file("src/context/AppContext.tsx").text();
 
     expect(source).toMatch(/id:\s*['"]settings-cache['"]/);
     expect(source).toMatch(/cached\.outcome !== ['"]completed['"] \|\| !cached\.value/);
-    expect(source).toContain("hydratedSettings = await hydrateWithinBudget(");
-    expect(source.includes("hydratedSettings = await initSettings(false);")).toBe(false);
-    expect(source).toContain("Reading your saved settings is taking longer than expected.");
+    expect(source).toContain("continueStartupSettingsHydration(");
+    expect(source).toContain("setStartupDataState('waiting')");
+    expect(source).toContain("if (cancelled) return false;");
+    expect(source).not.toContain("Reading your saved settings is taking longer than expected.");
     expect(source).toContain("settingsFailureMessageRef.current = getStartupSettingsFailureMessage(error)");
     expect(source).toContain("reportStartupPhase('settings_cache_hydrated')");
     expect(source).toMatch(/id:\s*['"]system-probe['"]/);
@@ -26,7 +27,7 @@ describe("AppContext startup coordination", () => {
   test("stops automatic retries when Windows account key recovery is required", async () => {
     const source = await Bun.file("src/context/AppContext.tsx").text();
     const startup = source.slice(source.indexOf("const runStartupSequence ="));
-    const boundedRetry = startup.indexOf("hydratedSettings = await hydrateWithinBudget(");
+    const boundedRetry = startup.indexOf("const continuedHydration = await continueStartupSettingsHydration(");
     const recovery = startup.indexOf("if (!hydratedSettings)");
     const recoveryGuard = /if \(settingsRecoveryMessageRef\.current\) \{\s*setStartupError\(settingsRecoveryMessageRef\.current\);\s*return;/;
 

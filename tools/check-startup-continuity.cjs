@@ -50,9 +50,18 @@ await delayedPage.evaluate(async () => {
  window.host = await import('/src/startup/animationRoot.tsx');
  window.props = { branding:{companyLabel:'SERVALABS',productLabel:'WINCOMMANDER'},
   isLight:false,reducedMotion:false,isWindowVisible:false,isAppReady:true,startupError:null,
-  onComplete(){window.completed++;window.completedAt=performance.now()},onRetry(){} };
+ onComplete(){window.completed++;window.completedAt=performance.now()},onRetry(){} };
  window.host.showStartupAnimation(window.props);
- await window.host.waitForStartupAnimationReady();
+ // Await the actual committed splash DOM. animationRoot intentionally has no
+ // native readiness helper: the renderer must be independently ready first.
+ await new Promise(resolve => {
+  const waitForSplashDom = () => {
+   const shadow = document.querySelector('#startup-animation')?.shadowRoot;
+   if (shadow?.querySelector('canvas') && shadow.querySelector('.sp-ring-outer')) return resolve();
+   requestAnimationFrame(waitForSplashDom);
+  };
+  waitForSplashDom();
+ });
  const shadow = document.querySelector('#startup-animation').shadowRoot;
  window.canvas = shadow.querySelector('canvas');
  window.ringAnimation = shadow.querySelector('.sp-ring-outer').getAnimations()[0];

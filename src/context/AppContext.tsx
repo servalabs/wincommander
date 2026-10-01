@@ -24,7 +24,7 @@ import { _getOperationHandlers } from './TaskStatusContext';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
 import { isAppInventoryRefreshDue } from '../lib/appInventoryStartup';
 import { waitForSoftTimeout } from '../lib/softTimeout';
-import { getStartupSettingsRecoveryMessage, hydrateWithinBudget, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus, type PersonalSettingsStatus } from '../lib/startupHydration';
+import { continueStartupSettingsHydration, getStartupSettingsRecoveryMessage, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus, type PersonalSettingsStatus } from '../lib/startupHydration';
 import { canRunStartupJob, type StartupEligibility } from '../lib/startupJobPolicy';
 import { createStartupCoordinator, type StartupCoordinator, type StartupJob, type StartupJobResult } from '../services/startupCoordinator';
 import { createStartupProbeStore } from '../services/startupProbeStore';
@@ -92,7 +92,7 @@ interface AppState {
     startupError: string | null;
     retryStartup: () => void;
     /** Whether startup surfaces cached settings, a fresh probe, or stale data. */
-    startupDataState: 'loading' | 'cached' | 'refreshing' | 'ready' | 'stale';
+    startupDataState: 'loading' | 'waiting' | 'cached' | 'refreshing' | 'ready' | 'stale';
 
     // Actions
     refreshAll: () => Promise<void>;
@@ -269,9 +269,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         settingsRecoveryMessageRef.current = null;
         settingsFailureMessageRef.current = null;
         setStartupError(null);
+        setStartupDataState('loading');
         setStartupAttempt(attempt => attempt + 1);
     }, []);
-    const [startupDataState, setStartupDataState] = useState<'loading' | 'cached' | 'refreshing' | 'ready' | 'stale'>('loading');
+    const [startupDataState, setStartupDataState] = useState<'loading' | 'waiting' | 'cached' | 'refreshing' | 'ready' | 'stale'>('loading');
 
     const normalizeDriveLetter = useCallback((value: string | null | undefined): string | null => {
         if (!value) return null;
@@ -1236,16 +1237,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 // consumer with a bounded budget. Failure stays on the splash,
                 // with an explicit retry instead of an empty dashboard.
                 setStartupDataState('stale');
-                hydratedSettings = await hydrateWithinBudget(signal => initSettings(false, undefined, signal));
-                if (cancelled) return;
+                const continuedHydration = await continueStartupSettingsHydration(
+                    signal => initSettings(false, undefined, signal),
+                    () => {
+                        if (cancelled) return false;
+                        setStartupDataState('waiting');
+                    },
+                );
+                hydratedSettings = continuedHydration.outcome === 'ready'
+                    ? continuedHydration.value
+                    : null;
+                if (cancelled || continuedHydration.outcome === 'cancelled') return;
                 if (settingsRecoveryMessageRef.current) {
                     setStartupError(settingsRecoveryMessageRef.current);
                     return;
                 }
                 if (!hydratedSettings) {
-                    // The native read remains shared; Retry attaches another bounded consumer.
-                    setStartupDataState('stale');
-                    setStartupError(settingsFailureMessageRef.current ?? 'Reading your saved settings is taking longer than expected. Retry startup. Your saved settings have not been reset.');
+                    setStartupError(settingsFailureMessageRef.current ?? getStartupSettingsFailureMessage(null));
                     return;
                 }
             }

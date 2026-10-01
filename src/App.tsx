@@ -1419,7 +1419,15 @@ function AppContent({ splashDone, onSplashComplete }: {
     <MotionConfig reducedMotion={motionPref === "reduced" ? "always" : "user"}>
     <SearchProvider>
     <>
-      {isLoading && <SplashScreen onComplete={onSplashComplete} isAppReady={startupComplete} startupError={startupError} onRetry={retryStartup} />}
+      {isLoading && <SplashScreen
+        onComplete={onSplashComplete}
+        isAppReady={startupComplete}
+        startupError={startupError}
+        startupNotice={startupDataState === 'waiting' && !startupError
+          ? 'WinCommander is still opening this account’s saved settings. You can keep waiting, or retry now. Your saved settings have not been reset.'
+          : null}
+        onRetry={retryStartup}
+      />}
 
       <div
         className="app-container"

@@ -9,3 +9,8 @@ export async function settleStartupReveal(request: Promise<boolean>, timeoutMs =
         return null;
     }
 }
+
+/** A missing acknowledgement is not evidence that the native window is hidden. */
+export function shouldKeepStartupAnimationVisible(revealResult: boolean | null): boolean {
+    return revealResult !== false;
+}

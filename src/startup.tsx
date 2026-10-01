@@ -3,7 +3,7 @@ import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
 import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
 import { flushSync } from 'react-dom';
-import { settleStartupReveal } from './startup/revealBudget';
+import { settleStartupReveal, shouldKeepStartupAnimationVisible } from './startup/revealBudget';
 
 const native = (window as typeof window & {
     __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
@@ -41,8 +41,11 @@ async function startMainWindow(): Promise<void> {
     // Native visibility must follow a committed DOM, not a queued React render.
     flushSync(() => showStartupAnimation(initialAnimation));
     const shown = await settleStartupReveal(revealStartupWindow());
-    // The intro clock starts after the real native window is revealed.
-    showStartupAnimation({ ...initialAnimation, isWindowVisible: shown === true });
+    // A timed-out native acknowledgement means "not known yet", not "the
+    // window is hidden". Keep the already-rendered animation running so a
+    // late elevated handoff has content to display. Only an explicit false
+    // suppresses the splash (for a deliberately hidden window).
+    showStartupAnimation({ ...initialAnimation, isWindowVisible: shouldKeepStartupAnimationVisible(shown) });
     if (shown === false) hideStartupAnimation();
     // Loading the dashboard is deliberately last: a slow module can no longer
     // leave a hidden, white-looking native window during startup.

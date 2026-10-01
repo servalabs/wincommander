@@ -10,6 +10,7 @@ interface SplashScreenProps {
     onComplete: () => void;
     isAppReady: boolean;
     startupError: string | null;
+    startupNotice?: string | null;
     onRetry: () => void;
 }
 
@@ -18,7 +19,7 @@ export default function SplashScreen(props: SplashScreenProps) {
     const { theme } = useTheme();
     const reducedMotion = useMotionPreference() === 'reduced';
     const { companyLabel, productLabel } = getDisplayBranding(appSettings);
-    const { onComplete, isAppReady, startupError, onRetry } = props;
+    const { onComplete, isAppReady, startupError, startupNotice = null, onRetry } = props;
 
     useEffect(() => {
         if (appSettings) cacheStartupBranding({ companyLabel, productLabel });
@@ -26,11 +27,11 @@ export default function SplashScreen(props: SplashScreenProps) {
 
     useEffect(() => {
         showStartupAnimation({
-            onComplete, isAppReady, startupError, onRetry,
+            onComplete, isAppReady, startupError, startupNotice, onRetry,
             branding: { companyLabel, productLabel },
             isLight: theme === 'light', reducedMotion,
         });
-    }, [onComplete, isAppReady, startupError, onRetry, companyLabel, productLabel, theme, reducedMotion]);
+    }, [onComplete, isAppReady, startupError, startupNotice, onRetry, companyLabel, productLabel, theme, reducedMotion]);
 
     useEffect(() => hideStartupAnimation, []);
 
