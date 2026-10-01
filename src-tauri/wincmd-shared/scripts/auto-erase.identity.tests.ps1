@@ -56,6 +56,7 @@ function Get-ScheduledTaskInfo { param($TaskName, $TaskPath, $ErrorAction)
 }
 function Start-ScheduledTask { throw 'Migration must never execute a cleanup task' }
 function ConvertTo-AutoEraseTaskArgument { throw 'Current payload must not be rewritten during rename' }
+function ConvertTo-AutoEraseComparableTaskXml { param([xml]$Document) return $Document }
 
 $legacy = 'WinCommander_AutoErase_clipboard'
 $sid = 'S-1-5-21-10-20-30-1001'
@@ -85,6 +86,21 @@ New-Fixture $legacy $sid $true
 $result = Invoke-AutoEraseMigration
 Assert-True (-not $result.error -and $script:tasks[$newName].State -eq 'Ready') 'Enabled state was not restored'
 Assert-True ($script:mutations[-1] -eq "enable:$newName") 'Replacement must only enable after original deletion'
+
+foreach ($omit in @('Enabled', 'Settings')) {
+    $script:tasks = @{}; $script:mutations = @()
+    New-Fixture $legacy $sid $true
+    [xml]$sparse = $script:tasks[$legacy].Xml.Replace('<Task>', '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">')
+    if ($omit -eq 'Enabled') { [void]$sparse.Task.Settings.RemoveChild($sparse.Task.Settings.SelectSingleNode('*[local-name()="Enabled"]')) }
+    else { [void]$sparse.Task.RemoveChild($sparse.Task.SelectSingleNode('*[local-name()="Settings"]')) }
+    Set-Fixture $legacy $sparse.OuterXml
+    $result = Invoke-AutoEraseMigration
+    Assert-True (-not $result.error) "Default-enabled task with omitted $omit must migrate: $($result.message)"
+    Assert-True ($script:tasks[$newName].State -eq 'Ready') "Omitted $omit must retain the Windows enabled default"
+    [xml]$migrated = $script:tasks[$newName].Xml
+    Assert-True ($migrated.Task.Settings.NamespaceURI -eq $migrated.Task.NamespaceURI) 'Created settings must use the task namespace'
+    Assert-True ($migrated.Task.Settings.SelectSingleNode('*[local-name()="Enabled"]').NamespaceURI -eq $migrated.Task.NamespaceURI) 'Created Enabled must use the task namespace'
+}
 
 $script:tasks = @{}; $script:mutations = @()
 New-Fixture $legacy

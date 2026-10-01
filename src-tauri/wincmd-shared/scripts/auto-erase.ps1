@@ -1108,6 +1108,39 @@ function Get-AutoEraseSchedules {
     } catch { @{ error = $true; message = "Failed to list auto-erase schedules: $($_.Exception.Message)" } }
 }
 
+# Task Scheduler omits default-valued nodes, including Settings/Enabled=true.
+# Use DOM nodes so absent settings and the task XML namespace are preserved.
+function Set-AutoEraseTaskXmlEnabled {
+    param([xml]$Document, [bool]$Value)
+    $root = $Document.DocumentElement
+    $settings = $root.SelectSingleNode('*[local-name()="Settings"]')
+    if ($null -eq $settings) {
+        $settings = $Document.CreateElement('Settings', $root.NamespaceURI)
+        [void]$root.AppendChild($settings)
+    }
+    $node = $settings.SelectSingleNode('*[local-name()="Enabled"]')
+    $previous = $true
+    if ($null -ne $node) {
+        $previous = [Xml.XmlConvert]::ToBoolean($node.InnerText)
+    } else {
+        $node = $Document.CreateElement('Enabled', $root.NamespaceURI)
+        [void]$settings.AppendChild($node)
+    }
+    $node.InnerText = [Xml.XmlConvert]::ToString($Value)
+    return $previous
+}
+
+# The Windows serializer expands defaults and reorders settings. Compare both
+# definitions through that same serializer, not their raw exported spelling.
+function ConvertTo-AutoEraseComparableTaskXml {
+    param([xml]$Document)
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    $definition = $service.NewTask(0)
+    $definition.XmlText = $Document.OuterXml
+    return [xml]$definition.XmlText
+}
+
 # Copy task XML instead of recreating schedules: dates, disabled state, selected
 # account, scope and settings belong to the user and survive a naming migration.
 function Invoke-AutoEraseMigration {
@@ -1148,24 +1181,25 @@ function Invoke-AutoEraseMigration {
                 $xml.Task.RegistrationInfo.Description = if ($task.Description -like 'WinCommander Auto-set scheduled wipe*') { "WinCommander Auto-set scheduled wipe v$revision" } else { "WinCommander scheduled wipe v$revision" }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
-            $enabled = [string]$xml.Task.Settings.Enabled
-            $xml.Task.Settings.Enabled = 'false'
+            $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false
+            $expected = ConvertTo-AutoEraseComparableTaskXml $xml
             # Register disabled so overdue or registration triggers cannot launch a
             # second wipe while the original task still exists.
-            $register = @{ TaskName = $identity.taskName; TaskPath = '\'; Xml = $xml.OuterXml; ErrorAction = 'Stop' }
+            $register = @{ TaskName = $identity.taskName; TaskPath = '\'; Xml = $expected.OuterXml; ErrorAction = 'Stop' }
             if (-not $renaming) { $register.Force = $true }
             Register-ScheduledTask @register | Out-Null
             try {
                 [xml]$readback = Export-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop
+                $readback = ConvertTo-AutoEraseComparableTaskXml $readback
                 foreach ($section in @('Actions', 'Triggers', 'Principals', 'Settings')) {
-                    if ($readback.Task.$section.OuterXml -ne $xml.Task.$section.OuterXml) {
+                    if ($readback.Task.$section.OuterXml -ne $expected.Task.$section.OuterXml) {
                         throw "The migrated task's $section could not be verified."
                     }
                 }
                 if ($renaming) {
                     Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
                 }
-                if ($enabled -ne 'false') { Enable-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop | Out-Null }
+                if ($enabled) { Enable-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop | Out-Null }
             } catch {
                 # Restore the exact original before removing a staged replacement.
                 Register-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Xml $originalXml -Force -ErrorAction Stop | Out-Null
