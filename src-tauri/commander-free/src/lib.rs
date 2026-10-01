@@ -1604,7 +1604,7 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 startup_trace::job_started(&app_handle, "autostart.integrity");
                 std::thread::spawn(move || {
-                    let succeeded = autostart::ensure_autostart_task().is_ok();
+                    let succeeded = autostart::ensure_autostart_task_sync().is_ok();
                     startup_trace::job_finished(&app_handle, "autostart.integrity", succeeded);
                 });
             }

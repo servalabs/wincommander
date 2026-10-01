@@ -125,6 +125,9 @@ launcher. Repair validates one sign-in trigger, no restart/repetition/catch-up
 policy, and no automatic triggers on the manual launcher. Scheduled handoff
 preserves background-start intent; a duplicate logon launch does not reveal or
 replace an existing window. Explicit manual launches still request focus.
+Native startup runs the integrity check once on a background thread. Autostart
+IPC operations use blocking workers rather than the window event thread; the
+renderer does not launch a duplicate startup repair.
 
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |

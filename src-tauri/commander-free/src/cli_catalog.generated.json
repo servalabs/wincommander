@@ -8201,9 +8201,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/App.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:enter_calculator_mode",

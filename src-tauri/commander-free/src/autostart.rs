@@ -785,7 +785,7 @@ fn run_autostart_mutation(
     let result = if first_attempt.status.code() == Some(ELEVATION_REQUIRED_EXIT_CODE)
         && elevation_is_deferred(operation, allow_elevation)
     {
-        // Setup and the legacy App effect both run this integrity pass. It
+        // Setup runs this integrity pass on its background worker. It
         // must never create a surprise or duplicate UAC prompt at launch or
         // logon. Explicit settings actions and the installer can repair the
         // task; the status command continues to report the actual routes.
@@ -827,7 +827,12 @@ fn run_autostart_mutation(
 /// or an explicit settings action, and never overrides an explicit opt-out.
 #[cfg(windows)]
 #[tauri::command]
-pub fn ensure_autostart_task() -> Result<(), String> {
+pub async fn ensure_autostart_task() -> Result<(), String> {
+    run_autostart_off_thread(ensure_autostart_task_sync).await
+}
+
+#[cfg(windows)]
+pub(crate) fn ensure_autostart_task_sync() -> Result<(), String> {
     // A development window must never repoint the installed machine's logon
     // task. The settings UI is meaningful only in packaged Windows builds.
     if cfg!(debug_assertions) {
@@ -840,22 +845,28 @@ pub fn ensure_autostart_task() -> Result<(), String> {
 /// deliberately changes marker 0 to 1 after creating and verifying the task.
 #[cfg(windows)]
 #[tauri::command]
-pub fn enable_autostart_task() -> Result<(), String> {
-    if cfg!(debug_assertions) {
-        return Ok(());
-    }
-    run_autostart_mutation(covered_identity_active(), AutostartOperation::Enable, true)
+pub async fn enable_autostart_task() -> Result<(), String> {
+    run_autostart_off_thread(|| {
+        if cfg!(debug_assertions) {
+            return Ok(());
+        }
+        run_autostart_mutation(covered_identity_active(), AutostartOperation::Enable, true)
+    })
+    .await
 }
 
 /// Reconcile the task name after an intentional covered-identity transition.
 /// This is still an integrity operation, so an explicit opt-out remains off.
 #[cfg(windows)]
 #[tauri::command]
-pub fn update_autostart_task_identity(covered: bool) -> Result<(), String> {
-    if cfg!(debug_assertions) {
-        return Ok(());
-    }
-    run_autostart_mutation(covered, AutostartOperation::Ensure, true)
+pub async fn update_autostart_task_identity(covered: bool) -> Result<(), String> {
+    run_autostart_off_thread(move || {
+        if cfg!(debug_assertions) {
+            return Ok(());
+        }
+        run_autostart_mutation(covered, AutostartOperation::Ensure, true)
+    })
+    .await
 }
 
 /// Explicit settings-toggle opt-out. The separate marker records the choice;
@@ -863,18 +874,35 @@ pub fn update_autostart_task_identity(covered: bool) -> Result<(), String> {
 /// reopen marker is removed rather than left disabled or stale.
 #[cfg(windows)]
 #[tauri::command]
-pub fn remove_autostart_task() -> Result<(), String> {
-    if cfg!(debug_assertions) {
-        return Ok(());
-    }
-    run_autostart_mutation(covered_identity_active(), AutostartOperation::Disable, true)
+pub async fn remove_autostart_task() -> Result<(), String> {
+    run_autostart_off_thread(|| {
+        if cfg!(debug_assertions) {
+            return Ok(());
+        }
+        run_autostart_mutation(covered_identity_active(), AutostartOperation::Disable, true)
+    })
+    .await
 }
 
 /// Reports actual automatic routes, even if a previous cleanup failed or the
 /// separate manual launcher needs repair. A preference alone cannot start the app.
 #[cfg(windows)]
 #[tauri::command]
-pub fn is_autostart_enabled() -> Result<bool, String> {
+pub async fn is_autostart_enabled() -> Result<bool, String> {
+    run_autostart_off_thread(is_autostart_enabled_sync).await
+}
+
+#[cfg(windows)]
+async fn run_autostart_off_thread<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("WinCommander autostart worker failed: {error}"))?
+}
+
+#[cfg(windows)]
+fn is_autostart_enabled_sync() -> Result<bool, String> {
     let script = build_autostart_script(covered_identity_active(), AutostartOperation::Status)?;
     let output = run_powershell(&script)?;
     if !output.status.success() {
@@ -929,6 +957,26 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn command_work_runs_off_the_caller_thread_and_preserves_errors() {
+        let caller = std::thread::current().id();
+        let worker = run_autostart_off_thread(|| Ok(std::thread::current().id()))
+            .await
+            .unwrap();
+        assert_ne!(caller, worker);
+        let result = run_autostart_off_thread(|| Err::<(), _>("scheduler denied".into())).await;
+        assert_eq!(result.unwrap_err(), "scheduler denied");
+    }
+
+    #[tokio::test]
+    async fn worker_failure_is_not_reported_as_success() {
+        let result = run_autostart_off_thread(|| -> Result<(), String> {
+            panic!("injected worker failure")
+        })
+        .await;
+        assert!(result.unwrap_err().contains("autostart worker failed"));
+    }
+
     #[test]
     fn absent_marker_defaults_on_but_a_legacy_disabled_task_migrates_to_off() {
         let script = build_autostart_script(false, AutostartOperation::Ensure).unwrap();
@@ -973,7 +1021,9 @@ mod tests {
         assert!(script.contains(
             "Remove-OwnedRunValues -Paths @(Get-UserRunPaths -RegistryRoot 'Registry::HKEY_CURRENT_USER')"
         ));
-        assert!(script.contains("Remove-OwnedStartupShortcuts -Roots @(Get-CurrentUserStartupRoots)"));
+        assert!(
+            script.contains("Remove-OwnedStartupShortcuts -Roots @(Get-CurrentUserStartupRoots)")
+        );
         assert!(script.contains("Remove-CurrentUserOwnedCompetingRoutes\n\n$preference"));
     }
 

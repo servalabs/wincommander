@@ -1382,39 +1382,6 @@ function AppContent({ splashDone, onSplashComplete }: {
     setSoundEnabled(appSettings?.app?.sounds?.enabled ?? true);
   }, [appSettings?.app?.sounds?.enabled]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      // Dev builds run from target/debug and need the Vite dev server, so a
-      // Run-key entry pointing at the dev exe can't start standalone — and it
-      // would clobber the installed app's autostart path with a broken one
-      // (this is exactly why silent startup "stopped working" while testing).
-      // Only register autostart from a packaged/installed build.
-      if (import.meta.env.DEV) {
-        console.info("[Autostart] dev build — skipping autostart registration");
-        return;
-      }
-      try {
-        // Machine-wide logon Scheduled Task (replaces the per-user HKCU Run
-        // key): fires for any user's logon in their interactive session and
-        // elevates without a UAC prompt for admins — required because the app
-        // is requireAdministrator. Idempotent and re-points at the current exe,
-        // so a moved portable exe re-binds on next launch; it also clears the
-        // legacy Run-key value so we don't double-register.
-        if (!cancelled) {
-          await invoke("ensure_autostart_task");
-        }
-      } catch (error) {
-        console.warn("[Autostart] Failed to enforce startup launch:", error);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   return (
     <MotionConfig reducedMotion={motionPref === "reduced" ? "always" : "user"}>
     <SearchProvider>
