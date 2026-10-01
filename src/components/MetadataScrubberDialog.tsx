@@ -519,9 +519,32 @@ export default function MetadataScrubberDialog({
       title="Share Safely — Metadata Scrubber"
       icon="clean"
       className={`wc-dialog ${theme === 'dark' ? Classes.DARK : ''}`}
-      style={{ width: 780, maxWidth: '96vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
+      // A report can contain dozens of cards. Give the dialog a real, bounded
+      // height once a report exists so its body is the *only* scroll surface.
+      // Previously the report body and the card grid both scrolled. In WebView2
+      // that nested pair could clip/repaint card contents after several files,
+      // and wheel input could appear to stop at the inner list's boundary.
+      style={{
+        width: 780,
+        maxWidth: '96vw',
+        maxHeight: '88vh',
+        height: report ? 'min(88vh, 920px)' : undefined,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
     >
-      <div className="wc-dialog-body" style={{ padding: 20, overflowY: 'auto', flex: 1, minHeight: 0 }}>
+      <div
+        className="wc-dialog-body custom-scrollbar"
+        style={{
+          padding: 20,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          flex: 1,
+          minHeight: 0,
+          overscrollBehavior: 'contain',
+        }}
+      >
         {engineKnown && !engineInstalled && (
           <ScrubberMissingBanner
             onInstall={handleInstall}
@@ -1752,17 +1775,15 @@ function FileCardList({ results }: { results: ScrubResult[] }) {
       </div>
 
       <div
-        className="custom-scrollbar"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          // Do not make this a second scrolling region. The dialog body owns
+          // scrolling for the whole report, so every file remains reachable
+          // with one continuous scrollbar regardless of card height.
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))',
           gap: 8,
-          maxHeight: results.length > 4 ? 560 : undefined,
-          overflowY: results.length > 4 ? 'auto' : undefined,
-          overflowX: 'hidden',
-          overscrollBehavior: 'contain',
-          paddingRight: results.length > 4 ? 4 : 0,
-          scrollbarGutter: 'stable',
+          alignContent: 'start',
+          minWidth: 0,
         }}
       >
         {results.map((result, index) => (

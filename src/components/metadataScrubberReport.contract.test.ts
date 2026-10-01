@@ -23,4 +23,19 @@ describe("metadata scrubber report wording", () => {
     expect(source).toContain("Location removed:");
     expect(source).toContain("Clean copy saved at:");
   });
+
+  test("keeps a large report on one continuous, responsive scroll surface", async () => {
+    const source = await Bun.file("src/components/MetadataScrubberDialog.tsx").text();
+    const fileCardList = source.slice(
+      source.indexOf("function FileCardList"),
+      source.indexOf("// ─────────────────────────────────────────────────────────────────────\n// GpsCoordList"),
+    );
+
+    expect(source).toContain("height: report ? 'min(88vh, 920px)' : undefined");
+    expect(source).toContain('className="wc-dialog-body custom-scrollbar"');
+    expect(source).toContain("overscrollBehavior: 'contain'");
+    expect(fileCardList).toContain("repeat(auto-fit, minmax(min(300px, 100%), 1fr))");
+    expect(fileCardList).not.toContain("overflowY:");
+    expect(fileCardList).not.toContain("maxHeight: results.length");
+  });
 });
