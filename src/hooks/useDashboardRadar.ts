@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useEffect, useState } from 'react';
 import { useAppState } from '../context/AppContext';
 import type { ScanReport } from '../components/startup/WizardAnimations';
-import { buildRadarReport, shouldProbeBrowserHardening } from '../lib/radarScan';
+import { buildRadarReport, shouldProbeBrowserHardening, type ServiceProfileStatus } from '../lib/radarScan';
 import { isModuleEnabled } from '../types/modules';
 import { getPersona } from '../types/settings';
 import {
@@ -36,6 +36,7 @@ export function useDashboardRadar({ scheduledWipesEnabled = false }: { scheduled
   } = useAppState();
   const { getAutoEraseSchedules } = useBackend();
   const [browserHardening, setBrowserHardening] = useState<InstalledBrowser[] | null>(null);
+  const [serviceProfile, setServiceProfile] = useState<ServiceProfileStatus | null>(null);
   const [autoEraseSchedules, setAutoEraseSchedules] = useState<DiskCleanupSchedule[] | undefined>();
   const [dashboardBlocklistStatus, setDashboardBlocklistStatus] = useState<BlocklistStatus | null>(
     cachedNetworkBlocklistStatus
@@ -45,6 +46,8 @@ export function useDashboardRadar({ scheduledWipesEnabled = false }: { scheduled
   // Network blocklist probe can be delayed/null and is optional for report build.
   const hasData = appSettings !== null;
   const probeBrowserHardening = shouldProbeBrowserHardening(appSettings);
+  const probeServiceProfile = Boolean(appSettings?.app.firstRunComplete && isModuleEnabled(appSettings?.app.modules, "tweaks"));
+  const serviceProfileRun = appSettings?.ideal?.tweaks?.maintenanceRuns?.services?.lastRunAt;
   const probeNetworkBlocklist = isModuleEnabled(appSettings?.app?.modules, "network");
   const probeAutoEraseSchedules = Boolean(
     scheduledWipesEnabled &&
@@ -59,6 +62,15 @@ export function useDashboardRadar({ scheduledWipesEnabled = false }: { scheduled
     appSettings?.current?.tweaks?.security?.edgeHardeningEnabled,
   ].join("|");
   const networkBlocklistFingerprint = appSettings?.current?.network?.hosts?.enabledBlocklists?.join("|") ?? "";
+
+  useEffect(() => {
+    if (!probeServiceProfile) { setServiceProfile(null); return; }
+    let cancelled = false;
+    void executeBackendCommand<ServiceProfileStatus>('Get-ServiceProfileStatus').then((result) => {
+      if (!cancelled) setServiceProfile(result.success ? (result.data ?? null) : null);
+    }).catch(() => { if (!cancelled) setServiceProfile(null); });
+    return () => { cancelled = true; };
+  }, [probeServiceProfile, serviceProfileRun]);
 
   useEffect(() => {
     if (cachedNetworkBlocklistStatus) {
@@ -140,9 +152,10 @@ export function useDashboardRadar({ scheduledWipesEnabled = false }: { scheduled
       systemInfo,
       browserHardening,
       autoEraseSchedules,
+      serviceProfile,
     });
   }, [
-    systemInfo, hasData, dashboardBlocklistStatus, appSettings, browserHardening, autoEraseSchedules
+    systemInfo, hasData, dashboardBlocklistStatus, appSettings, browserHardening, autoEraseSchedules, serviceProfile
   ]);
 
   const phase: DashboardRadar['phase'] = hasData ? 'complete' : 'scanning';

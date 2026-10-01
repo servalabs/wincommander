@@ -1884,6 +1884,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-DefenderExclusions" => Some("tweaks/security"),
         "Invoke-DiskCleanup" => Some("tweaks/maintenance"),
         "Set-ServicesManual" => Some("tweaks/maintenance"),
+        "Get-ServiceProfileStatus" => Some("tweaks/maintenance"),
         "Set-PowerPlan" => Some("tweaks/maintenance"),
 
         "Restart-Explorer" => Some("core/utils"),
@@ -2682,6 +2683,7 @@ pub fn list_all_commands() -> Vec<String> {
         "Restart-Explorer",
         "Invoke-DiskCleanup",
         "Set-ServicesManual",
+        "Get-ServiceProfileStatus",
         "Set-PowerPlan",
         "Disable-Telemetry",
         "Enable-Telemetry",

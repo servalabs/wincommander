@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix } from "./fixVerification";
+import { dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { getToggleById } from "@/registry";
 import type { ScanFinding } from "@/components/startup/WizardAnimations";
 
@@ -9,6 +9,13 @@ const expectRejection = async (operation: Promise<void>, message: string) => {
   const result = await operation.then(() => "unexpected success", error => String(error));
   expect(result).toContain(message);
 };
+
+test("engine install acknowledgements require a fresh exact dependency readback", async () => {
+  await expectRejection(verifyDependencyInstall("instantSearch", { success: true }, async () => ({ success: true, data: { dependencies: [{ id: "instantSearch", installed: false }] } })), "not detected");
+  await expectRejection(verifyDependencyInstall("instantSearch", { success: true, data: { success: false, message: "Download failed" } }, async () => { throw new Error("must not probe"); }), "Download failed");
+  await expectRejection(verifyDependencyInstall("instantSearch", { success: true }, async () => ({ success: false, error: "Status unavailable" })), "Status unavailable");
+  expect(await verifyDependencyInstall("instantSearch", { success: true }, async () => ({ success: true, data: { dependencies: [{ id: "instantSearch", installed: true }] } }))).toBeUndefined();
+});
 
 test("an acknowledgement cannot remove an issue without verified receipt and independent readback", async () => {
   let probes = 0;

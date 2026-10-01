@@ -47,7 +47,7 @@ import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showInfo, showSuccess } from "../../utils/toast";
 import { getMaintenanceFailureMessage } from "../../utils/maintenance";
-import { retainUnverifiedFindings, verifyDashboardToggleFix } from "./fixVerification";
+import { retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { useFindingFixAttempts } from "./useFindingFixAttempts";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
@@ -573,6 +573,7 @@ export default function DashboardPanel() {
         const res = ownsPackageOperation
           ? await install()
           : await runQueuedDependencyInstall(depId, install, () => showInfo(`Installing ${depId} after the current package operation finishes.`));
+        await verifyDependencyInstall(depId, res, () => executeBackendCommand('Get-DependencyStatus', { Force: true }));
         await refreshDependencies(true);
         return res;
       };

@@ -52,6 +52,9 @@ the backend and private component before execution.
 - Turning auto-start off removes the app's logon and elevated-launch tasks;
   turning it on recreates them as `SL-AS` and `SL-EL`. Updates preserve OFF.
 - Preview-first maintenance flows for supported cleanup categories.
+- Service Profile recommendations use current Windows service settings, not an
+  expiring run timestamp. Already-applied settings stay resolved across restarts;
+  changes and per-service failures remain actionable.
 - Guided Routine Hygiene previews an exact, test-locked cache allowlist and
   refuses bulk clear when any category is missing, busy, failed, or unscanned.
   Clears run sequentially and publish an authoritative post-action rescan.
@@ -66,6 +69,8 @@ the backend and private component before execution.
 ### Search and automation surface
 
 - Fast local filename search through the supported Everything integration.
+- Instant Search installation checks both Everything and its separate search CLI,
+  repairs missing components, and verifies their presence before reporting success.
 - Local keyword search inside supported document and text formats.
 - Selected VeraCrypt folders keep filename/content indexes inside their mounted
   volume. Existing indexes support read-only access; writable mounts reconcile

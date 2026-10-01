@@ -21,12 +21,19 @@ interface RadarBrowser {
   Hardened: boolean;
 }
 
+export interface ServiceProfileStatus {
+  applied: boolean;
+  checkedCount: number;
+  driftCount: number;
+}
+
 interface BuildRadarReportInput {
   appSettings: AppSettings;
   systemInfo?: RadarSystemInfo | null;
   networkBlocklistStatus?: RadarBlocklistStatus | null;
   browserHardening?: RadarBrowser[] | null;
   autoEraseSchedules?: AutoEraseScheduleSnapshot[];
+  serviceProfile?: ServiceProfileStatus | null;
 }
 
 const MAINTENANCE_STALE_DAYS = 15;
@@ -80,6 +87,7 @@ export function buildRadarReport({
   networkBlocklistStatus,
   browserHardening,
   autoEraseSchedules,
+  serviceProfile,
 }: BuildRadarReportInput): ScanReport {
   const findings: ScanFinding[] = [];
   const emittedIds = new Set<string>();
@@ -212,13 +220,13 @@ export function buildRadarReport({
   if (
     appSettings.app.firstRunComplete &&
     isModuleEnabled(appSettings.app.modules, "tweaks") &&
-    !isMaintenanceRunFresh(appSettings, "services")
+    serviceProfile && serviceProfile.checkedCount > 0 && !serviceProfile.applied
   ) {
     findings.push({
       id: "services-profile",
       category: "performance",
       label: "Service Profile",
-      impact: "Windows background services have not been optimized recently",
+      impact: `${serviceProfile.driftCount} Windows services differ from the recommended profile`,
       severity: "info",
       safeDefault: true,
     });

@@ -16,6 +16,23 @@ export function requiresObservedFix(toggleId: string): boolean {
   return Object.hasOwn(DASHBOARD_POLICY_FIELDS, toggleId);
 }
 
+export async function verifyDependencyInstall(
+  id: string,
+  result: FixReply,
+  readStatus: () => Promise<FixReply>,
+): Promise<void> {
+  const receipt = result.data as { success?: boolean; error?: boolean | string; message?: string } | null;
+  if (!result.success || receipt?.success === false || receipt?.error) {
+    throw new Error(result.error || receipt?.message || "Engine installation failed.");
+  }
+  const observed = await readStatus();
+  if (!observed.success) throw new Error(observed.error || "The engine installation could not be checked.");
+  const payload = observed.data as { dependencies?: { id: string; installed: boolean }[] } | null;
+  if (!payload?.dependencies?.some((dependency) => dependency.id === id && dependency.installed === true)) {
+    throw new Error("The required engine was not detected after installation. It has not been marked fixed. Refresh engines and retry.");
+  }
+}
+
 /** A command acknowledgement is not proof that the Windows policy persisted. */
 export async function verifyDashboardToggleFix(
   toggleId: string,

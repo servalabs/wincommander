@@ -137,10 +137,7 @@ function Set-PowerPlan {
 
 
 # Optimize system services to manual (Safe list)
-function Set-ServicesManual {
-    Assert-IsAdmin
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
+function Get-ServiceProfileTargets {
     # 1. Services to set to MANUAL (Start on demand)
     # KT: list deduped (case-insensitive); 'SNMPTRAP'/'SNMPTrap' was a single service.
     $manualServices = @(
@@ -169,28 +166,8 @@ function Set-ServicesManual {
         'workfolderssvc', 'wuauserv'
     ) | Sort-Object -Unique
 
-    $manualTouched = 0; $manualAlreadyOK = 0; $manualMissing = 0
-    $manualTouchedNames = New-Object System.Collections.Generic.List[string]
-    $manualFailed = New-Object System.Collections.Generic.List[hashtable]
-
-    foreach ($svcName in $manualServices) {
-        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if (-not $svc) { $manualMissing++; continue }
-        if ($svc.StartType -eq 'Manual') { $manualAlreadyOK++; continue }
-        try {
-            Set-Service -Name $svcName -StartupType Manual -ErrorAction Stop
-            $manualTouched++
-            $manualTouchedNames.Add($svcName)
-        }
-        catch {
-            $manualFailed.Add(@{ name = $svcName; error = $_.Exception.Message })
-        }
-    }
-
-    # 2. Services to DISABLE (Non-essential/Bloat)
-    # KT: removed bogus 'Telemetry' entry (no Windows service has that short name; DiagTrack is
-    # handled in the Privacy panel). 'NetBT' is intentionally aggressive — only safe in modern
-    # AD-free networks.
+    # DiagTrack is controlled by Privacy. NetBT is intentionally aggressive:
+    # only appropriate for modern networks that do not rely on legacy NetBIOS.
     $disableServices = @(
         'AppVClient', 'AssignedAccessManagerSvc', 'DialogBlockingService',
         'NetTcpPortSharing', 'RemoteAccess', 'RemoteRegistry',
@@ -205,6 +182,52 @@ function Set-ServicesManual {
         'MapsBroker',            # Downloaded Maps Manager
         'Fax'                    # Fax
     ) | Sort-Object -Unique
+    return @{ manual = $manualServices; disable = $disableServices }
+}
+
+function Get-ServiceProfileStatus {
+    $targets = Get-ServiceProfileTargets
+    $checked = 0
+    $drift = 0
+    # State, not the last button click, survives reinstalls and detects actual changes.
+    foreach ($mode in @('manual', 'disable')) {
+        foreach ($name in $targets[$mode]) {
+            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if (-not $service) { continue }
+            $checked++
+            $expected = if ($mode -eq 'manual') { 'Manual' } else { 'Disabled' }
+            if ($service.StartType -ne $expected -or ($mode -eq 'disable' -and $service.Status -ne 'Stopped')) { $drift++ }
+        }
+    }
+    return @{ applied = ($checked -gt 0 -and $drift -eq 0); checkedCount = $checked; driftCount = $drift }
+}
+
+function Set-ServicesManual {
+    Assert-IsAdmin
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $targets = Get-ServiceProfileTargets
+    $manualServices = $targets.manual
+    $disableServices = $targets.disable
+    $manualTouched = 0; $manualAlreadyOK = 0; $manualMissing = 0
+    $manualTouchedNames = New-Object System.Collections.Generic.List[string]
+    $manualFailed = New-Object System.Collections.Generic.List[hashtable]
+
+    foreach ($svcName in $manualServices) {
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if (-not $svc) { $manualMissing++; continue }
+        if ($svc.StartType -eq 'Manual') { $manualAlreadyOK++; continue }
+        try {
+            Set-Service -Name $svcName -StartupType Manual -ErrorAction Stop
+            if ((Get-Service -Name $svcName -ErrorAction Stop).StartType -ne 'Manual') {
+                throw 'Windows did not retain the Manual startup setting.'
+            }
+            $manualTouched++
+            $manualTouchedNames.Add($svcName)
+        }
+        catch {
+            $manualFailed.Add(@{ name = $svcName; error = $_.Exception.Message })
+        }
+    }
 
     $disableTouched = 0; $disableAlreadyOK = 0; $disableMissing = 0
     $disableTouchedNames = New-Object System.Collections.Generic.List[string]
@@ -222,6 +245,9 @@ function Set-ServicesManual {
         }
         try {
             Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
+            $actual = Get-Service -Name $svcName -ErrorAction Stop
+            if ($actual.StartType -ne 'Disabled') { throw 'Windows did not retain the Disabled startup setting.' }
+            if ($actual.Status -ne 'Stopped' -and -not $stopErr) { $stopErr = 'Windows still reports the service running.' }
             if ($stopErr) {
                 # Disable succeeded but stop failed — still counts as touched but record the warning.
                 $disableTouched++

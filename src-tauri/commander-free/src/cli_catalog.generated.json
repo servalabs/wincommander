@@ -4647,7 +4647,8 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/context/AppContext.tsx",
-        "src/hooks/useDependencies.ts"
+        "src/hooks/useDependencies.ts",
+        "src/panels/dashboard/index.tsx"
       ]
     },
     {
@@ -5427,6 +5428,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Get\u002dServiceProfileStatus",
+      "name": "Get\u002dServiceProfileStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useDashboardRadar.ts"
       ]
     },
     {

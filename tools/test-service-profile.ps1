@@ -26,6 +26,7 @@ function Set-Service {
         [string]$StartupType
     )
     if ($Name -eq 'AppReadiness') { throw 'Mocked access denied.' }
+    if ($Name -eq $script:noOpService) { return }
     $script:mockServices[$Name].StartType = $StartupType
     [void]$script:mockWrites.Add("$Name=$StartupType")
 }
@@ -54,3 +55,17 @@ if ($script:mockWrites.Count -ne 2 -or $script:mockStops.Count -ne 1) {
 }
 
 Write-Output 'Service Profile apply contract passed with mocked service state and a per-service failure.'
+
+$status = Get-ServiceProfileStatus
+if ($status.applied -or $status.driftCount -ne 1) { throw 'A partial apply must remain visible as service-profile drift.' }
+$script:mockServices.AppReadiness.StartType = 'Manual'
+$status = Get-ServiceProfileStatus
+if (-not $status.applied -or $status.driftCount -ne 0) { throw 'Already-correct service state must stay fixed without a saved run timestamp.' }
+$script:mockServices.AppMgmt.StartType = 'Automatic'
+if ((Get-ServiceProfileStatus).applied) { throw 'A Windows service change must make the profile actionable again.' }
+$script:noOpService = 'AppMgmt'
+$result = Set-ServicesManual
+if ($result.manual.failed.Count -ne 1 -or $result.manual.failed[0].name -ne 'AppMgmt') {
+    throw 'A successful setter that does not change Windows state must fail independent readback.'
+}
+Write-Output 'Service Profile readback passed for partial failure, missing history, and actual Windows drift.'

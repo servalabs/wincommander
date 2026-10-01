@@ -523,7 +523,7 @@ function Test-SystemCleanerInstalled {
     return @{ installed = $false; version = $null }
 }
 
-function Test-InstantSearchInstalled {
+function Find-EverythingSearchCli {
     $candidates = @(
         "$env:ProgramFiles\Everything\es.exe",
         "${env:ProgramFiles(x86)}\Everything\es.exe",
@@ -541,9 +541,8 @@ function Test-InstantSearchInstalled {
         if ($ev) { $candidates += "$ev\Everything\es.exe" }
     }
     foreach ($p in $candidates) {
-        if ($p -and (Test-Path $p)) {
-            $version = try { (Get-Item $p).VersionInfo.ProductVersion } catch { $null }
-            return @{ installed = $true; version = $version }
+        if ($p -and (Test-Path $p -PathType Leaf)) {
+            return $p
         }
     }
     # WinGet packages directory (Voidtools.Everything.Cli installs here)
@@ -559,8 +558,7 @@ function Test-InstantSearchInstalled {
             foreach ($d in $dirs) {
                 $hit = Get-ChildItem -Path $d.FullName -Filter "es.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($hit) {
-                    $version = try { $hit.VersionInfo.ProductVersion } catch { $null }
-                    return @{ installed = $true; version = $version }
+                    return $hit.FullName
                 }
             }
         }
@@ -569,10 +567,19 @@ function Test-InstantSearchInstalled {
     # %PATH% fallback — catches any install that added es.exe to PATH
     $found = Get-Command es.exe -ErrorAction SilentlyContinue
     if ($found) {
-        $version = try { (Get-Item $found.Source).VersionInfo.ProductVersion } catch { $null }
-        return @{ installed = $true; version = $version }
+        return $found.Source
     }
-    return @{ installed = $false; version = $null }
+    return $null
+}
+
+function Test-InstantSearchInstalled {
+    $cli = Find-EverythingSearchCli
+    $daemon = Get-EverythingExePath
+    $missing = @()
+    if (-not $cli) { $missing += 'Everything search CLI' }
+    if (-not $daemon) { $missing += 'Everything search engine' }
+    $version = if ($cli) { try { (Get-Item $cli).VersionInfo.ProductVersion } catch { $null } } else { $null }
+    return @{ installed = ($missing.Count -eq 0); version = $version; missing = $missing }
 }
 
 function Test-DiskHealthEngineInstalled {
@@ -1085,31 +1092,25 @@ function Install-InstantSearch {
     $status = Test-InstantSearchInstalled
     if ($status.installed) { return @{ success = $true; message = "Instant Search Engine already installed." } }
 
-    $wingetCmd = Resolve-WingetPath
-    if (-not $wingetCmd) { throw "Winget is required to install the Instant Search Engine." }
-
-    # Proactively sync sources — same robustness as Install-WingetApps to avoid -1978335138
-    Invoke-WingetSourceUpdate -WingetCmd $wingetCmd
-
-    $pkgId = 'voidtools.Everything'
-    & $wingetCmd install --id $pkgId --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
-    $code = $LASTEXITCODE
-
-    if ($code -ne 0 -and $code -ne -1978335212) {
-        if ($code -eq -1978335231) {
-            # Hash mismatch — retry with --ignore-security-hash (safe after source update)
-            & $wingetCmd install --id $pkgId --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
-            $retryCode = $LASTEXITCODE
-            if ($retryCode -ne 0 -and $retryCode -ne -1978335212) {
-                throw "Installer hash mismatch for $pkgId and retry also failed (exit code $retryCode)"
-            }
+    # Everything's main installer does not supply es.exe. Repair that missing
+    # component directly instead of force-reinstalling an already working app.
+    if (-not (Get-EverythingExePath)) {
+        $wingetCmd = Resolve-WingetPath
+        if (-not $wingetCmd) { throw "Winget is required to install the Instant Search Engine." }
+        Invoke-WingetSourceUpdate -WingetCmd $wingetCmd
+        $pkgId = 'voidtools.Everything'
+        & $wingetCmd install --id $pkgId --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity | Out-Null
+        $code = $LASTEXITCODE
+        if ($code -ne 0 -and $code -ne -1978335212) {
+            throw "Failed to install $pkgId (exit code $code). Refresh the package source and retry."
         }
-        else {
-            throw "Failed to install $pkgId (exit code $code)"
-        }
+        if (-not (Get-EverythingExePath)) { throw 'The Everything installer finished, but its search engine was not found. No successful install was confirmed.' }
     }
 
-    $cliPath = Install-EverythingSearchCli
+    $cliPath = Find-EverythingSearchCli
+    if (-not $cliPath) { $cliPath = Install-EverythingSearchCli }
+    $verified = Test-InstantSearchInstalled
+    if (-not $verified.installed) { throw "Instant Search is incomplete: $($verified.missing -join ', '). Refresh engines after repairing the missing component." }
     return @{ success = $true; message = "Instant Search Engine and CLI installed."; cliPath = $cliPath }
 }
 
@@ -1718,6 +1719,14 @@ function Get-DependencyStatus {
                 $cachedPowerShell.installed = [bool]$powerShellStatus.installed
                 $cachedPowerShell.version = $powerShellStatus.version
             }
+            # The engine and CLI can be changed independently outside this app.
+            $cachedSearch = @($cached.status | Where-Object { $_.id -eq 'instantSearch' }) | Select-Object -First 1
+            if ($cachedSearch) {
+                $searchStatus = Test-InstantSearchInstalled
+                $cachedSearch.installed = [bool]$searchStatus.installed
+                $cachedSearch.version = $searchStatus.version
+                $cachedSearch.missing = $searchStatus.missing
+            }
             $payload = @{ dependencies = $cached.status; cacheAgeSecs = $cached.cacheAgeSecs }
             $script:_depStatusCache     = $payload
             $script:_depStatusCacheTime = Get-Date
@@ -1828,7 +1837,7 @@ function Install-Dependency {
             default { throw "Unknown dependency: $Id" }
         }
 
-        if ($installResult.error) { return $installResult }
+        if ($installResult.error -or $installResult.success -eq $false) { return $installResult }
 
         $registry = Get-DependencyRegistry
         $depDef = $registry | Where-Object { $_.id -eq $Id }
@@ -1854,6 +1863,12 @@ function Install-Dependency {
         # Also mark running=true when the auto-start step succeeded so the running
         # gate in DependencyGate.tsx clears in the same round-trip.
         $mergeProps = @{ installed = $true }
+        if ($Id -eq 'instantSearch') {
+            $verifiedSearch = Test-InstantSearchInstalled
+            $mergeProps = @{ installed = [bool]$verifiedSearch.installed; version = $verifiedSearch.version; missing = $verifiedSearch.missing }
+            Update-DepStatusCacheEntry -depId $Id -mergeProps $mergeProps
+            if (-not $verifiedSearch.installed) { throw "Instant Search could not be verified after installation: $($verifiedSearch.missing -join ', ')." }
+        }
         if ($startResult -and $startResult.success) { $mergeProps['running'] = $true }
         Update-DepStatusCacheEntry -depId $Id -mergeProps $mergeProps
 
@@ -3076,7 +3091,7 @@ function Get-EverythingExePath {
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
     foreach ($path in $candidates) {
-        if (Test-Path $path -ErrorAction SilentlyContinue) { return $path }
+        if (Test-Path $path -PathType Leaf -ErrorAction SilentlyContinue) { return $path }
     }
     return $null
 }

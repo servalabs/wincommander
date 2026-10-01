@@ -21,6 +21,19 @@ function makeSettings(
 }
 
 describe("radar scan filtering", () => {
+  test("service profile follows Windows state instead of a lost or expired run timestamp", () => {
+    const settings = makeSettings({ tweaks: true });
+    settings.app.firstRunComplete = true;
+    settings.ideal = { tweaks: { maintenanceRuns: {} } };
+    const healthy = buildRadarReport({ appSettings: settings, serviceProfile: { applied: true, checkedCount: 4, driftCount: 0 } });
+    expect(healthy.findings.some((f) => f.id === "services-profile")).toBe(false);
+    settings.ideal.tweaks.maintenanceRuns.services = { lastRunAt: new Date().toISOString() };
+    const drift = buildRadarReport({ appSettings: settings, serviceProfile: { applied: false, checkedCount: 4, driftCount: 1 } });
+    expect(drift.findings.some((f) => f.id === "services-profile")).toBe(true);
+    const unknown = buildRadarReport({ appSettings: settings });
+    expect(unknown.findings.some((f) => f.id === "services-profile")).toBe(false);
+  });
+
   test("does not surface findings for disabled modules", () => {
     const report = buildRadarReport({
       appSettings: makeSettings({
