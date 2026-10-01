@@ -16,8 +16,9 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   clocks. Cached branding is used on the next launch. Error/retry pauses and
   resumes the same animation; it does not initialize a second canvas.
 - Packaged startup uses a bundled stylesheet accepted by the release CSP.
-  The native window is revealed only after splash styles, artwork and fonts
-  load; animation clocks wait for that reveal. Suppressed launches stay hidden.
+  The native window is revealed after the splash DOM is committed; artwork,
+  fonts and animation frames do not gate visibility. Animation clocks wait for
+  the reveal acknowledgement. Suppressed launches stay hidden.
 - Settings hydrate from the local cache before background system probes.
   A failed initial read has one bounded recovery wait, then the splash offers
   Retry startup while the dashboard remains gated.
@@ -31,9 +32,28 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   dashboard does not repeat that scan. Automatic drive-health probing waits for
   30 seconds on the dashboard; recent app inventory is reused, and automatic
   inventory refresh is deferred for two minutes before idle scheduling.
-- Frequent live metrics share a bounded five-second native disk snapshot while
-  CPU and RAM stay live. Identity, licence, portable state, settings, and
-  mutation inputs are not cached in that snapshot.
+- Dashboard cards share one live-metrics request. Automatic panel polling waits
+  for startup completion, pauses while the document is hidden, and refreshes on
+  return. CPU/RAM, temperature, disk, process and SMART collection use separate
+  single-flight workers; a stalled disk query cannot hold up CPU/RAM or the
+  window event loop. Disk readings refresh at most once every five seconds.
+  Failed or pending probes retain their last reading with freshness status.
+  Metrics child processes have bounded execution/output and are stopped on
+  timeout. A blocked OS call retains its worker slot rather than spawning more
+  workers. Identity, licence, portable state, settings and mutation inputs are
+  not cached in those snapshots.
+- Settings readers use a committed snapshot while storage transactions run
+  behind a separate gate. Native full-object writes reject stale snapshots;
+  observers run outside both locks. Initial security settings load before window
+  setup with a bounded wait; failure leaves the interface closed without resetting
+  settings. Service settings work runs off pipe-I/O threads, with bounded queues
+  and independent per-account serialization using authenticated ownership.
+- Startup module loading has a bounded window-reveal acknowledgement wait.
+  Focus requests do not attach to another application's input queue or inject
+  keyboard input. Changing foreground applications must not gate initialization.
+- Sidecar admission, request writes and shutdown have bounded waits. Only requests
+  known not to have been sent may retry automatically; an interrupted write or
+  missing response is an unknown outcome, not permission to replay a mutation.
 - Serialized Vault service operations mark both lock acquisition and execution
   as blocking work while preserving the caller's Windows impersonation thread.
   Queued status reads must not starve the broker's pipe I/O or timeout timers.
@@ -155,3 +175,9 @@ Windows startup timing.
 constraints across dark, light, system and stale-cache themes. This detects
 runtime inline-style rejection that an unrestricted Vite test cannot detect.
 It does not replace launching the release EXE on a clean Windows machine.
+
+`tools/check-startup-reveal-budget.cjs` uses the same Playwright configuration
+against a Vite server (URL argument, default `http://127.0.0.1:1438`). It leaves
+the native reveal reply unresolved and checks that application module loading
+continues while another browser page accepts input. This verifies bootstrap
+timeout handling, not Windows foreground activation or multi-session behavior.
