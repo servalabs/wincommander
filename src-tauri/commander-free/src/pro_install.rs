@@ -1470,7 +1470,7 @@ async fn install_pro_binary_machine(
         return Err(error);
     }
     let _maintenance = update_guard::Maintenance::begin(&install_path).await?;
-    crate::sidecar::close_pro_session().await;
+    crate::sidecar::drain_pro_sessions_for_update(&_maintenance).await;
     if install_path.exists() {
         let target = install_path.clone();
         tokio::task::spawn_blocking(move || stop_running_pro_at_path(&target))

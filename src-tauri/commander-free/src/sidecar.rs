@@ -2041,6 +2041,19 @@ fn test_dispatch_allows(feature_id: &str) -> bool {
 /// not leave a user-owned Pro child behind.
 pub async fn close_pro_session() {
     shutdown_signal().send_replace(true);
+    drain_pro_sessions_bounded().await;
+}
+
+/// Replacement is temporary: the maintenance lease blocks new work across
+/// sessions until either the update commits or the previous image is retained.
+/// Never clear the permanent shutdown signal if the app is also quitting.
+pub(crate) async fn drain_pro_sessions_for_update(
+    _maintenance: &crate::pro_install::update_guard::Maintenance,
+) {
+    drain_pro_sessions_bounded().await;
+}
+
+async fn drain_pro_sessions_bounded() {
     if timeout(Duration::from_secs(10), close_pro_session_inner()).await.is_err() {
         crate::log_message("warn", "[Sidecar] shutdown deadline reached");
     }
@@ -2075,6 +2088,48 @@ async fn close_pro_session_inner() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn update_drain_keeps_dispatch_available_after_success_or_failure() {
+        let directory = std::env::temp_dir().join(format!("pro-drain-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let target = directory.join("pro.exe");
+        let marker = target.with_extension("maintenance");
+        std::fs::write(&target, b"previous image").unwrap();
+        assert!(!*shutdown_signal().borrow());
+        for commit in [false, true] {
+            let outcome: Result<(), &str> = async {
+                let maintenance = crate::pro_install::update_guard::Maintenance::begin(&target)
+                    .await
+                    .unwrap();
+                drain_pro_sessions_for_update(&maintenance).await;
+                assert!(!*shutdown_signal().borrow(), "an update is not an app quit");
+                assert!(
+                    crate::pro_install::update_guard::operation_lease(Some(&target), &marker).is_err()
+                );
+                // Inject the installer's post-drain failure/commit boundary.
+                // Separate replacement tests exercise the real atomic swap.
+                if !commit {
+                    return Err("replacement denied; previous image preserved");
+                }
+                Ok(())
+            }
+            .await;
+            assert_eq!(outcome.is_ok(), commit);
+            assert_eq!(std::fs::read(&target).unwrap(), b"previous image");
+            let resumed = crate::pro_install::update_guard::operation_lease(Some(&target), &marker)
+                .expect("success and failure must both permit the next operation");
+            assert!(
+                deadlines::while_open(shutdown_signal().subscribe(), async { true })
+                    .await
+                    .unwrap()
+            );
+            drop(resumed);
+        }
+        std::fs::remove_file(target).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn reverse_forensic_request_accepts_only_fixed_categories_and_shape() {
