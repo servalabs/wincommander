@@ -139,11 +139,7 @@ fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override()
                         caller,
                         elevated,
                     );
-                    let allowed = if presentation == VaultPresentation::Machine {
-                        elevated
-                    } else {
-                        owner && session == 7
-                    };
+                    let allowed = owner && session == 7;
                     assert_eq!(result.state == VaultMountState::Unmounted, allowed);
                     let events = events.lock().unwrap();
                     assert_eq!(
@@ -153,11 +149,7 @@ fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override()
                     if !allowed {
                         assert_eq!(
                             result.reason,
-                            Some(if presentation == VaultPresentation::PerUser {
-                                VaultMountReason::MountStateUnknown
-                            } else {
-                                VaultMountReason::AdministratorRequired
-                            })
+                            Some(VaultMountReason::MountStateUnknown)
                         );
                         assert!(!serde_json::to_string(&result)
                             .unwrap()
@@ -197,7 +189,7 @@ fn dismount_test_policy_token(
 }
 
 #[test]
-fn dismount_policy_matrix_requires_shared_elevation_and_grant_on_both_routes() {
+fn dismount_policy_matrix_requires_grant_and_owner_or_shared_elevation_on_both_routes() {
     struct Resolver;
     impl PrincipalResolver for Resolver {
         fn resolve_sid(&self, name: &str) -> Result<String, crate::vault_access::VaultError> {
@@ -264,7 +256,7 @@ fn dismount_policy_matrix_requires_shared_elevation_and_grant_on_both_routes() {
                         };
                         let allowed = granted
                             && if presentation == VaultPresentation::Machine {
-                                elevated
+                                owner || elevated
                             } else {
                                 owner
                             };
@@ -361,11 +353,11 @@ fn inventory_prunes_only_proven_absent_slots_and_never_invents_empty_on_error() 
         rows[0].canonical_container_path.as_deref(),
         Some(r"D:\Vaults\example.hc")
     );
-    assert!(!rows[0].dismount_allowed);
+    assert!(rows[0].dismount_allowed);
     assert!(rows[0].browse_allowed);
     assert_eq!(
         rows[0].dismount_reason,
-        Some(VaultMountReason::AdministratorRequired)
+        None
     );
     broker.engine_snapshot = Some(|| Err("query unavailable".into()));
     assert_eq!(

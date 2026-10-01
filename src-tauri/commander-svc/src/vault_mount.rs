@@ -1427,8 +1427,10 @@ impl VaultMountBroker {
         if caller.caller_sid.is_empty() || caller.caller_session == 0 {
             return Err(VaultMountReason::MountStateUnknown);
         }
-        // Hide another account's private record even from administrators.
-        if mount.presentation == VaultPresentation::PerUser
+        // A personal mount belongs to its authenticated originating session,
+        // even when its drive letter is machine-visible. Visibility and an
+        // elevated token do not transfer ownership of another user's mount.
+        if (mount.personal || mount.presentation == VaultPresentation::PerUser)
             && !same_mount_owner(mount, caller.caller_session, caller.caller_sid)
         {
             return Err(VaultMountReason::MountStateUnknown);
@@ -1457,7 +1459,10 @@ impl VaultMountBroker {
                 }
             }
         }
-        if mount.presentation == VaultPresentation::Machine && !caller.caller_elevated {
+        if mount.presentation == VaultPresentation::Machine
+            && !same_mount_owner(mount, caller.caller_session, caller.caller_sid)
+            && !caller.caller_elevated
+        {
             return Err(VaultMountReason::AdministratorRequired);
         }
         Ok(())
@@ -2731,7 +2736,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_mount_projection_shares_machine_letters_and_keeps_legacy_private() {
+    fn personal_mount_projection_is_owner_scoped_even_for_machine_letters() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -2767,13 +2772,17 @@ mod tests {
         let other = broker
             .personal_mounts_for_caller(&store, std::ptr::null_mut(), 8, "S-1-5-21-other", true)
             .unwrap();
-        assert_eq!(other.len(), 1);
-        assert_eq!(other[0].internal_drive, 12);
-        assert!(other[0].cleanup_required);
+        assert!(other.is_empty());
         let owner = broker
             .personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", false)
             .unwrap();
         assert_eq!(owner.len(), 2);
+        assert!(owner.iter().all(|mount| mount.dismount_allowed));
+        assert!(owner.iter().all(|mount| mount.cleanup_required));
+        assert!(broker
+            .personal_mounts_for_caller(&store, std::ptr::null_mut(), 8, "S-1-5-21-owner", true)
+            .unwrap()
+            .is_empty());
         assert!(broker
             .personal_mounts_for_caller(&store, std::ptr::null_mut(), 0, "S-1-5-21-owner", true)
             .is_err());
@@ -3520,13 +3529,13 @@ mod tests {
             43,
             12,
             std::ptr::null_mut(),
-            11,
+            7,
             "S-1-5-21-owner",
-            true,
+            false,
         );
         assert_eq!(result.state, VaultMountState::Unmounted);
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
-        assert_eq!(events.lock().unwrap().recovered, vec![12]);
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
     }
 
     #[test]
