@@ -347,6 +347,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.mount"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
+        | "svc.vault.enroll_personal_syncthing"
         | "svc.vault.list_authorized"
         | "svc.vault.drive_letters"
         // A policy owner needs to load their own service-filtered fragment

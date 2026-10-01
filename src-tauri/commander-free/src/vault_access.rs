@@ -20,6 +20,7 @@ const APPLY_OWNER_FRAGMENT: &str = "svc.vault.apply_owner_fragment";
 const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
+const ENROLL_PERSONAL_SYNCTHING: &str = "svc.vault.enroll_personal_syncthing";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const DRIVE_LETTERS: &str = "svc.vault.drive_letters";
 const LIST_PRINCIPALS: &str = "svc.vault.list_principals";
@@ -491,6 +492,28 @@ pub async fn vault_unmount_entry(
     result
 }
 
+/// Explicitly enrols a child folder of the caller's mounted personal Vault.
+/// The service resolves the actual owner/session/slot; the renderer supplies
+/// only the selected current slot and a relative child directory.
+#[tauri::command]
+pub async fn vault_enroll_personal_syncthing(
+    internal_drive: u8,
+    relative_path: String,
+) -> Result<Value, String> {
+    if internal_drive > 25 || relative_path.len() > 240 {
+        return Err("personal sync enrollment request is invalid".to_string());
+    }
+    crate::svc_client::call(
+        ENROLL_PERSONAL_SYNCTHING,
+        serde_json::json!({
+            "personal": true,
+            "internal_drive": internal_drive,
+            "relative_path": relative_path,
+        }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
@@ -624,6 +647,7 @@ mod tests {
         );
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
+        assert_eq!(ENROLL_PERSONAL_SYNCTHING, "svc.vault.enroll_personal_syncthing");
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
         assert_eq!(DRIVE_LETTERS, "svc.vault.drive_letters");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");

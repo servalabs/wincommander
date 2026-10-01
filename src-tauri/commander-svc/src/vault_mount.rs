@@ -35,6 +35,11 @@ struct ActiveMount {
     policy_version: u64,
     #[serde(default)]
     personal: bool,
+    /// Set only after the owner-session adapter confirms that this exact
+    /// personal Vault has an enrolled Syncthing binding. It is intentionally
+    /// absent for machine/shared Vaults, which must have one explicit owner.
+    #[serde(default)]
+    syncthing_managed: bool,
     container_identity: String,
     access: wincmd_shared::vault_access::VaultAccess,
     mounted_at: u64,
@@ -123,6 +128,96 @@ enum CallerPresentationAttestation {
 }
 
 struct ProEnvelopeBroker;
+
+/// Calls the private, per-user adapter through the existing service-created
+/// Pro broker. The service owns target identity and never sees the API key or
+/// a caller-selected Syncthing endpoint.
+fn syncthing_lifecycle_call(
+    feature_id: &'static str,
+    operation_id: u64,
+    entry_id: &str,
+    mount: &ActiveMount,
+    caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+) -> Result<bool, VaultMountReason> {
+    #[cfg(test)]
+    {
+        let _ = (feature_id, operation_id, entry_id, mount, caller_token);
+        return Ok(false);
+    }
+    #[cfg(not(test))]
+    {
+    if !mount.personal || mount.presentation != VaultPresentation::PerUser {
+        return Ok(false);
+    }
+    let value = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+            crate::pro_broker::VaultCall {
+                request_id: operation_id,
+                target_session_id: mount.session_id,
+                caller_sid: &mount.caller_sid,
+                caller_token,
+                caller_authentication_id: None,
+                presentation: mount.presentation,
+                feature_id,
+                args: serde_json::json!({
+                    "operation_id": operation_id,
+                    "vault_entry_id": entry_id,
+                    "owner_sid": mount.caller_sid,
+                    "volume_identity": mount.container_identity,
+                    "drive_letter": mount.drive_letter,
+                    "target_session_id": mount.session_id,
+                }),
+            },
+        ))
+    })?;
+    Ok(value.get("managed").and_then(serde_json::Value::as_bool) == Some(true))
+    }
+}
+
+fn syncthing_enroll_call(
+    operation_id: u64,
+    entry_id: &str,
+    mount: &ActiveMount,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+    relative_path: &str,
+) -> Result<(), VaultMountReason> {
+    let mut hasher = Sha256::new();
+    hasher.update(entry_id.as_bytes());
+    let folder_id = format!(
+        "wcv-{}",
+        hasher
+            .finalize()[..12]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let value = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+            crate::pro_broker::VaultCall {
+                request_id: operation_id,
+                target_session_id: mount.session_id,
+                caller_sid: &mount.caller_sid,
+                caller_token: Some(caller_token),
+                caller_authentication_id: None,
+                presentation: mount.presentation,
+                feature_id: "vault.syncthing.enroll",
+                args: serde_json::json!({
+                    "operation_id": operation_id,
+                    "vault_entry_id": entry_id,
+                    "owner_sid": mount.caller_sid,
+                    "volume_identity": mount.container_identity,
+                    "drive_letter": mount.drive_letter,
+                    "target_session_id": mount.session_id,
+                    "folder_id": folder_id,
+                    "relative_path": relative_path,
+                }),
+            },
+        ))
+    })?;
+    (value.get("managed").and_then(serde_json::Value::as_bool) == Some(true))
+        .then_some(())
+        .ok_or(VaultMountReason::BrokerRejected)
+}
 
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     fn mount(
@@ -230,6 +325,15 @@ fn per_user_presented_drive_letter(
     drive_letter: &str,
 ) -> Option<&str> {
     (presentation == VaultPresentation::PerUser).then_some(drive_letter)
+}
+
+fn valid_relative_sync_path(value: &str) -> bool {
+    let path = std::path::Path::new(value);
+    !value.is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// Private input to the authenticated broker.  It is deliberately not serde
@@ -756,6 +860,7 @@ impl VaultMountBroker {
                         policy_id: "personal".into(),
                         policy_version: 1,
                         personal: true,
+                        syncthing_managed: false,
                         container_identity: record.container_identity.clone(),
                         access,
                         mounted_at,
@@ -797,6 +902,7 @@ impl VaultMountBroker {
             policy_id: "personal".into(),
             policy_version: 1,
             personal: true,
+            syncthing_managed: false,
             container_identity: record.container_identity.clone(),
             access,
             mounted_at,
@@ -813,6 +919,23 @@ impl VaultMountBroker {
             if let Ok(mut mounts) = self.active.lock() {
                 mounts.insert(entry_id.clone(), active.clone());
                 if self.persist_active(store, &mounts).is_ok() {
+                    // A missing binding is a no-op. Any adapter error is
+                    // conservative: retain the marker so the next normal
+                    // dismount cannot close a possibly active sync folder.
+                    active.syncthing_managed = syncthing_lifecycle_call(
+                        "vault.syncthing.resume",
+                        operation_id,
+                        &entry_id,
+                        &active,
+                        Some(caller_token),
+                    )
+                    .unwrap_or(true);
+                    if active.syncthing_managed {
+                        mounts.insert(entry_id.clone(), active.clone());
+                        if self.persist_active(store, &mounts).is_err() {
+                            return Err(VaultMountReason::DismountFailed);
+                        }
+                    }
                     return Ok((reply.drive_letter, reply.internal_drive, reply.acl_attested));
                 }
             }
@@ -1097,6 +1220,7 @@ impl VaultMountBroker {
                         policy_id,
                         policy_version,
                         personal: false,
+                        syncthing_managed: false,
                         container_identity,
                         access: effective_access,
                         mounted_at: std::time::SystemTime::now()
@@ -1131,6 +1255,7 @@ impl VaultMountBroker {
                     policy_id,
                     policy_version,
                     personal: false,
+                    syncthing_managed: false,
                     container_identity,
                     access: effective_access,
                     mounted_at,
@@ -1225,6 +1350,25 @@ impl VaultMountBroker {
                 reason: None,
             };
         };
+        if active.syncthing_managed {
+            let paused = syncthing_lifecycle_call(
+                "vault.syncthing.pause",
+                operation_id,
+                entry_id,
+                &active,
+                caller_token,
+            );
+            if !matches!(paused, Ok(true)) && caller_token.is_some() {
+                if let Ok(mut mounts) = self.active.lock() {
+                    mounts.insert(entry_id.to_owned(), active);
+                }
+                return failed(
+                    entry_id,
+                    Some(VaultPresentation::PerUser),
+                    VaultMountReason::BrokerUnavailable,
+                );
+            }
+        }
         let live = match self.live_mount_matches(&active) {
             Ok(live) => live,
             Err(reason) => {
@@ -1252,8 +1396,17 @@ impl VaultMountBroker {
                 .is_err()
                 || self
                     .snapshot()
-                    .map_or(true, |slots| slots.contains_key(&active.internal_drive)))
+                .map_or(true, |slots| slots.contains_key(&active.internal_drive)))
         {
+            if active.syncthing_managed {
+                let _ = syncthing_lifecycle_call(
+                    "vault.syncthing.resume",
+                    operation_id,
+                    entry_id,
+                    &active,
+                    caller_token,
+                );
+            }
             if let Ok(mut mounts) = self.active.lock() {
                 mounts.insert(entry_id.to_owned(), active.clone());
             }
@@ -1513,6 +1666,61 @@ impl VaultMountBroker {
                 entry_id: synthetic_entry_id,
                 ..result
             }
+        })
+    }
+
+    /// Enrols one child directory of an already-mounted personal Vault. The
+    /// service supplies the stable entry, owner and mounted identity; Pro only
+    /// creates/controls the owner-session profile selected by those facts.
+    pub(crate) fn enroll_personal_syncthing(
+        &self,
+        store: &VaultAccessStore,
+        operation_id: u64,
+        internal_drive: u8,
+        relative_path: &str,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        caller_session: u32,
+        caller_sid: &str,
+    ) -> Result<(), VaultMountReason> {
+        if !valid_relative_sync_path(relative_path) {
+            return Err(VaultMountReason::InvalidRequest);
+        }
+        self.with_exclusive_operation(|| {
+            let (entry_id, active) = self
+                .active
+                .lock()
+                .ok()
+                .and_then(|mounts| {
+                    mounts
+                        .iter()
+                        .find(|(_, mount)| mount.internal_drive == internal_drive)
+                        .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
+                })
+                .ok_or(VaultMountReason::MountStateUnknown)?;
+            if !active.personal
+                || active.presentation != VaultPresentation::PerUser
+                || !same_mount_owner(&active, caller_session, caller_sid)
+                || !self.live_mount_matches(&active)?
+            {
+                return Err(VaultMountReason::NotAuthorized);
+            }
+            syncthing_enroll_call(operation_id, &entry_id, &active, caller_token, relative_path)?;
+            let resumed = syncthing_lifecycle_call(
+                "vault.syncthing.resume",
+                operation_id,
+                &entry_id,
+                &active,
+                Some(caller_token),
+            )?;
+            if !resumed {
+                return Err(VaultMountReason::BrokerRejected);
+            }
+            let mut updated = active;
+            updated.syncthing_managed = true;
+            let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
+            mounts.insert(entry_id, updated);
+            self.persist_active(store, &mounts)
+                .map_err(|_| VaultMountReason::DismountFailed)
         })
     }
 
@@ -2616,6 +2824,7 @@ mod tests {
             policy_id: "policy".into(),
             policy_version: 1,
             personal: false,
+            syncthing_managed: false,
             container_identity: "identity".into(),
             access: wincmd_shared::vault_access::VaultAccess::Write,
             mounted_at: 1,

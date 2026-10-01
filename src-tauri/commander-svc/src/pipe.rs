@@ -688,6 +688,13 @@ async fn dispatch_verb(
         "svc.vault.dismount_personal" => {
             handle_personal_vault_dismount(request_id, vault_access, vault_mount, args, peer)
         }
+        "svc.vault.enroll_personal_syncthing" => handle_personal_vault_syncthing_enroll(
+            request_id,
+            vault_access,
+            vault_mount,
+            args,
+            peer,
+        ),
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
                 handle_personal_vault_list(vault_access, vault_mount, &args, peer)
@@ -2964,6 +2971,50 @@ fn handle_personal_vault_dismount(
     );
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonalVaultSyncthingEnrollmentRequest {
+    personal: bool,
+    internal_drive: u8,
+    relative_path: String,
+}
+
+fn handle_personal_vault_syncthing_enroll(
+    request_id: u64,
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let request: PersonalVaultSyncthingEnrollmentRequest = serde_json::from_value(args).map_err(|_| {
+        VerbError::new("vault_validation_failed", "personal sync enrollment request is invalid")
+    })?;
+    if !request.personal || request.internal_drive > 25 || request.relative_path.len() > 240 {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "personal sync enrollment request is invalid",
+        ));
+    }
+    let peer = require_personal_mount_peer(peer)?;
+    vault_mount
+        .enroll_personal_syncthing(
+            vault_access,
+            request_id,
+            request.internal_drive,
+            &request.relative_path,
+            peer.token(),
+            peer.session_id(),
+            peer.caller_sid(),
+        )
+        .map_err(|reason| {
+            VerbError::new(
+                VaultMountBroker::personal_mount_failure_code(reason),
+                "personal sync enrollment could not be confirmed",
+            )
+        })?;
+    Ok(serde_json::json!({ "enabled": true }))
 }
 
 fn handle_vault_list_authorized(

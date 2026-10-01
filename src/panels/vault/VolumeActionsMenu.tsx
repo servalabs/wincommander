@@ -22,9 +22,10 @@ interface VolumeActionsMenuProps {
 }
 
 function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, statusError, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
-  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
+  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume, enablePersonalVaultSync } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
+  const [enrollingSync, setEnrollingSync] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [failure, setFailureMessage] = useState("");
   const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
@@ -95,6 +96,24 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     } catch (error) { setFailure(vaultOperationError(error, "open")); }
   };
 
+  const handleEnablePersonalSync = async () => {
+    if (internalDrive === undefined) return;
+    const relativePath = window.prompt("Folder inside this personal Vault to sync", "Sync");
+    if (relativePath === null) return;
+    setEnrollingSync(true);
+    setFailure("");
+    try {
+      await enablePersonalVaultSync(internalDrive, relativePath);
+      showSuccess(`Syncthing will sync ${driveLabel}\\${relativePath} while this personal Vault is mounted.`);
+    } catch (error) {
+      const message = "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
+      setFailure(message);
+      showError(message, undefined, { kind: "notification" });
+    } finally {
+      setEnrollingSync(false);
+    }
+  };
+
   return (
     <div className="vol-actions-group">
       <div className="flex items-center gap-1 flex-shrink-0">
@@ -122,6 +141,18 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </Tooltip>
 
       <TierGate tier="paid" featureLabel="Encrypted volumes">
+        <Tooltip content="Enable sync for a folder in this personal Vault" position="top">
+          <Button
+            icon="cloud-upload"
+            minimal
+            small
+            loading={enrollingSync}
+            disabled={!accessible || Boolean(statusError) || internalDrive === undefined}
+            onClick={handleEnablePersonalSync}
+            className="vol-inline-btn"
+            aria-label={`Enable Syncthing for a folder in ${driveLabel}`}
+          />
+        </Tooltip>
         <Tooltip content="Force dismount" position="top">
           <Button
             icon="eject"
