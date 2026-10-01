@@ -165,6 +165,12 @@ Windows behavior. Preserve original captures beside generated reports.
 
 ## Public measurement status
 
+The Windows client uses Tauri 2.12 and Tao 0.37 or newer for the upstream
+keyboard-event reentrancy correction. Keyboard message inspection must not
+re-enter the window callback while its keyboard-state mutex is held. This
+dependency requirement does not establish installed RDP/session-transition
+acceptance or a timing benchmark.
+
 No reproducible public baseline, device-class budget, or benchmark result is
 currently published. Treat responsiveness statements as design descriptions,
 not measured performance claims. This document owns that gap; it is not
