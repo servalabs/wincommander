@@ -102,7 +102,9 @@ pub(super) fn mount_existing_unit(number: u32) -> Result<bool> {
     if mount_owner()?.is_some() {
         bail!("R: became occupied before recovery");
     }
-    let mount_name = wide(OsStr::new("Global\\R:"));
+    // This service runs as LocalSystem; DefineDosDevice places R: in the
+    // global DOS device namespace for that account.
+    let mount_name = wide(OsStr::new("R:"));
     let target = wide(OsStr::new(&format!(r"\Device\ImDisk{number}")));
     if unsafe { DefineDosDeviceW(DDD_RAW_TARGET_PATH, mount_name.as_ptr(), target.as_ptr()) } == 0 {
         bail!("could not restore R: for ImDisk unit {number}");
