@@ -6,7 +6,7 @@
 
 ## Overview
 
-WinCommander is a Tauri v2 desktop app: a React/TypeScript frontend in a WebView2 window driving a Rust backend over Tauri IPC. The backend executes Windows operations through AES-256-GCM-encrypted PowerShell modules decrypted in memory per command. Its desktop executables are `wincommander-free.exe` (open-source primary, AGPL) and `wincommander-pro.exe` (paid sidecar, governed by the [WinCommander EULA](https://servalabs.com/eula)), which talk over a Windows named pipe. The normal Free setup is per-user and never installs a machine service or driver. `wincommander-svc.exe` is an explicit administrator-installed component for Fleet Vault authorization and mount lifecycle decisions, and the intended future owner of the endpoint control plane (fleet connection, desired/observed state, reconciliation) — those loops are declared but not yet implemented. A third crate, `wincmd-shared`, defines the pure-data IPC types both link; a fourth crate, `wincmd-search`, is the reusable content-search engine owned in-process by `commander-free`. Two more permissive crates, `fleet-proto` and `fleet-agent-core`, hold the fleet wire-protocol SSOT and the generic fleet-client loop respectively — both are shared with TuxCommander (and, for the wire contract, with the Android agent via a golden-vector conformance fixture), not WinCommander-specific. The user sees one window with every panel; paid rows render locked until a licence/trial entitlement is present.
+WinCommander is a Tauri v2 desktop app: a React/TypeScript frontend in a WebView2 window driving a Rust backend over Tauri IPC. The backend executes Windows operations through AES-256-GCM-encrypted PowerShell modules decrypted in memory per command. Its desktop executables are `wincommander-free.exe` (open-source primary, AGPL) and `wincommander-pro.exe` (paid sidecar, governed by the [WinCommander EULA](https://servalabs.com/eula)), which talk over a Windows named pipe. The normal NSIS setup is machine-wide and includes `wincommander-svc.exe` for SID-owned personal settings and Fleet Vault authorization and mount lifecycle decisions. The service is also the intended future owner of the endpoint control plane (fleet connection, desired/observed state, reconciliation) — those loops are declared but not yet implemented. A third crate, `wincmd-shared`, defines the pure-data IPC types both link; a fourth crate, `wincmd-search`, is the reusable content-search engine owned in-process by `commander-free`. Two more permissive crates, `fleet-proto` and `fleet-agent-core`, hold the fleet wire-protocol SSOT and the generic fleet-client loop respectively — both are shared with TuxCommander (and, for the wire contract, with the Android agent via a golden-vector conformance fixture), not WinCommander-specific. The user sees one window with every panel; paid rows render locked until a licence/trial entitlement is present.
 
 ```mermaid
 flowchart LR
@@ -18,7 +18,7 @@ flowchart LR
     direction TB
     FREE["wincommander-free.exe<br/>(commander-free, AGPL)<br/>UI · free tier · licence · broker<br/>asInvoker: caller token"]
     PRO["wincommander-pro.exe<br/>(commander-pro, paid)<br/>headless, paid-tier handlers"]
-    SVC["wincommander-svc.exe<br/>Optional administrator component<br/>Fleet Vault lifecycle + personal settings"]
+    SVC["wincommander-svc.exe<br/>Machine-wide service<br/>Fleet Vault lifecycle + personal settings"]
   end
 
   subgraph crates["Linked crates (no side effects)"]
@@ -312,11 +312,18 @@ Persistent settings state is local. Machine installations keep shared policy and
 gate/identity state under `%ProgramData%\WinCommander\`; a current-user
 installation retains its general store in that profile's LocalAppData. The
 settings scope tables separate machine policy from personal preferences.
-Where the current service is installed, personal preferences use SID-owned,
+The machine-wide NSIS setup includes the local service. Personal preferences use SID-owned,
 revision-checked records in `%ProgramData%\WinCommanderPersonalSettings\`, with
 restrictive ACLs and machine DPAPI. Logs, Privacy Shield quota and search state
 remain per-user. The source and settings UI own encryption, migration, key
 recovery and unavailable-service behavior.
+
+A temporary personal-settings session periodically retries an authenticated
+read. Recovery reloads the saved record before accepting further edits; it never
+replays a temporary snapshot over newer preferences. A locked secret envelope
+remains protected independently of ordinary preference saves. Free-only Tauri
+development prepares the same settings service, without requesting Pro or
+encrypted-volume driver preparation from the development synchronizer.
 
 - `store/settings.dat` — the machine partition of the settings tree, encoded with AES-256-GCM (`enc:v2:` authenticated scope; legacy `enc:v1:` remains readable). The desktop merges the personal partition in memory into `AppSettings`; flows and other sensitive personal fields retain a separate encrypted envelope inside the service's atomic record. Plaintext migration cleanup requires confirmed service-backed personal and machine persistence, a durable hash journal, committed-partition checks, and exclusive-handle source verification before removal. Older no-service fallback writes retain the plaintext and journal. Encrypted legacy originals remain preserved.
 - Licence cache (`%ProgramData%\WinCommander\license_cache.json`, machine-wide) — signed JWT envelope (`payload` + `signature`), `last_verified_at`, optional seat info; verified against the build-embedded Ed25519 pubkey, bound to `current_device_hash()` — now derived from motherboard UUID + disk serial via `Get-CimInstance` (not the removed `wmic`), memoised per process (`license.rs`).

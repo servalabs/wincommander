@@ -18,7 +18,7 @@ const PIPE_CONNECT_RETRY_DELAYS: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(150),
     std::time::Duration::from_millis(350),
 ];
-/// `list_authorized` and `capabilities` are read-only desktop startup probes.
+/// Vault listings and personal-settings reads are read-only startup probes.
 /// A SYSTEM-service restart can leave the pipe present while its peer identity
 /// or Hello session is still being replaced. These delays retry only before a
 /// request is written, so a Vault mutation is never replayed.
@@ -218,11 +218,12 @@ async fn call_via_with_timeout(
 fn retries_service_startup_handshake(feature_id: &str) -> bool {
     // Keep this deliberately narrower than the protocol's `ReadOnly` class:
     // mount/unmount are authorized as ReadOnly but still change Windows state.
-    // These two verbs only fetch startup/page state and have no mutation
+    // These verbs only fetch startup/page state and have no mutation
     // request to repeat.
     matches!(
         feature_id,
         "svc.vault.list_authorized" | "svc.vault.capabilities"
+            | wincmd_shared::personal_settings::READ_PERSONAL_SETTINGS_VERB
     )
 }
 
@@ -428,11 +429,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn only_read_only_vault_startup_probes_retry_the_handshake() {
+    fn only_read_only_startup_probes_retry_the_handshake() {
         assert!(retries_service_startup_handshake(
             "svc.vault.list_authorized"
         ));
         assert!(retries_service_startup_handshake("svc.vault.capabilities"));
+        assert!(retries_service_startup_handshake(
+            wincmd_shared::personal_settings::READ_PERSONAL_SETTINGS_VERB
+        ));
+        assert!(!retries_service_startup_handshake(
+            wincmd_shared::personal_settings::WRITE_PERSONAL_SETTINGS_VERB
+        ));
         assert!(!retries_service_startup_handshake("svc.vault.apply_policy"));
         assert!(!retries_service_startup_handshake("svc.vault.mount"));
         assert!(!retries_service_startup_handshake("svc.vault.unmount"));

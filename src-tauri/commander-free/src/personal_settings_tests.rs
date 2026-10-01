@@ -110,6 +110,89 @@ fn unavailable_legacy_key_without_service_allows_only_temporary_preferences() {
 }
 
 #[test]
+fn temporary_session_adopts_recovered_service_data_but_requires_a_full_reload() {
+    let (mut temporary, _) = load_with(
+        Err("service connection failed".into()),
+        true,
+        || panic!("migrated data must not fall back"),
+        || panic!("unused"),
+    )
+    .unwrap();
+    let result = super::recovery::recover_temporary_session(&mut temporary, || {
+        load_with(
+            Ok(record(Some(json!({"app":{"theme":"restored"}})))),
+            true,
+            || panic!("unused"),
+            || Ok(json!({})),
+        )
+    })
+    .unwrap();
+    assert_eq!(result, super::recovery::TemporaryRecovery::ReloadRequired);
+    assert_eq!(temporary.mode, Mode::Service);
+    assert_eq!(temporary.revision, 4);
+}
+
+#[test]
+fn temporary_session_with_locked_legacy_secrets_recovers_for_ordinary_preference_saves() {
+    let (mut temporary, _) = load_with(
+        Err("service connection failed".into()),
+        false,
+        || Err(unavailable_key()),
+        || panic!("unused"),
+    )
+    .unwrap();
+    let result = super::recovery::recover_temporary_session(&mut temporary, || {
+        load_with(
+            Ok(record(None)),
+            false,
+            || Err(unavailable_key()),
+            || panic!("unused"),
+        )
+    })
+    .unwrap();
+    assert_eq!(result, super::recovery::TemporaryRecovery::ReloadRequired);
+    assert_eq!(temporary.mode, Mode::Service);
+    assert!(temporary.safe_defaults && temporary.secrets_locked);
+    save_service_with(
+        &mut temporary,
+        &json!({"app":{"theme":"light"}}),
+        |_, _| panic!("ordinary settings must not replace locked secrets"),
+        |request| {
+            assert!(request.value[SECRET_ENVELOPE].is_null());
+            assert!(request.legacy_recovery_required);
+            Ok(PersonalSettingsRecord {
+                revision: 1,
+                value: Some(request.value),
+                legacy_recovery_required: true,
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(temporary.revision, 1);
+}
+
+#[test]
+fn temporary_session_does_not_recreate_a_missing_migrated_service_record() {
+    let (mut temporary, _) = load_with(
+        Err("service connection failed".into()),
+        true,
+        || panic!("migrated data must not fall back"),
+        || panic!("unused"),
+    )
+    .unwrap();
+    let result = super::recovery::recover_temporary_session(&mut temporary, || {
+        load_with(
+            Ok(record(None)),
+            true,
+            || panic!("migrated data must not fall back"),
+            || panic!("unused"),
+        )
+    });
+    assert!(result.is_err());
+    assert_eq!(temporary.mode, Mode::Temporary);
+}
+
+#[test]
 fn service_and_legacy_integrity_errors_never_trigger_a_reset() {
     for error in [
         "service rejected request: personal_settings_corrupt (invalid)",

@@ -15,6 +15,8 @@ use transport::*;
 #[cfg(test)]
 #[path = "personal_settings_atomic_tests.rs"]
 mod atomic_tests;
+#[path = "personal_settings_recovery.rs"]
+mod recovery;
 #[cfg(test)]
 #[path = "personal_settings_tests.rs"]
 mod tests;
@@ -78,9 +80,60 @@ fn publish_status(status: Status) {
     }
 }
 
+#[cfg(test)]
+pub(super) struct TemporarySessionTestGuard {
+    previous_session: Option<Session>,
+    previous_status: Status,
+}
+
+#[cfg(test)]
+impl Drop for TemporarySessionTestGuard {
+    fn drop(&mut self) {
+        if let Ok(mut session) = SESSION.lock() {
+            *session = self.previous_session.take();
+        }
+        publish_status(self.previous_status);
+    }
+}
+
+/// Test-only in-memory fixture for the reconnect boundary. It neither reads nor
+/// writes the user's settings and restores the prior native state on drop.
+#[cfg(test)]
+pub(super) fn replace_session_with_temporary_for_test() -> Result<TemporarySessionTestGuard, String>
+{
+    let previous_status = status();
+    let mut session = SESSION
+        .lock()
+        .map_err(|_| "Personal settings lock failed".to_string())?;
+    let previous_session = session.take();
+    *session = Some(Session {
+        mode: Mode::Temporary,
+        revision: 0,
+        legacy_overlay_pending_migration: false,
+        legacy_recovery_required: false,
+        secrets_locked: false,
+        secrets: json!({}),
+        protected_secrets: None,
+        safe_defaults: true,
+    });
+    publish_status(UNAVAILABLE_STATUS);
+    Ok(TemporarySessionTestGuard {
+        previous_session,
+        previous_status,
+    })
+}
+
 pub(super) fn automation_available() -> bool {
     let status = status();
     status.can_save && !status.recovery_required
+}
+
+pub(super) fn temporary_session_needs_refresh() -> bool {
+    recovery::temporary_session_needs_refresh()
+}
+
+pub(super) fn refresh_temporary_session_if_due() -> bool {
+    recovery::refresh_temporary_session_if_due()
 }
 
 pub(super) struct Loaded {
@@ -107,15 +160,7 @@ pub(super) fn load() -> Result<Loaded, String> {
     let mut session = SESSION
         .lock()
         .map_err(|_| "Personal settings lock failed".to_string())?;
-    let (state, value) = load_with(
-        read_service(),
-        has_migration_marker()?,
-        super::load_legacy_user_settings_overlay,
-        secrets::load,
-    )?;
-    if state.mode == Mode::Service && state.revision > 0 && !super::is_decoy_mode() {
-        mark_migrated()?;
-    }
+    let (state, value) = load_current_session()?;
     let loaded = Loaded {
         value,
         safe_defaults: state.safe_defaults,
@@ -125,6 +170,19 @@ pub(super) fn load() -> Result<Loaded, String> {
     publish_status(state.status());
     *session = Some(state);
     Ok(loaded)
+}
+
+fn load_current_session() -> Result<(Session, Option<Value>), String> {
+    let (state, value) = load_with(
+        read_service(),
+        has_migration_marker()?,
+        super::load_legacy_user_settings_overlay,
+        secrets::load,
+    )?;
+    if state.mode == Mode::Service && state.revision > 0 && !super::is_decoy_mode() {
+        mark_migrated()?;
+    }
+    Ok((state, value))
 }
 
 fn load_with(
@@ -243,7 +301,11 @@ fn load_with_open(
 
 pub(super) fn save(value: &Value) -> Result<bool, String> {
     let result = save_inner(value);
-    if result.is_err() {
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| !recovery::recovered_settings_reload_required(error))
+    {
         publish_status(UNAVAILABLE_STATUS);
     }
     result
@@ -257,7 +319,15 @@ fn save_inner(value: &Value) -> Result<bool, String> {
         .as_mut()
         .ok_or("Personal settings have not been loaded")?;
     if state.mode == Mode::Temporary {
-        return Err("Personal settings are temporary; restore or update the WinCommander service before saving".into());
+        match recovery::recover_temporary_session(state, load_current_session)? {
+            recovery::TemporaryRecovery::ReloadRequired => {
+                // Keep the published status temporary until settings.rs has
+                // invalidated its mixed snapshot and load() publishes the
+                // recovered authoritative one. Otherwise another reader
+                // could see writable service status beside temporary values.
+                return Err(recovery::recovered_settings_reload_error());
+            }
+        }
     }
     if state.mode == Mode::Legacy {
         let bytes = serde_json::to_vec(value).map_err(|_| "Could not encode personal settings")?;

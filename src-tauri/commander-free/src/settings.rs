@@ -2397,6 +2397,9 @@ pub(crate) use preload::preload_settings;
 #[cfg(test)]
 #[path = "settings_concurrency_tests.rs"]
 mod concurrency_tests;
+#[cfg(test)]
+#[path = "settings_live_personal_recovery_test.rs"]
+mod live_personal_recovery_test;
 
 fn generate_device_id() -> String {
     Uuid::new_v4().to_string()
@@ -3077,6 +3080,18 @@ pub async fn get_settings() -> Result<serde_json::Value, String> {
 }
 
 fn get_settings_sync() -> Result<serde_json::Value, String> {
+    // A temporary personal session can become available after the background
+    // service finishes starting. Keep the session replacement and cache
+    // invalidation in the same transaction as settings writes: a stale
+    // renderer snapshot must never save against a freshly recovered revision.
+    if !is_decoy_mode() && personal_settings::temporary_session_needs_refresh() {
+        let _transaction = SETTINGS_TRANSACTION_GATE
+            .lock()
+            .map_err(|_| "Settings transaction lock poisoned".to_string())?;
+        if personal_settings::refresh_temporary_session_if_due() {
+            invalidate_cache_locked();
+        }
+    }
     let settings = read_settings()?;
     let mut v = serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
     v["personalSettingsStatus"] = serde_json::to_value(personal_settings::status())
