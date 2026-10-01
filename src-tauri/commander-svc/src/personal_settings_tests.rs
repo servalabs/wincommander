@@ -23,38 +23,52 @@ fn write(
     revision: u64,
     value: serde_json::Value,
 ) -> StoreResult<PersonalSettingsRecord> {
-    let _lock = STORE_LOCK.lock().unwrap();
-    execute(
+    serialized(
         root,
+        sid,
         WRITE_PERSONAL_SETTINGS_VERB,
         json!({
             "expectedRevision": revision, "value": value, "legacyRecoveryRequired": false
         }),
-        sid,
     )
 }
 fn read(root: &Path, sid: &str) -> StoreResult<PersonalSettingsRecord> {
-    let _lock = STORE_LOCK.lock().unwrap();
-    execute(root, READ_PERSONAL_SETTINGS_VERB, json!({}), sid)
+    serialized(root, sid, READ_PERSONAL_SETTINGS_VERB, json!({}))
 }
 
-#[test]
-fn personal_settings_refuse_missing_peer_before_filesystem_access() {
+fn serialized(
+    root: &Path,
+    sid: &str,
+    verb: &'static str,
+    args: serde_json::Value,
+) -> StoreResult<PersonalSettingsRecord> {
+    let fixture_account = format!("{}:{sid}", root.display());
+    let root = root.to_owned();
+    let owner = sid.to_owned();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(scheduler().run(&fixture_account, move || execute(&root, verb, args, &owner)))
+}
+
+#[tokio::test]
+async fn personal_settings_refuse_missing_peer_before_filesystem_access() {
     assert_eq!(
-        handle(READ_PERSONAL_SETTINGS_VERB, json!({}), None),
+        handle(READ_PERSONAL_SETTINGS_VERB, json!({}), None).await,
         Err("personal_settings_unauthorized")
     );
     assert_eq!(
-        handle(WRITE_PERSONAL_SETTINGS_VERB, json!({}), None),
+        handle(WRITE_PERSONAL_SETTINGS_VERB, json!({}), None).await,
         Err("personal_settings_unauthorized")
     );
 }
 
 #[test]
-fn personal_settings_three_accounts_remain_separate_across_reloads() {
+fn personal_settings_eight_accounts_remain_separate_across_reloads() {
     let root = Arc::new(TestRoot::new());
-    let barrier = Arc::new(Barrier::new(3));
-    let workers: Vec<_> = (1..=3)
+    let barrier = Arc::new(Barrier::new(8));
+    let workers: Vec<_> = (1..=8)
         .map(|id| {
             let root = root.clone();
             let barrier = barrier.clone();
@@ -73,7 +87,7 @@ fn personal_settings_three_accounts_remain_separate_across_reloads() {
     for worker in workers {
         worker.join().unwrap();
     }
-    for id in 1..=3 {
+    for id in 1..=8 {
         assert_eq!(
             read(&root.0, &format!("S-1-5-21-1-2-3-{id}"))
                 .unwrap()
@@ -81,7 +95,7 @@ fn personal_settings_three_accounts_remain_separate_across_reloads() {
             Some(json!({"theme": id}))
         );
     }
-    assert!(read(&root.0, "S-1-5-21-1-2-3-4").unwrap().value.is_none());
+    assert!(read(&root.0, "S-1-5-21-1-2-3-9").unwrap().value.is_none());
 }
 
 #[test]
@@ -111,7 +125,6 @@ fn personal_settings_same_revision_has_exactly_one_winner() {
 #[test]
 fn personal_settings_recovery_notice_is_sticky() {
     let root = TestRoot::new();
-    let _lock = STORE_LOCK.lock().unwrap();
     execute(
         &root.0,
         WRITE_PERSONAL_SETTINGS_VERB,

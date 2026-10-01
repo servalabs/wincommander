@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,6 +15,8 @@ use zeroize::Zeroizing;
 
 #[path = "personal_settings_windows.rs"]
 mod platform;
+#[path = "personal_settings_scheduler.rs"]
+mod scheduler;
 #[cfg(test)]
 #[path = "personal_settings_tests.rs"]
 mod tests;
@@ -24,7 +26,10 @@ const UNAVAILABLE: &str = "personal_settings_unavailable";
 const INVALID: &str = "personal_settings_invalid";
 const CORRUPT: &str = "personal_settings_corrupt";
 const MAX_RECORD_BYTES: u64 = (MAX_PERSONAL_SETTINGS_BYTES + 64 * 1024) as u64;
-static STORE_LOCK: Mutex<()> = Mutex::new(());
+fn scheduler() -> &'static scheduler::Scheduler {
+    static SCHEDULER: OnceLock<scheduler::Scheduler> = OnceLock::new();
+    SCHEDULER.get_or_init(scheduler::Scheduler::new)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,7 +39,7 @@ struct StoredRecord {
     record: PersonalSettingsRecord,
 }
 
-pub(crate) fn handle(
+pub(crate) async fn handle(
     verb: &str,
     args: serde_json::Value,
     peer: Option<&crate::pipe::AuthenticatedPipePeer>,
@@ -42,13 +47,18 @@ pub(crate) fn handle(
     let sid = peer
         .map(|peer| peer.caller_sid())
         .filter(|sid| !sid.is_empty())
-        .ok_or("personal_settings_unauthorized")?;
-    // A single process-wide lock covers the read/compare/replace transaction,
-    // including calls from different sessions belonging to the same account.
-    let _lock = STORE_LOCK.lock().map_err(|_| UNAVAILABLE)?;
-    let root = platform::store_root()?;
-    let record = execute(&root, verb, args, sid)?;
-    serde_json::to_value(record).map_err(|_| UNAVAILABLE)
+        .ok_or("personal_settings_unauthorized")?
+        .to_owned();
+    let verb = verb.to_owned();
+    let owner = sid.clone();
+    // Only the captured peer supplies ownership; no token impersonation crosses threads.
+    scheduler()
+        .run(&sid, move || {
+            let root = platform::store_root()?;
+            let record = execute(&root, &verb, args, &owner)?;
+            serde_json::to_value(record).map_err(|_| UNAVAILABLE)
+        })
+        .await
 }
 
 fn execute(

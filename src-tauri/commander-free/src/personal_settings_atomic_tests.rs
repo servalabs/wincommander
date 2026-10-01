@@ -3,6 +3,50 @@ use super::tests::{record, unavailable_key};
 use super::*;
 
 #[test]
+fn committed_status_remains_readable_during_a_session_transaction() {
+    let _global = super::super::GLOBAL_STATE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let original = status();
+    let committed = Status {
+        mode: Mode::Service,
+        recovery_required: false,
+        can_save: true,
+    };
+    publish_status(committed);
+    let session = SESSION.lock().unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        send.send(status()).unwrap();
+    });
+    let observed = receive.recv_timeout(std::time::Duration::from_secs(1));
+    drop(session);
+    reader.join().unwrap();
+    publish_status(original);
+    assert_eq!(observed.unwrap(), committed);
+}
+
+#[test]
+fn failed_save_disables_automation_without_waiting_for_another_status_read() {
+    let _global = super::super::GLOBAL_STATE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let original_status = status();
+    let original_session = SESSION.lock().unwrap().take();
+    publish_status(Status {
+        mode: Mode::Service,
+        recovery_required: false,
+        can_save: true,
+    });
+    let result = save(&json!({}));
+    let available = automation_available();
+    *SESSION.lock().unwrap() = original_session;
+    publish_status(original_status);
+    assert!(result.is_err());
+    assert!(!available);
+}
+
+#[test]
 fn removing_a_key_during_an_open_session_cannot_replace_or_clear_protected_secrets() {
     for changed in [json!({"app":{"flowSigningSeedB64":"new-seed"}}), json!({})] {
         let (mut state, _) = load_with_open(

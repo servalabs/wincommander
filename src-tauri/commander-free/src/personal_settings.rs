@@ -21,6 +21,12 @@ mod tests;
 
 const SECRET_ENVELOPE: &str = "_personalSecrets";
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+const UNAVAILABLE_STATUS: Status = Status {
+    mode: Mode::Temporary,
+    recovery_required: false,
+    can_save: false,
+};
+static STATUS: Mutex<Status> = Mutex::new(UNAVAILABLE_STATUS);
 
 #[derive(Clone, Copy, Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -59,15 +65,16 @@ impl Session {
 }
 
 pub(super) fn status() -> Status {
-    SESSION
+    STATUS
         .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(Session::status))
-        .unwrap_or(Status {
-            mode: Mode::Temporary,
-            recovery_required: false,
-            can_save: false,
-        })
+        .map(|status| *status)
+        .unwrap_or(UNAVAILABLE_STATUS)
+}
+
+fn publish_status(status: Status) {
+    if let Ok(mut snapshot) = STATUS.lock() {
+        *snapshot = status;
+    }
 }
 
 pub(super) fn automation_available() -> bool {
@@ -91,6 +98,7 @@ fn key_unavailable(error: &str) -> bool {
 }
 
 pub(super) fn load() -> Result<Loaded, String> {
+    publish_status(UNAVAILABLE_STATUS);
     let mut session = SESSION
         .lock()
         .map_err(|_| "Personal settings lock failed".to_string())?;
@@ -108,6 +116,7 @@ pub(super) fn load() -> Result<Loaded, String> {
         safe_defaults: state.safe_defaults,
         service_backed: state.mode == Mode::Service && state.revision > 0,
     };
+    publish_status(state.status());
     *session = Some(state);
     Ok(loaded)
 }
@@ -220,6 +229,14 @@ fn load_with_open(
 }
 
 pub(super) fn save(value: &Value) -> Result<bool, String> {
+    let result = save_inner(value);
+    if result.is_err() {
+        publish_status(UNAVAILABLE_STATUS);
+    }
+    result
+}
+
+fn save_inner(value: &Value) -> Result<bool, String> {
     let mut guard = SESSION
         .lock()
         .map_err(|_| "Personal settings lock failed".to_string())?;

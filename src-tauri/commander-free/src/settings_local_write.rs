@@ -39,7 +39,7 @@ fn apply_with(
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,
     notify: impl FnOnce(&Value, &Value),
 ) -> Result<AppSettings, String> {
-    // Both the authorization snapshot and the write share the settings lock.
+    // Authorization and persistence share the writer transaction, not the snapshot lock.
     mutate_settings_with(|current| prepare(current, mutation), paid, persist, notify)
 }
 

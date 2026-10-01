@@ -597,6 +597,7 @@ async fn dispatch_verb(
         "svc.diagnostics.query" => handle_diagnostics_query(args, peer),
         "svc.personal_settings.read" | "svc.personal_settings.write" => {
             crate::personal_settings::handle(&feature_id, args, peer)
+                .await
                 .map_err(|kind| VerbError::new(kind, kind))
         }
 

@@ -285,6 +285,9 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    // Native full-object writers must prove which committed snapshot they edited.
+    #[serde(skip)]
+    snapshot_revision: Option<Uuid>,
     // ── Meta ──
     pub settings_version: u32,
     pub app_version: String,
@@ -2370,11 +2373,30 @@ fn default_merge_strategy() -> String {
 // ═══════════════════════════════════════════════════════════════════════
 
 static SETTINGS_CACHE: Mutex<Option<AppSettings>> = Mutex::new(None);
-// The startup theme read and the full React settings hydration can arrive at
-// the native process together.  A cold cache must be populated once: letting
-// both callers decrypt, migrate, and rewrite the stores concurrently makes a
-// normal logon look like a settings timeout on slower disks.
-static SETTINGS_INITIALIZATION_GATE: Mutex<()> = Mutex::new(());
+// Serialize persistence without making committed snapshot readers wait for I/O.
+static SETTINGS_TRANSACTION_GATE: Mutex<()> = Mutex::new(());
+
+/// Read only the last committed snapshot; never hydrate or contact the service.
+pub(crate) fn cached_settings() -> Option<AppSettings> {
+    SETTINGS_CACHE.lock().ok().and_then(|cache| cache.clone())
+}
+
+#[path = "settings_window_policy.rs"]
+mod window_policy;
+pub(crate) use window_policy::WindowPolicy;
+
+/// Last confirmed window-close policy survives an uncertain settings write.
+pub(crate) fn cached_window_policy() -> Option<WindowPolicy> {
+    window_policy::cached()
+}
+
+#[path = "settings_preload.rs"]
+mod preload;
+pub(crate) use preload::preload_settings;
+
+#[cfg(test)]
+#[path = "settings_concurrency_tests.rs"]
+mod concurrency_tests;
 
 fn generate_device_id() -> String {
     Uuid::new_v4().to_string()
@@ -2411,6 +2433,7 @@ fn get_app_version() -> String {
 /// Create default settings with a generated device ID.
 pub(crate) fn create_default_settings() -> AppSettings {
     AppSettings {
+        snapshot_revision: None,
         settings_version: SETTINGS_VERSION,
         app_version: get_app_version(),
         device_id: generate_device_id(),
@@ -2703,7 +2726,7 @@ pub fn read_settings() -> Result<AppSettings, String> {
 
         // Serialize only the cold path.  Recheck after waiting because another
         // startup caller may have populated the cache while this call waited.
-        let _initialization = SETTINGS_INITIALIZATION_GATE
+        let _transaction = SETTINGS_TRANSACTION_GATE
             .lock()
             .map_err(|_| "Settings initialization lock poisoned".to_string())?;
         if let Ok(guard) = SETTINGS_CACHE.lock() {
@@ -2738,9 +2761,10 @@ pub fn read_settings() -> Result<AppSettings, String> {
                 );
             }
         }
-        if let Ok(mut guard) = SETTINGS_CACHE.lock() {
-            *guard = Some(settings.clone());
-        }
+        settings.snapshot_revision = Some(Uuid::new_v4());
+        *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
+            Some(settings.clone());
+        window_policy::publish(&settings);
         crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
 
         Ok(settings)
@@ -2819,21 +2843,49 @@ fn machine_settings_changed(
 
 /// Write full settings (public API).
 pub fn write_settings(settings: &AppSettings) -> Result<(), String> {
-    crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
-    if let Err(error) = write_settings_internal(settings) {
+    write_settings_with(settings, write_settings_internal)
+}
+
+fn write_settings_with(
+    settings: &AppSettings,
+    persist: impl FnOnce(&AppSettings) -> Result<(), String>,
+) -> Result<(), String> {
+    let _transaction = SETTINGS_TRANSACTION_GATE
+        .lock()
+        .map_err(|_| "Settings transaction lock poisoned".to_string())?;
+    if is_decoy_mode() {
+        return Err("Settings are read-only in decoy mode.".to_string());
+    }
+    let current = cached_settings().ok_or("Settings changed; reload before saving")?;
+    if settings.snapshot_revision.is_none()
+        || settings.snapshot_revision != current.snapshot_revision
+    {
+        return Err("Settings changed; reload before saving".into());
+    }
+    if let Err(error) = persist(settings) {
         // A transport timeout or later machine-store failure can follow a committed personal CAS.
-        invalidate_cache();
+        invalidate_cache_locked();
         return Err(error);
     }
-    if let Ok(mut guard) = SETTINGS_CACHE.lock() {
-        *guard = Some(settings.clone());
-    }
+    let mut committed = settings.clone();
+    committed.snapshot_revision = Some(Uuid::new_v4());
+    *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
+        Some(committed);
+    window_policy::publish(settings);
+    crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
     Ok(())
 }
 
 /// Invalidate in-memory cache (force re-read from disk).
 #[allow(dead_code)]
 pub fn invalidate_cache() {
+    let _transaction = SETTINGS_TRANSACTION_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    invalidate_cache_locked();
+}
+
+fn invalidate_cache_locked() {
     if let Ok(mut guard) = SETTINGS_CACHE.lock() {
         *guard = None;
     }
@@ -2845,9 +2897,7 @@ pub fn invalidate_cache() {
 
 /// Apply a partial JSON patch to settings.
 /// Only provided fields are updated (merge semantics).
-/// KT: Holds the cache mutex for the entire read-modify-write cycle to prevent
-/// TOCTOU races. Without this, concurrent calls (e.g. user click + background probe)
-/// can overwrite each other's changes because both read the same snapshot.
+/// A separate transaction gate protects the entire read-modify-write cycle.
 pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
     // Device identity probes must not hold the shared settings mutex on cold boot.
     let paid = crate::license::has_paid_entitlement();
@@ -2875,21 +2925,25 @@ fn patch_settings_with(
     )
 }
 
-/// Keep authorization, candidate construction and persistence in one cache transaction.
+/// Keep authorization and persistence serialized while reads use the committed snapshot.
 fn mutate_settings_with(
     prepare: impl FnOnce(&AppSettings) -> Result<AppSettings, String>,
     paid: bool,
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,
     notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
 ) -> Result<AppSettings, String> {
+    let transaction = SETTINGS_TRANSACTION_GATE
+        .lock()
+        .map_err(|_| "Settings transaction lock poisoned".to_string())?;
     if is_decoy_mode() {
         return Err("Settings are read-only in decoy mode.".to_string());
     }
-    let mut cache = SETTINGS_CACHE
+    let cached = SETTINGS_CACHE
         .lock()
-        .map_err(|_| "Settings cache lock poisoned".to_string())?;
-    let settings = match cache.as_ref() {
-        Some(cached) => cached.clone(),
+        .map_err(|_| "Settings cache lock poisoned".to_string())?
+        .clone();
+    let settings = match cached {
+        Some(cached) => cached,
         None => load_settings_from_store()?,
     };
     let mut updated = prepare(&settings)?;
@@ -2901,12 +2955,15 @@ fn mutate_settings_with(
     };
     if let Err(error) = persist(&updated) {
         // An error is not proof that neither store committed; reread before another mutation.
-        *cache = None;
+        invalidate_cache_locked();
         return Err(error);
     }
-    *cache = Some(updated.clone());
-    drop(cache);
+    updated.snapshot_revision = Some(Uuid::new_v4());
+    *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
+        Some(updated.clone());
+    window_policy::publish(&updated);
     crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
+    drop(transaction);
     if let Some(old_json) = old_json {
         if let Ok(new_json) = serde_json::to_value(&updated) {
             notify(&old_json, &new_json);
