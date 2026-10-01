@@ -44,6 +44,13 @@ assert.deepEqual(result,{sameCanvas:true,sameAnimation:true,timeAdvanced:true,br
 console.log(JSON.stringify(result));
 const delayedPage = await browser.newPage();
 await delayedPage.route('**/__splash_continuity__', route => route.fulfill({contentType:'text/html', body:fixture}));
+// Exercise DOM-before-CSS ordering: a committed ring is not yet a CSS animation.
+await delayedPage.route('**/src/components/SplashScreen.css*', async route => {
+ if (route.request().resourceType() === 'stylesheet') {
+  await new Promise(resolve => setTimeout(resolve, 250));
+ }
+ await route.continue();
+});
 await delayedPage.goto(new URL('/__splash_continuity__', process.argv[2] || 'http://127.0.0.1:1435').href);
 await delayedPage.evaluate(async () => {
  window.completed = 0;
@@ -52,16 +59,15 @@ await delayedPage.evaluate(async () => {
   isLight:false,reducedMotion:false,isWindowVisible:false,isAppReady:true,startupError:null,
  onComplete(){window.completed++;window.completedAt=performance.now()},onRetry(){} };
  window.host.showStartupAnimation(window.props);
- // Await the actual committed splash DOM. animationRoot intentionally has no
- // native readiness helper: the renderer must be independently ready first.
- await new Promise(resolve => {
-  const waitForSplashDom = () => {
-   const shadow = document.querySelector('#startup-animation')?.shadowRoot;
-   if (shadow?.querySelector('canvas') && shadow.querySelector('.sp-ring-outer')) return resolve();
-   requestAnimationFrame(waitForSplashDom);
-  };
-  waitForSplashDom();
- });
+});
+// This measurement needs the animation, unlike native reveal, which must not
+// wait for CSS. Bound failures here instead of dereferencing an absent animation.
+await delayedPage.waitForFunction(() => {
+ const shadow = document.querySelector('#startup-animation')?.shadowRoot;
+ const animation = shadow?.querySelector('.sp-ring-outer')?.getAnimations()[0];
+ return Boolean(shadow?.querySelector('canvas') && animation && animation.currentTime !== null);
+}, {}, { timeout: 5000 });
+await delayedPage.evaluate(() => {
  const shadow = document.querySelector('#startup-animation').shadowRoot;
  window.canvas = shadow.querySelector('canvas');
  window.ringAnimation = shadow.querySelector('.sp-ring-outer').getAnimations()[0];
