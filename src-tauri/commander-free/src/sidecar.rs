@@ -1,5 +1,8 @@
 #[path = "sidecar_vault_contract.rs"]
 mod vault_contract;
+#[path = "sidecar_deadlines.rs"]
+mod deadlines;
+use deadlines::DispatchFailure;
 
 // src-tauri/src/sidecar.rs (commander-free crate)
 // ═══════════════════════════════════════════════════════════════════════
@@ -98,6 +101,14 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// (deadlock, blocked PowerShell child, OS swap-storm) as an error
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const SHUTDOWN_STAGE_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn shutdown_signal() -> &'static tokio::sync::watch::Sender<bool> {
+    static SIGNAL: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+    SIGNAL.get_or_init(|| tokio::sync::watch::channel(false).0)
+}
 /// Pro shares a 3-minute deadline across a scrub request's external metadata
 /// tools; leave 30 seconds for report/IPC completion. Scrub failures never use
 /// the generic retry path because Pro may already have changed staged files.
@@ -475,7 +486,7 @@ async fn respond_to_free_forensic_projection(
     request: Request,
     session_token: String,
     writer: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
-) {
+) -> bool {
     let request_id = request.request_id;
     let response = async {
         if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
@@ -501,13 +512,14 @@ async fn respond_to_free_forensic_projection(
     }
     .sign(&session_token);
 
-    let mut write = writer.lock().await;
-    if let Err(error) = write_envelope(&mut *write, &envelope).await {
+    if let Err(error) = deadlines::write_frame(&writer, &envelope, WRITE_TIMEOUT).await {
         crate::log_message(
             "warn",
             &format!("[ProReader] failed to reply to Free forensic request: {error}"),
         );
+        return false;
     }
+    true
 }
 
 /// Per-session reader loop. Reads framed envelopes off the pipe,
@@ -625,7 +637,9 @@ async fn reader_loop<R>(
                 // Box this arm because the local collector uses the backend
                 // runner, which also contains the ordinary Pro-dispatch path.
                 // The box breaks that otherwise-recursive async future type.
-                Box::pin(respond_to_free_forensic_projection(request, token, writer)).await;
+                if !Box::pin(respond_to_free_forensic_projection(request, token, writer)).await {
+                    break;
+                }
             }
             Envelope::Signed(_) => {
                 // verify_and_unwrap already produced a non-Signed
@@ -674,16 +688,15 @@ fn pooled_child_is_running(session: &mut ProSession) -> bool {
 async fn stop_pro_session(mut session: ProSession) {
     // A worker has no durable state. Sending Bye gives a cooperative Pro a
     // chance to close its pipe; kill_on_drop remains the final backstop.
-    {
-        let mut write = session.write.lock().await;
-        let _ = timeout(
-            Duration::from_secs(2),
-            write_envelope(&mut *write, &Envelope::Bye),
-        )
-        .await;
-    }
-    let _ = session.child.start_kill();
-    let _ = timeout(Duration::from_secs(2), session.child.wait()).await;
+    deadlines::shutdown(
+        deadlines::write_frame(&session.write, &Envelope::Bye, SHUTDOWN_STAGE_TIMEOUT),
+        || async {
+            let _ = session.child.start_kill();
+            let _ = session.child.wait().await;
+        },
+        SHUTDOWN_STAGE_TIMEOUT,
+    )
+    .await;
 }
 
 async fn stop_pro_sessions(sessions: Vec<ProSession>) {
@@ -751,8 +764,17 @@ fn start_pro_pool_reaper() {
 }
 
 async fn return_pro_session_to_pool(session: ProSession) {
+    if *shutdown_signal().borrow() {
+        stop_pro_session(session).await;
+        return;
+    }
     let excess = {
         let mut pool = pro_session_pool().lock().await;
+        if *shutdown_signal().borrow() {
+            drop(pool);
+            stop_pro_session(session).await;
+            return;
+        }
         pool.push(PooledProSession {
             session,
             idle_until: Instant::now() + PRO_POOL_IDLE_TIMEOUT,
@@ -1048,6 +1070,12 @@ async fn spawn_pro_session() -> Result<ProSession, String> {
 }
 
 async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, String> {
+    deadlines::while_open(shutdown_signal().subscribe(), spawn_pro_session_with_role_open(role))
+        .await
+        .unwrap_or_else(|| Err("Pro session is closing".to_string()))
+}
+
+async fn spawn_pro_session_with_role_open(role: SessionRole) -> Result<ProSession, String> {
     // Once a sidecar launch has completed successfully, preserve the pool's
     // parallel-start behavior for cascade work. The serialized path below is
     // needed only until the first confirmed launch or after a failure.
@@ -1068,7 +1096,8 @@ async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, St
     // when Windows' native loader immediately rejects the child, so this is
     // the only point where concurrent callers can be coalesced before the OS
     // presents duplicate loader dialogs.
-    let _spawn_guard = pro_spawn_gate().lock().await;
+    let _spawn_guard = deadlines::admit(pro_spawn_gate().lock(), ADMISSION_TIMEOUT, "launch")
+        .await?;
     if let Some(error) = current_pro_spawn_cooldown_error() {
         return Err(error);
     }
@@ -1387,7 +1416,16 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
 async fn dispatch_request(
     session: &mut ProSession,
     req: Request,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, DispatchFailure> {
+    deadlines::while_open(shutdown_signal().subscribe(), dispatch_request_open(session, req))
+        .await
+        .unwrap_or_else(|| Err(DispatchFailure::OutcomeUnknown("Pro session is closing".to_string())))
+}
+
+async fn dispatch_request_open(
+    session: &mut ProSession,
+    req: Request,
+) -> Result<serde_json::Value, DispatchFailure> {
     let request_id = req.request_id;
     let request_timeout = request_timeout_for(&req.feature_id);
     let (tx, rx) = oneshot::channel();
@@ -1397,15 +1435,12 @@ async fn dispatch_request(
     session.inflight.lock().await.insert(request_id, tx);
 
     let signed = Envelope::Request(req).sign(&session.session_token);
-    let write_result = {
-        let mut write = session.write.lock().await;
-        write_envelope(&mut *write, &signed).await
-    };
+    let write_result = deadlines::write_frame(&session.write, &signed, WRITE_TIMEOUT).await;
     if let Err(e) = write_result {
         // Take our sender back out — reader would otherwise hold a
         // dangling entry forever for this id (no reply will arrive).
         session.inflight.lock().await.remove(&request_id);
-        return Err(format!("write request: {}", e));
+        return Err(e);
     }
 
     let response = match request_timeout {
@@ -1413,13 +1448,19 @@ async fn dispatch_request(
             Ok(response) => response,
             Err(_) => {
                 session.inflight.lock().await.remove(&request_id);
-                return Err("Pro response timeout".to_string());
+                return Err(DispatchFailure::OutcomeUnknown("Pro response timeout".to_string()));
             }
         },
         None => rx.await,
     };
     match response {
-        Ok(result) => result,
+        Ok(result) => result.map_err(|error| {
+            if error.starts_with("[pro:") {
+                DispatchFailure::Rejected(error)
+            } else {
+                DispatchFailure::OutcomeUnknown(error)
+            }
+        }),
         Err(_recv_err) => {
             // Sender dropped — either reader exited (pipe closed, EOF,
             // protocol break) or someone else cleared the map. Either
@@ -1434,9 +1475,9 @@ async fn dispatch_request(
                 Ok(None) => "Pro is still running but its IPC pipe closed".to_string(),
                 Err(error) => format!("could not inspect Pro exit status: {error}"),
             };
-            Err(format!(
+            Err(DispatchFailure::OutcomeUnknown(format!(
                 "Pro reader exited before responding ({child_state})"
-            ))
+            )))
         }
     }
 }
@@ -1629,7 +1670,13 @@ async fn try_dispatch_via_agent(
     feature_id: &str,
     args: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, String>> {
-    let mut slot = agent_session_slot().lock().await;
+    let mut slot = match deadlines::admit(agent_session_slot().lock(), ADMISSION_TIMEOUT, "agent").await {
+        Ok(slot) => slot,
+        Err(error) => return Some(Err(error)),
+    };
+    if *shutdown_signal().borrow() {
+        return Some(Err("Pro session is closing".to_string()));
+    }
     let mut session = match slot.take() {
         Some(s) => s,
         None => match spawn_pro_session_with_role(SessionRole::FleetAgent).await {
@@ -1657,14 +1704,14 @@ async fn try_dispatch_via_agent(
                 *slot = Some(session); // keep the agent process alive for the heartbeat
                 return Some(Ok(v));
             }
-            Err(e) if e.starts_with("[pro:") => {
+            Err(DispatchFailure::Rejected(e)) => {
                 *slot = Some(session);
                 return Some(Err(e));
             }
             Err(transport_err) => {
                 // A one-time lab enrollment capability must not be replayed
                 // after any ambiguous transport failure or timeout.
-                if attempt == 0 && feature_id != "fleet_lab_join" {
+                if attempt == 0 && feature_id != "fleet_lab_join" && transport_err.may_retry() {
                     crate::log_message(
                         "warn",
                         &format!(
@@ -1683,6 +1730,8 @@ async fn try_dispatch_via_agent(
                 }
                 let prefix = if feature_id == "fleet_lab_join" {
                     "Fleet lab join failed without retry"
+                } else if !transport_err.may_retry() {
+                    "Pro operation outcome unknown; request was not replayed"
                 } else {
                     "agent transport error"
                 };
@@ -1796,10 +1845,12 @@ pub async fn dispatch_paid_command(
 
     // Cap concurrent dispatches at POOL_CAPACITY. The permit lives
     // until function exit; any extra dispatches wait FIFO at acquire().
-    let _permit = pool_semaphore()
-        .acquire()
-        .await
+    let _permit = deadlines::admit(pool_semaphore().acquire(), ADMISSION_TIMEOUT, "worker")
+        .await?
         .map_err(|e| format!("pool semaphore closed: {}", e))?;
+    if *shutdown_signal().borrow() {
+        return Err("Pro session is closing".to_string());
+    }
 
     // Try to reuse an idle session; spawn a fresh one if none free.
     // The pool lock is released BEFORE awaiting spawn — otherwise
@@ -1835,13 +1886,7 @@ pub async fn dispatch_paid_command(
         }
     };
 
-    // Auto-retry on transport error: Pro can exit (idle timeout, OS
-    // killed it, user updated the binary) while Free still holds a
-    // stale pipe handle. The first write returns "pipe is being
-    // closed (os error 232)". On that, drop the session, respawn,
-    // and dispatch a second time. Only transport errors retry —
-    // semantic errors from Pro ([pro:*]) propagate immediately so
-    // business-logic failures aren't masked by a "Pro went away" retry.
+    // Retry only before writing starts; a lost reply cannot prove no mutation occurred.
     for attempt in 0..2 {
         if let Err(error) = vault_contract::require_vault_runtime(feature_id, session.vault_runtime_version) {
             return_pro_session_to_pool(session).await;
@@ -1889,7 +1934,7 @@ pub async fn dispatch_paid_command(
                 return_pro_session_to_pool(session).await;
                 return Ok(v);
             }
-            Err(e) if e.starts_with("[pro:") => {
+            Err(DispatchFailure::Rejected(e)) => {
                 crate::log_message(
                     "warn",
                     &format!("[Sidecar] '{}' semantic error: {}", feature_id, e),
@@ -1920,11 +1965,16 @@ pub async fn dispatch_paid_command(
                 crate::log_message("error", &format!(
                     "[Sidecar] '{feature_id}' result unknown; mutation was not replayed: {transport_err}"
                 ));
-                return Err(if transport_err == "Pro response timeout" {
+                return Err(if transport_err.message() == "Pro response timeout" {
                     "vault_request_timeout"
                 } else {
                     "vault_operation_unconfirmed"
                 }.to_string());
+            }
+            Err(transport_err) if !transport_err.may_retry() => {
+                return Err(format!(
+                    "Pro operation outcome unknown; request was not replayed: {transport_err}"
+                ));
             }
             Err(transport_err) => {
                 // Transport-level failure — drop the broken session.
@@ -1990,12 +2040,29 @@ fn test_dispatch_allows(feature_id: &str) -> bool {
 /// ordinary pool and the dedicated Fleet worker so quitting WinCommander does
 /// not leave a user-owned Pro child behind.
 pub async fn close_pro_session() {
-    let mut pool = pro_session_pool().lock().await;
-    let sessions = std::mem::take(&mut *pool);
-    drop(pool);
+    shutdown_signal().send_replace(true);
+    if timeout(Duration::from_secs(10), close_pro_session_inner()).await.is_err() {
+        crate::log_message("warn", "[Sidecar] shutdown deadline reached");
+    }
+}
+
+async fn close_pro_session_inner() {
+    let sessions = match timeout(SHUTDOWN_STAGE_TIMEOUT, pro_session_pool().lock()).await {
+        Ok(mut pool) => std::mem::take(&mut *pool),
+        Err(_) => {
+            crate::log_message("warn", "[Sidecar] worker shutdown admission timed out");
+            Vec::new()
+        }
+    };
     stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
 
-    let agent = agent_session_slot().lock().await.take();
+    let agent = match timeout(SHUTDOWN_STAGE_TIMEOUT, agent_session_slot().lock()).await {
+        Ok(mut slot) => slot.take(),
+        Err(_) => {
+            crate::log_message("warn", "[Sidecar] agent shutdown admission timed out");
+            None
+        }
+    };
     if let Some(agent) = agent {
         stop_pro_session(agent).await;
     }
