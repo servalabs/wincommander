@@ -1532,8 +1532,9 @@ const legacyActionCategories: LegacyCleanupCategory[] = [
     actionOnly: true,
     extractPreview: () => ({ count: -1, items: [] }),
   },
-  // Force SSD TRIM lives in OsRepairCard (Maintenance's old "Repair & hygiene"
-  // tab that used to host it is gone, 2026-07) — not one of these categories.
+  // Drive optimization lives in OsRepairCard.  Windows' one Optimize-Volume
+  // action chooses defrag for HDDs and ReTrim for SSD/NVMe volumes, so it is
+  // not a cleanup category or a second SSD-only action.
   {
     id: 'previousWindowsInstall',
     label: 'Previous Windows Install',

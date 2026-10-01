@@ -140,7 +140,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
   // Drive optimization is a one-time action and shares the main actions grid;
   // Windows repair remains in its own subsection below that grid.
-  test("Defrag and both SSD TRIM actions share the System Cleanup one-time action grid", async () => {
+  test("one Windows drive optimization action owns Defrag and SSD TRIM in the System Cleanup grid", async () => {
     const categories = await read("src/panels/cleanup/cleanupCategories.ts");
     const actionsMonitoring = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
     const scan = await read("src/panels/cleanup/useCleanupScan.ts");
@@ -156,10 +156,11 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain('from "../maintenance/OsRepairCard"');
     expect(panel).toContain('<OsRepairCard embedded group="disk" />');
     expect(panel).toContain('<OsRepairCard embedded group="repair" />');
-    expect(repair).toContain('key === "defrag" || key === "ssdTrim"');
+    expect(repair).toContain('key === "defrag"');
     expect(repair).toContain('group === "disk" ? isDiskAction : !isDiskAction');
-    expect(repair).toContain('label: "Defrag / TRIM"');
-    expect(repair).toContain('label: "Force SSD TRIM"');
+    expect(repair).toContain('label: "Optimize drives (Defrag / TRIM)"');
+    expect(repair).not.toContain('label: "Force SSD TRIM"');
+    expect(repair).not.toContain("invokeSSDTrim");
   });
 
   // Each of the four usability tiers renders through the same component,

@@ -759,8 +759,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         defenderHistory: clearDefenderHistory,
         virtualMemory: invokeVirtualMemoryPurge,
         unallocatedErase: invokeUnallocatedSpaceErase,
-        // Force SSD TRIM lives in OsRepairCard (Maintenance's old "Repair & hygiene"
-        // tab that used to host it is gone, 2026-07) — not dispatched through this map.
+        // Drive optimization is a single OsRepairCard action. Windows chooses
+        // defrag or ReTrim per volume, so no SSD-only cleanup action is
+        // dispatched through this map.
     };
 
     // Keep the card dispatcher in lockstep with cleanupCategories.ts. Most

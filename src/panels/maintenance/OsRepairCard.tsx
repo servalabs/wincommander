@@ -4,7 +4,6 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import useBackend from "../../hooks/useBackend";
-import TierGate from "../../components/shared/TierGate";
 import { useAppState } from "../../context/AppContext";
 import { runOperation } from "../../context/OperationContext";
 import { showSuccess } from "../../utils/toast";
@@ -24,12 +23,11 @@ import RunOnceButton from "../../components/cleanup/RunOnceButton";
 const REPAIR_ACTIONS = [
   { key: "repair", label: "System repair", operationLabel: "System Repair (SFC + DISM)", description: "Verify and restore Windows system files with SFC, then repair the component store with DISM.", icon: "build", tier: "free" },
   { key: "updateRepair", label: "Windows Update repair", operationLabel: "Windows Update Repair", description: "Reset update caches, services, Winsock, and proxy state, then re-run DISM and SFC.", icon: "automatic-updates", tier: "free" },
-  { key: "defrag", label: "Defrag / TRIM", operationLabel: "Defrag / Trim Drive", description: "Defragment mechanical drives; issue TRIM on solid-state drives. Windows picks the right operation per disk.", icon: "predictive-analysis", tier: "free" },
-  // Moved here from System Cleanup per product decision (2026-07): this is the
-  // paid, Pro-sidecar forced retrim, distinct from the free per-volume
-  // Optimize-Volume pass above -- kept alongside it so both TRIM actions live
-  // in one place.
-  { key: "ssdTrim", label: "Force SSD TRIM", operationLabel: "Force SSD TRIM", description: "Force an immediate TRIM pass on every SSD through the Pro sidecar, bypassing Windows' own schedule.", icon: "flash", tier: "paid" },
+  // Windows' Optimize-Volume is the one supported maintenance route: it
+  // defragments fixed HDDs and issues ReTrim for SSD/NVMe volumes.  Keeping a
+  // separate "Force SSD TRIM" button made one maintenance operation look like
+  // two different actions, and could run both back-to-back.
+  { key: "defrag", label: "Optimize drives (Defrag / TRIM)", operationLabel: "Optimize drives (Defrag / TRIM)", description: "Defragment mechanical drives and issue TRIM on solid-state drives. Windows chooses the safe operation for each disk.", icon: "predictive-analysis", tier: "free" },
 ] as const;
 
 // A repair older than this reads as stale. Matches the ageing threshold the
@@ -43,7 +41,7 @@ interface OsRepairCardProps {
 
 export default function OsRepairCard({ embedded = false, group = "all" }: OsRepairCardProps) {
   const { appSettings, patchAppSettings } = useAppState();
-  const { invokeSystemRepair, invokeWindowsUpdateRepair, invokeDefrag, invokeSSDTrim } = useBackend();
+  const { invokeSystemRepair, invokeWindowsUpdateRepair, invokeDefrag } = useBackend();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
   const maintenanceRuns = useMemo(
@@ -92,11 +90,10 @@ export default function OsRepairCard({ embedded = false, group = "all" }: OsRepa
     repair: invokeSystemRepair,
     updateRepair: invokeWindowsUpdateRepair,
     defrag: invokeDefrag,
-    ssdTrim: invokeSSDTrim,
   };
 
   const visibleActions = REPAIR_ACTIONS.filter(({ key }) => {
-    const isDiskAction = key === "defrag" || key === "ssdTrim";
+    const isDiskAction = key === "defrag";
     return group === "all" || (group === "disk" ? isDiskAction : !isDiskAction);
   });
 
@@ -142,7 +139,7 @@ export default function OsRepairCard({ embedded = false, group = "all" }: OsRepa
           <p className={embedded ? "truncate text-[10.5px] text-[var(--color-text-muted)]" : "mt-1 text-xs text-[var(--text-dim)]"}>{action.description}</p>
           {embedded && <span className="block truncate text-[9px] text-[var(--color-text-muted)] opacity-70">{history.label}{history.runCount > 0 ? ` · ${history.runCount} run${history.runCount === 1 ? "" : "s"}` : ""}</span>}
         </div>
-        {action.tier === "paid" ? <TierGate tier="paid" featureLabel={action.label}>{runButton}</TierGate> : runButton}
+        {runButton}
       </div>
     );
   });
