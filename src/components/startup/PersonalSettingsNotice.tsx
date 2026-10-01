@@ -22,13 +22,13 @@ function DismissibleNotice({ status, onOpenSettings, onRetry }: NoticeProps & { 
   const [checkError, setCheckError] = useState<string | null>(null);
   if (dismissed) return null;
 
-  const canRetryService = status.mode === "temporary" && !status.canSave && Boolean(onRetry);
+  const canRetryService = Boolean(onRetry) && (status.recoveryRequired || (status.mode === "temporary" && !status.canSave));
   const retryService = () => {
     if (!onRetry || checking) return;
     setChecking(true);
     setCheckError(null);
     void onRetry()
-      .catch(() => setCheckError("WinCommander could not check the personal-settings service. Your preferences were not saved."))
+      .catch(() => setCheckError("WinCommander could not check access to your saved preferences and protected data. This check did not save preferences."))
       .finally(() => setChecking(false));
   };
 
@@ -44,7 +44,7 @@ function DismissibleNotice({ status, onOpenSettings, onRetry }: NoticeProps & { 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {onOpenSettings && <Button size="sm" onClick={onOpenSettings}>Review in Settings</Button>}
         {canRetryService && <Button size="sm" variant="outline" onClick={retryService} disabled={checking}>
-          {checking ? "Checking service…" : "Check service again"}
+          {checking ? "Checking saved data…" : status.recoveryRequired ? "Check access again" : "Check service again"}
         </Button>}
         <Button size="sm" variant="ghost" onClick={() => setDismissed(true)} aria-label="Dismiss personal data recovery notice for this session">Dismiss for now</Button>
         <span className="text-xs text-[var(--text-dim)]">Details remain in Settings. Dismissing does not unlock protected data.</span>
@@ -62,7 +62,7 @@ function RecoveryMessage({ status }: { status: PersonalSettingsStatus }) {
       </p>
       <p>
         {status.recoveryRequired
-          ? "Windows could not unlock some saved personal data. The original files are preserved. Unavailable preferences use safe defaults, and affected sensitive features stay locked until access is restored."
+          ? "Windows could not unlock some saved personal data. The original files are preserved. Available preferences remain usable. Unavailable preferences use safe defaults, and affected sensitive features stay locked until access is restored."
           : temporaryService
             ? "WinCommander could not reach this account's local personal-settings service, so it is using temporary preferences."
             : "WinCommander has opened with temporary personal defaults."}
@@ -81,7 +81,7 @@ export function PersonalSettingsRecoveryDetails({ status }: { status: PersonalSe
   return (
     <section aria-label="Personal data recovery" className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--text)]">
       <RecoveryMessage status={status} />
-      {status.recoveryRequired && <p className="mt-2">Use the Windows account that saved this data. Administrator permission alone cannot unlock another account's encrypted personal data. Keep the original files while restoring that account's access.</p>}
+      {status.recoveryRequired && <p className="mt-2">Use the Windows account that saved this data. An administrator password reset can leave older protected data locked even in the same account. Administrator permission alone cannot unlock another account's encrypted personal data. Recovery may require the original Windows encryption keys or a usable backup; WinCommander cannot recreate lost keys. Keep the original files while restoring access.</p>}
       <p className="mt-2 text-[var(--text-dim)]">After restoring access, check settings again. Saving new preferences or dismissing the banner does not recover the original data.</p>
     </section>
   );

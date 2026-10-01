@@ -47,6 +47,48 @@ fn failed_save_disables_automation_without_waiting_for_another_status_read() {
 }
 
 #[test]
+fn failed_save_does_not_forget_that_original_protected_data_is_still_locked() {
+    let _global = super::super::GLOBAL_STATE_TEST_LOCK
+        .lock().unwrap_or_else(|error| error.into_inner());
+    let _fixture = replace_session_with_temporary_for_test().unwrap();
+    *SESSION.lock().unwrap() = None;
+    publish_status(Status { mode: Mode::Service, recovery_required: true, can_save: true });
+    assert!(save(&json!({})).is_err());
+    assert_eq!(status().mode, Mode::Temporary);
+    assert!(status().recovery_required);
+    assert!(!automation_available());
+}
+
+#[test]
+fn password_reset_defaults_round_trip_ordinary_preferences_without_replacing_lost_secrets() {
+    let (mut state, _) = load_with(
+        Ok(record(None)), false, || Err(unavailable_key()), || panic!("unused"),
+    ).unwrap();
+    let mut settings = super::super::create_default_settings();
+    super::super::apply_personal_recovery_defaults(&mut settings);
+    let (_, mut user) = super::super::split_settings_value(serde_json::to_value(settings).unwrap()).unwrap();
+    user["app"]["theme"] = json!("light");
+    let mut committed = None;
+    save_service_with(&mut state, &user,
+        |_, _| panic!("must not create or replace the lost key"),
+        |request| {
+            assert!(request.legacy_recovery_required);
+            assert!(request.value[SECRET_ENVELOPE].is_null());
+            let result = PersonalSettingsRecord { revision: 1, value: Some(request.value), legacy_recovery_required: true };
+            committed = Some(result.clone());
+            Ok(result)
+        },
+    ).unwrap();
+    let (restored, value) = load_with(
+        Ok(committed.unwrap()), true, || Err(unavailable_key()),
+        || panic!("explicit empty envelope must not read old secrets"),
+    ).unwrap();
+    assert_eq!(value.unwrap()["app"]["theme"], "light");
+    assert!(restored.status().can_save && restored.status().recovery_required);
+    assert!(restored.secrets_locked);
+}
+
+#[test]
 fn removing_a_key_during_an_open_session_cannot_replace_or_clear_protected_secrets() {
     for changed in [json!({"app":{"flowSigningSeedB64":"new-seed"}}), json!({})] {
         let (mut state, _) = load_with_open(

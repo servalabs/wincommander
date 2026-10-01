@@ -80,6 +80,14 @@ fn publish_status(status: Status) {
     }
 }
 
+fn publish_unavailable_status() {
+    let previous = status();
+    publish_status(Status {
+        recovery_required: previous.recovery_required,
+        ..UNAVAILABLE_STATUS
+    });
+}
+
 #[cfg(test)]
 pub(super) struct TemporarySessionTestGuard {
     previous_session: Option<Session>,
@@ -128,12 +136,12 @@ pub(super) fn automation_available() -> bool {
     status.can_save && !status.recovery_required
 }
 
-pub(super) fn temporary_session_needs_refresh() -> bool {
-    recovery::temporary_session_needs_refresh()
+pub(super) fn session_needs_refresh(recheck_locked: bool) -> bool {
+    recovery::session_needs_refresh(recheck_locked)
 }
 
-pub(super) fn refresh_temporary_session_if_due() -> bool {
-    recovery::refresh_temporary_session_if_due()
+pub(super) fn refresh_session_if_due(recheck_locked: bool) -> bool {
+    recovery::refresh_session_if_due(recheck_locked)
 }
 
 pub(super) struct Loaded {
@@ -156,7 +164,7 @@ fn key_unavailable(error: &str) -> bool {
 }
 
 pub(super) fn load() -> Result<Loaded, String> {
-    publish_status(UNAVAILABLE_STATUS);
+    publish_unavailable_status();
     let mut session = SESSION
         .lock()
         .map_err(|_| "Personal settings lock failed".to_string())?;
@@ -306,7 +314,7 @@ pub(super) fn save(value: &Value) -> Result<bool, String> {
         .err()
         .is_some_and(|error| !recovery::recovered_settings_reload_required(error))
     {
-        publish_status(UNAVAILABLE_STATUS);
+        publish_unavailable_status();
     }
     result
 }
@@ -318,7 +326,9 @@ fn save_inner(value: &Value) -> Result<bool, String> {
     let state = guard
         .as_mut()
         .ok_or("Personal settings have not been loaded")?;
-    if state.mode == Mode::Temporary {
+    if state.mode == Mode::Temporary
+        || (state.mode == Mode::Service && status().mode == Mode::Temporary)
+    {
         match recovery::recover_temporary_session(state, load_current_session)? {
             recovery::TemporaryRecovery::ReloadRequired => {
                 // Keep the published status temporary until settings.rs has

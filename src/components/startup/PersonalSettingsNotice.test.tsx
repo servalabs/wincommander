@@ -28,6 +28,8 @@ test("recovery banner offers a Settings route and details stay available indepen
   expect(details).toContain('aria-label="Personal data recovery"');
   expect(details).toContain("original files are preserved");
   expect(details).toContain("Administrator permission alone cannot unlock another account");
+  expect(details).toContain("password reset can leave older protected data locked even in the same account");
+  expect(details).toContain("WinCommander cannot recreate lost keys");
   expect(details).not.toContain("Dismiss");
   expect(status.recoveryRequired).toBe(true);
 });
@@ -70,6 +72,17 @@ test("temporary service notice offers an authoritative check without claiming a 
   expect(html).toContain("Check service again");
   expect(html).toContain("were not saved");
   expect(html).not.toContain("Settings saved");
+});
+
+test("locked protected data can be rechecked while ordinary preferences remain writable", () => {
+  const html = renderToStaticMarkup(<PersonalSettingsNotice
+    status={{ mode: "service", recoveryRequired: true, canSave: true }}
+    onRetry={async () => {}}
+  />);
+  expect(html).toContain("Check access again");
+  expect(html).toContain("Available preferences remain usable");
+  expect(html).toContain("You can save new preferences");
+  expect(html).not.toContain("could not reach this account");
 });
 
 test("healthy service or legacy preferences do not show a recovery notice", () => {

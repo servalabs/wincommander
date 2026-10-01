@@ -54,6 +54,8 @@ describe("AppContext startup coordination", () => {
 
     expect(hydration).toContain("setPersonalSettingsStatus(previous => readPersonalSettingsStatus(settings, previous))");
     expect(refresh).toContain("setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous))");
+    expect(refresh).toContain("'get_settings', { refreshPersonal }");
+    expect(refresh).toContain("() => readAndApplySettings(true)");
     expect(hydration).not.toContain("setStartupError(");
     expect(source).toContain('personalSettingsStatus: authMode === "decoy" ? null : personalSettingsStatus');
     expect(shell).toContain('<PersonalSettingsNotice');

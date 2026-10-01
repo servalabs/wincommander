@@ -707,14 +707,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, [getStartupStatus, mergeDiskHealth, persistProbeToSettings]);
 
     /** Applies only the authoritative settings record returned by native code. */
-    const readAndApplySettings = useCallback(async () => {
+    const readAndApplySettings = useCallback(async (refreshPersonal = false) => {
         // Do not snapshot the cache while a serialized patch is still in its
         // native write/restore phase. This is especially important for a
         // recovery read: its result must not paint an older cache entry after
         // that patch has confirmed a newer authoritative value.
         await patchChainRef.current;
         const requestGeneration = settingsMutationGenerationRef.current;
-        const updated = await invoke<AppSettings>('get_settings');
+        const updated = await invoke<AppSettings>('get_settings', { refreshPersonal });
         if (requestGeneration !== settingsMutationGenerationRef.current) return;
         setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous));
         // PERF: the active-panel poller calls this every 10s just to READ
@@ -751,7 +751,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (authMode === 'decoy') return Promise.resolve();
         // Unlike routine refreshes, surface a rejected service read to the
         // recovery banner. It still applies only native's freshly read record.
-        return runSharedSettingsRecoveryRead(personalSettingsRecoveryReadRef.current, readAndApplySettings);
+        return runSharedSettingsRecoveryRead(personalSettingsRecoveryReadRef.current, () => readAndApplySettings(true));
     }, [authMode, readAndApplySettings]);
 
     useEffect(() => {

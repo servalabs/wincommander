@@ -3073,22 +3073,29 @@ pub fn import_settings(json: &str) -> Result<AppSettings, String> {
 
 /// Get the full settings object.
 #[tauri::command]
-pub async fn get_settings() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(get_settings_sync)
-        .await
-        .map_err(|error| format!("Settings task failed: {error}"))?
+pub async fn get_settings(refresh_personal: Option<bool>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        get_settings_sync_with_refresh(refresh_personal.unwrap_or(false))
+    })
+    .await
+    .map_err(|error| format!("Settings task failed: {error}"))?
 }
 
+#[cfg(test)]
 fn get_settings_sync() -> Result<serde_json::Value, String> {
+    get_settings_sync_with_refresh(false)
+}
+
+fn get_settings_sync_with_refresh(recheck_locked: bool) -> Result<serde_json::Value, String> {
     // A temporary personal session can become available after the background
     // service finishes starting. Keep the session replacement and cache
     // invalidation in the same transaction as settings writes: a stale
     // renderer snapshot must never save against a freshly recovered revision.
-    if !is_decoy_mode() && personal_settings::temporary_session_needs_refresh() {
+    if !is_decoy_mode() && personal_settings::session_needs_refresh(recheck_locked) {
         let _transaction = SETTINGS_TRANSACTION_GATE
             .lock()
             .map_err(|_| "Settings transaction lock poisoned".to_string())?;
-        if personal_settings::refresh_temporary_session_if_due() {
+        if personal_settings::refresh_session_if_due(recheck_locked) {
             invalidate_cache_locked();
         }
     }
