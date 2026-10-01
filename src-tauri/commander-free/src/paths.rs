@@ -223,7 +223,7 @@ fn harden_dir_acl_result(dir: &std::path::Path) -> bool {
         let dir_str = dir.to_string_lossy();
         let grant_user = format!("{}:(OI)(CI)F", user);
 
-        std::process::Command::new("icacls")
+        let child = std::process::Command::new("icacls")
             .args([
                 dir_str.as_ref(),
                 "/inheritance:r",
@@ -233,13 +233,38 @@ fn harden_dir_acl_result(dir: &std::path::Path) -> bool {
                 grant_user.as_str(),
             ])
             .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .is_ok_and(|output| output.status.success())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        child.is_ok_and(|mut child| {
+            wait_for_acl_child(&mut child, std::time::Duration::from_secs(5))
+        })
     }
     #[cfg(not(windows))]
     {
         let _ = dir; // no-op on non-Windows
         true
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_acl_child(child: &mut std::process::Child, budget: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started.elapsed() < budget => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                // This Child owns the process handle: never kill by name or PID.
+                // Windows releases process resources when the handle is closed;
+                // don't turn a best-effort timeout into another blocking wait.
+                let _ = child.kill();
+                return false;
+            }
+        }
     }
 }
 
@@ -603,6 +628,51 @@ mod tests {
         is_valid_state_filename, should_harden_machine_data_dir, state_file_from_dir,
         MACHINE_DATA_ACL_GRANTS,
     };
+
+    #[cfg(windows)]
+    fn harmless_acl_test_child(script: &str) -> std::process::Child {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .creation_flags(0x08000000)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn acl_child_wait_preserves_success_and_failure_status() {
+        for (script, expected) in [("exit 0", true), ("exit 7", false)] {
+            let mut child = harmless_acl_test_child(script);
+            assert_eq!(
+                super::wait_for_acl_child(&mut child, std::time::Duration::from_secs(5)),
+                expected
+            );
+            assert!(child.try_wait().unwrap().is_some());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn acl_child_timeout_terminates_only_the_owned_child_without_blocking() {
+        let mut child = harmless_acl_test_child("Start-Sleep -Seconds 30");
+        let started = std::time::Instant::now();
+        assert!(!super::wait_for_acl_child(
+            &mut child,
+            std::time::Duration::from_millis(100)
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        // TerminateProcess is asynchronous. Poll only this disposable child's
+        // handle to prove termination without an unbounded test cleanup wait.
+        let terminated = std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            assert!(terminated.elapsed() < std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn user_directory_acl_is_applied_once_per_directory_identity() {

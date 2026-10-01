@@ -47,6 +47,7 @@ enum Mode {
 struct Session {
     mode: Mode,
     revision: u64,
+    legacy_overlay_pending_migration: bool,
     legacy_recovery_required: bool,
     secrets_locked: bool,
     secrets: Value,
@@ -86,6 +87,10 @@ pub(super) struct Loaded {
     pub value: Option<Value>,
     pub safe_defaults: bool,
     pub service_backed: bool,
+    /// A readable legacy per-user overlay was loaded while the service has no
+    /// record yet. Persist it once so later launches do not depend on the
+    /// legacy file.
+    pub migration_persistence_needed: bool,
 }
 
 pub(super) fn is_conflict(error: &str) -> bool {
@@ -115,6 +120,7 @@ pub(super) fn load() -> Result<Loaded, String> {
         value,
         safe_defaults: state.safe_defaults,
         service_backed: state.mode == Mode::Service && state.revision > 0,
+        migration_persistence_needed: state.legacy_overlay_pending_migration,
     };
     publish_status(state.status());
     *session = Some(state);
@@ -152,6 +158,7 @@ fn load_with_open(
             Mode::Legacy
         },
         revision: record.as_ref().map_or(0, |record| record.revision),
+        legacy_overlay_pending_migration: false,
         legacy_recovery_required: record
             .as_ref()
             .is_some_and(|record| record.legacy_recovery_required),
@@ -222,6 +229,12 @@ fn load_with_open(
     let value = value
         .map(|value| super::split_settings_value(value).map(|(_, user)| user))
         .transpose()?;
+    // The service was reachable but had no record.  Carry this marker to the
+    // caller so it performs exactly one migration write; do not turn normal
+    // settings reads into writes after that record exists.
+    if value.is_some() && state.mode == Mode::Service {
+        state.legacy_overlay_pending_migration = true;
+    }
     if let Some(value) = &value {
         state.secrets = secrets::split(value.clone()).1;
     }

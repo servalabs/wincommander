@@ -2,6 +2,7 @@
 //! Reveal the desktop only after its startup content has been painted.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use tauri::Manager;
 
@@ -9,6 +10,8 @@ pub(crate) struct StartupWindow {
     armed: AtomicBool,
     ready: AtomicBool,
     warned: AtomicBool,
+    recovery_started: AtomicBool,
+    document_generation: Mutex<u32>,
 }
 
 impl StartupWindow {
@@ -17,6 +20,8 @@ impl StartupWindow {
             armed: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             warned: AtomicBool::new(false),
+            recovery_started: AtomicBool::new(false),
+            document_generation: Mutex::new(0),
         }
     }
 
@@ -37,6 +42,23 @@ impl StartupWindow {
             && !self.is_ready()
             && !self.warned.swap(true, Ordering::AcqRel)
     }
+
+    fn begin_recovery(&self) -> bool {
+        self.armed.load(Ordering::Acquire)
+            && !self.is_ready()
+            && !self.recovery_started.swap(true, Ordering::AcqRel)
+    }
+
+    fn accept_ready(&self, generation: u32) -> bool {
+        let Ok(current) = self.document_generation.lock() else {
+            return false;
+        };
+        if *current != generation {
+            return false;
+        }
+        self.ready.store(true, Ordering::Release);
+        true
+    }
 }
 
 async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bool, String> {
@@ -46,7 +68,14 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
     if !state.take_reveal() {
         return window.is_visible().map_err(|error| error.to_string());
     }
-    if let Err(error) = crate::window_placement::show_maximized(window).await {
+    let mut result = crate::window_placement::show_maximized(window).await;
+    // A display/session transition can briefly reject placement. Let Windows
+    // finish processing it before reporting a persistent failure.
+    if result.is_err() {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        result = crate::window_placement::show_maximized(window).await;
+    }
+    if let Err(error) = result {
         state.arm();
         if !state.warned.swap(true, Ordering::AcqRel) {
             show_native_startup_error(&format!("WinCommander could not open its window. {error}"));
@@ -59,10 +88,58 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
     Ok(true)
 }
 
+/// Recover a stalled first document once, without resetting settings or
+/// revealing an unpainted/locked window. Never enter an infinite reload loop.
+pub(crate) async fn recover_if_unready(window: &tauri::WebviewWindow) {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return;
+    };
+    if !state.begin_recovery() {
+        return;
+    }
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        // Readiness may arrive while this callback is queued.
+        if let Some(state) = target.try_state::<StartupWindow>() {
+            // Serialize generation change with readiness so a delayed IPC from
+            // the previous document cannot reveal its unpainted replacement.
+            let Ok(mut generation) = state.document_generation.lock() else {
+                return;
+            };
+            if state.is_ready() || crate::calc_mode_active(target.app_handle()) {
+                return;
+            }
+            let Ok(mut url) = target.url() else {
+                return;
+            };
+            *generation += 1;
+            url.query_pairs_mut()
+                .append_pair("wc-startup-generation", &generation.to_string());
+            crate::log_message_src(
+                "warn",
+                "core",
+                "[Startup] retrying stalled interface document once",
+            );
+            if let Err(error) = target.navigate(url) {
+                crate::log_message_src(
+                    "error",
+                    "core",
+                    &format!("[Startup] interface retry failed: {error}"),
+                );
+            }
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    if !crate::calc_mode_active(window.app_handle()) {
+        warn_if_unready(window);
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn startup_window_ready(
     window: tauri::WebviewWindow,
     is_light: bool,
+    generation: Option<u32>,
 ) -> Result<bool, String> {
     if window.label() != "main" {
         return Err("Startup readiness is only available to the main window".into());
@@ -78,10 +155,12 @@ pub(crate) async fn startup_window_ready(
     window
         .set_background_color(Some(background))
         .map_err(|error| error.to_string())?;
-    window
+    if !window
         .state::<StartupWindow>()
-        .ready
-        .store(true, Ordering::Release);
+        .accept_ready(generation.unwrap_or(0))
+    {
+        return Ok(false);
+    }
     reveal_armed_startup_window(&window).await
 }
 
@@ -169,5 +248,36 @@ mod tests {
         state.arm();
         state.ready.store(true, Ordering::Release);
         assert!(!state.needs_warning());
+    }
+
+    #[test]
+    fn recovery_is_once_only_and_preserves_late_readiness() {
+        let state = StartupWindow::new();
+        assert!(!state.begin_recovery());
+        state.arm();
+        assert!(state.begin_recovery());
+        assert!(!state.begin_recovery());
+        state.ready.store(true, Ordering::Release);
+        assert!(!state.needs_warning());
+        assert!(state.take_reveal());
+    }
+
+    #[test]
+    fn a_ready_document_is_never_reloaded() {
+        let state = StartupWindow::new();
+        state.arm();
+        state.ready.store(true, Ordering::Release);
+        assert!(!state.begin_recovery());
+    }
+
+    #[test]
+    fn old_document_readiness_cannot_reveal_a_replacement() {
+        let state = StartupWindow::new();
+        state.arm();
+        *state.document_generation.lock().unwrap() = 1;
+        assert!(!state.accept_ready(0));
+        assert!(!state.is_ready());
+        assert!(state.accept_ready(1));
+        assert!(state.is_ready());
     }
 }

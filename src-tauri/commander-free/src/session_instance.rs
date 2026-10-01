@@ -359,6 +359,13 @@ pub fn release() {
 /// liveness recovery path: a non-responsive primary is deliberately preserved.
 fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> bool {
     let handoff = ["--elevated-relaunch".to_string()];
+    // An already-elevated primary will reveal instead of exiting. Give that
+    // existing process the same foreground permission as a normal relaunch.
+    if let Some(primary_pid) = read_stored_primary_pid() {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(primary_pid);
+        }
+    }
     // At sign-in the normal router can acquire the mutex a little before the
     // Tauri setup path creates its pipe listener.  Wait for that bounded
     // readiness window instead of treating a slow cold start as a failed
@@ -667,9 +674,10 @@ pub(crate) fn resolve_context_menu_event(has_flag: impl Fn(&str) -> bool) -> &'s
 /// Format: `path1|--flag|path2` (same separator as the original plugin used).
 fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     let parts: Vec<&str> = payload.split('|').collect();
+    let primary_is_elevated = crate::startup_elevation::is_current_process_elevated();
     if should_exit_for_elevation_handoff(
         parts.contains(&"--elevated-relaunch"),
-        crate::startup_elevation::is_current_process_elevated(),
+        primary_is_elevated,
     ) {
         crate::log_message_src(
             "info",
@@ -693,17 +701,16 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     }
     if parts.contains(&"--elevated-relaunch") {
         crate::log_message_src(
-            "warn",
+            "info",
             "core",
-            "[SessionInstance] elevation handoff ignored because this instance is already elevated",
+            "[SessionInstance] elevation relaunch is revealing the existing elevated instance",
         );
-        return;
     }
     // Win32 ShowWindow (which desynced Tauri's window state and crashed on
     // maximize). A dead app can't toggle — it cold-starts and reveals instead.
     // --focus is the sentinel sent by a bare double-click of the exe — an
     // explicit "show me", never a hide.
-    let is_focus = parts.contains(&"--focus");
+    let is_focus = should_reveal_existing_instance(&parts, primary_is_elevated);
     // Safe Paste must never bring the window forward — see lib.rs's setup()
     // cold-start dispatch for the mirrored guard. The event still emits below
     // (paths carries the destination folder) so the frontend can run the
@@ -777,11 +784,16 @@ fn should_exit_for_elevation_handoff(requested: bool, primary_is_elevated: bool)
     requested && !primary_is_elevated
 }
 
+fn should_reveal_existing_instance(parts: &[&str], primary_is_elevated: bool) -> bool {
+    parts.contains(&"--focus") || (primary_is_elevated && parts.contains(&"--elevated-relaunch"))
+}
+
 #[cfg(test)]
 mod resolve_context_menu_event_tests {
     use super::{
         instance_object_name, pipe_path, primary_pid_value_name, resolve_context_menu_event,
-        should_exit_for_elevation_handoff, take_pending_safe_pastes,
+        should_exit_for_elevation_handoff, should_reveal_existing_instance,
+        take_pending_safe_pastes,
     };
     use std::sync::Mutex;
 
@@ -863,6 +875,25 @@ mod resolve_context_menu_event_tests {
         assert!(should_exit_for_elevation_handoff(true, false));
         assert!(!should_exit_for_elevation_handoff(true, true));
         assert!(!should_exit_for_elevation_handoff(false, false));
+    }
+
+    #[test]
+    fn elevated_relaunch_reveals_existing_elevated_primary_without_replacing_it() {
+        let parts = ["--elevated-relaunch"];
+        assert!(!should_exit_for_elevation_handoff(true, true));
+        assert!(should_reveal_existing_instance(&parts, true));
+        assert!(should_exit_for_elevation_handoff(true, false));
+        assert!(!should_reveal_existing_instance(&parts, false));
+    }
+
+    #[test]
+    fn ordinary_background_duplicates_do_not_become_explicit_reveals() {
+        for elevated in [false, true] {
+            for flags in [vec!["--autostart"], vec!["--minimized"], vec![]] {
+                assert!(!should_reveal_existing_instance(&flags, elevated));
+            }
+            assert!(should_reveal_existing_instance(&["--focus"], elevated));
+        }
     }
 
     #[test]

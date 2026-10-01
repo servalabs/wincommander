@@ -20,5 +20,6 @@ export async function prepareStartupTheme(): Promise<void> {
 export function revealStartupWindow(): Promise<boolean> {
     return invoke<boolean>('startup_window_ready', {
         isLight: document.documentElement.classList.contains('light'),
+        generation: Number(new URLSearchParams(location.search).get('wc-startup-generation') ?? 0),
     });
 }

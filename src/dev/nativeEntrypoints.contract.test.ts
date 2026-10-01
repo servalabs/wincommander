@@ -71,12 +71,16 @@ describe("native and UI-audit entrypoints", () => {
     expect(main).not.toContain("location.reload()");
   });
 
-  test("a renderer timeout reports an error instead of revealing a blank native window", async () => {
+  test("a renderer timeout retries once before reporting persistent failure", async () => {
     const native = await read("src-tauri/commander-free/src/lib.rs");
     const startup = await read("src-tauri/commander-free/src/startup_window.rs");
-    expect(native).toContain("startup_window::warn_if_unready(&fallback_window)");
+    expect(native).toContain("startup_window::recover_if_unready(&fallback_window).await");
+    expect(native).not.toContain("startup_window::warn_if_unready(&window)");
     expect(native).not.toContain("reveal_armed_startup_window(&fallback_window)");
     expect(startup).toContain("MessageBoxW");
+    expect(startup).toContain("target.navigate(url)");
+    expect(startup).toContain("accept_ready(generation.unwrap_or(0))");
+    expect(startup).toContain("state.begin_recovery()");
     expect(startup).toContain("window_placement::show_maximized(window).await");
   });
 });

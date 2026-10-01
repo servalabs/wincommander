@@ -180,7 +180,13 @@ async fn call_via_with_timeout(
     } else {
         reply
     };
-    let _ = wincmd_shared::write_envelope(&mut client, &wincmd_shared::Envelope::Bye).await;
+    // The response is already verified. A stalled peer during optional session
+    // cleanup must not hold a successful settings read (or mutation) forever.
+    let _ = tokio::time::timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &wincmd_shared::Envelope::Bye),
+    )
+    .await;
 
     match reply {
         wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {

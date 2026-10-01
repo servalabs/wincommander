@@ -2624,22 +2624,39 @@ fn migrate_legacy_monitor_names(root: &mut serde_json::Value) {
     }
 }
 
+struct LoadedSettings {
+    settings: AppSettings,
+    // A new machine snapshot must record its generated device identity.  A
+    // legacy plaintext source also needs one normal migration commit.  Routine
+    // launches deliberately do not write metadata while loading.
+    initial_persistence_needed: bool,
+}
+
+fn initial_persistence_needed(
+    machine_store_was_empty: bool,
+    legacy_migration_needed: bool,
+    personal_migration_needed: bool,
+) -> bool {
+    machine_store_was_empty || legacy_migration_needed || personal_migration_needed
+}
+
 /// Load settings from the encoded store. If the store section is absent,
 /// check for a legacy plaintext settings.json and migrate it on first run.
-fn load_settings_from_store() -> Result<AppSettings, String> {
+fn load_settings_for_startup() -> Result<LoadedSettings, String> {
     legacy_migration::clear()?;
     crate::paths::migrate_user_data_layout()?;
-    let stored = crate::datastore::load("settings")?;
-    let encrypted_machine_exists = stored.as_object().is_some_and(|value| !value.is_empty());
     let defaults = create_default_settings();
     let (default_machine, default_user_overlay) = split_settings_value(
         serde_json::to_value(&defaults)
             .map_err(|error| format!("Failed to serialize default settings: {error}"))?,
     )?;
+    let stored = crate::datastore::load("settings")?;
+    let machine_store_was_empty = stored.as_object().is_some_and(|value| value.is_empty());
+    let encrypted_machine_exists = !machine_store_was_empty;
     let mut legacy_user_overlay = None;
     let mut legacy_source = None;
     // Empty object = section file does not yet exist.
-    let machine_value = if stored.as_object().map(|m| m.is_empty()).unwrap_or(false) {
+    let machine_value = if machine_store_was_empty {
         let legacy = crate::paths::user_settings_path()?;
         if legacy.exists() {
             let (raw, source) = legacy_migration::read(&legacy)?;
@@ -2674,6 +2691,7 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
     let loaded = personal_settings::load()?;
     let personal_overlay = loaded.value;
     let encrypted_personal_exists = personal_overlay.is_some();
+    let legacy_migration_needed = legacy_source.is_some();
     if personal_overlay.is_none() && !loaded.safe_defaults {
         if let Some(source) = legacy_source {
             legacy_migration::remember(source)?;
@@ -2698,7 +2716,20 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
         )?;
         legacy_migration::resume_committed(&machine, &user);
     }
-    Ok(settings)
+    Ok(LoadedSettings {
+        settings,
+        initial_persistence_needed: initial_persistence_needed(
+            machine_store_was_empty,
+            legacy_migration_needed,
+            loaded.migration_persistence_needed,
+        ),
+    })
+}
+
+/// General cold readers need only the resolved snapshot.  Startup uses the
+/// richer result above to make the one required first-run migration commit.
+fn load_settings_from_store() -> Result<AppSettings, String> {
+    load_settings_for_startup().map(|loaded| loaded.settings)
 }
 
 fn apply_personal_recovery_defaults(settings: &mut AppSettings) {
@@ -2735,29 +2766,27 @@ pub fn read_settings() -> Result<AppSettings, String> {
             }
         }
 
-        let mut settings = load_settings_from_store()?;
+        let loaded = load_settings_for_startup()?;
+        let mut settings = loaded.settings;
         settings.last_seen_at = now_iso8601();
         settings.app_version = get_app_version();
 
-        // Best-effort persistence: first-run defaults / legacy migration and
-        // lastSeenAt normally land in the store here. A read must still return
-        // the real decoded settings when the process has read-only access to
-        // the machine-wide store (notably an asInvoker `tauri dev` session).
-        // Making this auxiliary write fatal left SETTINGS_CACHE empty, so every
-        // startup probe repeated the decrypt/load and the WebView never reached
-        // its native backend. Explicit mutations still use write_settings() and
-        // continue to report write failures to their callers.
-        //
-        // Skip entirely in decoy mode: a read must never write to the real
-        // store under coercion (and write_settings_internal would refuse it).
-        if !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        // Routine settings reads must not write metadata.  A service-backed
+        // personal write can wait on a service restart and previously held the
+        // cold-read transaction until the renderer timed out. `last_seen_at`
+        // remains current for this running session. The only exceptions are a
+        // first install or required legacy migration: the generated machine
+        // identity and readable legacy overlay must be committed once.
+        if loaded.initial_persistence_needed
+            && !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed)
+        {
             if let Err(error) = write_settings_internal(&settings) {
                 if personal_settings::is_conflict(&error) {
                     settings = load_settings_from_store()?;
                 }
                 crate::log_message(
                     "warn",
-                    &format!("[Settings] loaded read-only; metadata persistence skipped: {error}"),
+                    &format!("[Settings] initial settings persistence skipped: {error}"),
                 );
             }
         }
@@ -4137,6 +4166,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_first_run_or_legacy_migration_requires_a_cold_read_commit() {
+        assert!(initial_persistence_needed(true, false, false));
+        assert!(initial_persistence_needed(false, true, false));
+        assert!(initial_persistence_needed(false, false, true));
+        assert!(initial_persistence_needed(true, true, true));
+        assert!(!initial_persistence_needed(false, false, false));
+    }
+
+    #[test]
     fn explorer_setup_defaults_have_reversible_convergence_commands() {
         let mappings = [
             (
@@ -4826,21 +4864,11 @@ mod tests {
         );
     }
 
-    /// read_settings()'s cold-read path guards its persistence write with
-    /// `if !DECOY_MODE.load(...) { write_settings_internal(&settings)? }` —
-    /// it must SKIP that write while decoy mode is active rather than
-    /// attempt it (which would itself fail: write_settings_internal refuses
-    /// under decoy mode, see decoy_mode_refuses_all_settings_writes_via_*
-    /// above). We can't safely exercise the real cold-read branch here
-    /// (load_settings_from_store performs real filesystem migration + ACL
-    /// hardening side effects against %ProgramData%/%LOCALAPPDATA% — not
-    /// something a unit test should trigger against the dev machine's real
-    /// app-data directories). Instead this test evaluates the EXACT guard
-    /// expression read_settings uses, proving it correctly resolves to
-    /// "skip the write" under decoy mode. If that condition in the source
-    /// were ever inverted or removed, this assertion would fail.
+    /// Routine cold reads do not persist metadata, and the exceptional initial
+    /// migration path is skipped in decoy mode. This keeps the direct write
+    /// choke point as the relevant runtime assertion here.
     #[test]
-    fn decoy_read_does_not_persist() {
+    fn decoy_cold_read_has_no_persistence_path_and_direct_writes_are_refused() {
         let _decoy = DecoyModeGuard::engage();
         warm_cache_with_defaults();
 
@@ -4849,13 +4877,6 @@ mod tests {
         assert!(
             direct_write.is_err(),
             "control check failed: write_settings_internal must refuse under decoy mode"
-        );
-
-        // The exact condition read_settings's cold-read branch guards its write with.
-        let would_attempt_persist_write = !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            !would_attempt_persist_write,
-            "read_settings must skip its cold-read persistence write while decoy mode is active"
         );
     }
 

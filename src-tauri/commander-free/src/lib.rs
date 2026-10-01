@@ -380,7 +380,8 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     } else {
         if let Some(startup) = window.try_state::<startup_window::StartupWindow>() {
             if !startup.is_ready() {
-                startup_window::warn_if_unready(&window);
+                // Startup owns its bounded recovery. A tray click while the
+                // renderer is loading must not turn that delay into an error.
                 return;
             }
         }
@@ -1274,7 +1275,10 @@ fn lock_to_calculator(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(wincommander_dev_profile)]
 fn dev_startup_trace(stage: &str) {
-    eprintln!("[wincommander-dev-startup] {stage}");
+    use std::io::Write;
+    // Explorer/launcher pipes may close before the GUI finishes opening.
+    // Debug tracing must never turn that harmless condition into a panic.
+    let _ = writeln!(std::io::stderr(), "[wincommander-dev-startup] {stage}");
 }
 
 #[cfg(not(wincommander_dev_profile))]
@@ -1501,7 +1505,10 @@ pub fn run() {
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
     if !cli_mode {
-        if let Err(error) = settings::preload_settings(std::time::Duration::from_secs(15)) {
+        // Security settings must be known before creating the window. The read
+        // has its own transport error handling; elapsed time alone is not a
+        // settings failure and must not abort an otherwise valid cold start.
+        if let Err(error) = settings::preload_settings() {
             startup_window::show_initialization_error(&error);
             return;
         }
@@ -1864,11 +1871,11 @@ pub fn run() {
                     let _ = window.set_skip_taskbar(false);
                     // Native setup can finish before bundled scripts have painted.
                     app.state::<startup_window::StartupWindow>().arm();
-                    // A missing renderer gets a native error, never a blank reveal.
+                    // Retry a stalled renderer once, never reveal a blank HWND.
                     let fallback_window = window.clone();
                     tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                        startup_window::warn_if_unready(&fallback_window);
+                        startup_window::recover_if_unready(&fallback_window).await;
                     });
                 }
                 dev_startup_trace("main window reveal prepared");

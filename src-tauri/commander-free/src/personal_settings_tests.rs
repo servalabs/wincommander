@@ -45,6 +45,7 @@ fn migration_keeps_readable_preferences_and_exact_signing_identity() {
     assert_eq!(state.secrets["app"]["flowSigningSeedB64"], "original-seed");
     assert!(!state.status().recovery_required);
     assert_eq!(state.revision, 0);
+    assert!(state.legacy_overlay_pending_migration);
 }
 
 #[test]
@@ -90,6 +91,7 @@ fn absent_service_keeps_a_readable_existing_profile_usable() {
     assert_eq!(state.mode, Mode::Legacy);
     assert_eq!(value.unwrap()["app"]["theme"], "light");
     assert!(state.status().can_save);
+    assert!(!state.legacy_overlay_pending_migration);
 }
 
 #[test]
