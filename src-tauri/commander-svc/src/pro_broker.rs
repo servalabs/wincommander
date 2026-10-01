@@ -21,6 +21,26 @@ fn random_session_token() -> String {
     bytes_to_hex(&buf)
 }
 
+// A signed Pro error may carry this closed, path/credential-free native
+// category. Never persist its unrestricted message or native stderr.
+fn native_mount_diagnostic(message: &str) -> Option<&'static str> {
+    match message {
+        "VLT.NATIVE.EXIT_13" => Some("VLT.NATIVE.RNG_INIT_FAILED"),
+        "VLT.NATIVE.EXIT_14" => Some("VLT.NATIVE.DRIVER_UNAVAILABLE"),
+        "VLT.NATIVE.EXIT_15" => Some("VLT.NATIVE.SELF_TEST_FAILED"),
+        "VLT.NATIVE.EXIT_16" => Some("VLT.NATIVE.ABORTED"),
+        "VLT.NATIVE.EXIT_17" | "VLT.NATIVE.EXIT_18" => Some("VLT.NATIVE.INIT_FAILED"),
+        "VLT.NATIVE.EXIT_23" => Some("VLT.NATIVE.ACCESS_DENIED"),
+        "VLT.NATIVE.EXIT_28" => Some("VLT.NATIVE.UNLOCK_FAILED"),
+        "VLT.NATIVE.EXIT_29" => Some("VLT.NATIVE.CLEANUP_FAILED"),
+        "VLT.NATIVE.EXIT_32" => Some("VLT.NATIVE.SCOPE_UNSUPPORTED"),
+        "VLT.NATIVE.EXIT_33" => Some("VLT.NATIVE.DRIVE_LINK_FAILED"),
+        "VLT.NATIVE.EXIT_34" => Some("VLT.NATIVE.ACL_FAILED"),
+        "VLT.NATIVE.EXIT_35" => Some("VLT.NATIVE.LETTER_UNAVAILABLE"),
+        _ => None,
+    }
+}
+
 fn random_pipe_name() -> String {
     let mut buf = [0u8; 8];
     fill_random(&mut buf);
@@ -507,6 +527,12 @@ fn process_broker_reply(
             Ok(BrokerReply::Finished(Ok(response.result)))
         }
         Envelope::Error(error) if error.request_id == request_id => {
+            if let Some(code) = native_mount_diagnostic(&error.message) {
+                crate::diagnostics::record_vault_failure(
+                    &format!("VLT-{request_id}"), "mount", code,
+                    "review_native_mount_diagnostics", false, std::time::Instant::now(),
+                );
+            }
             let reason = VaultMountReason::from_wire(&error.kind).unwrap_or_else(|| {
                 if error.kind == "missing_entitlement" {
                     VaultMountReason::EntitlementDenied
@@ -907,6 +933,15 @@ fn session_token_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_mount_diagnostic_accepts_only_closed_receipt_categories() {
+        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_14"), Some("VLT.NATIVE.DRIVER_UNAVAILABLE"));
+        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_34"), Some("VLT.NATIVE.ACL_FAILED"));
+        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_33"), Some("VLT.NATIVE.DRIVE_LINK_FAILED"));
+        for value in ["private path", "VLT.NATIVE.EXIT_014", "VLT.NATIVE.EXIT_14\nsecret", "VLT.NATIVE.EXIT_999"] {
+            assert!(super::native_mount_diagnostic(value).is_none());
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn missing_pro_is_not_confused_with_permission_or_integrity_failure() {
