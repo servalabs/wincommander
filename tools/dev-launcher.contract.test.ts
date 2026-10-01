@@ -79,7 +79,7 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(tauri.build.beforeDevCommand).toContain('dev:server');
     expect(devLauncher).toContain('& $bun run dev:server');
     expect(devLauncher).toContain('node_modules\\.bin\\tauri.exe');
-    expect(packageJson.scripts.tauri).toContain('@tauri-apps/cli@2.11.4');
+    expect(packageJson.scripts.tauri).toContain(`@tauri-apps/cli@${packageJson.devDependencies['@tauri-apps/cli']}`);
   });
 
   test("clears the old desktop before setup and avoids killing the new one", () => {
