@@ -4124,7 +4124,7 @@ fn hold_mount_file(
 }
 
 #[cfg(windows)]
-fn with_caller_impersonation<T>(
+pub(crate) fn with_caller_impersonation<T>(
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     operation: impl FnOnce() -> Result<T, VaultError>,
 ) -> Result<T, VaultError> {

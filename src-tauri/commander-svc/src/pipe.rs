@@ -60,6 +60,9 @@ mod service_peer_query;
 #[path = "vault_inventory_contract.rs"]
 mod vault_inventory_contract;
 
+#[path = "vault_create_staging.rs"]
+mod vault_create_staging;
+
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -1980,15 +1983,24 @@ async fn handle_personal_vault_create(
         None
     };
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
-    let result = tokio::task::block_in_place(|| {
+    // Windows filesystem formatting requires privilege for true standard users.
+    // SYSTEM receives only a protected staging target, never their chosen path.
+    let mut staging = if let Some(registration) = registration.as_ref().filter(|_| !token_is_privileged(peer.token()).unwrap_or(false)) {
+        Some(vault_create_staging::Creation::prepare(&mut args, registration.normalized_path(), peer.token()).map_err(|_| {
+            zeroize_json(&mut args);
+            vault_access.cancel_personal_registration(registration);
+            VerbError::new("vault_creation_preparation_failed", "The new Vault could not be prepared. Choose a new writable filename and allow free disk space for two encrypted copies; keyfiles must be readable and no larger than 64 MB.")
+        })?)
+    } else { None };
+    let mut result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
             crate::pro_broker::VaultCall {
                 request_id: operation_id,
-                target_session_id: peer.session_id(),
+                target_session_id: if staging.is_some() { 0 } else { peer.session_id() },
                 caller_sid: peer.caller_sid(),
                 caller_token: Some(peer.token()),
                 caller_authentication_id: Some(peer.authentication_id()),
-                presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
+                presentation: if staging.is_some() { wincmd_shared::vault_access::VaultPresentation::Machine } else { wincmd_shared::vault_access::VaultPresentation::PerUser },
                 feature_id: "vault.broker.create_personal",
                 args,
             },
@@ -2008,6 +2020,12 @@ async fn handle_personal_vault_create(
         );
         personal_vault_creation_failure(reason)
     })?;
+    if let Some(staging) = &mut staging {
+        staging.publish(&mut result).map_err(|_| {
+            if let Some(registration) = &registration { vault_access.cancel_personal_registration(registration); }
+            VerbError::new("vault_creation_verification_failed", "The encrypted Vault could not be copied and verified at the selected destination. No completed Vault was saved.")
+        })?;
+    }
     if let Some(registration) = &registration {
         let broker_path = result
             .get("path")
@@ -2043,6 +2061,7 @@ async fn handle_personal_vault_create(
                 crate::vault_access::unix_time_seconds(),
             )
             .map_err(|_| {
+                vault_access.cancel_personal_registration(registration);
                 crate::diagnostics::record_vault_failure(
                     &diagnostic_operation_id,
                     "create",
@@ -2057,6 +2076,7 @@ async fn handle_personal_vault_create(
                 )
             })?;
     }
+    if let Some(staging) = &mut staging { staging.commit(); }
     crate::diagnostics::record_vault_create_success(&diagnostic_operation_id, started);
     Ok(result)
 }
