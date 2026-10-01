@@ -238,6 +238,9 @@ describe("Free machine-wide release packaging", () => {
     expect(template).toContain('ExecWait \'$R1\' $0');
     expect(template).toContain('Function un.onInit');
     expect(template).toContain('Section Uninstall');
+    expect(template).toContain('!include "Win\\RestartManager.nsh"');
+    expect(template.match(/!insertmacro CheckIfAppIsRunning "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"/g)).toHaveLength(2);
+    expect(template).not.toContain('CheckIfAppIsRunning "${MAINBINARYNAME}.exe"');
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain('!define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\\..\\..\\..\\tools\\repair-vault-driver-access.ps1"');
     expect(hooks).toContain('IfFileExists "$R5\\WinCommander\\bin\\engine" 0 wc_no_driver_access_repair');
