@@ -32,6 +32,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { syncDevelopmentService } from "./dev-service-startup";
 
 const ROOT = resolve(import.meta.dir, "..");
 // The Codex/runtime environment can place a PowerShell-compatible shim ahead
@@ -140,7 +141,7 @@ async function main(): Promise<void> {
 
   console.log(
     FREE_ONLY
-      ? "[dev-server] kill:dev/install done — starting vite..."
+      ? "[dev-server] kill:dev/install done — preparing the settings service..."
       : "[dev-server] kill:dev/install done — building Pro before starting vite...",
   );
 
@@ -150,15 +151,12 @@ async function main(): Promise<void> {
       console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
       process.exit(buildProResult);
     }
-    const serviceResult = await run("[service]", WINDOWS_POWERSHELL, [
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-      "tools/sync-dev-service.ps1", "-SyncPro",
-    ]);
-    if (serviceResult !== 0) {
-      throw new Error(`development service synchronization failed (exit ${serviceResult}); Vite was not started`);
-    }
-    console.log("[dev-server] current Pro and SYSTEM service verified — starting vite.");
   }
+
+  // Free also persists account preferences through the authenticated service.
+  // Pro is optional; the service must be ready before either desktop starts.
+  await syncDevelopmentService(FREE_ONLY, args => run("[service]", WINDOWS_POWERSHELL, args));
+  console.log("[dev-server] SYSTEM settings service verified — starting vite.");
 
   freeVitePort();
 

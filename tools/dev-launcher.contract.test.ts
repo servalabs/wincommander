@@ -9,6 +9,7 @@ const devLauncher = readFileSync("tools/dev.ps1", "utf8");
 const combinedLauncher = readFileSync("tools/dev-all.ts", "utf8");
 const serviceSync = readFileSync("tools/sync-dev-service.ps1", "utf8");
 const devServer = readFileSync("tools/dev-server.ts", "utf8");
+const serviceStartup = readFileSync("tools/dev-service-startup.ts", "utf8");
 
 describe("desktop development launchers", () => {
   test("excludes locked runtime files from the frontend watcher", () => {
@@ -62,14 +63,18 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(JSON.parse(result.stdout.trim())).toEqual([false, false, true, true]);
   });
 
-  test("synchronizes the Vault service before starting the normal desktop", () => {
+  test("synchronizes the settings service before starting either desktop edition", () => {
     expect(packageJson.scripts["dev:tauri"]).toContain("tools/dev.ps1");
     expect(packageJson.scripts["dev:admin"]).toContain("tools/dev.ps1 -Elevated");
     expect(devLauncher).not.toContain('sync-dev-service.ps1');
-    expect(devServer).toContain('"tools/sync-dev-service.ps1", "-SyncPro"');
-    expect(devServer.indexOf('"tools/build-pro.ts"')).toBeLessThan(devServer.indexOf('"tools/sync-dev-service.ps1"'));
-    expect(devServer.indexOf('"tools/sync-dev-service.ps1"')).toBeLessThan(devServer.indexOf('const vite = spawn'));
-    expect(devServer).toContain('if (serviceResult !== 0)');
+    expect(serviceStartup).toContain('"tools/sync-dev-service.ps1"');
+    expect(serviceStartup).toContain('...(!freeOnly ? ["-SyncPro"] : [])');
+    expect(devServer).toMatch(/if \(!FREE_ONLY\) \{[\s\S]*?buildProResult[\s\S]*?\n  \}\s*\/\/ Free[\s\S]*?await syncDevelopmentService\(FREE_ONLY/);
+    expect(devServer.indexOf('"tools/build-pro.ts"')).toBeLessThan(devServer.indexOf('await syncDevelopmentService('));
+    expect(devServer.indexOf('await syncDevelopmentService(')).toBeLessThan(devServer.indexOf('const vite = spawn'));
+    expect(serviceStartup).toContain('if (result !== 0)');
+    expect(serviceSync).toContain('(-not $SyncPro -or (Test-EncryptedVolumeDriverReady))');
+    expect(serviceSync).toContain('if ($SyncPro) { Ensure-EncryptedVolumeDriver }');
     const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
     expect(tauri.build.beforeDevCommand).toContain('dev:server');
     expect(devLauncher).toContain('& $bun run dev:server');

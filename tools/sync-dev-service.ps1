@@ -313,7 +313,8 @@ if (-not $Elevated) {
     $serviceRunning = $null -ne $service -and $service.Status -eq 'Running'
     if ($stagedMatches -and $configuredPath -and
         $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -and
-        $serviceRunning -and (Test-ServiceProcessCurrent) -and (Test-EncryptedVolumeDriverReady) -and
+        $serviceRunning -and (Test-ServiceProcessCurrent) -and
+        (-not $SyncPro -or (Test-EncryptedVolumeDriverReady)) -and
         (-not $SyncPro -or (Test-DevelopmentProCurrent))) {
         Write-Host 'WinCommander development service is current.'
         return
@@ -383,7 +384,7 @@ if (-not $configuredPath -or -not $configuredPath.Equals($stagedService, [String
 # Verify and, if needed, repair the signed driver before starting the new
 # service. Starting the service first can race its driver probing against this
 # hash read and made fresh checkouts fail after the UAC prompt.
-Ensure-EncryptedVolumeDriver
+if ($SyncPro) { Ensure-EncryptedVolumeDriver }
 Write-Diagnostic 'Starting the staged development service.'
 Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
