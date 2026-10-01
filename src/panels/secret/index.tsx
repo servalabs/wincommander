@@ -142,6 +142,7 @@ function AutoStartTile() {
             }
             setAutostartEnabled(enabled);
         } catch (error) {
+            setAutostartEnabled(null);
             setAutostartError({
                 phase: "status",
                 message: nativeErrorMessage(error, "Windows could not report the Auto Start state."),
@@ -176,11 +177,18 @@ function AutoStartTile() {
                 ? "Auto Start on — WinCommander will use the supported Windows sign-in task."
                 : "Auto Start off — all WinCommander startup entries were removed.");
         } catch (error) {
+            // A failed operation can have changed Windows before its last step failed.
+            setAutostartEnabled(null);
+            try {
+                setAutostartEnabled(await invoke<boolean>("is_autostart_enabled"));
+            } catch {
+                // Keep the control unknown until Windows can confirm its state.
+            }
             const message = nativeErrorMessage(error, "Windows could not save the Auto Start choice.");
             const phase: AutostartErrorPhase = nativeOperationFinished ? "confirmation" : "change";
             const heading = phase === "confirmation"
                 ? "Auto Start may have changed, but Windows did not confirm it"
-                : "Auto Start wasn't changed";
+                : "Auto Start change could not be completed";
             setAutostartError({ phase, message });
             showError(`${heading}: ${message}`);
         } finally {
@@ -194,7 +202,7 @@ function AutoStartTile() {
         : autostartBusy
             ? "Saving your Auto Start choice…"
             : autostartEnabled === true
-                ? "On — WinCommander starts at sign-in with the supported Windows sign-in task. Turn it off to remove all WinCommander startup entries."
+                ? "On — Windows has automatic startup entries for WinCommander. Turn it off to remove all WinCommander startup entries."
                 : autostartEnabled === false
                     ? "Off — WinCommander won't start at sign-in. Turn it on to create the supported Windows sign-in task."
                     : "Windows startup could not be checked. Try again before changing Auto Start.";
@@ -224,7 +232,7 @@ function AutoStartTile() {
         ? "Auto Start status unavailable"
         : autostartError?.phase === "confirmation"
             ? "Auto Start may have changed, but Windows did not confirm it"
-            : "Auto Start wasn't changed";
+            : "Auto Start change could not be completed";
 
     return (
         <DgzTile

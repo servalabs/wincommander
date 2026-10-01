@@ -23,6 +23,9 @@ describe("Secret Settings Auto Start", () => {
         expect(source).toContain("supported Windows sign-in task");
         expect(source).toContain('role="status"');
         expect(source).toContain('role="alert"');
+        expect(source).toContain("setAutostartEnabled(null)");
+        expect(source).toContain('setAutostartEnabled(await invoke<boolean>("is_autostart_enabled"))');
+        expect(source).not.toContain("Auto Start wasn't changed");
     });
 
     test("retries a false status only while the panel first hydrates", async () => {

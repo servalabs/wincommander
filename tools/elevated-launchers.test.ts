@@ -26,12 +26,12 @@ Invoke-Expression $function.Extent.Text
 $targetPath='C:\\Program Files\\WinCommander\\wincommander-free.exe'
 $group=([Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value
 function Fixture {
-  [pscustomobject]@{State='Ready';Triggers=@();Principal=[pscustomobject]@{GroupId=$group;RunLevel='Highest'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S'};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--elevated-relaunch'})}
+  [pscustomobject]@{State='Ready';Triggers=@();Principal=[pscustomobject]@{GroupId=$group;RunLevel='Highest'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S';AllowDemandStart=$true;RestartCount=0;StartWhenAvailable=$false;WakeToRun=$false};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--elevated-relaunch'})}
 }
 Assert-TaskContract (Fixture) 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
 $sidFixture=Fixture; $sidFixture.Principal.GroupId='S-1-5-32-544'
 Assert-TaskContract $sidFixture 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
-foreach ($case in @('disabled','group','level','instances','time','path','arguments')) {
+foreach ($case in @('disabled','group','level','instances','time','path','arguments','trigger','restart','catchup','wake','demand')) {
   $t=Fixture
   switch ($case) {
     disabled { $t.State='Disabled' }
@@ -41,6 +41,11 @@ foreach ($case in @('disabled','group','level','instances','time','path','argume
     time { $t.Settings.ExecutionTimeLimit='PT1M' }
     path { $t.Actions[0].Execute='C:\\wrong.exe' }
     arguments { $t.Actions[0].Arguments='--wrong' }
+    trigger { $t.Triggers=@([pscustomobject]@{Enabled=$true}) }
+    restart { $t.Settings.RestartCount=3 }
+    catchup { $t.Settings.StartWhenAvailable=$true }
+    wake { $t.Settings.WakeToRun=$true }
+    demand { $t.Settings.AllowDemandStart=$false }
   }
   $denied=$false
   try { Assert-TaskContract $t 'S-1-5-32-544' 'Highest' '--elevated-relaunch' } catch { $denied=$true }
@@ -75,7 +80,7 @@ ${runtimePredicate}
 }
 $targetPath='C:\\Program Files\\WinCommander\\wincommander-free.exe'
 function Fixture {
-  [pscustomobject]@{State='Ready';Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};Enabled=$true;UserId=$null});Principal=[pscustomobject]@{GroupId='S-1-5-32-545';RunLevel='Limited'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S'};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--autostart'})}
+  [pscustomobject]@{State='Ready';Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};Enabled=$true;UserId=$null;Repetition=[pscustomobject]@{Interval=''}});Principal=[pscustomobject]@{GroupId='S-1-5-32-545';RunLevel='Limited'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S';AllowDemandStart=$true;RestartCount=0;StartWhenAvailable=$false;WakeToRun=$false};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--autostart'})}
 }
 Assert-TaskContract (Fixture) 'S-1-5-32-545' 'Limited' '--autostart' $true
 Assert-RuntimeRouter (Fixture)

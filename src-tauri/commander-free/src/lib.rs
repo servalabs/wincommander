@@ -1460,6 +1460,7 @@ pub fn run() {
         // replace an already-running normal instance instead of being treated
         // as a duplicate.
         if !cli_mode
+            && !session_instance::is_background_duplicate(&cli_args)
             && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args)
             && startup_elevation::offer_startup_elevation(&cli_args)
                 == startup_elevation::StartupElevationResult::ElevatedCopyStarted
@@ -1505,9 +1506,8 @@ pub fn run() {
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
     if !cli_mode {
-        // Security settings must be known before creating the window. The read
-        // has its own transport error handling; elapsed time alone is not a
-        // settings failure and must not abort an otherwise valid cold start.
+        // Security settings must be known before creating the window. A stalled
+        // preload fails closed; it never starts a second read or bypasses PIN policy.
         if let Err(error) = settings::preload_settings() {
             startup_window::show_initialization_error(&error);
             return;

@@ -46,12 +46,14 @@ use std::sync::OnceLock;
 
 use tauri::{Emitter, Manager};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, STILL_ACTIVE},
+    Foundation::{
+        CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, STILL_ACTIVE,
+    },
     System::{
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
-            CreateMutexW, GetCurrentProcessId, GetExitCodeProcess, OpenProcess, ReleaseMutex,
-            PROCESS_QUERY_LIMITED_INFORMATION,
+            CreateMutexW, GetCurrentProcessId, GetExitCodeProcess, OpenMutexW, OpenProcess,
+            ReleaseMutex, PROCESS_QUERY_LIMITED_INFORMATION,
         },
     },
 };
@@ -156,6 +158,45 @@ pub fn pipe_path(sid: u32) -> String {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/// Background duplicates must not ask Scheduler for a fresh elevated GUI.
+pub fn is_background_duplicate(args: &[String]) -> bool {
+    if !args
+        .iter()
+        .any(|arg| arg == "--autostart" || arg == "--minimized")
+    {
+        return false;
+    }
+    let name = encode_wide(&instance_object_name(current_session_id(), "lock"));
+    let handle = unsafe { OpenMutexW(0x00100000, 0, name.as_ptr()) }; // SYNCHRONIZE
+    if handle.is_null() {
+        return unsafe { GetLastError() } != ERROR_FILE_NOT_FOUND;
+    }
+    unsafe { CloseHandle(handle) };
+    true
+}
+
+fn duplicate_forward_arguments(args: &[String]) -> Option<Vec<String>> {
+    let background = args
+        .iter()
+        .any(|arg| arg == "--autostart" || arg == "--minimized");
+    let meaningful: Vec<_> = args
+        .iter()
+        .skip(1)
+        .filter(|arg| {
+            !matches!(arg.as_str(), "--autostart" | "--minimized")
+                && !(background && arg.as_str() == "--elevated-relaunch")
+        })
+        .cloned()
+        .collect();
+    if !meaningful.is_empty() {
+        Some(meaningful)
+    } else if background {
+        None
+    } else {
+        Some(vec!["--focus".to_string()])
+    }
+}
+
 /// Attempt to become the primary instance for this Windows logon session.
 ///
 /// Returns `true`  → caller is the primary; proceed with normal startup.
@@ -207,25 +248,7 @@ pub fn acquire(cli_args: &[String]) -> bool {
         //
         // Startup markers are not user-intent signals and must not bring an
         // already-running instance to the foreground.
-        let had_startup_flag = cli_args[1..]
-            .iter()
-            .any(|a| a == "--autostart" || a == "--minimized");
-        let meaningful: Vec<String> = cli_args[1..]
-            .iter()
-            .filter(|a| a.as_str() != "--autostart" && a.as_str() != "--minimized")
-            .cloned()
-            .collect();
-
-        let payload = if !meaningful.is_empty() {
-            // Has real args (paths, --shred, --scrub) — forward them.
-            Some(meaningful)
-        } else if !had_startup_flag {
-            // Bare double-click: no args at all → ask primary to show window.
-            Some(vec!["--focus".to_string()])
-        } else {
-            // Startup marker only → startup duplicate → forward nothing.
-            None
-        };
+        let payload = duplicate_forward_arguments(cli_args);
 
         if let Some(args) = payload {
             // The duplicate was launched by the user and is therefore allowed
@@ -676,7 +699,9 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     let parts: Vec<&str> = payload.split('|').collect();
     let primary_is_elevated = crate::startup_elevation::is_current_process_elevated();
     if should_exit_for_elevation_handoff(
-        parts.contains(&"--elevated-relaunch"),
+        parts.contains(&"--elevated-relaunch")
+            && !parts.contains(&"--autostart")
+            && !parts.contains(&"--minimized"),
         primary_is_elevated,
     ) {
         crate::log_message_src(
@@ -785,15 +810,19 @@ fn should_exit_for_elevation_handoff(requested: bool, primary_is_elevated: bool)
 }
 
 fn should_reveal_existing_instance(parts: &[&str], primary_is_elevated: bool) -> bool {
-    parts.contains(&"--focus") || (primary_is_elevated && parts.contains(&"--elevated-relaunch"))
+    parts.contains(&"--focus")
+        || (primary_is_elevated
+            && parts.contains(&"--elevated-relaunch")
+            && !parts.contains(&"--autostart")
+            && !parts.contains(&"--minimized"))
 }
 
 #[cfg(test)]
 mod resolve_context_menu_event_tests {
     use super::{
-        instance_object_name, pipe_path, primary_pid_value_name, resolve_context_menu_event,
-        should_exit_for_elevation_handoff, should_reveal_existing_instance,
-        take_pending_safe_pastes,
+        duplicate_forward_arguments, instance_object_name, pipe_path, primary_pid_value_name,
+        resolve_context_menu_event, should_exit_for_elevation_handoff,
+        should_reveal_existing_instance, take_pending_safe_pastes,
     };
     use std::sync::Mutex;
 
@@ -889,11 +918,36 @@ mod resolve_context_menu_event_tests {
     #[test]
     fn ordinary_background_duplicates_do_not_become_explicit_reveals() {
         for elevated in [false, true] {
-            for flags in [vec!["--autostart"], vec!["--minimized"], vec![]] {
+            for flags in [
+                vec!["--autostart"],
+                vec!["--minimized"],
+                vec!["--elevated-relaunch", "--autostart"],
+                vec![],
+            ] {
                 assert!(!should_reveal_existing_instance(&flags, elevated));
             }
             assert!(should_reveal_existing_instance(&["--focus"], elevated));
         }
+    }
+
+    #[test]
+    fn elevated_logon_duplicates_do_not_forward_a_handoff_or_reveal() {
+        assert_eq!(
+            duplicate_forward_arguments(&[
+                "app.exe".into(),
+                "--elevated-relaunch".into(),
+                "--autostart".into()
+            ]),
+            None
+        );
+        assert_eq!(
+            duplicate_forward_arguments(&["app.exe".into()]),
+            Some(vec!["--focus".into()])
+        );
+        assert_eq!(
+            duplicate_forward_arguments(&["app.exe".into(), "--scrub".into(), "file.txt".into()]),
+            Some(vec!["--scrub".into(), "file.txt".into()])
+        );
     }
 
     #[test]

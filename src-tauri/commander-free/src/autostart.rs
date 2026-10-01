@@ -45,7 +45,7 @@ enum AutostartOperation {
     Enable,
     /// A user deliberately switched autostart off.
     Disable,
-    /// Read-only, strict status for the settings toggle.
+    /// Read-only effective startup state for the settings toggle.
     Status,
 }
 
@@ -310,7 +310,7 @@ function Test-OwnedManagedTask {
   $arguments = [string]$actions[0].Arguments
   if (Test-OwnedExecutablePath -Path ([string]$actions[0].Execute)) {
     if ($Name -in @($manualTaskName, 'WinCommander Elevated Launcher')) {
-      return $arguments -eq '--elevated-relaunch'
+      return $arguments -in @('--elevated-relaunch', '--elevated-relaunch $(Arg0)')
     }
     # Never remove a same-named task merely because its executable happens to
     # be ours. Each known historic route also needs its known launch contract.
@@ -347,10 +347,16 @@ function Test-CanonicalTask {
   $logonTriggers = @($triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
   $allUsersLogon = $triggers.Count -eq 1 -and $logonTriggers.Count -eq 1 -and [bool]$logonTriggers[0].Enabled -and [string]::IsNullOrWhiteSpace([string]$logonTriggers[0].UserId)
   if (-not $allUsersLogon) { return $false }
+  $repetition = $logonTriggers[0].Repetition
+  if ($null -ne $repetition -and -not [string]::IsNullOrWhiteSpace([string]$repetition.Interval)) { return $false }
   return (Resolve-PrincipalSid -GroupId ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-545' -and
     $Task.Principal.RunLevel -eq 'Limited' -and
     $Task.Settings.MultipleInstances -eq 'Parallel' -and
-    $Task.Settings.ExecutionTimeLimit -eq 'PT0S'
+    $Task.Settings.ExecutionTimeLimit -eq 'PT0S' -and $Task.Settings.AllowDemandStart -and (Test-NoAutomaticRestart $Task.Settings)
+}
+
+function Test-NoAutomaticRestart($Settings) {
+  return $Settings.RestartCount -eq 0 -and -not $Settings.StartWhenAvailable -and -not $Settings.WakeToRun
 }
 
 function Get-OwnedTaskEntries {
@@ -576,10 +582,10 @@ function Test-CanonicalLauncher {
   if (-not (Test-InstalledLauncherEligible) -or $null -eq $Task -or $Task.State -eq 'Disabled' -or $null -eq $Task.Principal -or $null -eq $Task.Settings) { return $false }
   $actions = @($Task.Actions)
   return $actions.Count -eq 1 -and (Test-CurrentExecutablePath ([string]$actions[0].Execute)) -and
-    [string]$actions[0].Arguments -eq '--elevated-relaunch' -and @($Task.Triggers).Count -eq 0 -and
+    [string]$actions[0].Arguments -eq '--elevated-relaunch $(Arg0)' -and @($Task.Triggers).Count -eq 0 -and
     (Resolve-PrincipalSid ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-544' -and
     $Task.Principal.RunLevel -eq 'Highest' -and $Task.Settings.MultipleInstances -eq 'Parallel' -and
-    $Task.Settings.ExecutionTimeLimit -eq 'PT0S'
+    $Task.Settings.ExecutionTimeLimit -eq 'PT0S' -and $Task.Settings.AllowDemandStart -and (Test-NoAutomaticRestart $Task.Settings)
 }
 
 function Test-LauncherNeedsRepair {
@@ -604,7 +610,7 @@ function Register-CanonicalLauncher {
     throw "Scheduled task '$manualTaskName' already belongs to another program and was left untouched."
   }
   if (Test-CanonicalLauncher $existing) { return }
-  $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--elevated-relaunch'
+  $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--elevated-relaunch $(Arg0)'
   $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-544' -RunLevel Highest
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
   Register-ScheduledTask -TaskName $manualTaskName -Description 'SerVaLabs administrator desktop launcher' -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
@@ -689,11 +695,11 @@ if ($needsRemoval) {
 #[cfg(windows)]
 const POWERSHELL_STATUS: &str = r#"
 
-$preference = Get-AutostartPreference
-$enabled = $preference -ne 0
-if ($enabled) {
-  $desiredTask = Get-TaskOrNull -Name $desiredTaskName
-  $enabled = (Test-CanonicalTask -Task $desiredTask) -and -not (Test-AnyOwnedCompetingRoutes) -and -not (Test-LauncherNeedsRepair)
+$enabled = @(Get-OwnedRunEntries).Count -gt 0 -or @(Get-OwnedStartupShortcutEntries).Count -gt 0
+foreach ($entry in @(Get-OwnedTaskEntries)) {
+  if ($entry.Task.State -ne 'Disabled' -and @($entry.Task.Triggers | Where-Object { $_.Enabled }).Count -gt 0) {
+    $enabled = $true
+  }
 }
 [Console]::Out.Write(([bool]$enabled).ToString().ToLowerInvariant())
 "#;
@@ -706,6 +712,8 @@ fn run_powershell(script: &str) -> Result<std::process::Output, String> {
         .args([
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
@@ -731,7 +739,7 @@ fn run_elevated_powershell(script: &str) -> Result<std::process::Output, String>
     let launcher = format!(
         r#"$ErrorActionPreference = 'Stop'
 try {{
-  $process = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '{encoded_script}') -Verb RunAs -Wait -PassThru
+  $process = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '{encoded_script}') -Verb RunAs -Wait -PassThru
   if ($null -eq $process) {{ throw 'Windows did not start the elevated autostart operation.' }}
   if ($process.ExitCode -ne 0) {{ throw "The elevated autostart operation exited with code $($process.ExitCode)." }}
 }} catch {{
@@ -779,9 +787,8 @@ fn run_autostart_mutation(
     {
         // Setup and the legacy App effect both run this integrity pass. It
         // must never create a surprise or duplicate UAC prompt at launch or
-        // logon. The strict status command remains false until the installer,
-        // an already-elevated process, or an explicit settings action repairs
-        // the task.
+        // logon. Explicit settings actions and the installer can repair the
+        // task; the status command continues to report the actual routes.
         deferred_for_elevation = true;
         Ok(())
     } else if first_attempt.status.code() == Some(ELEVATION_REQUIRED_EXIT_CODE) {
@@ -863,10 +870,8 @@ pub fn remove_autostart_task() -> Result<(), String> {
     run_autostart_mutation(covered_identity_active(), AutostartOperation::Disable, true)
 }
 
-/// A strict, read-only status for the visible settings toggle. `true` means
-/// the preference is on *and* exactly one healthy canonical router remains;
-/// a fresh default with a missing task intentionally reports false until the
-/// background repair has completed.
+/// Reports actual automatic routes, even if a previous cleanup failed or the
+/// separate manual launcher needs repair. A preference alone cannot start the app.
 #[cfg(windows)]
 #[tauri::command]
 pub fn is_autostart_enabled() -> Result<bool, String> {
@@ -973,11 +978,14 @@ mod tests {
     }
 
     #[test]
-    fn status_is_strict_and_covered_task_cleanup_requires_our_exact_action() {
+    fn status_reports_actual_routes_and_cleanup_requires_our_exact_action() {
         let status = build_autostart_script(true, AutostartOperation::Status).unwrap();
-        assert!(status.contains("$enabled = $preference -ne 0"));
-        assert!(status.contains("Test-CanonicalTask -Task $desiredTask"));
-        assert!(status.contains("Test-AnyOwnedCompetingRoutes"));
+        assert!(status.contains("$enabled = @(Get-OwnedRunEntries).Count -gt 0"));
+        assert!(status.contains("$entry.Task.State -ne 'Disabled'"));
+        assert!(POWERSHELL_STATUS.contains("Where-Object { $_.Enabled }"));
+        assert!(!POWERSHELL_STATUS.contains("Get-AutostartPreference"));
+        assert!(!POWERSHELL_STATUS.contains("Test-CanonicalTask"));
+        assert!(!POWERSHELL_STATUS.contains("Test-LauncherNeedsRepair"));
         assert!(status.contains("if ($Name -eq $coveredTaskName)"));
         assert!(status.contains("return $arguments -eq '--autostart'"));
         assert!(status.contains("$arguments -notmatch '(?i)autostart\\.stderr\\.log'"));

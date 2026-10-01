@@ -119,6 +119,25 @@ flowchart LR
 
 ## Executable open-core model
 
+The Auto Start switch reads actual enabled, owned automatic Windows routes,
+not merely the saved preference or the health of the separate manual elevation
+launcher. Repair validates one sign-in trigger, no restart/repetition/catch-up
+policy, and no automatic triggers on the manual launcher. Scheduled handoff
+preserves background-start intent; a duplicate logon launch does not reveal or
+replace an existing window. Explicit manual launches still request focus.
+
+| Scheduled task | Purpose | Scope |
+| --- | --- | --- |
+| `SL-AS` | Sign-in startup router | One all-user logon trigger; runs in the signed-in session |
+| `SL-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
+| `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
+| `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
+| `WinCommanderShellPriorityLogon` | Apply configured desktop-shell priority | Machine logon helper |
+
+Task migration checks the executable/action identity before changing or removing
+an existing task. Similar names alone do not prove that a task belongs to this
+installation. Task Scheduler names are not a security or concealment boundary.
+
 The Pro updater holds a machine-wide maintenance reservation while replacing
 the shared component. Desktop and service brokers pause new calls, active
 requests drain, and only processes verified against the target executable are
@@ -324,6 +343,13 @@ replays a temporary snapshot over newer preferences. A locked secret envelope
 remains protected independently of ordinary preference saves. Free-only Tauri
 development prepares the same settings service, without requesting Pro or
 encrypted-volume driver preparation from the development synchronizer.
+
+A failed save publishes an unavailable state that can recover even if the
+previous session was service-backed. Explicit personal-data retries re-read
+locked data; ordinary polling does not repeatedly try inaccessible Windows keys.
+Pre-window initialization waits for one settings load and refuses to open without
+its security snapshot if that read exceeds its bounded wait. It never replaces
+unreadable policy or secrets with a writable default record.
 
 - `store/settings.dat` — the machine partition of the settings tree, encoded with AES-256-GCM (`enc:v2:` authenticated scope; legacy `enc:v1:` remains readable). The desktop merges the personal partition in memory into `AppSettings`; flows and other sensitive personal fields retain a separate encrypted envelope inside the service's atomic record. Plaintext migration cleanup requires confirmed service-backed personal and machine persistence, a durable hash journal, committed-partition checks, and exclusive-handle source verification before removal. Older no-service fallback writes retain the plaintext and journal. Encrypted legacy originals remain preserved.
 - Licence cache (`%ProgramData%\WinCommander\license_cache.json`, machine-wide) — signed JWT envelope (`payload` + `signature`), `last_verified_at`, optional seat info; verified against the build-embedded Ed25519 pubkey, bound to `current_device_hash()` — now derived from motherboard UUID + disk serial via `Get-CimInstance` (not the removed `wmic`), memoised per process (`license.rs`).

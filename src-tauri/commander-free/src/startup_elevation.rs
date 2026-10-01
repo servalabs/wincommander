@@ -20,6 +20,10 @@ pub enum StartupElevationResult {
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
 const ELEVATED_LAUNCH_TASK: &str = "SL-EL";
 
+#[cfg(windows)]
+#[path = "startup_elevation_wait.rs"]
+mod handoff_wait;
+
 /// A UAC prompt is useful for every interactive desktop launch, including the
 /// logon launch. This lets Windows show its normal consent/credential prompt
 /// instead of silently pinning WinCommander to a limited token.
@@ -110,7 +114,15 @@ pub fn is_current_process_elevated() -> bool {
 /// a cooperative exit request. Other duplicate launches remain ordinary
 /// forwards, even when Explorer already started them elevated.
 pub fn should_handoff_existing_instance(args: &[String]) -> bool {
-    !is_helper_launch(args) && is_elevated_relaunch(args)
+    !is_helper_launch(args) && !is_logon_router_launch(args) && is_elevated_relaunch(args)
+}
+
+fn task_launch_intent(args: &[String]) -> &'static str {
+    if is_logon_router_launch(args) {
+        "--autostart"
+    } else {
+        "--focus"
+    }
 }
 
 /// Build the child arguments without passing the internal sentinel on again.
@@ -178,30 +190,54 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     // child without another consent dialog. If the task is absent, blocked by
     // policy, or this is a standard user, deliberately fall through to UAC.
     let task_name = ELEVATED_LAUNCH_TASK;
+    let launch_intent = task_launch_intent(args);
     // Never hand a dev/portable launch to an unrelated installed executable.
     // RunEx binds the task to this interactive session on multi-user machines.
     let task_script = std::env::current_exe().ok().map(|path| format!(
-        "$ErrorActionPreference='Stop'; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0) {{ exit 1 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 1 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId; $null=$task.RunEx($null,4,$session,$null)",
+        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
         path.to_string_lossy().replace('\'', "''")
     ));
+    use handoff_wait::SchedulerHandoff;
     let task_status = if !cfg!(debug_assertions) && current_user_has_split_admin_token() {
-        task_script.and_then(|script| {
-            std::process::Command::new("powershell.exe")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        task_script.map_or(SchedulerHandoff::NotStarted, |script| {
+            let child = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    &script,
+                ])
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .status()
-                .ok()
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match child {
+                Ok(mut child) => {
+                    handoff_wait::wait_for_handoff(&mut child, std::time::Duration::from_secs(12))
+                }
+                Err(_) => SchedulerHandoff::NotStarted,
+            }
         })
     } else {
-        None
+        SchedulerHandoff::NotStarted
     };
-    if matches!(task_status, Some(status) if status.success()) {
+    if task_status == SchedulerHandoff::Accepted {
         crate::log_message_src(
             "info",
             "core",
             &format!("[StartupElevation] trusted task started: {task_name}"),
         );
         return StartupElevationResult::ElevatedCopyStarted;
+    }
+    if task_status == SchedulerHandoff::AcceptanceUnknown {
+        crate::log_message_src(
+            "warn", "core",
+            "[StartupElevation] scheduler handoff outcome unknown; continuing without another elevation request",
+        );
+        return StartupElevationResult::ContinueNormally;
     }
 
     // The sole logon task runs at the caller's normal token. For a standard
@@ -347,6 +383,23 @@ mod tests {
             "--context-shred".into(),
             ELEVATED_RELAUNCH_FLAG.into()
         ]));
+        assert!(!should_handoff_existing_instance(&[
+            "app.exe".into(),
+            ELEVATED_RELAUNCH_FLAG.into(),
+            "--autostart".into()
+        ]));
+    }
+
+    #[test]
+    fn scheduler_only_receives_fixed_launch_intent_and_keeps_background_duplicates_quiet() {
+        assert_eq!(
+            task_launch_intent(&["app.exe".into(), "--autostart".into()]),
+            "--autostart"
+        );
+        assert_eq!(
+            task_launch_intent(&["app.exe".into(), "untrusted argument".into()]),
+            "--focus"
+        );
     }
 
     #[test]

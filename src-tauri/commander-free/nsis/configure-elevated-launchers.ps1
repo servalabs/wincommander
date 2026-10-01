@@ -108,13 +108,16 @@ function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [strin
     }
     $actions = @($Task.Actions)
     $triggers = @($Task.Triggers)
-    $hasOneLogonTrigger = -not $RequireLogonTrigger -or
-        ($triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and
-            $triggers[0].Enabled -and [string]::IsNullOrWhiteSpace($triggers[0].UserId))
+    $hasExpectedTriggers = if ($RequireLogonTrigger) {
+        $triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and
+            $triggers[0].Enabled -and [string]::IsNullOrWhiteSpace($triggers[0].UserId) -and
+            ($null -eq $triggers[0].Repetition -or [string]::IsNullOrWhiteSpace([string]$triggers[0].Repetition.Interval))
+    } else { $triggers.Count -eq 0 }
     if ($Task.State -eq 'Disabled' -or $actualSid -ne $GroupSid -or $Task.Principal.RunLevel -ne $RunLevel -or
         $Task.Settings.MultipleInstances -ne 'Parallel' -or $Task.Settings.ExecutionTimeLimit -ne 'PT0S' -or
+        -not $Task.Settings.AllowDemandStart -or $Task.Settings.RestartCount -ne 0 -or $Task.Settings.StartWhenAvailable -or $Task.Settings.WakeToRun -or
         $actions.Count -ne 1 -or $actions[0].Execute -ine $targetPath -or $actions[0].Arguments -ne $Arguments -or
-        -not $hasOneLogonTrigger) {
+        -not $hasExpectedTriggers) {
         throw 'The registered WinCommander task did not match the required security and session contract.'
     }
 }
@@ -169,7 +172,8 @@ function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPat
     if ($actions.Count -ne 1) { return $false }
     $actualArguments = [string]$actions[0].Arguments
     if (Test-OwnedExecutableCommand ([string]$actions[0].Execute) $OwnedPaths) {
-        return $actualArguments -eq $Arguments -or ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized')
+        return $actualArguments -eq $Arguments -or ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized') -or
+            ($Arguments -eq '--elevated-relaunch' -and $actualArguments -eq '--elevated-relaunch $(Arg0)')
     }
     # Match the historic wrapper by both its bounded argument contract and an
     # exact installed image; a generic task name never establishes ownership.
@@ -234,12 +238,12 @@ function Remove-AllAutostartTasks([string[]]$OwnedPaths) {
 
 function Register-ElevatedLauncherTask {
     Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths
-    $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--elevated-relaunch'
+    $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--elevated-relaunch $(Arg0)'
     $principal = New-ScheduledTaskPrincipal -GroupId $administratorsSid -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $manualTaskName -Description 'SerVaLabs administrator desktop launcher' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    Assert-TaskContract (Get-ScheduledTask -TaskName $manualTaskName -ErrorAction Stop) $administratorsSid 'Highest' '--elevated-relaunch'
+    Assert-TaskContract (Get-ScheduledTask -TaskName $manualTaskName -ErrorAction Stop) $administratorsSid 'Highest' '--elevated-relaunch $(Arg0)'
 }
 
 function Register-LogonRouterTask {
