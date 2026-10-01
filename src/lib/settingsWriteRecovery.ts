@@ -9,6 +9,11 @@ export interface SettingsWriteFailure {
   reason: string;
 }
 
+/** Mutable single-flight slot shared by automatic and user-requested recovery reads. */
+export interface SettingsRecoveryReadSlot<T> {
+  pending: Promise<T> | null;
+}
+
 const reportedWriteFailures = new WeakSet<object>();
 
 function errorText(error: unknown): string {
@@ -58,4 +63,21 @@ export async function recoverSettingsWrite<T>(
     report(error);
     throw error;
   }
+}
+
+/**
+ * Coalesce recovery reads without retrying a failed settings mutation. The
+ * supplied read must be authoritative (the service/cache read-back), and a
+ * later caller gets the same pending result rather than opening a second pipe.
+ */
+export function runSharedSettingsRecoveryRead<T>(
+  slot: SettingsRecoveryReadSlot<T>,
+  read: () => Promise<T>,
+): Promise<T> {
+  if (slot.pending) return slot.pending;
+  const pending = Promise.resolve().then(read).finally(() => {
+    if (slot.pending === pending) slot.pending = null;
+  });
+  slot.pending = pending;
+  return pending;
 }

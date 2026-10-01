@@ -23,10 +23,20 @@ import { PersonalSettingsNotice, PersonalSettingsRecoveryDetails } from '/src/co
 function Fixture() {
   const [status, setStatus] = React.useState({ mode: 'service', recoveryRequired: true, canSave: true });
   const [showSettings, setShowSettings] = React.useState(false);
+  const retry = React.useCallback(() => {
+    window.recoveryRetryCalls = (window.recoveryRetryCalls || 0) + 1;
+    return new Promise(resolve => {
+      window.resolveRecoveryRetry = () => {
+        setStatus({ mode: 'service', recoveryRequired: false, canSave: true });
+        resolve();
+      };
+    });
+  }, []);
   window.updateRecoveryFixture = next => setStatus(next);
   window.readRecoveryFixture = () => status;
+  window.recoveryRetryCalls = window.recoveryRetryCalls || 0;
   return React.createElement(React.Fragment, null,
-    React.createElement(PersonalSettingsNotice, { status, onOpenSettings: () => setShowSettings(true) }),
+    React.createElement(PersonalSettingsNotice, { status, onOpenSettings: () => setShowSettings(true), onRetry: retry }),
     React.createElement('button', { onClick: () => setShowSettings(true) }, 'Open Settings'),
     showSettings && React.createElement(PersonalSettingsRecoveryDetails, { status }));
 }
@@ -36,7 +46,7 @@ ReactDOM.createRoot(document.getElementById('fixture')).render(React.createEleme
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  page.setDefaultTimeout(30000);
+  page.setDefaultTimeout(10000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('requestfailed', request => errors.push(`${new URL(request.url()).pathname}: ${request.failure()?.errorText}`));
@@ -80,8 +90,20 @@ async function main() {
     await page.getByRole('status').waitFor({ state: 'detached' });
     await page.reload();
     await dismiss().waitFor();
+    await page.evaluate(() => window.updateRecoveryFixture({ mode: 'temporary', recoveryRequired: false, canSave: false }));
+    const checkService = page.getByRole('button', { name: 'Check service again', exact: true });
+    await checkService.waitFor();
+    await checkService.click();
+    const checkingService = page.getByRole('button', { name: 'Checking service…', exact: true });
+    await checkingService.waitFor();
+    assert.equal(await checkingService.isDisabled(), true, 'An in-flight service check disables repeated user retries');
+    await page.evaluate(() => document.querySelector('[data-slot="button"][disabled]')?.click());
+    assert.equal(await page.evaluate(() => window.recoveryRetryCalls), 1, 'A disabled retry cannot open another recovery read');
+    await page.evaluate(() => window.resolveRecoveryRetry());
+    await page.getByRole('button', { name: 'Check service again', exact: true }).waitFor({ state: 'detached' });
+    assert.equal(await page.getByRole('status').count(), 0, 'A healthy authoritative status removes the temporary notice');
     assert.deepEqual(errors, [], 'Recovery components must not raise browser errors');
-    console.log('PASS: actual pointer/keyboard dismissal, Settings details, unchanged protection status, ordinary refresh, changed condition, recovery recurrence, and new-session redisplay. Browser fixture only; no native recovery performed.');
+    console.log('PASS: actual pointer/keyboard dismissal, Settings details, unchanged protection status, ordinary refresh, changed condition, recovery recurrence, new-session redisplay, and one simulated pending authoritative service retry. Browser fixture only; no native recovery performed.');
   } catch (error) {
     console.error('Fixture browser errors:', errors);
     throw error;

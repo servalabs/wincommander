@@ -34,7 +34,7 @@ export interface ControlLifecycleState {
 
 export type ControlLifecycleTone = "neutral" | "success" | "warning" | "danger" | "info";
 
-const BLOCKED_REASON = /decoy|access denied|permission denied|not authorized|(?:needs?|requires?)[\s-]*elevation|store[\s-]*(?:is[\s-]*)?read[\s-]*only|read[\s-]*only/i;
+const BLOCKED_REASON = /decoy|access denied|permission denied|not authorized|(?:needs?|requires?)[\s-]*elevation|store[\s-]*(?:is[\s-]*)?read[\s-]*only|read[\s-]*only|personal settings are temporary|WinCommander service before saving|personal settings service is still unavailable; no preferences were saved|personal settings service recovered\. refresh settings before saving so newer preferences are preserved/i;
 
 function stateFor(reason: string): "Blocked" | "Failed" {
   return BLOCKED_REASON.test(reason) ? "Blocked" : "Failed";

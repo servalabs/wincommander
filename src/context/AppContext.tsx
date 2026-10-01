@@ -31,7 +31,7 @@ import { createStartupProbeStore } from '../services/startupProbeStore';
 import { useLicenseQuery } from '../hooks/queries/useLicenseQuery';
 import { createTauriStartupReporter } from '../events/startup';
 import { reportStartupPhase } from '../hooks/startupTrace';
-import { recoverSettingsWrite } from '../lib/settingsWriteRecovery';
+import { recoverSettingsWrite, runSharedSettingsRecoveryRead } from '../lib/settingsWriteRecovery';
 import { preserveDashboardPolicyUnknowns } from '../lib/dashboardPolicyObservation';
 import { getStartupSettingsFailureMessage } from '../lib/startupSettingsFailure';
 import { getPackageUpdateInventorySnapshot, runPackageUpdateInventoryCheck, setPackageUpdateCatalogInventoryFresh } from '../lib/packageUpdateInventoryStore';
@@ -68,6 +68,9 @@ interface AppState {
     /** Re-read settings.json from Rust. Lightweight (~1ms). Use after bulk
      *  backend operations (e.g. Fix Everything) so the radar auto-updates. */
     refreshSettings: () => Promise<void>;
+    /** Re-check a temporary per-account settings service session. This reads
+     *  only an authoritative service record; it never retries a cached patch. */
+    retryPersonalSettingsRecovery: () => Promise<void>;
 
     // Dependency status — from centralized dependency module
     dependencyStatus: DependencyInfo[] | null;
@@ -221,6 +224,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const appSettingsRef = useRef<AppSettings | null>(null);
     useEffect(() => { appSettingsRef.current = appSettings; }, [appSettings]);
     const patchChainRef = useRef<Promise<unknown>>(Promise.resolve());
+    // A background recovery read must never render an older snapshot over a
+    // mutation that started after that read. Native already serializes its
+    // personal-session recovery with writes; this protects the renderer cache.
+    const settingsMutationGenerationRef = useRef(0);
+    const personalSettingsRecoveryReadRef = useRef<{ pending: Promise<void> | null }>({ pending: null });
     const appInventory: AppInventorySnapshot | null = appSettings?.current?.apps?.inventory ?? null;
 
     // React Query client — kept in sync with AppContext so panels that read
@@ -698,6 +706,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     }, [getStartupStatus, mergeDiskHealth, persistProbeToSettings]);
 
+    /** Applies only the authoritative settings record returned by native code. */
+    const readAndApplySettings = useCallback(async () => {
+        // Do not snapshot the cache while a serialized patch is still in its
+        // native write/restore phase. This is especially important for a
+        // recovery read: its result must not paint an older cache entry after
+        // that patch has confirmed a newer authoritative value.
+        await patchChainRef.current;
+        const requestGeneration = settingsMutationGenerationRef.current;
+        const updated = await invoke<AppSettings>('get_settings');
+        if (requestGeneration !== settingsMutationGenerationRef.current) return;
+        setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous));
+        // PERF: the active-panel poller calls this every 10s just to READ
+        // settings — it mutates nothing. Re-seeding React state with a fresh
+        // object identity re-renders the whole app (every useAppState
+        // consumer), which can hitch an in-progress scroll. Skip the update
+        // entirely when the settings are unchanged (the common case): only
+        // re-render when a background probe actually wrote something new.
+        const prev = appSettingsRef.current;
+        if (prev && JSON.stringify(prev) === JSON.stringify(updated)) return;
+        appSettingsRef.current = updated;
+        setAppSettings(updated);
+        queryClient.setQueryData(settingsKeys.detail(), updated);
+        seedFromCachedSettings(updated);
+    }, [queryClient, seedFromCachedSettings]);
+
     /** Lightweight re-read of settings.json from Rust (~1ms). Does NOT
      *  trigger any PowerShell probe — just reads what Rust already has. */
     const refreshSettings = useCallback(async () => {
@@ -705,24 +738,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // with the real config, blowing the fake-data substitution in the ctx memo.
         if (authMode === 'decoy') return;
         try {
-            const updated = await invoke<AppSettings>('get_settings');
-            setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous));
-            // PERF: the active-panel poller calls this every 10s just to READ
-            // settings — it mutates nothing. Re-seeding React state with a fresh
-            // object identity re-renders the whole app (every useAppState
-            // consumer), which can hitch an in-progress scroll. Skip the update
-            // entirely when the settings are unchanged (the common case): only
-            // re-render when a background probe actually wrote something new.
-            const prev = appSettingsRef.current;
-            if (prev && JSON.stringify(prev) === JSON.stringify(updated)) return;
-            appSettingsRef.current = updated;
-            setAppSettings(updated);
-            queryClient.setQueryData(settingsKeys.detail(), updated);
-            seedFromCachedSettings(updated);
+            await readAndApplySettings();
         } catch (err) {
             console.error('Failed to refresh settings:', err);
         }
-    }, [authMode, queryClient, seedFromCachedSettings]);
+    }, [authMode, readAndApplySettings]);
+
+    // Both the recovery banner and its low-frequency background check share
+    // one read. Native decides whether a temporary service session is allowed
+    // to reconnect; it returns a fresh authoritative record on success.
+    const retryPersonalSettingsRecovery = useCallback(() => {
+        if (authMode === 'decoy') return Promise.resolve();
+        // Unlike routine refreshes, surface a rejected service read to the
+        // recovery banner. It still applies only native's freshly read record.
+        return runSharedSettingsRecoveryRead(personalSettingsRecoveryReadRef.current, readAndApplySettings);
+    }, [authMode, readAndApplySettings]);
+
+    useEffect(() => {
+        if (authMode === 'decoy'
+            || personalSettingsStatus?.mode !== 'temporary'
+            || personalSettingsStatus.canSave) {
+            return;
+        }
+        // Do not poll normal settings. A temporary session gets one bounded
+        // background recheck; the native transport separately throttles actual
+        // service reconnects and preserves its SID/revision contract.
+        const interval = window.setInterval(() => {
+            void retryPersonalSettingsRecovery().catch((error) => {
+                // The banner remains truthful (temporary/not saved); avoid an
+                // unhandled rejection if a future transport implementation
+                // chooses to reject rather than return that status.
+                console.warn('Personal settings recovery check failed:', error);
+            });
+        }, 15_000);
+        return () => window.clearInterval(interval);
+    }, [authMode, personalSettingsStatus?.canSave, personalSettingsStatus?.mode, retryPersonalSettingsRecovery]);
 
     const refreshHardening = useCallback(async () => {
         // Thin wrapper — all hardening data is in settings.json, written by sync patches.
@@ -1107,6 +1157,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // stale base and clobber each other; read the latest settings from a ref so
         // module normalization sees the freshest value, not the closure snapshot.
         const run = patchChainRef.current.then(async () => {
+          settingsMutationGenerationRef.current += 1;
           return recoverSettingsWrite(async () => {
             const latest = appSettingsRef.current;
             // Resolve function-form patches here, at this write's turn in the
@@ -1448,6 +1499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         personalSettingsStatus: authMode === "decoy" ? null : personalSettingsStatus,
         patchAppSettings,
         refreshSettings,
+        retryPersonalSettingsRecovery,
         dependencyStatus,
         depCacheAge,
         forceRefreshDeps,
@@ -1490,6 +1542,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         personalSettingsStatus,
         patchAppSettings,
         refreshSettings,
+        retryPersonalSettingsRecovery,
         dependencyStatus,
         depCacheAge,
         forceRefreshDeps,

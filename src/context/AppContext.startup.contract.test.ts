@@ -49,14 +49,17 @@ describe("AppContext startup coordination", () => {
   test("keeps recovery notice independent of patch snapshots and out of decoy mode", async () => {
     const source = await Bun.file("src/context/AppContext.tsx").text();
     const hydration = source.slice(source.indexOf("const initSettings ="), source.indexOf("// Phase 2: System probe"));
-    const refresh = source.slice(source.indexOf("const refreshSettings ="), source.indexOf("const refreshHardening ="));
+    const refresh = source.slice(source.indexOf("const readAndApplySettings ="), source.indexOf("const refreshHardening ="));
     const shell = await Bun.file("src/components/AppShell.tsx").text();
 
     expect(hydration).toContain("setPersonalSettingsStatus(previous => readPersonalSettingsStatus(settings, previous))");
     expect(refresh).toContain("setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous))");
     expect(hydration).not.toContain("setStartupError(");
     expect(source).toContain('personalSettingsStatus: authMode === "decoy" ? null : personalSettingsStatus');
-    expect(shell).toContain('<PersonalSettingsNotice status={personalSettingsStatus} onOpenSettings={() => onPanelChange("system-identity")} />');
+    expect(shell).toContain('<PersonalSettingsNotice');
+    expect(shell).toContain('status={personalSettingsStatus}');
+    expect(shell).toContain('onOpenSettings={() => onPanelChange("system-identity")}');
+    expect(shell).toContain('onRetry={retryPersonalSettingsRecovery}');
     expect(shell.indexOf("<PersonalSettingsNotice")).toBeGreaterThan(shell.indexOf("<TitleBar"));
   });
 
@@ -68,6 +71,17 @@ describe("AppContext startup coordination", () => {
     expect(mutation).toContain("...currentModules,");
     expect(mutation).toContain("...normalizedPatch.app.modules,");
     expect(mutation).toContain("invoke<AppSettings>('patch_settings_cmd', { patch: normalizedPatch })");
+  });
+
+  test("does not let a pre-mutation recovery read overwrite a newer settings snapshot", async () => {
+    const source = await Bun.file("src/context/AppContext.tsx").text();
+    const refresh = source.slice(source.indexOf("const readAndApplySettings ="), source.indexOf("const refreshHardening ="));
+    const mutation = source.slice(source.indexOf("const patchAppSettings ="), source.indexOf("const startupEligibility ="));
+
+    expect(refresh).toContain("const requestGeneration = settingsMutationGenerationRef.current;");
+    expect(refresh).toContain("await patchChainRef.current;");
+    expect(refresh).toContain("if (requestGeneration !== settingsMutationGenerationRef.current) return;");
+    expect(mutation).toContain("settingsMutationGenerationRef.current += 1;");
   });
 
   test("checks package updates automatically after launch without blocking startup", async () => {

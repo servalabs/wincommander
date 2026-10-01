@@ -5,18 +5,32 @@ import { Button } from "../ui/button";
 interface NoticeProps {
   status: PersonalSettingsStatus | null;
   onOpenSettings?: () => void;
+  /** Performs an authoritative service read; it does not replay an unsaved patch. */
+  onRetry?: () => Promise<void>;
 }
 
-export function PersonalSettingsNotice({ status, onOpenSettings }: NoticeProps) {
+export function PersonalSettingsNotice({ status, onOpenSettings, onRetry }: NoticeProps) {
   if (!status || (!status.recoveryRequired && status.canSave)) return null;
 
   // A changed problem or a new app session must be acknowledged again.
-  return <DismissibleNotice key={`${status.recoveryRequired}:${status.canSave}`} status={status} onOpenSettings={onOpenSettings} />;
+  return <DismissibleNotice key={`${status.recoveryRequired}:${status.canSave}`} status={status} onOpenSettings={onOpenSettings} onRetry={onRetry} />;
 }
 
-function DismissibleNotice({ status, onOpenSettings }: NoticeProps & { status: PersonalSettingsStatus }) {
+function DismissibleNotice({ status, onOpenSettings, onRetry }: NoticeProps & { status: PersonalSettingsStatus }) {
   const [dismissed, setDismissed] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   if (dismissed) return null;
+
+  const canRetryService = status.mode === "temporary" && !status.canSave && Boolean(onRetry);
+  const retryService = () => {
+    if (!onRetry || checking) return;
+    setChecking(true);
+    setCheckError(null);
+    void onRetry()
+      .catch(() => setCheckError("WinCommander could not check the personal-settings service. Your preferences were not saved."))
+      .finally(() => setChecking(false));
+  };
 
   return (
     <div
@@ -26,8 +40,12 @@ function DismissibleNotice({ status, onOpenSettings }: NoticeProps & { status: P
       className="shrink-0 border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text)]"
     >
       <RecoveryMessage status={status} />
+      {checkError && <p role="status" className="mt-2 text-[var(--danger)]">{checkError}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {onOpenSettings && <Button size="sm" onClick={onOpenSettings}>Review in Settings</Button>}
+        {canRetryService && <Button size="sm" variant="outline" onClick={retryService} disabled={checking}>
+          {checking ? "Checking service…" : "Check service again"}
+        </Button>}
         <Button size="sm" variant="ghost" onClick={() => setDismissed(true)} aria-label="Dismiss personal data recovery notice for this session">Dismiss for now</Button>
         <span className="text-xs text-[var(--text-dim)]">Details remain in Settings. Dismissing does not unlock protected data.</span>
       </div>
@@ -36,6 +54,7 @@ function DismissibleNotice({ status, onOpenSettings }: NoticeProps & { status: P
 }
 
 function RecoveryMessage({ status }: { status: PersonalSettingsStatus }) {
+  const temporaryService = status.mode === "temporary" && !status.canSave;
   return (
     <>
       <p className="font-semibold">
@@ -44,10 +63,14 @@ function RecoveryMessage({ status }: { status: PersonalSettingsStatus }) {
       <p>
         {status.recoveryRequired
           ? "Windows could not unlock some saved personal data. The original files are preserved. Unavailable preferences use safe defaults, and affected sensitive features stay locked until access is restored."
-          : "WinCommander has opened with temporary personal defaults."}
+          : temporaryService
+            ? "WinCommander could not reach this account's local personal-settings service, so it is using temporary preferences."
+            : "WinCommander has opened with temporary personal defaults."}
         {status.canSave
           ? " You can save new preferences."
-          : " Changes to personal preferences cannot be saved right now. Try reopening WinCommander when its background service is available."}
+          : temporaryService
+            ? " Changes to personal preferences cannot be saved right now and were not saved. Start or update the local WinCommander service, then check it again. WinCommander will also check again in the background."
+            : " Changes to personal preferences cannot be saved right now. Try reopening WinCommander when its background service is available."}
       </p>
     </>
   );
@@ -59,7 +82,7 @@ export function PersonalSettingsRecoveryDetails({ status }: { status: PersonalSe
     <section aria-label="Personal data recovery" className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--text)]">
       <RecoveryMessage status={status} />
       {status.recoveryRequired && <p className="mt-2">Use the Windows account that saved this data. Administrator permission alone cannot unlock another account's encrypted personal data. Keep the original files while restoring that account's access.</p>}
-      <p className="mt-2 text-[var(--text-dim)]">After restoring access, reopen WinCommander to check again. Saving new preferences or dismissing the banner does not recover the original data.</p>
+      <p className="mt-2 text-[var(--text-dim)]">After restoring access, check settings again. Saving new preferences or dismissing the banner does not recover the original data.</p>
     </section>
   );
 }

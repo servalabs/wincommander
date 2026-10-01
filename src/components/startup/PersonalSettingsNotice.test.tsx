@@ -51,8 +51,25 @@ test("temporary recovery preferences never claim they can be saved", () => {
 test("temporary service failure without key loss does not claim sensitive data is locked", () => {
   const html = renderToStaticMarkup(<PersonalSettingsNotice status={{ mode: "temporary", recoveryRequired: false, canSave: false }} />);
   expect(html).toContain("temporarily unavailable");
+  expect(html).toContain("could not reach this account&#x27;s local personal-settings service");
   expect(html).toContain("cannot be saved right now");
+  expect(html).toContain("Changes to personal preferences cannot be saved right now and were not saved");
+  expect(html).toContain("Start or update the local WinCommander service");
+  expect(html).not.toContain("reopen WinCommander");
+  expect(html).toContain("check again in the background");
   expect(html).not.toContain("affected sensitive features stay locked");
+});
+
+test("temporary service notice offers an authoritative check without claiming a save", () => {
+  const html = renderToStaticMarkup(
+    <PersonalSettingsNotice
+      status={{ mode: "temporary", recoveryRequired: false, canSave: false }}
+      onRetry={async () => {}}
+    />,
+  );
+  expect(html).toContain("Check service again");
+  expect(html).toContain("were not saved");
+  expect(html).not.toContain("Settings saved");
 });
 
 test("healthy service or legacy preferences do not show a recovery notice", () => {

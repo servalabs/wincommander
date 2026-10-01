@@ -48,7 +48,7 @@ export default function AppShell({
   const isDashboard = activePanel === "dashboard";
   const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup";
   const { clearSearch } = useSearchQuery();
-  const { personalSettingsStatus } = useAppState();
+  const { personalSettingsStatus, retryPersonalSettingsRecovery } = useAppState();
 
   // Reset any palette-seeded panel filter whenever the user switches panels.
   useEffect(() => { clearSearch(); }, [activePanel, clearSearch]);
@@ -83,7 +83,11 @@ export default function AppShell({
   return (
     <>
       <TitleBar activePanel={activePanel} />
-      <PersonalSettingsNotice status={personalSettingsStatus} onOpenSettings={() => onPanelChange("system-identity")} />
+      <PersonalSettingsNotice
+        status={personalSettingsStatus}
+        onOpenSettings={() => onPanelChange("system-identity")}
+        onRetry={retryPersonalSettingsRecovery}
+      />
       <div className="app-body flex overflow-hidden">
         {/* Column 1: Left Navigation */}
         <Sidebar
