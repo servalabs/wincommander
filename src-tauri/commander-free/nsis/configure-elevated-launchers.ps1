@@ -107,7 +107,7 @@ function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [strin
         $actualSid = ([Security.Principal.NTAccount]$actualSid).Translate([Security.Principal.SecurityIdentifier]).Value
     }
     $actions = @($Task.Actions)
-    $triggers = @($Task.Triggers)
+    $triggers = @($Task.Triggers | Where-Object { $null -ne $_ })
     $hasExpectedTriggers = if ($RequireLogonTrigger) {
         $triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and
             $triggers[0].Enabled -and [string]::IsNullOrWhiteSpace($triggers[0].UserId) -and

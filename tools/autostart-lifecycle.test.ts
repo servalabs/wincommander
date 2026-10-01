@@ -51,6 +51,8 @@ if ($script:tasks.Count -ne 1) { throw 'Integrity repair recreated a task after 
 if ($script:preference -ne 1 -or $script:tasks.Count -ne 3 -or -not (Test-CanonicalTask $script:tasks['SL-AS']) -or -not (Test-CanonicalLauncher $script:tasks['SL-EL'])) { throw 'ON did not recreate the safe canonical pair' }
 & { ${script("ENSURE")} }
 if ($script:tasks.Count -ne 3) { throw 'Integrity repair duplicated routes' }
+$script:tasks['SL-EL'].Triggers=$null
+if (-not (Test-CanonicalLauncher $script:tasks['SL-EL'])) { throw 'Windows CIM null triggers falsely required launcher repair' }
 $script:tasks['SL-AS'].Triggers[0].Repetition=$null
 if (-not (Test-CanonicalTask $script:tasks['SL-AS'])) { throw 'A non-repeating Windows trigger was rejected' }
 $script:tasks['SL-AS'].Triggers[0].Repetition=[pscustomobject]@{Interval=''}
@@ -75,6 +77,10 @@ if ($script:tasks['SL-EL'].Triggers.Count -ne 0) { throw 'Reconciliation retaine
 & { ${script("DISABLE")} }
 if ($script:tasks.Count -ne 1) { throw 'OFF did not remove the newly named pair' }
 if (Read-EffectiveStatus) { throw 'Removed startup routes were still reported ON' }
+$script:tasks['SL-EL']=$launcher
+$script:tasks['SL-EL'].Triggers=$null
+if (Read-EffectiveStatus) { throw 'Manual launcher with CIM null triggers was reported as an automatic route' }
+[void]$script:tasks.Remove('SL-EL')
 $script:tasks['WinCommander Elevated Launcher']=LegacyTask '--elevated-relaunch'
 & { ${script("ENSURE")} }
 if ($script:tasks.Count -ne 1) { throw 'Explicit OFF did not clean a lingering legacy launcher' }

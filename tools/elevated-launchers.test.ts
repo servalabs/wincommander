@@ -31,6 +31,8 @@ function Fixture {
 Assert-TaskContract (Fixture) 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
 $sidFixture=Fixture; $sidFixture.Principal.GroupId='S-1-5-32-544'
 Assert-TaskContract $sidFixture 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
+$nullTriggerFixture=Fixture; $nullTriggerFixture.Triggers=$null
+Assert-TaskContract $nullTriggerFixture 'S-1-5-32-544' 'Highest' '--elevated-relaunch'
 foreach ($case in @('disabled','group','level','instances','time','path','arguments','trigger','restart','catchup','wake','demand')) {
   $t=Fixture
   switch ($case) {

@@ -343,7 +343,7 @@ function Test-CanonicalTask {
   if ($null -eq $Task -or $Task.State -eq 'Disabled' -or $null -eq $Task.Principal -or $null -eq $Task.Settings) { return $false }
   $actions = @($Task.Actions)
   if ($actions.Count -ne 1 -or -not (Test-CurrentExecutablePath -Path ([string]$actions[0].Execute)) -or [string]$actions[0].Arguments -ne '--autostart') { return $false }
-  $triggers = @($Task.Triggers)
+  $triggers = @($Task.Triggers | Where-Object { $null -ne $_ })
   $logonTriggers = @($triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
   $allUsersLogon = $triggers.Count -eq 1 -and $logonTriggers.Count -eq 1 -and [bool]$logonTriggers[0].Enabled -and [string]::IsNullOrWhiteSpace([string]$logonTriggers[0].UserId)
   if (-not $allUsersLogon) { return $false }
@@ -582,7 +582,7 @@ function Test-CanonicalLauncher {
   if (-not (Test-InstalledLauncherEligible) -or $null -eq $Task -or $Task.State -eq 'Disabled' -or $null -eq $Task.Principal -or $null -eq $Task.Settings) { return $false }
   $actions = @($Task.Actions)
   return $actions.Count -eq 1 -and (Test-CurrentExecutablePath ([string]$actions[0].Execute)) -and
-    [string]$actions[0].Arguments -eq '--elevated-relaunch $(Arg0)' -and @($Task.Triggers).Count -eq 0 -and
+    [string]$actions[0].Arguments -eq '--elevated-relaunch $(Arg0)' -and @($Task.Triggers | Where-Object { $null -ne $_ }).Count -eq 0 -and
     (Resolve-PrincipalSid ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-544' -and
     $Task.Principal.RunLevel -eq 'Highest' -and $Task.Settings.MultipleInstances -eq 'Parallel' -and
     $Task.Settings.ExecutionTimeLimit -eq 'PT0S' -and $Task.Settings.AllowDemandStart -and (Test-NoAutomaticRestart $Task.Settings)
@@ -697,7 +697,7 @@ const POWERSHELL_STATUS: &str = r#"
 
 $enabled = @(Get-OwnedRunEntries).Count -gt 0 -or @(Get-OwnedStartupShortcutEntries).Count -gt 0
 foreach ($entry in @(Get-OwnedTaskEntries)) {
-  if ($entry.Task.State -ne 'Disabled' -and @($entry.Task.Triggers | Where-Object { $_.Enabled }).Count -gt 0) {
+  if ($entry.Task.State -ne 'Disabled' -and @($entry.Task.Triggers | Where-Object { $null -ne $_ -and $_.Enabled }).Count -gt 0) {
     $enabled = $true
   }
 }
@@ -982,7 +982,7 @@ mod tests {
         let status = build_autostart_script(true, AutostartOperation::Status).unwrap();
         assert!(status.contains("$enabled = @(Get-OwnedRunEntries).Count -gt 0"));
         assert!(status.contains("$entry.Task.State -ne 'Disabled'"));
-        assert!(POWERSHELL_STATUS.contains("Where-Object { $_.Enabled }"));
+        assert!(POWERSHELL_STATUS.contains("Where-Object { $null -ne $_ -and $_.Enabled }"));
         assert!(!POWERSHELL_STATUS.contains("Get-AutostartPreference"));
         assert!(!POWERSHELL_STATUS.contains("Test-CanonicalTask"));
         assert!(!POWERSHELL_STATUS.contains("Test-LauncherNeedsRepair"));
