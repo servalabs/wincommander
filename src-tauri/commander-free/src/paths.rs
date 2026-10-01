@@ -454,6 +454,28 @@ pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, St
     }
 }
 
+/// Coordinate one profile's log across sessions without blocking other profiles.
+pub(crate) fn acquire_diagnostic_log_lock() -> Result<MachineStateLock, String> {
+    let directory = fs::canonicalize(user_logs_dir()?)
+        .map_err(|_| "diagnostic log directory is unavailable".to_string())?;
+    acquire_machine_state_lock(&diagnostic_log_lock_resource(&directory))
+}
+
+fn diagnostic_log_lock_resource(directory: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+    let identity = directory
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    let digest = Sha256::digest(identity.as_bytes());
+    // Keep private profile paths out of the kernel object name.
+    let suffix: String = digest[..24]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("diagnostics-{suffix}")
+}
+
 impl Drop for MachineStateLock {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -621,6 +643,50 @@ pub fn migrate_user_data_layout() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn diagnostic_locks_share_one_profile_but_never_another_profiles_log() {
+        let first = super::diagnostic_log_lock_resource(std::path::Path::new(
+            r"C:\Users\AccountOne\AppData\Local\WinCommander\logs",
+        ));
+        let equivalent = super::diagnostic_log_lock_resource(std::path::Path::new(
+            "c:/users/accountone/appdata/local/wincommander/logs",
+        ));
+        let other = super::diagnostic_log_lock_resource(std::path::Path::new(
+            r"C:\Users\AccountTwo\AppData\Local\WinCommander\logs",
+        ));
+        assert_eq!(first, equivalent);
+        assert_ne!(first, other);
+        assert!(super::is_valid_machine_state_resource(&first));
+        assert!(!first.contains("accountone"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_lock_for_another_profile_progresses_while_first_profile_is_busy() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let first = super::diagnostic_log_lock_resource(&root.join("first"));
+        let other = super::diagnostic_log_lock_resource(&root.join("other"));
+        let held = super::acquire_machine_state_lock(&first).unwrap();
+        let (done, finished) = mpsc::channel();
+        let independent = std::thread::spawn(move || {
+            let _lock = super::acquire_machine_state_lock(&other).unwrap();
+            done.send(()).unwrap();
+        });
+        finished.recv_timeout(Duration::from_secs(1)).unwrap();
+        independent.join().unwrap();
+        let (done, finished) = mpsc::channel();
+        let shared = std::thread::spawn(move || {
+            let _lock = super::acquire_machine_state_lock(&first).unwrap();
+            done.send(()).unwrap();
+        });
+        assert!(finished.recv_timeout(Duration::from_millis(20)).is_err());
+        drop(held);
+        finished.recv_timeout(Duration::from_secs(1)).unwrap();
+        shared.join().unwrap();
+    }
+
     use std::path::PathBuf;
 
     use super::{

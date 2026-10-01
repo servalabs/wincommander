@@ -76,6 +76,7 @@ export default function usePasteMonitor(
   autoClearSeconds: number,
   autoClearOnLock: boolean,
 ) {
+  const { cloudApi, aiApi, devTools, paymentComms, keysAndCrypto, personalData, maliciousCommand, unicode } = categories;
   // Start / stop the watcher.
   useEffect(() => {
     const operationId = newDiagnosticOperationId("clipboard");
@@ -111,7 +112,9 @@ export default function usePasteMonitor(
   // watcher next starts, it picks up the right mask immediately.
   useEffect(() => {
     const operationId = newDiagnosticOperationId("clipboard");
-    invoke("set_paste_monitor_categories", { categories }).then(() => {
+    invoke("set_paste_monitor_categories", { categories: {
+      cloudApi, aiApi, devTools, paymentComms, keysAndCrypto, personalData, maliciousCommand, unicode,
+    } }).then(() => {
       recordDiagnostic({ operationId, feature: "clipboard", action: "paste_category_sync", stage: "runtime",
         lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
         suggestedNextAction: "none", privacyClass: "restricted", context: { state: "synced" } });
@@ -123,15 +126,7 @@ export default function usePasteMonitor(
         privacyClass: "restricted", context: { state: "sync_failed" } });
     });
   }, [
-    categories.cloudApi,
-    categories.aiApi,
-    categories.devTools,
-    categories.paymentComms,
-    categories.keysAndCrypto,
-    categories.personalData,
-    categories.maliciousCommand,
-    categories.unicode,
-    categories,
+    cloudApi, aiApi, devTools, paymentComms, keysAndCrypto, personalData, maliciousCommand, unicode,
   ]);
 
   // Sync the crypto-swap toggle.

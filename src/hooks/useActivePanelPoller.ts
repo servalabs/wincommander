@@ -17,7 +17,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import type { PanelId } from '../types/panels';
 import { PANEL_MANIFESTS } from '../types/panels';
 import { useAppState } from '../context/AppContext';
-import { useLiveMetrics } from '../context/LiveMetricsContext';
+import { useLiveMetricsRefresh } from '../context/LiveMetricsContext';
 import { getModuleForPanel, isModuleEnabled } from '../types/modules';
 import { usePageVisible } from './usePageVisible';
 
@@ -83,7 +83,7 @@ export function useActivePanelPoller({ activePanel, paused: externallyPaused = f
         refreshProductivity,
         refreshVault,
     } = appState;
-    const { refreshLiveMetrics } = useLiveMetrics();
+    const refreshLiveMetrics = useLiveMetricsRefresh();
 
     // Track previous panel to fire immediate one-shot on panel change
     const prevPanelRef = useRef<PanelId | null>(null);

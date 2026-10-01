@@ -128,7 +128,10 @@ test('actual polling hooks respect startup, visibility, resume, and in-flight ow
             { id: 'vault', refreshKey: 'refreshVault' },
         ] }));
         mock.module('./src/context/AppContext', () => ({ useAppState: () => state }));
-        mock.module('./src/context/LiveMetricsContext', () => ({ useLiveMetrics: () => live }));
+        mock.module('./src/context/LiveMetricsContext', () => ({
+            useLiveMetricsRefresh: () => live.refreshLiveMetrics,
+            useLiveMetrics: () => { throw new Error('poller must not subscribe the shell to samples'); },
+        }));
         const { useActivePanelPoller } = await import('./src/hooks/useActivePanelPoller');
         let activePanel = 'dashboard';
         let paused = false;

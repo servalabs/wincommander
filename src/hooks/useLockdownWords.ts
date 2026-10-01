@@ -5,7 +5,7 @@
 // require_paid()'s on the Rust side, but we also short-circuit the
 // hook here so non-paid users never invoke start.
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CoercionPhraseEntry } from "../types/settings";
 import { useAuthMode } from "../context/AuthModeContext";
@@ -18,10 +18,8 @@ export default function useLockdownWords(
   hasPaid: boolean,
 ) {
   const { mode } = useAuthMode();
-  const phraseFingerprint = useMemo(
-    () => phrases.map((p) => p.hash).join("|"),
-    [phrases],
-  );
+  // Include labels/actions too; a hash-only fingerprint loses metadata edits.
+  const serializedPhrases = JSON.stringify(phrases);
 
   // Sync registered phrases to runtime first (Rust holds an in-memory
   // copy that the hook callback consults on every keystroke).
@@ -34,7 +32,7 @@ export default function useLockdownWords(
     // register [] and stop the hook, disarming the coercion trigger mid-coercion.
     if (mode === "decoy") return;
     const operationId = newDiagnosticOperationId("lockdown");
-    invoke("set_lockdown_words", { phrases }).then(() => {
+    invoke("set_lockdown_words", { phrases: JSON.parse(serializedPhrases) }).then(() => {
       recordDiagnostic({ operationId, feature: "lockdown", action: "phrase_sync", stage: "runtime",
         lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
         suggestedNextAction: "none", privacyClass: "restricted", context: { state: "registered" } });
@@ -46,7 +44,7 @@ export default function useLockdownWords(
         privacyClass: "restricted", context: { state: "registration_failed" } });
       showError("Lockdown words could not register. Review Privacy settings and try again.");
     });
-  }, [hasPaid, phraseFingerprint, phrases, mode]);
+  }, [hasPaid, serializedPhrases, mode]);
 
   useEffect(() => {
     if (!hasPaid) {

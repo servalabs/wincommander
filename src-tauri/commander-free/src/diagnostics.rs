@@ -284,7 +284,7 @@ fn record_recovery_if_needed(path: &Path) {
 #[allow(dead_code)] // Retained for the scheduled diagnostics maintenance entrypoint.
 pub(crate) fn prune_retained_diagnostics() {
     let result = (|| {
-        let _lock = crate::paths::acquire_machine_state_lock("diagnostic-events")
+        let _lock = crate::paths::acquire_diagnostic_log_lock()
             .map_err(|_| "DIAGNOSTICS.PRUNE.LOCK_FAILED")?;
         let path = diagnostic_path().map_err(|_| "DIAGNOSTICS.PRUNE.PATH_FAILED")?;
         prune_diagnostic_store(&path)
@@ -299,22 +299,22 @@ pub(crate) fn record(mut event: DiagnosticEvent) -> Result<DiagnosticEvent, Stri
     event.validate()?;
     let removed = redact_context(&mut event);
     let result = (|| {
-        let _lock = crate::paths::acquire_machine_state_lock("diagnostic-events")
+        let _lock = crate::paths::acquire_diagnostic_log_lock()
             .map_err(|_| "DIAGNOSTICS.STORAGE.LOCK_FAILED")?;
         let path = diagnostic_path().map_err(|_| "DIAGNOSTICS.STORAGE.PATH_FAILED")?;
         persist_event(&path, &event)?;
+        record_recovery_if_needed(&path);
         // Retention is deliberately deferred to idle startup maintenance.  Reading,
         // decrypting and rewriting the entire event store for every event caused the
         // desktop process to stall as the store grew.
-        Ok::<_, &'static str>(path)
+        Ok::<_, &'static str>(())
     })();
     match result {
-        Ok(path) => {
+        Ok(()) => {
             if let Ok(mut state) = health_state().lock() {
                 state.persisted += 1;
                 state.redacted_fields += removed as u64;
             }
-            record_recovery_if_needed(&path);
             Ok(event)
         }
         Err(code) => {
@@ -350,7 +350,7 @@ fn read_diagnostic_events(
     if crate::settings::is_decoy_mode() {
         return Ok(vec![]);
     }
-    let _lock = match crate::paths::acquire_machine_state_lock("diagnostic-events") {
+    let _lock = match crate::paths::acquire_diagnostic_log_lock() {
         Ok(lock) => lock,
         Err(_) => {
             record_storage_failure("DIAGNOSTICS.READ.LOCK_FAILED");

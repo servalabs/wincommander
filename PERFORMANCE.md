@@ -48,6 +48,11 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   timeout. A blocked OS call retains its worker slot rather than spawning more
   workers. Identity, licence, portable state, settings and mutation inputs are
   not cached in those snapshots.
+- The panel poller subscribes only to the stable metrics refresh action, not
+  each metric sample. Clipboard categories and phrase registration synchronize
+  on content changes rather than new object/array identities on every render.
+  Diagnostic read/write/retention locks are scoped to the canonical profile log
+  directory, so another user's private log does not share the same lock.
 - Settings readers use a committed snapshot while storage transactions run
   behind a separate gate. Native full-object writes reject stale snapshots;
   observers run outside both locks. Initial security settings load before window

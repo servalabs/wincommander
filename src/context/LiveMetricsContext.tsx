@@ -25,6 +25,7 @@ interface LiveMetricsState {
 }
 
 const LiveMetricsContext = createContext<LiveMetricsState | null>(null);
+const LiveMetricsRefreshContext = createContext<(() => Promise<void>) | null>(null);
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
@@ -96,7 +97,16 @@ export function LiveMetricsProvider({ children }: { children: ReactNode }) {
     [metrics, status, refreshLiveMetrics],
   );
 
-  return <LiveMetricsContext.Provider value={value}>{children}</LiveMetricsContext.Provider>;
+  return <LiveMetricsRefreshContext.Provider value={refreshLiveMetrics}>
+    <LiveMetricsContext.Provider value={value}>{children}</LiveMetricsContext.Provider>
+  </LiveMetricsRefreshContext.Provider>;
+}
+
+/** Polling commands must not subscribe the application shell to every sample. */
+export function useLiveMetricsRefresh(): () => Promise<void> {
+  const refresh = useContext(LiveMetricsRefreshContext);
+  if (!refresh) throw new Error("useLiveMetricsRefresh must be used within a LiveMetricsProvider");
+  return refresh;
 }
 
 export function useLiveMetrics(): LiveMetricsState {
