@@ -123,8 +123,8 @@ mod startup_maintenance;
 mod startup_trace;
 mod startup_window;
 mod storage_probe;
-mod trust_store_audit;
 mod svc_client;
+mod trust_store_audit;
 mod window_placement;
 // This is an executable-free admission contract, covered by its unit tests.
 // It is intentionally excluded from the shipped binary until the signed
@@ -347,111 +347,15 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
     Ok(())
 }
 
-/// Force the overlay window to the foreground. Combines several Windows
-/// techniques because no single one works in all situations:
-///
-///   1. Tap Alt — Windows resets its foreground lock when an Alt keystroke
-///      arrives, so any thread can SetForegroundWindow during the tap.
-///      This is the Microsoft-documented workaround for the same problem.
-///   2. AttachThreadInput — briefly attaches our input queue to whatever
-///      the current foreground thread is so SetForegroundWindow doesn't
-///      hit LockSetForegroundWindow.
-///   3. SetForegroundWindow + BringWindowToTop + SetActiveWindow + SetFocus
-///      in sequence so both the native HWND and the inner WebView2 child
-///      HWND end up active.
-///
-/// Without this, Tauri's set_focus() can return Ok but Windows silently
-/// rejects the foreground promotion — the window paints, the webview
-/// renders, but the input never gets a blinking caret because the window
-/// isn't truly the foreground.
-#[cfg(windows)]
+/// Request activation on the owner thread without joining another app's input queue.
 pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
-    use windows_sys::Win32::Foundation::HWND;
-    use windows_sys::Win32::System::Threading::AttachThreadInput;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsZoomed,
-        SetForegroundWindow, SetWindowPos, ShowWindowAsync, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_RESTORE, SW_SHOWMAXIMIZED,
-    };
-    let Ok(raw_hwnd) = window.hwnd() else { return };
-    let target: HWND = raw_hwnd.0 as HWND;
-    unsafe {
-        // Do not use the synchronous ShowWindow from a tray callback. At logon
-        // Explorer and the app can be on different input queues; ShowWindow can
-        // wait on the shell while the shell is waiting for this callback to
-        // return. Keep a maximized window maximized: the old unconditional
-        // SW_RESTORE ran after reveal_main_window() had maximized the app,
-        // making a full-search handoff visibly shrink back to its saved size.
-        // SetWindowPos still gives a never-before-visible --minimized launch
-        // an explicit visible top-level placement.
-        let show_command = if IsZoomed(target) != 0 {
-            SW_SHOWMAXIMIZED
-        } else {
-            SW_RESTORE
-        };
-        ShowWindowAsync(target, show_command);
-        SetWindowPos(
-            target,
-            HWND_TOP,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        );
-
-        // Microsoft-documented workaround: a synthetic Alt keystroke resets
-        // the foreground-window lock for the current input desktop, so any
-        // SetForegroundWindow call right after will actually take effect.
-        keybd_event(VK_MENU as u8, 0, 0, 0);
-        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
-
-        let foreground = GetForegroundWindow();
-        let mut foreground_pid: u32 = 0;
-        let foreground_thread = if !foreground.is_null() {
-            GetWindowThreadProcessId(foreground, &mut foreground_pid as *mut u32)
-        } else {
-            0
-        };
-
-        let target_thread = GetWindowThreadProcessId(target, std::ptr::null_mut());
-        let attached = foreground_thread != 0
-            && foreground_thread != target_thread
-            && AttachThreadInput(target_thread, foreground_thread, 1) != 0;
-
-        BringWindowToTop(target);
-        SetForegroundWindow(target);
-        SetActiveWindow(target);
-
-        // SetFocus on the WebView2 child HWND (Chrome_WidgetWin_*) while
-        // thread input is still attached. This is the critical step that
-        // makes the DOM input actually receive the caret — SetActiveWindow
-        // on the outer Tauri HWND alone is not enough for WebView2.
-        if let Some(wv_hwnd) = find_webview2_hwnd(target) {
-            SetFocus(wv_hwnd);
-        }
-
-        if attached {
-            AttachThreadInput(target_thread, foreground_thread, 0);
-        }
-    }
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let _ = target.set_focus();
+    });
 }
 
-#[cfg(not(windows))]
-pub(crate) fn force_window_foreground(_window: &tauri::WebviewWindow) {}
-
-/// Restore + foreground the main window from a tray reveal (icon click / "Show").
-///
-/// A bare show()+set_focus() is NOT enough when the reveal originates from the
-/// already-running, elevated, BACKGROUND process: clicking the tray makes the
-/// shell — not us — the foreground process, so Windows' foreground-activation
-/// lock silently refuses SetForegroundWindow and the window stays hidden behind
-/// the shell. Routing the tray paths through force_window_foreground — the same
-/// Alt-key workaround used for restored windows — makes a reveal reliably bring
-/// the window up.
+/// Restore the main window on an explicit reveal without overriding Windows' focus policy.
 pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         log_message_src("warn", "core", "[Reveal] main window not found");
@@ -508,24 +412,6 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
             }
             set_wincommander_window_icon(&window);
             let _ = window.set_focus();
-            // Tray callbacks run on the shell message pump. Yield before activating
-            // so Windows has registered the restored window. A cold post-logon
-            // WebView2 window can miss the first visibility transition, so retry
-            // only while the native HWND remains hidden; never steal focus later
-            // after the user has moved to another application.
-            let window_for_foreground = window.clone();
-            std::thread::spawn(move || {
-                for delay_ms in [50_u64, 250, 800] {
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                    force_window_foreground(&window_for_foreground);
-                    let _ = window_for_foreground.set_focus();
-                    if window_for_foreground.is_visible().unwrap_or(true) {
-                        break;
-                    }
-                    let _ = window_for_foreground.hide();
-                    let _ = window_for_foreground.show();
-                }
-            });
             // Signal the (authenticated) app was revealed so the frontend re-arms the
             // update prompt — a dismissed-then-reopened window shows it again. Not
             // emitted on the calc-mode branch: a locked calculator re-entry isn't a
@@ -577,55 +463,6 @@ fn set_calculator_taskbar_identity() {
 
 #[cfg(not(windows))]
 fn set_calculator_taskbar_identity() {}
-
-/// Enumerate child windows of `parent` looking for the first one whose
-/// class name starts with "Chrome_" — that is the WebView2 (Chromium) host
-/// widget HWND. We pass the target address through lparam so the callback
-/// can write the result without needing a closure (Win32 callbacks must be
-/// bare extern "system" fns, not Rust closures).
-#[cfg(windows)]
-unsafe extern "system" fn find_chrome_widget_proc(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    lparam: isize, // LPARAM = isize in windows-sys
-) -> i32 {
-    // BOOL   = i32  in windows-sys
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
-    let out = lparam as *mut windows_sys::Win32::Foundation::HWND;
-    let mut buf = [0u16; 256];
-    let len = GetClassNameW(hwnd, buf.as_mut_ptr(), 256);
-    if len > 0 {
-        let name = String::from_utf16_lossy(&buf[..len as usize]);
-        if name.starts_with("Chrome_") || name.contains("WebView2") {
-            *out = hwnd;
-            return 0; // FALSE — stop enumeration
-        }
-    }
-    1 // TRUE — continue
-}
-
-/// Walk the child-window tree of `parent` and return the first WebView2
-/// host HWND (class name starts with "Chrome_"). This is the HWND that
-/// must receive `SetFocus` for a DOM input to show a blinking caret;
-/// calling SetFocus on the outer Tauri shell HWND is not sufficient.
-#[cfg(windows)]
-fn find_webview2_hwnd(
-    parent: windows_sys::Win32::Foundation::HWND,
-) -> Option<windows_sys::Win32::Foundation::HWND> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::EnumChildWindows;
-    let mut found: windows_sys::Win32::Foundation::HWND = std::ptr::null_mut();
-    unsafe {
-        EnumChildWindows(
-            parent,
-            Some(find_chrome_widget_proc),
-            &mut found as *mut windows_sys::Win32::Foundation::HWND as _,
-        );
-    }
-    if found.is_null() {
-        None
-    } else {
-        Some(found)
-    }
-}
 
 /// Update the current user's Start Menu shortcut filename.
 ///
@@ -1663,6 +1500,12 @@ pub fn run() {
     // Log and diagnostic retention is intentionally deferred until after the
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
+    if !cli_mode {
+        if let Err(error) = settings::preload_settings(std::time::Duration::from_secs(15)) {
+            startup_window::show_initialization_error(&error);
+            return;
+        }
+    }
     startup_trace::pre_window_milestone("pre-builder.complete");
     dev_startup_trace("pre-builder work complete");
     let mut context = tauri::generate_context!();
@@ -1834,8 +1677,7 @@ pub fn run() {
                 file_watch_trigger::FileWatchTriggerState::default(),
             ));
             // Seed the hide hotkey from persisted settings; fall back to the default.
-            let saved_hide_hotkey = settings::read_settings()
-                .ok()
+            let saved_hide_hotkey = settings::cached_settings()
                 .and_then(|s| s.ideal.identity.hide_win_commander_hotkey)
                 .unwrap_or_else(|| "Ctrl+Shift+G".to_string());
             app.manage(HideHotkeyState(Mutex::new(saved_hide_hotkey)));
@@ -1881,9 +1723,9 @@ pub fn run() {
                         if let Some(state) = app.try_state::<TrayShieldState>() {
                             if let Ok(mut running) = state.running.lock() {
                                 if *running {
-                                    let fleet_owns_shield = settings::read_settings()
+                                    let fleet_owns_shield = settings::cached_settings()
                                         .map(|s| s.app.fleet.privacy_shield_session_owned)
-                                        .unwrap_or(false);
+                                        .unwrap_or(true);
                                     if fleet_owns_shield {
                                         // The endpoint may still close the application,
                                         // but it cannot stop a shield session that Fleet
@@ -2112,28 +1954,23 @@ pub fn run() {
                     WindowEvent::CloseRequested { api, .. } => {
                     use tauri::Emitter;
                     api.prevent_close();
-                    // Read settings ONCE to avoid a TOCTOU race: if a concurrent
-                    // patch_settings_cmd removes the PIN between two separate reads,
-                    // armed=true+lock_on_close=true could enter calculator mode with
-                    // no real PIN set → user lockout. One snapshot drives both.
-                    let snap = settings::read_settings().ok();
-                    let armed = snap.as_ref()
-                        .map(|s| startup_auth::gate_enabled(&s.ideal.privacy.startup_pin))
-                        // Fail CLOSED on a settings-read failure: if the snapshot
-                        // can't be read at close time (transient datastore/decode
-                        // error, or a race with a concurrent write), fall back to
-                        // the independent PIN-configured probe instead of defaulting
-                        // to "not armed" — which would silently drop the calculator
-                        // disguise for this session and reveal the real window on
-                        // the next open, defeating the coercion/deniability guard.
-                        .unwrap_or_else(startup_auth::startup_pin_is_configured_sync);
+                    // Cache invalidation must not invent a PIN or discard a committed lock policy.
+                    let Some(policy) = settings::cached_window_policy() else {
+                        log_message_src("error", "core", "[Hide] close refused: window lock policy unavailable");
+                        tauri::async_runtime::spawn_blocking(move || {
+                            startup_window::show_error_dialog(
+                                "WinCommander",
+                                "WinCommander could not verify its lock settings. The window remains open. Retry after settings finish loading, or exit from the tray menu and reopen WinCommander.",
+                            );
+                        });
+                        return;
+                    };
+                    let armed = policy.pin_armed;
                     // "Lock panel on close" (Secret Setting). Resolved default is PIN-aware:
                     // None => ON when a calculator PIN is armed, else OFF. ON+armed = show the
                     // calculator only; OFF (or no PIN) = hide to tray (the next reveal is
                     // Borrowed-locked when locked panels are configured, via persisted lockedPanelIds).
-                    let lock_on_close = snap.as_ref()
-                        .and_then(|s| s.app.lock_panel_on_close)
-                        .unwrap_or(armed);
+                    let lock_on_close = policy.lock_on_close;
                     let _ = window_clone.set_skip_taskbar(true);
                     let _ = window_clone.hide();
                     if lock_on_close && armed {
@@ -2147,11 +1984,7 @@ pub fn run() {
                         // hidden-panels-lock resets the runtime override so the
                         // next reveal shows Borrowed Mode whenever locked panels
                         // are configured — matching "lock off ⇒ borrow on reopen".
-                        let has_borrow = snap.as_ref()
-                            .and_then(|s| s.app.locked_panel_ids.as_ref())
-                            .map(|ids| !ids.is_empty())
-                            .unwrap_or(false);
-                        if has_borrow {
+                        if policy.has_borrowed_panels {
                             let _ = window_clone.app_handle().emit("hidden-panels-lock", ());
                         }
                         let is_hidden = wincommander_is_hidden();
@@ -2299,7 +2132,8 @@ pub fn run() {
 
             // Bootstrap the inactivity-timer watchdog. Idempotent —
             // safe to call repeatedly. Auto-resets the timer on startup.
-            inactivity_timer::init(app.handle());
+            let inactivity_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || inactivity_timer::init(&inactivity_app));
             dev_startup_trace("background services initialized");
             startup_trace::milestone(app.handle(), "critical-listeners.armed");
 

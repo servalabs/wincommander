@@ -49,7 +49,7 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
     if let Err(error) = crate::window_placement::show_maximized(window).await {
         state.arm();
         if !state.warned.swap(true, Ordering::AcqRel) {
-            show_native_startup_error(&format!("WinCommander could not open its window. {error} Your saved settings have not been reset."));
+            show_native_startup_error(&format!("WinCommander could not open its window. {error}"));
         }
         return Err(error);
     }
@@ -98,28 +98,39 @@ pub(crate) fn warn_if_unready(window: &tauri::WebviewWindow) {
         "core",
         "[Startup] interface readiness was not received; blank window remains hidden",
     );
-    show_native_startup_error("WinCommander could not finish loading its interface. The empty window has been kept hidden. Close WinCommander from its tray menu and reopen it. If this continues, repair or reinstall the application. Your saved settings have not been reset.");
+    show_native_startup_error("WinCommander could not finish loading its interface. The empty window has been kept hidden. Close WinCommander from its tray menu and reopen it. If this continues, repair or reinstall the application.");
 }
 
 fn show_native_startup_error(message: &str) {
+    let message = message.to_owned();
+    tauri::async_runtime::spawn_blocking(move || show_initialization_error(&message));
+}
+
+pub(crate) fn show_initialization_error(message: &str) {
+    show_error_dialog(
+        "WinCommander startup",
+        &format!("{message}\nYour saved settings have not been reset. Close this message and retry opening WinCommander."),
+    );
+}
+
+// Call before GUI setup or on a blocking worker; never wait for a dialog on the event thread.
+pub(crate) fn show_error_dialog(title: &str, message: &str) {
     #[cfg(windows)]
     {
         let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-        tauri::async_runtime::spawn_blocking(move || {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-            let title: Vec<u16> = "WinCommander startup\0".encode_utf16().collect();
-            unsafe {
-                MessageBoxW(
-                    std::ptr::null_mut(),
-                    message.as_ptr(),
-                    title.as_ptr(),
-                    MB_OK | MB_ICONERROR,
-                );
-            }
-        });
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
     }
     #[cfg(not(windows))]
-    crate::log_message_src("error", "core", message);
+    crate::log_message_src("error", "core", &format!("{title}: {message}"));
 }
 
 #[cfg(test)]

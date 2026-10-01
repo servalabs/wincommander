@@ -1243,19 +1243,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     return;
                 }
                 if (!hydratedSettings) {
-                    // A soft timeout only bounds the splash's first attempt; it
-                    // cannot cancel a native DPAPI/filesystem read.  Keep one
-                    // shared read alive instead of presenting a false
-                    // "settings" failure while that normal cold-start work is
-                    // still completing.  A real read error still reaches the
-                    // recovery screen below.
-                    setStartupDataState('loading');
-                    hydratedSettings = await initSettings(false);
-                    if (cancelled) return;
-                    if (!hydratedSettings) {
-                        setStartupError(settingsFailureMessageRef.current ?? getStartupSettingsFailureMessage(null));
-                        return;
-                    }
+                    // The native read remains shared; Retry attaches another bounded consumer.
+                    setStartupDataState('stale');
+                    setStartupError(settingsFailureMessageRef.current ?? 'Reading your saved settings is taking longer than expected. Retry startup. Your saved settings have not been reset.');
+                    return;
                 }
             }
 

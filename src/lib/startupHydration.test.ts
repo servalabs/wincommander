@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { getStartupSettingsRecoveryMessage, hydrateWithinBudget, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus } from "./startupHydration";
 import { getDefaultModules, getFirstRunModules } from "../types/modules";
 import type { AppSettings } from "../types/settings";
+import { createStartupProbeStore } from '../services/startupProbeStore';
 
 test("unreadable legacy settings can hydrate fresh defaults without blocking startup", async () => {
   const response = {
@@ -65,6 +66,20 @@ test("hung settings read expires and late consumer is aborted", async () => {
 
 test("successful retry returns settings within its budget", async () => {
   expect(await hydrateWithinBudget(async () => ({ loaded: true }))).toEqual({ loaded: true });
+});
+
+test('repeated startup recovery waits share one native read and accept its eventual result', async () => {
+  const store = createStartupProbeStore<string>();
+  let finish!: (value: string) => void;
+  let calls = 0;
+  const native = new Promise<string>(resolve => { finish = resolve; });
+  const read = (signal: AbortSignal) => store.refresh(() => { calls++; return native; }, signal);
+  expect(await hydrateWithinBudget(read, 5)).toBeNull();
+  expect(await hydrateWithinBudget(read, 5)).toBeNull();
+  const recovery = hydrateWithinBudget(read, 100);
+  finish('saved choices');
+  expect(await recovery).toBe('saved choices');
+  expect(calls).toBe(1);
 });
 
 test("sparse settings hydrate without changing the shared snapshot or saved choices", () => {

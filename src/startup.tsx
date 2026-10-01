@@ -3,6 +3,7 @@ import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
 import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
 import { flushSync } from 'react-dom';
+import { settleStartupReveal } from './startup/revealBudget';
 
 const native = (window as typeof window & {
     __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
@@ -39,10 +40,10 @@ async function startMainWindow(): Promise<void> {
     // frame: any one of those can be delayed or unavailable after an update.
     // Native visibility must follow a committed DOM, not a queued React render.
     flushSync(() => showStartupAnimation(initialAnimation));
-    const shown = await revealStartupWindow();
+    const shown = await settleStartupReveal(revealStartupWindow());
     // The intro clock starts after the real native window is revealed.
-    showStartupAnimation({ ...initialAnimation, isWindowVisible: true });
-    if (!shown) hideStartupAnimation();
+    showStartupAnimation({ ...initialAnimation, isWindowVisible: shown === true });
+    if (shown === false) hideStartupAnimation();
     // Loading the dashboard is deliberately last: a slow module can no longer
     // leave a hidden, white-looking native window during startup.
     await import('./main');
