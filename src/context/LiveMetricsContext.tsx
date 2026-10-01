@@ -6,6 +6,10 @@ type LiveMetricDisk = SystemInfo["disks"][number];
 export interface LiveMetrics {
   cpuUsage: number;
   cpuTemp: number | null;
+  cpuTempStatus: "loading" | "live" | "stale" | "unavailable";
+  cpuTempAgeMs: number | null;
+  disksStatus: "loading" | "live" | "stale" | "unavailable";
+  disksAgeMs: number | null;
   ramUsage: number;
   ramUsedGb: number;
   ramTotalGb: number;
@@ -30,6 +34,10 @@ function mapLiveMetrics(raw: LiveMetricsResult): LiveMetrics {
   return {
     cpuUsage: Math.round(raw.cpuUsage),
     cpuTemp: raw.cpuTemp != null && raw.cpuTemp > 0 ? Math.round(raw.cpuTemp) : null,
+    cpuTempStatus: raw.cpuTempStatus ?? (raw.cpuTemp != null && raw.cpuTemp > 0 ? "live" : "unavailable"),
+    cpuTempAgeMs: raw.cpuTempAgeMs ?? null,
+    disksStatus: raw.disksStatus ?? "live",
+    disksAgeMs: raw.disksAgeMs ?? null,
     ramUsage: Math.round(raw.ramUsagePercent),
     ramUsedGb: round1(raw.ramUsedGb),
     ramTotalGb: round1(raw.ramTotalGb),

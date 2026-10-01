@@ -1,12 +1,5 @@
-// src-tauri/src/system_metrics.rs
-//
-// Rust-native live system metrics using the `sysinfo` crate.
-// Replaces the PowerShell-based Get-SystemInfo poll that spawned a new
-// powershell.exe process every 3 seconds (the #1 CPU offender).
-//
-// A lazy-initialized System singleton is kept alive so sysinfo can compute
-// accurate CPU deltas between refresh() calls.  Each invocation costs <1ms
-// vs. ~300ms+ for the old PS approach.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Hardware probes retain one worker each; a stalled device cannot block the UI.
 
 use once_cell::sync::Lazy;
 use serde_json::Value;
@@ -15,38 +8,43 @@ use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
+#[path = "metrics_child.rs"]
+mod metrics_child;
+#[path = "metrics_probe.rs"]
+mod metrics_probe;
+use metrics_probe::Probe;
+
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-static SYS: Lazy<Mutex<System>> = Lazy::new(|| {
-    let mut sys = System::new_all();
-    sys.refresh_cpu_all();
-    sys.refresh_memory();
-    Mutex::new(sys)
-});
+static SYS: Lazy<Mutex<Option<System>>> = Lazy::new(|| Mutex::new(None));
 
 // CPU temperature is read via a WMI/PowerShell probe, which is comparatively
 // expensive and (historically) the source of a per-poll powershell.exe spawn.
 // The 2s dashboard poll does NOT need fresh temp every tick, so the probe is
 // throttled and cached here — at most one (windowless) spawn per TEMP_REFRESH.
 const TEMP_REFRESH: Duration = Duration::from_secs(30);
-static TEMP_CACHE: Lazy<Mutex<(Option<Instant>, Option<f32>)>> =
-    Lazy::new(|| Mutex::new((None, None)));
-// Set to true after the first probe attempt that returns None — on machines
-// without accessible WMI temperature sensors (VMs, locked-down hardware) the
-// queries always fail, so there is no point retrying every 30 seconds.
-static TEMP_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+static TEMP_CACHE: Lazy<Probe<Option<f32>>> = Lazy::new(Probe::new);
 
-// Disk enumeration is read-only but can still traverse network-backed mount
-// points. Keep the high-frequency dashboard path bounded to one enumeration
-// per short window instead of rebuilding the list for every live-metric tick.
+// Mount enumeration can block on disconnected network-backed volumes.
 const DISK_SNAPSHOT_REFRESH: Duration = Duration::from_secs(5);
-static DISK_SNAPSHOT: Lazy<Mutex<(Option<Instant>, Vec<DiskMetric>)>> =
-    Lazy::new(|| Mutex::new((None, Vec::new())));
+static DISK_SNAPSHOT: Lazy<Probe<Vec<DiskMetric>>> = Lazy::new(Probe::new);
+static CPU_SNAPSHOT: Lazy<Probe<CpuMetrics>> = Lazy::new(Probe::new);
+static SMART_SNAPSHOT: Lazy<Probe<DriveSmartHealthResult>> = Lazy::new(Probe::new);
+static PROCESS_SNAPSHOT: Lazy<Probe<Vec<ProcessMetric>>> = Lazy::new(Probe::new);
+static WIPE_SNAPSHOT: Lazy<Probe<Vec<WipeDriveEntry>>> = Lazy::new(Probe::new);
+const CPU_REFRESH: Duration = Duration::from_secs(2);
+
+#[derive(Clone)]
+struct CpuMetrics {
+    cpu_usage: f32,
+    ram_usage_percent: f32,
+    ram_used_gb: f64,
+    ram_total_gb: f64,
+}
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -65,12 +63,10 @@ pub struct LiveMetrics {
     pub ram_used_gb: f64,
     pub ram_total_gb: f64,
     pub disks: Vec<DiskMetric>,
-}
-
-fn disk_snapshot_is_fresh(updated_at: Option<Instant>, now: Instant) -> bool {
-    updated_at
-        .map(|updated_at| now.saturating_duration_since(updated_at) < DISK_SNAPSHOT_REFRESH)
-        .unwrap_or(false)
+    pub cpu_temp_status: &'static str,
+    pub cpu_temp_age_ms: Option<u64>,
+    pub disks_status: &'static str,
+    pub disks_age_ms: Option<u64>,
 }
 
 fn collect_disk_metrics() -> Vec<DiskMetric> {
@@ -83,20 +79,6 @@ fn collect_disk_metrics() -> Vec<DiskMetric> {
             free_gb: disk.available_space() as f64 / 1_073_741_824.0,
         })
         .collect()
-}
-
-/// Bounded native snapshot for frequent dashboard reads. It carries no
-/// portable state, device identity, licence state, or mutation capability.
-fn disk_metrics_snapshot() -> Vec<DiskMetric> {
-    let now = Instant::now();
-    let mut snapshot = DISK_SNAPSHOT.lock().unwrap();
-    if disk_snapshot_is_fresh(snapshot.0, now) {
-        return snapshot.1.clone();
-    }
-
-    let disks = collect_disk_metrics();
-    *snapshot = (Some(now), disks.clone());
-    disks
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -115,7 +97,7 @@ pub struct DriveSmartHealthResult {
     pub drives: Vec<DriveSmartHealth>,
 }
 
-fn resolve_smartctl_path() -> Option<PathBuf> {
+fn resolve_smartctl_path(deadline: Instant) -> Result<Option<PathBuf>, String> {
     // Absolute paths: check file existence — no need to spawn the process.
     let absolute_paths = [
         r"C:\Program Files\smartmontools\bin\smartctl.exe",
@@ -125,9 +107,10 @@ fn resolve_smartctl_path() -> Option<PathBuf> {
         r"C:\ProgramData\chocolatey\bin\smartctl.exe",
     ];
     for candidate in absolute_paths {
+        ensure_probe_budget(deadline)?;
         let p = PathBuf::from(candidate);
         if p.exists() {
-            return Some(p);
+            return Ok(Some(p));
         }
     }
 
@@ -141,9 +124,10 @@ fn resolve_smartctl_path() -> Option<PathBuf> {
             ),
         ];
         for candidate in &winget_candidates {
+            ensure_probe_budget(deadline)?;
             let p = PathBuf::from(candidate);
             if p.exists() {
-                return Some(p);
+                return Ok(Some(p));
             }
         }
     }
@@ -153,47 +137,46 @@ fn resolve_smartctl_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.arg("--version");
-    if let Ok(out) = cmd.output() {
-        if out.status.success() {
-            return Some(PathBuf::from("smartctl.exe"));
-        }
+    match metrics_child::output_until(&mut cmd, deadline) {
+        Ok(out) if out.status.success() => return Ok(Some(PathBuf::from("smartctl.exe"))),
+        Ok(_) => {}
+        Err(error) if error == "Hardware probe could not start" => {}
+        Err(error) => return Err(error),
     }
 
-    None
+    Ok(None)
 }
 
-fn run_powershell_json(script: &str) -> Option<Value> {
+fn run_powershell_json(script: &str) -> Result<Value, String> {
+    run_powershell_json_until(script, Instant::now() + Duration::from_secs(5))
+}
+
+fn run_powershell_json_until(script: &str, deadline: Instant) -> Result<Value, String> {
     let mut cmd = Command::new("powershell");
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let output = cmd
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .output()
-        .ok()?;
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    let output = metrics_child::output_until(&mut cmd, deadline)?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        crate::log_message(
-            "error",
-            &format!("[Metrics] PowerShell helper failed: {}", stderr.trim()),
-        );
-        return None;
+        return Err("Hardware probe failed".into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() {
-        return None;
+        return Err("Hardware probe returned no observation".into());
     }
 
-    serde_json::from_str::<Value>(&stdout).ok()
+    serde_json::from_str::<Value>(&stdout)
+        .map_err(|_| "Hardware probe returned invalid data".into())
 }
 
 fn parse_health_from_smartctl_json(v: &Value) -> Option<u8> {
@@ -251,7 +234,7 @@ fn parse_passed_from_smartctl_json(v: &Value) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
-fn extract_drive_map() -> HashMap<String, u64> {
+fn extract_drive_map(deadline: Instant) -> Result<HashMap<String, u64>, String> {
     // Returns { "C:": 0, "D:": 1 } where value is the physical DiskNumber.
     let script = r#"
       $rows = Get-Partition -ErrorAction SilentlyContinue |
@@ -261,14 +244,12 @@ fn extract_drive_map() -> HashMap<String, u64> {
     "#;
 
     let mut map = HashMap::new();
-    let Some(v) = run_powershell_json(script) else {
-        return map;
-    };
+    let v = run_powershell_json_until(script, deadline)?;
 
     let items: Vec<Value> = match v {
         Value::Array(arr) => arr,
         Value::Object(_) => vec![v],
-        _ => vec![],
+        _ => return Err("Hardware probe returned invalid drive inventory".into()),
     };
 
     for item in items {
@@ -281,21 +262,28 @@ fn extract_drive_map() -> HashMap<String, u64> {
         map.insert(drive.to_ascii_uppercase(), disk_number);
     }
 
-    map
+    Ok(map)
 }
 
 #[tauri::command]
-pub fn get_drive_smart_health() -> DriveSmartHealthResult {
-    let drive_map = extract_drive_map();
+pub async fn get_drive_smart_health() -> Result<DriveSmartHealthResult, String> {
+    SMART_SNAPSHOT.refresh(Duration::from_secs(30), collect_drive_smart_health);
+    SMART_SNAPSHOT.wait(Duration::from_secs(20)).await
+}
+
+fn collect_drive_smart_health() -> Result<DriveSmartHealthResult, String> {
+    // One budget includes partition discovery, executable discovery, and every disk.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let drive_map = extract_drive_map(deadline)?;
     if drive_map.is_empty() {
-        return DriveSmartHealthResult {
+        return Ok(DriveSmartHealthResult {
             smartctl_available: false,
             drives: vec![],
-        };
+        });
     }
 
-    let Some(smartctl_path) = resolve_smartctl_path() else {
-        return DriveSmartHealthResult {
+    let Some(smartctl_path) = resolve_smartctl_path(deadline)? else {
+        return Ok(DriveSmartHealthResult {
             smartctl_available: false,
             drives: drive_map
                 .keys()
@@ -306,7 +294,7 @@ pub fn get_drive_smart_health() -> DriveSmartHealthResult {
                     source: "unavailable".to_string(),
                 })
                 .collect(),
-        };
+        });
     };
 
     let mut disk_health_cache: HashMap<u64, (Option<u8>, Option<bool>)> = HashMap::new();
@@ -314,13 +302,15 @@ pub fn get_drive_smart_health() -> DriveSmartHealthResult {
         if disk_health_cache.contains_key(disk_number) {
             continue;
         }
+        ensure_probe_budget(deadline)?;
 
         let device = format!("/dev/pd{}", disk_number);
         let mut cmd = Command::new(&smartctl_path);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let output = cmd.args(["-j", "-A", "-H", &device]).output();
+        cmd.args(["-j", "-A", "-H", &device]);
+        let output = metrics_child::output_until(&mut cmd, deadline);
 
         let (health_percent, passed) = match output {
             Ok(out) if out.status.success() => {
@@ -340,24 +330,14 @@ pub fn get_drive_smart_health() -> DriveSmartHealthResult {
                 }
             }
             Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
+                let _ = out;
                 crate::log_message(
                     "warn",
-                    &format!(
-                        "[Metrics] smartctl failed for {}: {}",
-                        device,
-                        stderr.trim()
-                    ),
+                    "[Metrics] smartctl did not return a successful observation",
                 );
                 (None, None)
             }
-            Err(e) => {
-                crate::log_message(
-                    "error",
-                    &format!("[Metrics] Failed to launch smartctl: {}", e),
-                );
-                (None, None)
-            }
+            Err(error) => return Err(error),
         };
 
         disk_health_cache.insert(*disk_number, (health_percent, passed));
@@ -381,9 +361,17 @@ pub fn get_drive_smart_health() -> DriveSmartHealthResult {
 
     drives.sort_by(|a, b| a.drive_letter.cmp(&b.drive_letter));
 
-    DriveSmartHealthResult {
+    Ok(DriveSmartHealthResult {
         smartctl_available: true,
         drives,
+    })
+}
+
+fn ensure_probe_budget(deadline: Instant) -> Result<(), String> {
+    if Instant::now() >= deadline {
+        Err("Hardware probe timed out".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -404,15 +392,28 @@ pub struct ProcessMetric {
 /// we read here. On a busy host that touches 300+ processes, this cuts
 /// the per-call cost roughly 4-6×.
 #[tauri::command]
-pub fn get_top_processes(limit: usize) -> Vec<ProcessMetric> {
-    let mut sys = SYS.lock().unwrap();
+pub async fn get_top_processes(limit: usize) -> Result<Vec<ProcessMetric>, String> {
+    PROCESS_SNAPSHOT.refresh(Duration::from_secs(2), || Ok(collect_top_processes()));
+    let mut processes = PROCESS_SNAPSHOT.wait(Duration::from_secs(2)).await?;
+    processes.truncate(limit.clamp(1, 20));
+    Ok(processes)
+}
+
+fn collect_top_processes() -> Vec<ProcessMetric> {
+    static PROCESSES: Lazy<Mutex<Option<System>>> = Lazy::new(|| Mutex::new(None));
+    // Single-flight ownership lets the worker retain deltas without locking during OS calls.
+    let mut sys = PROCESSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or_default();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
         ProcessRefreshKind::nothing().with_cpu().with_memory(),
     );
 
-    let logical_cores = sys.cpus().len().max(1) as f32;
+    let logical_cores = std::thread::available_parallelism().map_or(1, |count| count.get()) as f32;
     let mut agg: HashMap<String, ProcessMetric> = HashMap::new();
     for process in sys.processes().values() {
         let cpu = process.cpu_usage() / logical_cores;
@@ -439,8 +440,8 @@ pub fn get_top_processes(limit: usize) -> Vec<ProcessMetric> {
             .partial_cmp(&a.cpu_usage)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let cap = limit.clamp(1, 20);
-    processes.truncate(cap);
+    processes.truncate(20);
+    *PROCESSES.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
     processes
 }
 
@@ -448,32 +449,32 @@ pub fn get_top_processes(limit: usize) -> Vec<ProcessMetric> {
 /// Returns actual CPU package/DTS temperature, not chipset/zone temps.
 /// NOTE: Some systems (esp. desktops) don't expose CPU DTS via WMI —
 /// third-party tools like LibreHardwareMonitor may be needed for full temp support.
-fn get_cpu_temp_from_wmi() -> Option<f32> {
+fn get_cpu_temp_from_wmi() -> Result<Option<f32>, String> {
     // Try Win32_TemperatureProbe first (works on systems with proper sensor exposure)
-    if let Some(temp) = query_wmi_temperature_probe() {
-        return Some(temp);
+    if let Some(temp) = query_wmi_temperature_probe()? {
+        return Ok(Some(temp));
     }
 
     // Try CIM_TemperatureSensor as fallback
-    if let Some(temp) = query_wmi_cim_temperature() {
-        return Some(temp);
+    if let Some(temp) = query_wmi_cim_temperature()? {
+        return Ok(Some(temp));
     }
 
     // Note: MSAcpi_ThermalZoneTemperature / ThermalZoneInformation are NOT returned
     // because they often report chipset/zone temps (e.g. 28°C) instead of CPU package temp.
     // If you need accurate CPU temps, install LibreHardwareMonitor or Open Hardware Monitor.
 
-    None
+    Ok(None)
 }
 
 /// Query Win32_TemperatureProbe for CPU temperatures.
 /// Handles Intel Core, AMD Ryzen, package sensors, and other CPU-related probes.
-fn query_wmi_temperature_probe() -> Option<f32> {
+fn query_wmi_temperature_probe() -> Result<Option<f32>, String> {
     let mut cmd = Command::new("powershell");
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd
-        .arg("-NoProfile")
+    cmd.arg("-NoProfile")
+        .arg("-NonInteractive")
         .arg("-Command")
         .arg(
             r#"$temps = @();
@@ -489,25 +490,24 @@ fn query_wmi_temperature_probe() -> Option<f32> {
                    }
                };
                if ($temps.Count -gt 0) { [math]::Max($temps) } else { $null }"#,
-        )
-        .output()
-        .ok()?;
+        );
+    let output = metrics_child::output(&mut cmd)?;
 
     if !output.status.success() {
-        return None;
+        return Err("Temperature probe failed".into());
     }
 
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    parse_temp_output(&stdout)
+    let stdout = String::from_utf8(output.stdout).map_err(|_| "Invalid temperature output")?;
+    Ok(parse_temp_output(&stdout))
 }
 
 /// Query CIM_TemperatureSensor for CPU temps.
-fn query_wmi_cim_temperature() -> Option<f32> {
+fn query_wmi_cim_temperature() -> Result<Option<f32>, String> {
     let mut cmd = Command::new("powershell");
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd
-        .arg("-NoProfile")
+    cmd.arg("-NoProfile")
+        .arg("-NonInteractive")
         .arg("-Command")
         .arg(
             r#"$temps = @();
@@ -521,15 +521,15 @@ fn query_wmi_cim_temperature() -> Option<f32> {
                    }
                };
                if ($temps.Count -gt 0) { [math]::Max($temps) } else { $null }"#,
-        )
-        .output()
-        .ok()?;
+        );
+    let output = metrics_child::output(&mut cmd)?;
 
     if !output.status.success() {
-        return None;
+        return Err("Temperature probe failed".into());
     }
 
-    parse_temp_output(&String::from_utf8(output.stdout).ok()?)
+    let stdout = String::from_utf8(output.stdout).map_err(|_| "Invalid temperature output")?;
+    Ok(parse_temp_output(&stdout))
 }
 
 /// Parse PowerShell output and validate temperature is reasonable.
@@ -544,25 +544,6 @@ fn parse_temp_output(output: &str) -> Option<f32> {
         .parse::<f32>()
         .ok()
         .filter(|&t| (20.0..=120.0).contains(&t))
-}
-
-/// CPU temperature, throttled. The WMI probe spawns a (windowless) PowerShell
-/// process, so the reading is cached and re-probed at most once per
-/// TEMP_REFRESH — keeping the 2s `get_live_metrics` poll spawn-free in between.
-fn cpu_temp_throttled() -> Option<f32> {
-    if TEMP_UNAVAILABLE.load(Ordering::Relaxed) {
-        return None;
-    }
-    let mut cache = TEMP_CACHE.lock().unwrap();
-    let fresh = cache.0.map(|t| t.elapsed() < TEMP_REFRESH).unwrap_or(false);
-    if !fresh {
-        let temp = get_cpu_temp_from_wmi();
-        if temp.is_none() {
-            TEMP_UNAVAILABLE.store(true, Ordering::Relaxed);
-        }
-        *cache = (Some(Instant::now()), temp);
-    }
-    cache.1
 }
 
 // ── Wipe Drive List ──────────────────────────────────────────────────────
@@ -580,10 +561,14 @@ pub struct WipeDriveEntry {
     pub is_system: bool,
 }
 
-/// Enumerate local drives with media-type info for the free-space wipe selector.
-/// Non-destructive read-only query. Returns empty vec on failure.
+/// Enumerate local drives for the wipe selector; failure is not an empty inventory.
 #[tauri::command]
-pub fn get_wipe_drive_list() -> Vec<WipeDriveEntry> {
+pub async fn get_wipe_drive_list() -> Result<Vec<WipeDriveEntry>, String> {
+    WIPE_SNAPSHOT.refresh(Duration::from_secs(5), collect_wipe_drive_list);
+    WIPE_SNAPSHOT.wait(Duration::from_secs(7)).await
+}
+
+fn collect_wipe_drive_list() -> Result<Vec<WipeDriveEntry>, String> {
     // Get-PhysicalDisk gives MediaType/BusType; Get-PSDrive gives free/used space.
     // $ErrorActionPreference = SilentlyContinue so USB/SD drives with no matching
     // PhysicalDisk entry don't abort the entire loop.
@@ -622,17 +607,15 @@ foreach ($drv in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name.Le
 $out | ConvertTo-Json -Depth 2 -Compress
 "#;
 
-    let Some(v) = run_powershell_json(script) else {
-        return vec![];
-    };
+    let v = run_powershell_json(script)?;
 
     let items = match v {
         Value::Array(a) => a,
         obj @ Value::Object(_) => vec![obj],
-        _ => return vec![],
+        _ => return Err("Hardware probe returned invalid drive inventory".into()),
     };
 
-    items
+    Ok(items
         .into_iter()
         .filter_map(|item| {
             let letter = item.get("letter").and_then(Value::as_str)?.to_string();
@@ -665,29 +648,48 @@ $out | ConvertTo-Json -Depth 2 -Compress
                     .unwrap_or(false),
             })
         })
-        .collect()
+        .collect())
 }
 
-/// Fast Tauri command — returns live CPU / RAM / Disk usage + CPU temp.
-/// Called every 2s from the frontend when the dashboard is visible.
-/// CPU/RAM/disk are kernel-counter reads (<2ms). CPU temp is a throttled WMI
-/// probe (≤ once per 30s, windowless via CREATE_NO_WINDOW), so the 2s poll
-/// itself spawns no process between refreshes.
+/// Slow hardware observations never gate CPU/RAM reads or the window event loop.
 #[tauri::command]
-pub fn get_live_metrics() -> LiveMetrics {
-    let mut sys = SYS.lock().unwrap();
+pub async fn get_live_metrics() -> Result<LiveMetrics, String> {
+    CPU_SNAPSHOT.refresh(CPU_REFRESH, || Ok(collect_cpu_metrics()));
+    DISK_SNAPSHOT.refresh(DISK_SNAPSHOT_REFRESH, || Ok(collect_disk_metrics()));
+    TEMP_CACHE.refresh(TEMP_REFRESH, get_cpu_temp_from_wmi);
+    let cpu = CPU_SNAPSHOT.wait(Duration::from_millis(500)).await?;
+    let disks = DISK_SNAPSHOT.snapshot(DISK_SNAPSHOT_REFRESH);
+    let temperature = TEMP_CACHE.snapshot(TEMP_REFRESH);
+    let cpu_temp = temperature.value.flatten();
+    Ok(LiveMetrics {
+        cpu_usage: cpu.cpu_usage,
+        cpu_temp,
+        ram_usage_percent: cpu.ram_usage_percent,
+        ram_used_gb: cpu.ram_used_gb,
+        ram_total_gb: cpu.ram_total_gb,
+        disks: disks.value.unwrap_or_default(),
+        cpu_temp_status: if temperature.status == "live" && cpu_temp.is_none() {
+            "unavailable"
+        } else {
+            temperature.status
+        },
+        cpu_temp_age_ms: temperature.age_ms,
+        disks_status: disks.status,
+        disks_age_ms: disks.age_ms,
+    })
+}
+
+fn collect_cpu_metrics() -> CpuMetrics {
+    let mut sys = SYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or_default();
     sys.refresh_cpu_all();
     sys.refresh_memory();
 
-    // CPU temperature via WMI only (no fallback to avoid stale/incorrect readings).
-    // Win32_TemperatureProbe or MSAcpi_ThermalZoneTemperature if available.
-    // Note: Some systems (especially desktops with BIOS-level temp restrictions)
-    // may not expose CPU DTS to Windows WMI — HWInfo uses proprietary drivers.
-    let cpu_temp: Option<f32> = cpu_temp_throttled();
-
-    LiveMetrics {
+    let metrics = CpuMetrics {
         cpu_usage: sys.global_cpu_usage(),
-        cpu_temp,
         ram_usage_percent: if sys.total_memory() > 0 {
             (sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0) as f32
         } else {
@@ -695,25 +697,7 @@ pub fn get_live_metrics() -> LiveMetrics {
         },
         ram_used_gb: sys.used_memory() as f64 / 1_073_741_824.0,
         ram_total_gb: sys.total_memory() as f64 / 1_073_741_824.0,
-        disks: disk_metrics_snapshot(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn disk_snapshot_expires_after_its_short_read_only_window() {
-        let now = Instant::now();
-        assert!(disk_snapshot_is_fresh(
-            Some(now - DISK_SNAPSHOT_REFRESH + Duration::from_millis(1)),
-            now,
-        ));
-        assert!(!disk_snapshot_is_fresh(
-            Some(now - DISK_SNAPSHOT_REFRESH),
-            now
-        ));
-        assert!(!disk_snapshot_is_fresh(None, now));
-    }
+    };
+    *SYS.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
+    metrics
 }

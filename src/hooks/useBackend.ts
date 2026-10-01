@@ -936,6 +936,10 @@ export interface LiveMetricsResult {
   ramUsedGb: number;
   ramTotalGb: number;
   disks: Array<{ name: string; totalGb: number; freeGb: number }>;
+  cpuTempStatus?: "loading" | "live" | "stale" | "unavailable";
+  cpuTempAgeMs?: number | null;
+  disksStatus?: "loading" | "live" | "stale" | "unavailable";
+  disksAgeMs?: number | null;
 }
 
 export interface DriveSmartHealthEntry {

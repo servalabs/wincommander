@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import { Cpu, MemoryStick, BatteryFull, ChevronDown, ChevronUp, Thermometer, Bell, BellOff } from "lucide-react";
 import useBackend, { type SystemInfo, type BatteryHealthResult } from "../../hooks/useBackend";
 import MetricAlertRow from "./MetricAlertRow";
 import { useMetricAlerts } from "../../hooks/useMetricAlerts";
+import { useLiveMetrics } from "../../context/LiveMetricsContext";
+import { useAppState } from "../../context/AppContext";
 
 interface HardwareSpecsCardProps {
     systemInfo: SystemInfo | null;
@@ -71,14 +72,16 @@ export default function HardwareSpecsCard({
     const cpuAlertOn = !!alerts?.cpu.enabled;
     const ramAlertOn = !!alerts?.ram.enabled;
     const [uncontrolledAlertOpen, setUncontrolledAlertOpen] = useState(false);
-    const [liveCpuTemp, setLiveCpuTemp] = useState<number | null>(null);
+    const { metrics } = useLiveMetrics();
+    const liveCpuTemp = metrics?.cpuTemp ?? null;
+    const { startupComplete } = useAppState();
     const [battery, setBattery] = useState<BatteryHealthResult | null>(null);
-    const warmRef = useRef(false);
 
     const alertOpen = controlledAlertOpen ?? uncontrolledAlertOpen;
     const setAlertOpen = onAlertOpenChange ?? setUncontrolledAlertOpen;
 
     useEffect(() => {
+        if (!startupComplete) return;
         let cancelled = false;
         const fetchBattery = async () => {
             try {
@@ -90,23 +93,7 @@ export default function HardwareSpecsCard({
         fetchBattery();
         const id = setInterval(fetchBattery, BATTERY_REFRESH_INTERVAL_MS);
         return () => { cancelled = true; clearInterval(id); };
-    }, [getBatteryHealth]);
-
-    useEffect(() => {
-        let cancelled = false;
-        const fetch = async () => {
-            try {
-                const metrics = await invoke<{ cpuTemp: number | null }>('get_live_metrics');
-                if (!cancelled) setLiveCpuTemp(metrics.cpuTemp ?? null);
-            } catch { /* hardware may not expose temp */ }
-        };
-        fetch();
-        const warmTimer = setTimeout(() => {
-            if (!cancelled && !warmRef.current) { warmRef.current = true; fetch(); }
-        }, 1200);
-        const id = setInterval(fetch, 10000);
-        return () => { cancelled = true; clearTimeout(warmTimer); clearInterval(id); };
-    }, []);
+    }, [getBatteryHealth, startupComplete]);
 
     if (isLoading || !systemInfo) {
         return (
@@ -184,6 +171,7 @@ export default function HardwareSpecsCard({
                             <span className="hw-detail-badge" style={{ color: tempColor(liveCpuTemp) }}>
                                 <Thermometer size={10} />
                                 {Math.round(liveCpuTemp)}°C
+                                {(metricsStatus === 'stale' || metrics?.cpuTempStatus === 'stale') && ' (last reading)'}
                             </span>
                         )}
                     </div>

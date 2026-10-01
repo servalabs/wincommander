@@ -19,6 +19,7 @@ import { PANEL_MANIFESTS } from '../types/panels';
 import { useAppState } from '../context/AppContext';
 import { useLiveMetrics } from '../context/LiveMetricsContext';
 import { getModuleForPanel, isModuleEnabled } from '../types/modules';
+import { usePageVisible } from './usePageVisible';
 
 const LIVE_METRICS_INTERVAL = 2_000;  // 2s — Rust sysinfo, <1ms cost
 // Drive health is fetched once per app lifetime — smartctl+PS spin up ~1s
@@ -67,8 +68,10 @@ export async function runRefreshIfIdle(
     }
 }
 
-export function useActivePanelPoller({ activePanel, paused = false }: { activePanel: PanelId; paused?: boolean }) {
+export function useActivePanelPoller({ activePanel, paused: externallyPaused = false }: { activePanel: PanelId; paused?: boolean }) {
     const appState = useAppState();
+    const visible = usePageVisible();
+    const paused = externallyPaused || !appState.startupComplete || !visible;
     const {
         appSettings,
         refreshDriveHealth,

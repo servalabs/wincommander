@@ -8946,7 +8946,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/dashboard/HardwareSpecsCard.tsx",
         "src/hooks/useBackend.ts"
       ]
     },

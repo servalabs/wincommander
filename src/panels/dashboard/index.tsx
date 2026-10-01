@@ -112,7 +112,7 @@ export default function DashboardPanel() {
     return {
       ...staticInfo,
       ...liveMetrics,
-      cpuTemp: liveMetrics.cpuTemp ?? staticInfo.cpuTemp,
+      cpuTemp: liveMetrics.cpuTemp ?? 0,
       disks: liveMetrics.disks.map((disk) => ({
         ...disk,
         healthPercent: healthByDisk.get(disk.id) ?? null,
@@ -1079,6 +1079,7 @@ export default function DashboardPanel() {
           {isExpert && (
             <StorageOverviewCard
               isLoading={isLoading}
+              readingsStatus={liveMetricsStatus === 'stale' ? 'stale' : liveMetrics?.disksStatus ?? 'loading'}
               systemInfo={dashboardSystemInfo}
               expanded={isCardOpen("storage")}
               onToggle={() => toggleCard("storage")}

@@ -18,6 +18,8 @@ describe("live metrics mapping", () => {
     expect(metrics).toEqual({
       cpuUsage: 43,
       cpuTemp: 72,
+      cpuTempStatus: 'live', cpuTempAgeMs: null,
+      disksStatus: 'live', disksAgeMs: null,
       ramUsage: 58,
       ramUsedGb: 9.9,
       ramTotalGb: 16,
@@ -39,5 +41,20 @@ describe("live metrics mapping", () => {
     });
 
     expect(metrics.cpuTemp).toBeNull();
+    expect(metrics.cpuTempStatus).toBe('unavailable');
+  });
+
+  test('retains last observed values without labelling delayed probes as live', () => {
+    const metrics = mapLiveMetrics({
+      cpuUsage: 1, cpuTemp: 55, ramUsagePercent: 2, ramUsedGb: 1, ramTotalGb: 2,
+      disks: [{ name: 'C:', totalGb: 100, freeGb: 50 }],
+      cpuTempStatus: 'stale', cpuTempAgeMs: 60000, disksStatus: 'stale', disksAgeMs: 12000,
+    });
+    expect(metrics.cpuTemp).toBe(55);
+    expect(metrics.cpuTempStatus).toBe('stale');
+    expect(metrics.cpuTempAgeMs).toBe(60000);
+    expect(metrics.disksStatus).toBe('stale');
+    expect(metrics.disksAgeMs).toBe(12000);
+    expect(metrics.disks).toHaveLength(1);
   });
 });

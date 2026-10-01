@@ -7,6 +7,7 @@ interface StorageOverviewCardProps {
     isLoading: boolean;
     expanded: boolean;
     onToggle: () => void;
+    readingsStatus?: "loading" | "live" | "stale" | "unavailable";
 }
 
 function getHealthTone(healthPercent: number | null | undefined) {
@@ -16,7 +17,7 @@ function getHealthTone(healthPercent: number | null | undefined) {
     return "bad";
 }
 
-const StorageOverviewCard = memo(function StorageOverviewCard({ systemInfo, isLoading, expanded, onToggle }: StorageOverviewCardProps) {
+const StorageOverviewCard = memo(function StorageOverviewCard({ systemInfo, isLoading, expanded, onToggle, readingsStatus = 'live' }: StorageOverviewCardProps) {
     if (isLoading || !systemInfo) {
         return (
             <div className="hardware-specs-card loading">
@@ -46,6 +47,9 @@ const StorageOverviewCard = memo(function StorageOverviewCard({ systemInfo, isLo
                 </button>
             </div>
 
+            {readingsStatus !== 'live' && <div className="storage-empty-state" role="status">
+                {readingsStatus === 'loading' ? 'Checking drives…' : readingsStatus === 'stale' ? 'Showing last drive readings.' : 'Drive readings are currently unavailable.'}
+            </div>}
             {!expanded && disks.length > 0 && (
                 <div className="hw-bars">
                     {disks.map((disk) => (
