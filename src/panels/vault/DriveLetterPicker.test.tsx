@@ -29,3 +29,10 @@ test("a validated selected letter is retained without an exhausted-list warning"
   expect(html).toContain('value="J" selected=""');
   expect(html).not.toContain("No free drive letters");
 });
+
+test("the Secure Storage cleanup action is opt-in", () => {
+  const normal = renderToStaticMarkup(<DriveLetterPicker id="letters" value="W" letters={["W"]} onChange={() => undefined} />);
+  const secureStorage = renderToStaticMarkup(<DriveLetterPicker id="letters" value="W" letters={["W"]} onChange={() => undefined} onReleaseOrphaned={() => undefined} />);
+  expect(normal).not.toContain("Check and free unavailable Vault letters");
+  expect(secureStorage).toContain("Check and free unavailable Vault letters");
+});

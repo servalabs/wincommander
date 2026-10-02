@@ -1,4 +1,5 @@
 import { Button, Tooltip } from "@/components/ui/bp";
+import { open } from "@tauri-apps/plugin-shell";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
@@ -22,9 +23,10 @@ interface VolumeActionsMenuProps {
 }
 
 function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, statusError, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
-  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
+  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume, enablePersonalVaultSync } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
+  const [enrollingSync, setEnrollingSync] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [failure, setFailureMessage] = useState("");
   const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
@@ -95,6 +97,36 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     } catch (error) { setFailure(vaultOperationError(error, "open")); }
   };
 
+  const handleEnablePersonalSync = async () => {
+    if (internalDrive === undefined) return;
+    const relativePath = window.prompt("Folder inside this personal Vault to sync", "Sync");
+    if (relativePath === null) return;
+    setEnrollingSync(true);
+    setFailure("");
+    try {
+      const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
+      void open(enrollment.gui_url);
+      showSuccess(`Syncthing setup opened at ${enrollment.gui_url}. ${driveLabel}\\${relativePath} will sync while this personal Vault is mounted.`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      const message = detail.includes("vault_not_authorized")
+        ? "Syncthing can only be enabled for a personal or owner-only per-user Vault mounted by this Windows account. Shared Vaults cannot use it."
+        : detail.includes("vault_mount_state_unknown")
+          ? "WinCommander could not confirm that this Vault is still mounted for this Windows account. Refresh Secure Storage, then try again."
+          : detail.includes("vault_syncthing_profile_unavailable")
+            ? "Syncthing did not become ready for this Windows account. Keep the personal Vault mounted, then retry. If it persists, verify the Syncthing installation."
+            : detail.includes("vault_syncthing_root_conflict")
+              ? "This Vault already syncs that folder or an overlapping folder. Choose a separate folder outside the existing sync folder."
+            : detail.includes("vault_broker_unavailable") || detail.includes("vault_broker_rejected")
+            ? "WinCommander could not reach the Syncthing helper for this Windows account. Keep the Vault mounted and try again."
+            : "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
+      setFailure(message);
+      showError(message, undefined, { kind: "notification" });
+    } finally {
+      setEnrollingSync(false);
+    }
+  };
+
   return (
     <div className="vol-actions-group">
       <div className="flex items-center gap-1 flex-shrink-0">
@@ -122,6 +154,18 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </Tooltip>
 
       <TierGate tier="paid" featureLabel="Encrypted volumes">
+        <Tooltip content="Enable sync for a folder in this personal Vault" position="top">
+          <Button
+            icon="cloud-upload"
+            minimal
+            small
+            loading={enrollingSync}
+            disabled={!accessible || Boolean(statusError) || internalDrive === undefined}
+            onClick={handleEnablePersonalSync}
+            className="vol-inline-btn"
+            aria-label={`Enable Syncthing for a folder in ${driveLabel}`}
+          />
+        </Tooltip>
         <Tooltip content="Force dismount" position="top">
           <Button
             icon="eject"

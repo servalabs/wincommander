@@ -625,6 +625,8 @@ pub enum VaultMountReason {
     AlreadyMounted,
     ProNotInstalled,
     BrokerUnavailable,
+    SyncthingProfileUnavailable,
+    SyncthingRootConflict,
     BrokerRejected,
     BrokerIdentityRejected,
     BrokerHandshakeRejected,
@@ -644,7 +646,7 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -654,6 +656,8 @@ impl VaultMountReason {
         Self::AlreadyMounted,
         Self::ProNotInstalled,
         Self::BrokerUnavailable,
+        Self::SyncthingProfileUnavailable,
+        Self::SyncthingRootConflict,
         Self::BrokerRejected,
         Self::BrokerIdentityRejected,
         Self::BrokerHandshakeRejected,
@@ -672,7 +676,7 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 25] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 27] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -682,6 +686,8 @@ impl VaultMountReason {
         "already_mounted",
         "pro_not_installed",
         "broker_unavailable",
+        "syncthing_profile_unavailable",
+        "syncthing_root_conflict",
         "broker_rejected",
         "broker_identity_rejected",
         "broker_handshake_rejected",
@@ -711,6 +717,8 @@ impl VaultMountReason {
             Self::AlreadyMounted => "already_mounted",
             Self::ProNotInstalled => "pro_not_installed",
             Self::BrokerUnavailable => "broker_unavailable",
+            Self::SyncthingProfileUnavailable => "syncthing_profile_unavailable",
+            Self::SyncthingRootConflict => "syncthing_root_conflict",
             Self::BrokerRejected => "broker_rejected",
             Self::BrokerIdentityRejected => "broker_identity_rejected",
             Self::BrokerHandshakeRejected => "broker_handshake_rejected",
@@ -741,6 +749,8 @@ impl VaultMountReason {
             "already_mounted" => Some(Self::AlreadyMounted),
             "pro_not_installed" => Some(Self::ProNotInstalled),
             "broker_unavailable" => Some(Self::BrokerUnavailable),
+            "syncthing_profile_unavailable" => Some(Self::SyncthingProfileUnavailable),
+            "syncthing_root_conflict" => Some(Self::SyncthingRootConflict),
             "broker_rejected" => Some(Self::BrokerRejected),
             "broker_identity_rejected" => Some(Self::BrokerIdentityRejected),
             "broker_handshake_rejected" => Some(Self::BrokerHandshakeRejected),

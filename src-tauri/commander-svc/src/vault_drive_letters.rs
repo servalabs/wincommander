@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Bounded, read-only inventory of machine and every logon's DOS drive names.
+//! Bounded inventory of machine and every logon's DOS drive names.
 
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, UNICODE_STRING},
+    Storage::FileSystem::{
+        DefineDosDeviceW, QueryDosDeviceW, DDD_EXACT_MATCH_ON_REMOVE, DDD_RAW_TARGET_PATH,
+        DDD_REMOVE_DEFINITION,
+    },
     System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
 };
 
@@ -173,6 +177,120 @@ pub(crate) fn occupied_letters() -> Result<HashSet<String>, ()> {
     Ok(letters)
 }
 
+fn encrypted_volume_device_target(target: &str) -> bool {
+    target.starts_with(r"\Device\VeraCryptVolume") || target.starts_with(r"\Device\TrueCryptVolume")
+}
+
+fn global_dos_name(letter: char) -> Vec<u16> {
+    format!("Global\\{letter}:")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect()
+}
+
+fn global_dos_device_target(letter: char) -> Result<Option<String>, ()> {
+    // Query the explicit global namespace.  The SYSTEM service must never
+    // infer a caller's per-user mapping while deciding whether a stale
+    // machine-wide name can be removed.
+    let name = global_dos_name(letter);
+    let mut target = vec![0u16; 32_768];
+    let length =
+        unsafe { QueryDosDeviceW(name.as_ptr(), target.as_mut_ptr(), target.len() as u32) };
+    if length == 0 {
+        // A missing link is already clean. Other API failures are not guessed
+        // at, because this routine is allowed to remove a live system name.
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        return if error == windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND {
+            Ok(None)
+        } else {
+            Err(())
+        };
+    }
+    let end = target
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(length as usize);
+    String::from_utf16(&target[..end]).map(Some).map_err(|_| ())
+}
+
+/// Ask a disposable child to read an encrypted root. A dead driver can block
+/// a filesystem call indefinitely, so a Vault repair must never perform that
+/// call in the long-lived SYSTEM service. `Ok(true)` preserves a usable drive;
+/// `Ok(false)` is a failed root read and is eligible for exact-match removal;
+/// `Err(())` is inconclusive and leaves the mapping untouched.
+fn bounded_global_root_probe(letter: char) -> Result<bool, ()> {
+    use std::{
+        process::Command,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let cmd = std::path::PathBuf::from(system_root)
+        .join("System32")
+        .join("cmd.exe");
+    let root = format!("{letter}:\\");
+    let mut child = Command::new(cmd)
+        .args(["/d", "/c", "dir", "/a", &root])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| ())?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|_| ())? {
+            return Ok(status.success());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn remove_global_dos_device(letter: char, target: &str) -> Result<(), ()> {
+    let name = global_dos_name(letter);
+    let target = target.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let removed = unsafe {
+        DefineDosDeviceW(
+            DDD_REMOVE_DEFINITION | DDD_RAW_TARGET_PATH | DDD_EXACT_MATCH_ON_REMOVE,
+            name.as_ptr(),
+            target.as_ptr(),
+        )
+    };
+    (removed != 0).then_some(()).ok_or(())
+}
+
+/// Remove only a dead global VeraCrypt/TrueCrypt drive name. This is the
+/// SYSTEM counterpart to Pro's current-Explorer cleanup: it never touches a
+/// per-user mapping, a normal drive target, or a mapping whose root can still
+/// be read. The exact target is supplied back to Windows on removal so a
+/// concurrently replaced mapping cannot be deleted.
+pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
+    let mut released = 0;
+    for byte in b'A'..=b'Z' {
+        let letter = char::from(byte);
+        let Some(target) = global_dos_device_target(letter)? else {
+            continue;
+        };
+        if !encrypted_volume_device_target(&target) {
+            continue;
+        }
+        match bounded_global_root_probe(letter) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            // An uncertain result must never remove a possibly live mapping.
+            Err(()) => continue,
+        }
+        remove_global_dos_device(letter, &target)?;
+        released += 1;
+    }
+    Ok(released)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +314,23 @@ mod tests {
             ],
         );
         assert_eq!(letters, HashSet::from(["C".into(), "P".into()]));
+    }
+
+    #[test]
+    fn only_encrypted_volume_device_targets_are_cleanup_candidates() {
+        assert!(encrypted_volume_device_target(r"\Device\VeraCryptVolume4"));
+        assert!(encrypted_volume_device_target(r"\Device\TrueCryptVolume7"));
+        assert!(!encrypted_volume_device_target(r"\Device\HarddiskVolume4"));
+        assert!(!encrypted_volume_device_target(r"\??\C:"));
+    }
+
+    #[test]
+    fn global_dos_names_are_explicit_and_nul_terminated() {
+        assert_eq!(
+            String::from_utf16(&global_dos_name('Y')[..global_dos_name('Y').len() - 1]).unwrap(),
+            "Global\\Y:"
+        );
+        assert_eq!(*global_dos_name('Y').last().unwrap(), 0);
     }
 
     #[test]

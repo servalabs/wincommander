@@ -187,12 +187,14 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
   const [mountFailure, setMountFailure] = useState("");
   const [volumeActionFailure, setVolumeActionFailure] = useState("");
+  const [releasingOrphanedLetters, setReleasingOrphanedLetters] = useState(false);
 
   const {
     mountVolume,
     verifyVaultDrive,
     openEncryptionVolume,
     getEncryptionPartitions,
+    releaseOrphanedVaultDriveLetters,
   } = useBackend();
   const { canUse } = useEntitlements();
   const accessibleVolumes = volumes.filter((volume) => volume.accessible !== false);
@@ -228,6 +230,25 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     setMountLetter(availableLetters.includes("Y") ? "Y" : availableLetters[0] ?? "");
     setMountType('file');
   }, [availableLetters]);
+
+  const releaseOrphanedMountLetters = useCallback(async () => {
+    setReleasingOrphanedLetters(true);
+    try {
+      const result = await releaseOrphanedVaultDriveLetters();
+      if (!result.success || !result.data) {
+        showError(result.error || "Unavailable Vault drive letters could not be checked.");
+        return;
+      }
+      await refreshMountLetters();
+      showSuccess(
+        result.data.released === 0
+          ? "No unavailable Vault drive letters were found."
+          : `Freed ${result.data.released} unavailable Vault drive letter${result.data.released === 1 ? "" : "s"}.`,
+      );
+    } finally {
+      setReleasingOrphanedLetters(false);
+    }
+  }, [refreshMountLetters, releaseOrphanedVaultDriveLetters]);
   useEffect(() => {
     if (!mountInFlight.current && !mountLettersLoading && !mountLettersUnavailable) {
       setMountLetter(current => availableLetters.includes(current) ? current : availableLetters[0] ?? "");
@@ -727,6 +748,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               loading={mountLettersLoading}
               unavailable={mountLettersUnavailable}
               onRefresh={() => void refreshMountLetters()}
+              onReleaseOrphaned={() => void releaseOrphanedMountLetters()}
+              releasingOrphaned={releasingOrphanedLetters}
             />
           </FormGroup>
 

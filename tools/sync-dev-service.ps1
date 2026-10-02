@@ -8,6 +8,10 @@ param(
     # differences could otherwise stop the old service and strand it.
     [switch]$UseExistingBuild,
     [switch]$SyncPro,
+    # Replacing the SYSTEM service cleanly dismounts every Vault it owns. An
+    # explicit opt-in keeps an ordinary frontend restart from unexpectedly
+    # closing a mounted Vault during development.
+    [switch]$AllowVaultDismount,
     [string]$DiagnosticPath
 )
 
@@ -27,6 +31,24 @@ $driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
 $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
 $driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
 $driverAccessRepair = Join-Path $PSScriptRoot 'repair-vault-driver-access.ps1'
+$activeMountRegistry = Join-Path $env:ProgramData 'WinCommander\policy\vault-active-mounts-v1.json'
+
+function Assert-NoActiveVaultsUnlessAllowed {
+    if ($AllowVaultDismount -or -not (Test-Path -LiteralPath $activeMountRegistry -PathType Leaf)) {
+        return
+    }
+    try {
+        $registry = Get-Content -LiteralPath $activeMountRegistry -Raw | ConvertFrom-Json -ErrorAction Stop
+        $mounts = @($registry.mounts.psobject.Properties | ForEach-Object { $_.Value })
+    }
+    catch {
+        throw "WinCommander cannot verify whether a Vault is mounted. Stop the service only after resolving the Vault state, or rerun the explicit development synchronization with -AllowVaultDismount."
+    }
+    if ($mounts.Count -gt 0) {
+        $letters = ($mounts | ForEach-Object { $_.drive_letter } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
+        throw "A Vault is mounted ($letters). Replacing the development service would dismount it. Dismount it in WinCommander first, or rerun this explicit test operation with -AllowVaultDismount."
+    }
+}
 
 function Write-Diagnostic([string]$Message) {
     if ($DiagnosticPath) {
@@ -263,7 +285,8 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
     # the elevated child stopped the service but failed before restarting it.
     $existingBuildArgument = if ($UseExistingBuild) { ' -UseExistingBuild' } else { '' }
     $proArgument = if ($SyncPro) { ' -SyncPro' } else { '' }
-    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument$proArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
+    $vaultArgument = if ($AllowVaultDismount) { ' -AllowVaultDismount' } else { '' }
+    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument$proArgument$vaultArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     # Pass one argument string to the Windows process launcher.  The encoded
     # payload contains no spaces, avoiding another quoting boundary on paths
@@ -300,6 +323,7 @@ if (-not $Elevated) {
         # First migration from an older target\debug service can hold the build
         # output open. The elevated child stops it, rebuilds, and completes the
         # one-time move to the staging directory.
+        Assert-NoActiveVaultsUnlessAllowed
         Start-ElevatedSync
         Write-Host 'WinCommander development service synchronized and running.'
         return
@@ -320,6 +344,7 @@ if (-not $Elevated) {
         return
     }
 
+    Assert-NoActiveVaultsUnlessAllowed
     Start-ElevatedSync -UseExistingBuild
     Write-Host 'WinCommander development service synchronized and running.'
     return
@@ -331,6 +356,7 @@ if (-not $Elevated) {
 if ($SyncPro -and -not (Test-Path -LiteralPath $builtPro -PathType Leaf)) {
     throw 'Build the development Pro helper before synchronizing the service.'
 }
+Assert-NoActiveVaultsUnlessAllowed
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Diagnostic 'Stopping the existing WinCommander service.'
     Stop-Service -Name $serviceName -Force -NoWait -ErrorAction Stop

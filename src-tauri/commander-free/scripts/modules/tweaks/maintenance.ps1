@@ -153,10 +153,13 @@ function Get-ServiceProfileTargets {
         'SNMPTRAP', 'SSDPSRV', 'ScDeviceEnum', 'SensorDataService', 'SensorService',
         'SensrSvc', 'SessionEnv', 'SharedAccess', 'SmsRouter', 'SstpSvc', 'StiSvc', 'StorSvc', 'TapiSrv',
         'TieringEngineService', 'TokenBroker', 'TroubleshootingSvc', 'TrustedInstaller',
-        'UmRdpService', 'UsoSvc', 'VSS', 'W32Time', 'WEPHOSTSVC', 'WFDSConMgrSvc', 'WMPNetworkSvc',
+        # Keep clock and automatic time-zone synchronization under Windows'
+        # default automatic management. An optimization profile must not leave
+        # a machine without time synchronization.
+        'UmRdpService', 'UsoSvc', 'VSS', 'WEPHOSTSVC', 'WFDSConMgrSvc', 'WMPNetworkSvc',
         'WManSvc', 'WPDBusEnum', 'WalletService', 'WarpJITSvc', 'WbioSrvc', 'WdiServiceHost',
         'WdiSystemHost', 'WebClient', 'Wecsvc', 'WerSvc', 'WiaRpc', 'WinRM', 'WpcMonSvc', 'WpnService',
-        'XblAuthManager', 'XblGameSave', 'XboxGipSvc', 'XboxNetApiSvc', 'autotimesvc', 'bthserv',
+        'XblAuthManager', 'XblGameSave', 'XboxGipSvc', 'XboxNetApiSvc', 'bthserv',
         'camsvc', 'cloudidsvc', 'dcsvc', 'defragsvc', 'diagsvc', 'dmwappushservice', 'dot3svc',
         'edgeupdate', 'edgeupdatem', 'fdPHost', 'fhsvc', 'hidserv', 'icssvc', 'lfsvc', 'lltdsvc',
         'lmhosts', 'netprofm', 'perceptionsimulation', 'pla', 'seclogon', 'smphost', 'svsvc',

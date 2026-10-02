@@ -2013,6 +2013,34 @@ impl VaultAccessStore {
             .map(|p| p.policy.clone())
     }
 
+    /// Only an owner-only, per-user policy Vault may have a per-user
+    /// Syncthing binding. Shared policies deliberately fail this check: two
+    /// local profiles must never independently control one folder's sync
+    /// state.
+    pub(crate) fn is_exclusive_per_user_policy_owner(&self, entry_id: &str, owner_sid: &str) -> bool {
+        if !valid_windows_sid(owner_sid) {
+            return false;
+        }
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        if !state.access_directory_healthy
+            || state.status.validation_state != VaultValidationState::Current
+        {
+            return false;
+        }
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
+        let Some(entry) = active.policy.entries.iter().find(|entry| entry.id == entry_id) else {
+            return false;
+        };
+        let Some(resolved) = active.resolved.iter().find(|resolved| resolved.id == entry_id) else {
+            return false;
+        };
+        exclusive_per_user_policy_owner(entry, resolved, owner_sid)
+    }
+
     /// A caller-scoped policy view.  The service never projects another
     /// owner's label, path, letter, grants, or SID to a normal Fleet user.
     pub fn caller_projection(
@@ -3293,6 +3321,17 @@ impl VaultAccessStore {
             },
         };
     }
+}
+
+fn exclusive_per_user_policy_owner(
+    entry: &VaultAccessEntry,
+    resolved: &ResolvedEntry,
+    owner_sid: &str,
+) -> bool {
+    entry.mount.presentation == VaultPresentation::PerUser
+        && entry.primary_owner_sid.as_deref() == Some(owner_sid)
+        && resolved.authorization_grants.len() == 1
+        && resolved.authorization_grants[0].sid == owner_sid
 }
 
 #[cfg(windows)]
@@ -5477,6 +5516,30 @@ mod tests {
             .lock()
             .unwrap()
             .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
+    }
+
+    #[test]
+    fn syncthing_policy_eligibility_requires_one_owner_only_grant() {
+        let owner_sid = "S-1-5-21-owner";
+        let mut entry = policy(1, 0).entries.remove(0);
+        entry.mount.presentation = VaultPresentation::PerUser;
+        entry.primary_owner_sid = Some(owner_sid.into());
+        let mut resolved = ResolvedEntry {
+            id: entry.id.clone(),
+            identity: "volume:1:file:2".into(),
+            grants: vec![],
+            authorization_grants: vec![ResolvedGrantRecord {
+                sid: owner_sid.into(),
+                access: VaultAccess::Write,
+            }],
+        };
+        assert!(exclusive_per_user_policy_owner(&entry, &resolved, owner_sid));
+
+        resolved.authorization_grants.push(ResolvedGrantRecord {
+            sid: "S-1-5-21-other".into(),
+            access: VaultAccess::Write,
+        });
+        assert!(!exclusive_per_user_policy_owner(&entry, &resolved, owner_sid));
     }
 
     #[test]
