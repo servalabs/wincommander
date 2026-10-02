@@ -124,6 +124,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.create_personal"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
+            | "svc.vault.enroll_personal_syncthing"
             | "svc.vault.list_authorized"
             | "svc.vault.drive_letters"
             | "svc.vault.capabilities"
@@ -549,6 +550,7 @@ mod tests {
             "svc.vault.create_personal",
             "svc.vault.unmount",
             "svc.vault.dismount_personal",
+            "svc.vault.enroll_personal_syncthing",
             "svc.vault.list_authorized",
             "svc.vault.drive_letters",
             "svc.vault.capabilities",
