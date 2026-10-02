@@ -214,6 +214,11 @@ function Install-RamDiskEngine {
     }
 }
 
+function _Test-ImDiskDeviceListResult {
+    param([int]$ExitCode, [string]$Stderr)
+    return $ExitCode -in @(0, 1) -and [string]::IsNullOrWhiteSpace($Stderr)
+}
+
 function _Invoke-ImDisk {
     # Internal helper: runs the engine CLI synchronously, captures stdout
     # and stderr together so callers can grep either stream uniformly.
@@ -248,8 +253,14 @@ function _Invoke-ImDisk {
         $stdout = $proc.StandardOutput.ReadToEnd()
         $stderr = $proc.StandardError.ReadToEnd()
         $proc.WaitForExit()
+        # ImDisk's device-list mode returns 1 on success (including an empty
+        # list); an actual list failure writes to stderr and can return 0.
+        $isDeviceList = $Arguments.Count -eq 2 -and $Arguments[0] -eq '-l' -and $Arguments[1] -eq '-n'
+        $ok = if ($isDeviceList) {
+            _Test-ImDiskDeviceListResult -ExitCode $proc.ExitCode -Stderr $stderr
+        } else { $proc.ExitCode -eq 0 }
         return @{
-            ok       = ($proc.ExitCode -eq 0)
+            ok       = $ok
             output   = "$stdout`n$stderr"
             exitCode = $proc.ExitCode
         }
@@ -259,17 +270,9 @@ function _Invoke-ImDisk {
 }
 
 function _Parse-ImDiskDeviceDetails {
-    # Parses the verbose `engine -l -n <num>` output into a hashtable.
-    # Real output varies slightly between versions; the line that carries
-    # both the drive letter and the size looks like one of:
-    #     R:  Size: 1073741824 bytes (1024 MB).
-    #     R: \\?\GLOBALROOT\Device\ImDisk0  Size: 1073741824 bytes (1024 MB).
-    # The strict "letter then Size:" regex used to miss the second form,
-    # which is why a mounted RAM disk showed "No RAM disks mounted" in the
-    # tab while the drive was clearly present in Explorer.
-    #
-    # New approach: detect each field independently per line, so neither
-    # the letter nor the size has to live in any particular position.
+    # Parses `imdisk -l -u <num>` output. Current ImDisk reports "Drive
+    # letter: R" and puts "Virtual Memory" on the Size line; older
+    # builds used separate disk-image fields.
     param([string]$Text)
 
     $info = @{
@@ -288,6 +291,10 @@ function _Parse-ImDiskDeviceDetails {
         if (-not $l) { continue }
 
         if ($l -match '^Device\s+(\d+):') { $info.deviceNumber = [int]$Matches[1]; continue }
+        if ($l -match '^(?:Drive letter|Mount point):\s*([A-Z]):?\s*$') {
+            $info.letter = "$($Matches[1]):"
+            continue
+        }
 
         # Drive letter is the first single uppercase letter followed by ':'
         # at the start of a non-header line. Don't require anything after.
@@ -300,6 +307,9 @@ function _Parse-ImDiskDeviceDetails {
             $info.sizeBytes = [int64]$Matches[1]
             if ($Matches[2]) { $info.sizeText = $Matches[2].Trim() }
         }
+        # Current ImDisk puts the backing type on the Size line, not a
+        # separate "Disk image type" line.
+        if ($l -match '(?i)(?:,\s*Virtual Memory\b|,\s*VM\b)') { $info.isRam = $true }
 
         if ($l -match '^Disk image type:\s+(.+)$') {
             $info.type = $Matches[1].Trim()
@@ -307,10 +317,147 @@ function _Parse-ImDiskDeviceDetails {
             if ($info.type -match '(?i)virtual\s*memory|^vm\b|\bvm\b') { $info.isRam = $true }
             continue
         }
-        if ($l -match '^Disk image file:\s+(.+)$') { $info.imageFile = $Matches[1].Trim(); continue }
+        if ($l -match '^(?:Disk image file|Image file):\s+(.+)$') { $info.imageFile = $Matches[1].Trim(); continue }
         if ($l -match '^Properties:\s+(.+)$')      { $info.properties = $Matches[1].Trim(); continue }
     }
     return $info
+}
+
+function _Get-ImDiskMountOwner {
+    param([string]$Letter)
+    if (-not ([System.Management.Automation.PSTypeName]'RdkDosDevices').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class RdkDosDevices {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern uint QueryDosDevice(string lpDeviceName, StringBuilder lpTargetPath, int ucchMax);
+}
+'@ -ErrorAction Stop
+    }
+    $buffer = New-Object System.Text.StringBuilder 1024
+    $length = [RdkDosDevices]::QueryDosDevice("${Letter}:", $buffer, 1024)
+    if ($length -eq 0) { return $null }
+    if ($buffer.ToString() -match '^\\Device\\ImDisk(\d+)$') { return [int]$Matches[1] }
+    return -1 # Occupied by a non-ImDisk device.
+}
+
+function _Get-RamDiskVolumeLabel {
+    param([string]$Letter)
+    try { return (New-Object System.IO.DriveInfo "${Letter}:\").VolumeLabel }
+    catch { return $null }
+}
+
+function _Get-ImDiskUnitVolumeLabel {
+    param([int]$DeviceNumber)
+    if (-not ([System.Management.Automation.PSTypeName]'RdkUnitVolumeLabel').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class RdkUnitVolumeLabel {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool GetVolumeInformation(string root, StringBuilder label, int labelSize,
+        IntPtr serial, IntPtr maxComponent, IntPtr flags, IntPtr filesystem, int filesystemSize);
+}
+'@ -ErrorAction Stop
+    }
+    $label = New-Object System.Text.StringBuilder 64
+    $root = "\\?\GLOBALROOT\Device\ImDisk$DeviceNumber\"
+    if (-not [RdkUnitVolumeLabel]::GetVolumeInformation($root, $label, 64,
+        [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, 0)) {
+        return $null
+    }
+    return $label.ToString()
+}
+
+function _Set-ImDiskMountPoint {
+    param([string]$Letter, [int]$DeviceNumber, [bool]$Remove = $false)
+    if (-not ([System.Management.Automation.PSTypeName]'RdkDosMount').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class RdkDosMount {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool DefineDosDevice(uint flags, string name, string target);
+}
+'@ -ErrorAction Stop
+    }
+    $target = "\Device\ImDisk$DeviceNumber"
+    # Exact-match removal never removes a different session's live target.
+    $flags = if ($Remove) { [uint32]7 } else { [uint32]1 }
+    if (-not [RdkDosMount]::DefineDosDevice($flags, "${Letter}:", $target)) {
+        $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "Could not $(if ($Remove) { 'unlink' } else { 'mount' }) RAM disk unit $DeviceNumber at ${Letter}: (Windows error $code)"
+    }
+}
+
+function _Get-ImDiskUnits {
+    $list = _Invoke-ImDisk -Arguments @('-l', '-n')
+    if (-not $list.ok) { throw "Cannot enumerate RAM disks: $($list.output.Trim())" }
+    $units = @()
+    foreach ($line in ($list.output -split "`r?`n")) {
+        if (-not $line.Trim()) { continue }
+        if ($line.Trim() -notmatch '^\d+$') { throw 'Unrecognized RAM disk device list' }
+        $number = [int]$line.Trim()
+        $details = _Invoke-ImDisk -Arguments @('-l', '-u', "$number")
+        if (-not $details.ok) { throw "Cannot inspect RAM disk unit $number" }
+        $info = _Parse-ImDiskDeviceDetails -Text $details.output
+        $info.deviceNumber = $number
+        $units += $info
+    }
+    return $units
+}
+
+function _Dismount-ImDiskUnitWithoutMountPoint {
+    param([int]$DeviceNumber, [string]$ExpectedLabel)
+    if ($PSBoundParameters.ContainsKey('ExpectedLabel') -and
+        (_Get-ImDiskUnitVolumeLabel -DeviceNumber $DeviceNumber) -ine $ExpectedLabel) {
+        throw "RAM disk unit $DeviceNumber has an unexpected or unreadable label"
+    }
+    # ImDisk's CLI -d -u also removes the unit's recorded drive letter. For
+    # duplicate R: units that letter may now belong to a different unit.
+    if (-not ([System.Management.Automation.PSTypeName]'RdkSafeUnitEject').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class RdkSafeUnitEject {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool FlushFileBuffers(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool DeviceIoControl(IntPtr handle, uint code, IntPtr input, uint inputSize, IntPtr output, uint outputSize, out uint returned, IntPtr overlapped);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    public static int Eject(int number) {
+        IntPtr handle = CreateFile(@"\\?\GLOBALROOT\Device\ImDisk" + number,
+            0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (handle == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+        uint returned;
+        bool locked = false;
+        try {
+            if (!FlushFileBuffers(handle)) return Marshal.GetLastWin32Error();
+            if (!DeviceIoControl(handle, 0x00090018, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero))
+                return Marshal.GetLastWin32Error();
+            locked = true;
+            if (!DeviceIoControl(handle, 0x00090020, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero))
+                return Marshal.GetLastWin32Error();
+            if (!DeviceIoControl(handle, 0x002D4808, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero))
+                return Marshal.GetLastWin32Error();
+            return 0;
+        } finally {
+            if (locked) DeviceIoControl(handle, 0x0009001C, IntPtr.Zero, 0, IntPtr.Zero, 0, out returned, IntPtr.Zero);
+            CloseHandle(handle);
+        }
+    }
+}
+'@ -ErrorAction Stop
+    }
+    $errorCode = [RdkSafeUnitEject]::Eject($DeviceNumber)
+    if ($errorCode -ne 0) { throw "Could not detach RAM disk unit $DeviceNumber (Windows error $errorCode)" }
 }
 
 function Get-RamDiskStatus {
@@ -337,14 +484,14 @@ function Get-RamDiskStatus {
         }
 
         foreach ($n in $deviceNumbers) {
-            $details = _Invoke-ImDisk -Arguments @('-l', '-n', "$n")
+            $details = _Invoke-ImDisk -Arguments @('-l', '-u', "$n")
             if (-not $details.ok) { continue }
             $info = _Parse-ImDiskDeviceDetails -Text $details.output
             if (-not $info.isRam) { continue }
             if (-not $info.letter) { continue }
             [void]$seenLetters.Add($info.letter)
             $disks += @{
-                deviceNumber = $info.deviceNumber
+                deviceNumber = $n
                 letter       = $info.letter
                 sizeBytes    = $info.sizeBytes
                 size         = $info.sizeText
@@ -482,7 +629,7 @@ function New-RamDisk {
     }
 
     $letter = $DriveLetter.TrimEnd('\','/',':').ToUpper()
-    if ($letter.Length -ne 1) { return @{ status = 'error'; error = "Invalid DriveLetter: '$DriveLetter'" } }
+    if ($letter -notmatch '^[A-Z]$') { return @{ status = 'error'; error = "Invalid DriveLetter: '$DriveLetter'" } }
 
     $fsMap = @{ 'NTFS' = 'ntfs'; 'FAT32' = 'fat32'; 'EXFAT' = 'exfat'; 'FAT' = 'fat' }
     $fsKey = $Filesystem.ToUpper()
@@ -491,8 +638,10 @@ function New-RamDisk {
     }
     $fmtArgs = @("/fs:$($fsMap[$fsKey])", '/y')
     if ($Quick) { $fmtArgs += '/q' }
+    $safeLabel = ''
     if ($Label) {
-        $safeLabel = ($Label -replace '[^A-Za-z0-9_-]', '').Substring(0, [Math]::Min($Label.Length, 32))
+        $safeLabel = $Label -replace '[^A-Za-z0-9_-]', ''
+        $safeLabel = $safeLabel.Substring(0, [Math]::Min($safeLabel.Length, 32))
         if ($safeLabel) { $fmtArgs += "/v:$safeLabel" }
     }
     $formatString = $fmtArgs -join ' '
@@ -504,17 +653,141 @@ function New-RamDisk {
     $imArgs = @('-a', '-t', 'vm', '-s', "${sizeInt}M", '-m', "${letter}:", '-o', ($oFlags -join ','))
     $imArgs += @('-p', $formatString)
 
-    $res = _Invoke-ImDisk -Arguments $imArgs
-    if (-not $res.ok) {
-        return @{ status = 'error'; error = "Attach failed (exit $($res.exitCode)): $($res.output.Trim())" }
+    $mutexAcl = New-Object System.Security.AccessControl.MutexSecurity
+    $authenticatedUsers = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-11')
+    $mutexRights = [System.Security.AccessControl.MutexRights]::Synchronize -bor
+        [System.Security.AccessControl.MutexRights]::Modify
+    $mutexAcl.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule(
+        $authenticatedUsers, $mutexRights, [System.Security.AccessControl.AccessControlType]::Allow)))
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $principal = New-Object System.Security.Principal.SecurityIdentifier($sid)
+        $mutexAcl.AddAccessRule((New-Object System.Security.AccessControl.MutexAccessRule(
+            $principal, [System.Security.AccessControl.MutexRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
     }
+    $created = $false
+    $mutex = New-Object System.Threading.Mutex($false, "Global\WinCommander-RamDisk-${letter}", [ref]$created, $mutexAcl)
+    $hasLock = $false
+    $newNumber = $null
+    try {
+        try { $hasLock = $mutex.WaitOne([TimeSpan]::FromSeconds(30)) }
+        catch [System.Threading.AbandonedMutexException] { $hasLock = $true }
+        if (-not $hasLock) { throw "Timed out waiting to inspect ${letter}:" }
 
-    for ($i = 0; $i -lt 15; $i++) {
-        if (Test-Path "${letter}:\") { break }
-        Start-Sleep -Milliseconds 200
+        # The mount query is mandatory: an occupied letter must never be
+        # interpreted as permission to allocate another System-backed unit.
+        $mounted = _Invoke-ImDisk -Arguments @('-l', '-m', "${letter}:")
+        $owner = _Get-ImDiskMountOwner -Letter $letter
+        if ($owner -eq -1 -or ($mounted.ok -and $null -eq $owner)) {
+            throw "${letter}: is occupied or its RAM disk cannot be inspected"
+        }
+        if ($null -eq $owner -and (Test-Path "${letter}:\")) {
+            throw "${letter}: is occupied but its owner cannot be identified"
+        }
+
+        $units = @(_Get-ImDiskUnits)
+        if ($null -ne $owner -and -not $mounted.ok -and
+            @($units | Where-Object { $_.deviceNumber -eq $owner }).Count -eq 0) {
+            # A previous duplicate detach may have left a per-session R:
+            # mapping to a device that no longer exists. Remove only that
+            # exact mapping before consulting the surviving attached units.
+            _Set-ImDiskMountPoint -Letter $letter -DeviceNumber $owner -Remove $true
+            $owner = _Get-ImDiskMountOwner -Letter $letter
+            $mounted = _Invoke-ImDisk -Arguments @('-l', '-m', "${letter}:")
+        }
+        $sameLetter = @($units | Where-Object { $_.letter -eq "${letter}:" })
+        $targetBytes = [int64]$sizeInt * 1MB
+        $matching = @($sameLetter | Where-Object {
+            $_.isRam -and $_.sizeBytes -eq $targetBytes -and -not $_.imageFile -and
+            (_Get-ImDiskUnitVolumeLabel -DeviceNumber $_.deviceNumber) -ieq $safeLabel
+        })
+        if ($sameLetter.Count -ne $matching.Count) {
+            throw "${letter}: has an unrecognized RAM disk unit; refusing another attach"
+        }
+        if ($matching.Count -gt 1 -and
+            -not ($letter -eq 'R' -and $sizeInt -eq 768 -and $safeLabel -ieq 'TEMP')) {
+            throw "${letter}: has multiple RAM disk units; automatic cleanup is limited to TEMP on R:"
+        }
+
+        if ($null -ne $owner -and -not $mounted.ok) {
+            throw "${letter}: is occupied but its RAM disk cannot be inspected"
+        }
+        if ($null -ne $owner) {
+            $live = @($matching | Where-Object { $_.deviceNumber -eq $owner })
+            $volumeLabel = _Get-RamDiskVolumeLabel -Letter $letter
+            if ($live.Count -ne 1 -or $null -eq $volumeLabel -or
+                $volumeLabel -ine $safeLabel) {
+                throw "${letter}: is already mounted with a different RAM disk or label"
+            }
+        }
+
+        if ($null -eq $owner -and $matching.Count -gt 0) {
+            foreach ($candidate in $matching) {
+                _Set-ImDiskMountPoint -Letter $letter -DeviceNumber $candidate.deviceNumber
+                if ((_Get-ImDiskMountOwner -Letter $letter) -eq $candidate.deviceNumber -and
+                    (_Get-RamDiskVolumeLabel -Letter $letter) -ieq $safeLabel) {
+                    $owner = $candidate.deviceNumber
+                    break
+                }
+                _Set-ImDiskMountPoint -Letter $letter -DeviceNumber $candidate.deviceNumber -Remove $true
+            }
+            if ($null -eq $owner) { throw "${letter}: has attached RAM disks, but none matches the requested label" }
+        }
+
+        foreach ($stale in $matching) {
+            if ($null -ne $owner -and $stale.deviceNumber -eq $owner) { continue }
+            _Dismount-ImDiskUnitWithoutMountPoint -DeviceNumber $stale.deviceNumber -ExpectedLabel $safeLabel
+            for ($i = 0; $i -lt 15; $i++) {
+                $check = _Invoke-ImDisk -Arguments @('-l', '-u', "$($stale.deviceNumber)")
+                if (-not $check.ok) { break }
+                Start-Sleep -Milliseconds 200
+            }
+            if ($check.ok) { throw "RAM disk unit $($stale.deviceNumber) is still attached" }
+            if ((_Get-ImDiskMountOwner -Letter $letter) -ne $owner) {
+                throw "${letter}: changed while removing a duplicate RAM disk"
+            }
+        }
+
+        if ($null -ne $owner) {
+            return @{ status = 'reused'; drive = "${letter}:"; sizeMB = $sizeInt; filesystem = $Filesystem }
+        }
+
+        # Recheck immediately before allocation, under the cross-process lock.
+        if ($null -ne (_Get-ImDiskMountOwner -Letter $letter)) {
+            throw "${letter}: became occupied before RAM disk creation"
+        }
+        $res = _Invoke-ImDisk -Arguments $imArgs
+        if ($res.output -match 'Created device\s+(\d+):') { $newNumber = [int]$Matches[1] }
+        if (-not $res.ok) {
+            throw "Attach failed (exit $($res.exitCode)): $($res.output.Trim())"
+        }
+        for ($i = 0; $i -lt 15; $i++) {
+            if ($null -ne $newNumber -and (_Get-ImDiskMountOwner -Letter $letter) -eq $newNumber -and
+                (_Get-RamDiskVolumeLabel -Letter $letter) -ieq $safeLabel) { break }
+            Start-Sleep -Milliseconds 200
+        }
+        if ($null -eq $newNumber -or (_Get-ImDiskMountOwner -Letter $letter) -ne $newNumber -or
+            (_Get-RamDiskVolumeLabel -Letter $letter) -ine $safeLabel) {
+            throw "RAM disk attach did not produce the expected ${letter}: volume"
+        }
+        return @{ status = 'created'; drive = "${letter}:"; sizeMB = $sizeInt; filesystem = $Filesystem }
+    } catch {
+        $message = $_.Exception.Message
+        if ($null -ne $newNumber) {
+            try {
+                if ((_Get-ImDiskMountOwner -Letter $letter) -eq $newNumber) {
+                    $rollback = _Invoke-ImDisk -Arguments @('-d', '-m', "${letter}:")
+                    if (-not $rollback.ok) { throw "New RAM disk could not be dismounted" }
+                } else {
+                    _Dismount-ImDiskUnitWithoutMountPoint -DeviceNumber $newNumber
+                }
+            } catch { $message += "; rollback failed: $($_.Exception.Message)" }
+        }
+        return @{ status = 'error'; error = $message }
+    } finally {
+        if ($hasLock) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
     }
-
-    @{ status = 'created'; drive = "${letter}:"; sizeMB = $sizeInt; filesystem = $Filesystem }
 }
 
 function Remove-RamDisk {

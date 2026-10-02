@@ -28,7 +28,6 @@ function RamDisksSection() {
     installRamDiskEngine,
     getRamDiskStatus,
     getSystemRamInfo,
-    getAvailableDriveLetters,
     createRamDisk,
     removeRamDisk,
     removeAllRamDisks,
@@ -85,20 +84,6 @@ function RamDisksSection() {
       return;
     }
     const { DriveLetter: letter, SizeMB: sizeMB } = mountRequest;
-    const available = await getAvailableDriveLetters();
-    const isAvailable = available.success && available.data?.letters?.some((value) => value.toUpperCase() === letter);
-
-    if (!isAvailable) {
-      const current = await getRamDiskStatus();
-      if (current.success && current.data?.disks.some((disk) => disk.letter?.toUpperCase() === letter)) {
-        setStatus(current.data);
-        showSuccess(`Startup RAM disk saved — ${letter}: is already mounted.`);
-      } else {
-        showError(`Startup RAM disk was saved, but ${letter}: is already used by another drive.`);
-      }
-      return;
-    }
-
     const result = await createRamDisk(mountRequest);
     if (!result.success) {
       showError(result.error || "Startup RAM disk was saved, but could not be mounted.");
@@ -107,8 +92,11 @@ function RamDisksSection() {
 
     const current = await getRamDiskStatus();
     if (current.success && current.data) setStatus(current.data);
-    showSuccess(`Startup RAM disk saved and mounted at ${letter}: (${fmtMB(sizeMB)}).`);
-  }, [createRamDisk, getAvailableDriveLetters, getRamDiskStatus]);
+    const reused = (result.data as { status?: string } | undefined)?.status === "reused";
+    showSuccess(reused
+      ? `Startup RAM disk saved — ${letter}: was reused.`
+      : `Startup RAM disk saved and mounted at ${letter}: (${fmtMB(sizeMB)}).`);
+  }, [createRamDisk, getRamDiskStatus]);
 
   const saveAutostart = useCallback(async (override?: Partial<RamDiskAutostartSettings>): Promise<boolean> => {
     const next: RamDiskAutostartSettings = {
@@ -369,7 +357,7 @@ function RamDisksSection() {
               </thead>
               <tbody>
                 {disks.map((d) => (
-                  <tr key={d.letter}>
+                  <tr key={d.deviceNumber ?? d.letter}>
                     <td className="mono-cell">
                       <span className="vault-active-dot" aria-hidden />
                       <strong>{d.letter}</strong>
