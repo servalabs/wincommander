@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- RAM disk creation reuses a matching mounted ImDisk volume and removes stale
+  copies without clearing the live drive letter. The service reconciles legacy
+  768 MB TEMP disks on R: when it starts.
+
 - Restored Stego video backup, container attachment, extraction, and snapshot
   refresh. Ordinary mounts retain existing Windows permissions and do not open
   the retired account-repair prompt. Fleet access restrictions remain unchanged.

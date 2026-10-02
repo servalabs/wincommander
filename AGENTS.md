@@ -81,6 +81,11 @@ Run commands from the repository root in PowerShell on Windows.
 The Rust toolchain is pinned in `rust-toolchain.toml`. Bun is the package
 manager and task runner.
 
+Shared React components, including Risk Matrix, come from the pinned `assets`
+submodule. Initialize it with `git submodule update --init --recursive -- assets`;
+source archives must include its contents. Local build/dev entry points check
+essential shared assets before compiling or starting the app.
+
 ## Public-repository rules
 
 - Use `rg`/`rg --files` for search.
