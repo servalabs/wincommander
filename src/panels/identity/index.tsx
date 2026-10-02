@@ -235,8 +235,8 @@ export default function IdentityPanel() {
 
                 <SectionCard title="Fix All scope" icon="shield">
                     <UniversalToggle
-                        label="Apply next Fix All to all users"
-                        description="Off by default. When enabled, your next Dashboard Fix All requests administrator permission and applies eligible protections machine-wide. It does not replace other users’ saved preferences; each Windows user can choose this separately."
+                        label="Apply supported Fix All protections to all users"
+                        description="Off by default. When enabled, Dashboard Fix All applies supported machine-wide protections with administrator permission. User-specific preferences still apply only to the signed-in Windows user, not to other users’ profiles."
                         checked={appSettings?.app?.applyFixAllMachineWide === true}
                         onChange={(enabled) => {
                             patchAppSettings({ app: { applyFixAllMachineWide: enabled } }).catch(reportSettingsWriteFailure);

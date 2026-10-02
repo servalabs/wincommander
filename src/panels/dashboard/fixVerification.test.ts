@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
+import { assertDashboardFixSucceeded, dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { getToggleById } from "@/registry";
 import type { ScanFinding } from "@/components/startup/WizardAnimations";
 
@@ -9,6 +9,68 @@ const expectRejection = async (operation: Promise<void>, message: string) => {
   const result = await operation.then(() => "unexpected success", error => String(error));
   expect(result).toContain(message);
 };
+
+test("Fix All preserves backend reasons instead of confirming failed or unsupported scope", async () => {
+  for (const result of [
+    { success: false, error: "Administrator approval is required." },
+    { success: true, data: { status: "blocked", reason: "Administrator approval is required." } },
+    { success: true, data: { status: "failed", message: "Administrator approval is required." } },
+    { success: true, data: { success: false, message: "Administrator approval is required." } },
+    { success: true, data: { ok: false, message: "Administrator approval is required." } },
+    { success: true, data: { error: true, message: "Administrator approval is required." } },
+    { success: true, data: { status: "applied", operationStatus: "blocked", reason: "Administrator approval is required." } },
+  ]) {
+    await expectRejection(Promise.resolve().then(() => assertDashboardFixSucceeded(result)), "Administrator approval is required.");
+  }
+  await expectRejection(Promise.resolve().then(() => assertDashboardFixSucceeded({ success: true, data: { status: "unsupported", reason: "This device does not support this setting." } })), "This device does not support this setting.");
+});
+
+test("Fix All accepts successful current-user and machine receipts without changing scope or retrying", () => {
+  for (const scope of ["current-user", "machine", "machine-and-current-user", "application-defined"]) {
+    const result = { success: true, data: { scope, status: "applied" } };
+    expect(assertDashboardFixSucceeded(result)).toBeUndefined();
+    expect(result.data.scope).toBe(scope);
+  }
+  expect(assertDashboardFixSucceeded(undefined)).toBeUndefined();
+});
+
+test("pending and partial receipts retain their explanation instead of becoming success", async () => {
+  for (const status of ["pending", "partial", "partially_applied"]) {
+    await expectRejection(Promise.resolve().then(() => assertDashboardFixSucceeded({
+      success: true, data: { status, note: "Protection is not active. Check firmware support and restart." },
+    })), "Protection is not active. Check firmware support and restart.");
+  }
+  await expectRejection(verifyDashboardToggleFix("kernelDmaProtect", true,
+    { success: true, data: { status: "pending", operationStatus: "preference_set_reboot_needed", actuallyActive: false, note: "Kernel DMA Protection is not active." } },
+    async () => { throw new Error("must not probe"); }), "Kernel DMA Protection is not active.");
+});
+
+test("user-only toggle failure remains visible even when no hardening probe applies", async () => {
+  await expectRejection(verifyDashboardToggleFix("clockSeconds", true,
+    { success: true, data: { scope: "current-user", status: "failed", reason: "Windows denied the preference write." } },
+    async () => { throw new Error("must not probe"); }), "Windows denied the preference write.");
+});
+
+test("DMA policy preference is not a confirmed hardware protection", async () => {
+  let probes = 0;
+  for (const scope of [undefined, "machine"]) {
+    await expectRejection(verifyDashboardToggleFix("kernelDmaProtect", true,
+      { success: true, data: { scope, status: scope ? "applied" : "preference_set_reboot_needed", operationStatus: "preference_set_reboot_needed", actuallyActive: false } },
+      async () => { probes += 1; return { success: true, data: { kernelDmaProtect: true } }; }), "not active");
+  }
+  expect(probes).toBe(0);
+  const active = { success: true, data: { status: "enabled", actuallyActive: true } };
+  await expectRejection(verifyDashboardToggleFix("kernelDmaProtect", true, active,
+    async () => ({ success: true, data: { kernelDmaProtect: false } })), "previous setting");
+  expect(await verifyDashboardToggleFix("kernelDmaProtect", true, active,
+    async () => ({ success: true, data: { kernelDmaProtect: true } }))).toBeUndefined();
+  await expectRejection(verifyDashboardToggleFix("kernelDmaProtect", false,
+    { success: true, data: { status: "preference_cleared", actuallyActive: true } },
+    async () => { throw new Error("must not probe"); }), "still active");
+  await expectRejection(verifyDashboardToggleFix("kernelDmaProtect", true,
+    { success: true, data: { status: "applied" } },
+    async () => { throw new Error("must not probe"); }), "could not confirm");
+});
 
 test("engine install acknowledgements require a fresh exact dependency readback", async () => {
   await expectRejection(verifyDependencyInstall("instantSearch", { success: true }, async () => ({ success: true, data: { dependencies: [{ id: "instantSearch", installed: false }] } })), "not detected");
@@ -43,7 +105,7 @@ test("reverting a policy requires enabled receipt and false observed state", asy
 test("machine-wide receipt preserves the operation result and still needs independent readback", async () => {
   const wrapped = { success: true, data: { status: "applied", operationStatus: "disabled", verified: true } };
   expect(await verifyDashboardToggleFix("officeLog", true, wrapped, async () => ({ success: true, data: { officeLoggingDisabled: true } }))).toBe(undefined);
-  await expectRejection(verifyDashboardToggleFix("officeLog", true, { ...wrapped, data: { ...wrapped.data, status: "blocked" } }, async () => ({ success: true, data: { officeLoggingDisabled: true } })), "not confirmed");
+  await expectRejection(verifyDashboardToggleFix("officeLog", true, { ...wrapped, data: { ...wrapped.data, status: "blocked" } }, async () => ({ success: true, data: { officeLoggingDisabled: true } })), "did not apply");
 });
 
 test("failed native writes retain their reason and do not probe for a success", async () => {

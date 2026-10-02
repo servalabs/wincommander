@@ -6,6 +6,7 @@ export const DASHBOARD_POLICY_FIELDS: Record<string, string> = {
   internetComm: "internetCommRestricted",
   officeLog: "officeLoggingDisabled",
   bitlockerAuto: "bitlockerAutoEncryptDisabled",
+  kernelDmaProtect: "kernelDmaProtect",
 };
 
 /** Preserve explicit unknown observations instead of retaining an old cached success. */

@@ -24,6 +24,11 @@ the backend and private component before execution.
   controls where the public backend supports the operation.
 - Current-versus-intended state reporting so the UI can show whether Windows
   actually applied a requested setting.
+- Fix All keeps supported Explorer preferences in the current Windows account,
+  even when machine-wide fixes are selected. Machine protections still require
+  elevation; mixed or application-defined actions retain their actual scope.
+  Failed or pending changes remain actionable. Kernel DMA Protection requires
+  confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
 - Export/import of non-secret application settings through validated backend

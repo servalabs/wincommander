@@ -11,6 +11,9 @@ use tauri::AppHandle;
 #[path = "backend_paid_args.rs"]
 mod backend_paid_args;
 
+#[path = "backend_fix_scope.rs"]
+mod fix_scope;
+
 #[path = "vault_inventory.rs"]
 mod vault_inventory;
 
@@ -4268,39 +4271,7 @@ fn machine_wide_status(command: &str, status: &str, reason: &str) -> serde_json:
 }
 
 fn with_machine_wide_status(command: &str, result: serde_json::Value) -> serde_json::Value {
-    let status = if result.get("error").and_then(serde_json::Value::as_bool) == Some(true)
-        || result.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
-    {
-        "failed"
-    } else {
-        "applied"
-    };
-
-    match result {
-        serde_json::Value::Object(mut object) => {
-            if matches!(
-                command,
-                "Disable-DiagnosticEventTracing" | "Enable-DiagnosticEventTracing"
-                | "Disable-RecallSnapshots" | "Enable-RecallSnapshots"
-                | "Disable-OfficeLogging" | "Enable-OfficeLogging"
-                | "Disable-InternetCommunication" | "Enable-InternetCommunication"
-                | "Disable-BitLockerAutoEncrypt" | "Enable-BitLockerAutoEncrypt"
-            ) {
-                if let Some(operation_status) = object.get("status").cloned() {
-                    object.insert("operationStatus".to_string(), operation_status);
-                }
-            }
-            object.insert("scope".to_string(), serde_json::json!("machine"));
-            object.insert("status".to_string(), serde_json::json!(status));
-            serde_json::Value::Object(object)
-        }
-        data => serde_json::json!({
-            "command": command,
-            "scope": "machine",
-            "status": status,
-            "data": data,
-        }),
-    }
+    fix_scope::annotate(command, fix_scope::Scope::Machine, result)
 }
 
 #[cfg(windows)]
@@ -5018,18 +4989,24 @@ pub(crate) async fn run_backend_script_with_timeout(
     mut params: HashMap<String, String>,
     timeout_override: Option<std::time::Duration>,
 ) -> Result<serde_json::Value, String> {
-    let machine_wide = take_machine_wide_param(&mut params)?;
+    let requested_machine_wide = take_machine_wide_param(&mut params)?;
+    let effective_scope = if requested_machine_wide {
+        fix_scope::resolve(&command, is_machine_wide_fix_command(&command))
+    } else {
+        None
+    };
+    let machine_wide = effective_scope.is_some_and(|scope| scope.requires_elevation());
     // Keep legacy command/CLI callers on the same service-owned availability
     // snapshot as the UI. A per-process PowerShell probe misses other sessions
     // and saved Fleet reservations. Failure must never mean every letter is free.
     if command == "Get-AvailableDriveLetters" {
         return crate::vault_access::get_vault_available_drive_letters(None).await;
     }
-    if machine_wide && !is_machine_wide_fix_command(&command) {
+    if requested_machine_wide && effective_scope.is_none() {
         return Ok(machine_wide_status(
             &command,
             "blocked",
-            "This fix is user-specific and has no supported machine-wide policy.",
+            "This action does not support the requested Fix All scope. Run it from its own settings card.",
         ));
     }
     if machine_wide && !is_elevated_process() {
@@ -5202,7 +5179,10 @@ pub(crate) async fn run_backend_script_with_timeout(
                 &format!("[Backend] paid command '{}' dispatch error: {}", command, e),
             );
         }
-        return out;
+        return out.map(|value| match effective_scope {
+            Some(scope) => fix_scope::annotate(&command, scope, value),
+            None => value,
+        });
     }
 
     // Module gate — refuse to run commands whose frontend module is disabled
@@ -5533,8 +5513,8 @@ pub(crate) async fn run_backend_script_with_timeout(
         }
     };
 
-    let result = if machine_wide {
-        result.map(|value| with_machine_wide_status(&command, value))
+    let result = if let Some(scope) = effective_scope {
+        result.map(|value| fix_scope::annotate(&command, scope, value))
     } else {
         result
     };

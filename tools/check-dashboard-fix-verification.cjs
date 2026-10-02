@@ -22,7 +22,7 @@ import { DASHBOARD_POLICY_FIELDS } from '/src/lib/dashboardPolicyObservation.ts'
 import { getToggleById } from '/src/registry/index.ts';
 const ids = Object.keys(DASHBOARD_POLICY_FIELDS);
 const findings = ids.map(id => ({ id, label: getToggleById(id).label, impact: getToggleById(id).impact, category: 'privacy', severity: 'warning' }));
-window.__fixModes = { recallSnapshots: 'ack', internetComm: 'mismatch', officeLog: 'unknown', bitlockerAuto: 'verified' };
+window.__fixModes = { recallSnapshots: 'ack', internetComm: 'mismatch', officeLog: 'unknown', bitlockerAuto: 'verified', kernelDmaProtect: 'pending' };
 window.__verifiedFixes = JSON.parse(sessionStorage.getItem('fixture-verified') || '[]');
 function Fixture() {
   const [cached, setCached] = React.useState(() => Object.fromEntries(ids.map(id => [id, window.__verifiedFixes.includes(id)])));
@@ -36,7 +36,10 @@ function Fixture() {
         // Reproduce an old optimistic cache update racing with independent readback.
         setCached(current => ({ ...current, [finding.id]: true }));
         const mode = window.__fixModes[finding.id];
-        const result = { success: true, data: mode === 'ack' ? { status: 'disabled' } : { status: 'disabled', verified: true } };
+        const result = { success: true, data: finding.id === 'kernelDmaProtect'
+          ? (mode === 'verified' ? { status: 'applied', operationStatus: 'enabled', actuallyActive: true }
+            : { status: 'pending', operationStatus: 'preference_set_reboot_needed', actuallyActive: false, note: 'Kernel DMA Protection is not active. Check firmware support and restart.' })
+          : mode === 'ack' ? { status: 'disabled' } : { status: 'disabled', verified: true } };
         await verifyDashboardToggleFix(finding.id, true, result, async () => ({ success: true, data: {
           [DASHBOARD_POLICY_FIELDS[finding.id]]: mode === 'verified' ? true : mode === 'unknown' ? null : false
         } }));
@@ -74,16 +77,17 @@ async function main() {
     await page.goto(new URL('/__dashboard_fix__', origin).href);
     await page.locator('.na-item').first().waitFor();
     const labels = await page.locator('.na-label').allTextContents();
-    assert.equal(labels.length, 4);
+    assert.equal(labels.length, 5);
     const scenarios = [
       ['Recall', 'Windows has not confirmed'],
       ['Internet', 'Windows still reports'],
       ['Office', 'could not be checked afterwards'],
+      ['Kernel DMA', 'not active'],
     ];
     for (const [label, message] of scenarios) {
       await row(label).getByRole('button', { name: 'Fix', exact: true }).click();
       await row(label).getByRole('alert').filter({ hasText: message }).waitFor();
-      assert.equal(await page.locator('.na-item').count(), 4, 'Unverified rows survive optimistic snapshots');
+      assert.equal(await page.locator('.na-item').count(), 5, 'Unverified rows survive optimistic snapshots');
     }
     await row('BitLocker').getByRole('button', { name: 'Fix', exact: true }).click();
     await row('BitLocker').waitFor({ state: 'detached' });
@@ -93,12 +97,18 @@ async function main() {
     assert.deepEqual(await page.evaluate(() => window.__verifiedFixes), ['bitlockerAuto'], 'Ignore never reports a verified fix');
     await page.reload();
     await row('Recall').waitFor();
-    assert.equal(await page.locator('.na-item').count(), 3, 'Reopening retains only truly persisted success');
+    assert.equal(await page.locator('.na-item').count(), 4, 'Reopening retains only truly persisted success');
     assert.equal(await row('BitLocker').count(), 0);
     await page.evaluate(() => { window.__fixModes.officeLog = 'verified'; });
     await row('Office').getByRole('button', { name: 'Fix', exact: true }).click();
     await row('Office').waitFor({ state: 'detached' });
     assert.deepEqual(await page.evaluate(() => window.__verifiedFixes), ['bitlockerAuto', 'officeLog']);
+    await row('Kernel DMA').getByRole('button', { name: 'Fix', exact: true }).click();
+    await row('Kernel DMA').getByRole('alert').filter({ hasText: 'not active' }).waitFor();
+    await page.evaluate(() => { window.__fixModes.kernelDmaProtect = 'verified'; });
+    await row('Kernel DMA').getByRole('button', { name: 'Fix', exact: true }).click();
+    await row('Kernel DMA').waitFor({ state: 'detached' });
+    assert.deepEqual(await page.evaluate(() => window.__verifiedFixes), ['bitlockerAuto', 'officeLog', 'kernelDmaProtect']);
     assert.deepEqual(errors, []);
     console.log('PASS: acknowledgement, mismatch and unknown readback stay visible with inline errors; exact verified readback clears rows; Ignore never counts as fixed; reload preserves only verified state. Simulated native responses only.');
   } catch (error) {

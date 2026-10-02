@@ -47,7 +47,7 @@ import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showInfo, showSuccess } from "../../utils/toast";
 import { getMaintenanceFailureMessage } from "../../utils/maintenance";
-import { retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
+import { assertDashboardFixSucceeded, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { useFindingFixAttempts } from "./useFindingFixAttempts";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
@@ -533,14 +533,7 @@ export default function DashboardPanel() {
   const buildFindingOp = useCallback((f: ScanFinding, machineWide = false, ownsPackageOperation = false): { label: string; fn: () => Promise<any> } | null => {
     const wrap = (fn: () => Promise<any>) => () => trackFindingFix(f, async () => {
       const res = await fn();
-      if (res && (res as any).error) throw new Error((res as any).error);
-      if (res && res.success === false) throw new Error("Operation failed");
-      // Machine-scope dispatch deliberately refuses user-only or unsupported
-      // commands. Surface that as a failed operation step instead of a green
-      // Fix All result that implies another user's setting was changed.
-      if (res?.data?.status === "blocked") {
-        throw new Error(res.data.reason || "This fix cannot be applied machine-wide.");
-      }
+      assertDashboardFixSucceeded(res);
       return res;
     });
     const runToggleCommand = async (toggleId: string, targetChecked = true) => {
@@ -556,7 +549,7 @@ export default function DashboardPanel() {
       const res = await executeBackendCommand(targetChecked ? toggle.enableCmd : toggle.disableCmd, { MachineWide: machineWide });
       await verifyDashboardToggleFix(toggleId, targetChecked, res, () => executeBackendCommand('Get-HardeningStatus'));
       if (targetChecked && toggle.id === 'suggestions') {
-        await executeBackendCommand('Disable-SetupCompletionNags', { MachineWide: machineWide });
+        assertDashboardFixSucceeded(await executeBackendCommand('Disable-SetupCompletionNags', { MachineWide: machineWide }));
       }
       return res;
     };
@@ -685,10 +678,8 @@ export default function DashboardPanel() {
   // directly, instead of only through the TaskStatusContext-derived
   // isFixEverythingRunning (see fixAllInProgress, above).
   const fixFindings = useCallback((targets: ScanFinding[], title: string, machineWide = false) => {
-    if (machineWide && needsElevation) {
-      showError(`Apply Fix All to all users is blocked. ${MACHINE_SCOPE_ELEVATION_MESSAGE}`);
-      return Promise.resolve();
-    }
+    // The backend resolves each operation's actual scope and authorization.
+    // A machine-wide preference must not block unrelated current-user fixes.
     const requestedAppUpdateIds = targets
       .filter((t) => t.id.startsWith('app-update:'))
       .map((t) => t.id.slice('app-update:'.length));
@@ -739,7 +730,7 @@ export default function DashboardPanel() {
     return operation.finally(() => {
         setBusyIds((prev) => { const n = new Set(prev); ids.forEach((i) => n.delete(i)); return n; });
       });
-  }, [buildFindingOp, refreshSettings, refreshNetwork, needsElevation]);
+  }, [buildFindingOp, refreshSettings, refreshNetwork]);
 
   // Also broadcast as a window event so Sidebar (a sibling, not a child of
   // this component) can blur in sync without going through TaskStatusContext.

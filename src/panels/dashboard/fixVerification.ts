@@ -12,6 +12,22 @@ export interface FindingFixAttempt {
   error: string | null;
 }
 
+export function assertDashboardFixSucceeded(result: unknown): void {
+  if (!result || typeof result !== "object") return;
+  const reply = result as Record<string, unknown>;
+  const data = reply.data && typeof reply.data === "object"
+    ? reply.data as Record<string, unknown> : undefined;
+  const failed = [reply, data].some(value => value && (
+    value.success === false || value.ok === false || !!value.error ||
+    [value.status, value.operationStatus].some(status =>
+      ["blocked", "failed", "error", "unsupported", "not_supported", "pending", "partial", "partially_applied"].includes(String(status)))
+  ));
+  if (!failed) return;
+  const reason = [reply.error, data?.reason, data?.message, data?.error, data?.note, reply.reason, reply.message, reply.note]
+    .find(value => typeof value === "string" && value.trim().length > 0);
+  throw new Error(typeof reason === "string" ? reason : "Windows did not apply this change. The issue is still listed.");
+}
+
 export function requiresObservedFix(toggleId: string): boolean {
   return Object.hasOwn(DASHBOARD_POLICY_FIELDS, toggleId);
 }
@@ -40,11 +56,19 @@ export async function verifyDashboardToggleFix(
   result: FixReply,
   readHardeningStatus: () => Promise<FixReply>,
 ): Promise<void> {
-  if (!result.success) throw new Error(result.error || "Windows did not apply this change. The issue is still listed.");
+  assertDashboardFixSucceeded(result);
   if (!requiresObservedFix(toggleId)) return;
-  const receipt = result.data as { verified?: unknown; status?: unknown; operationStatus?: unknown } | null;
+  const receipt = result.data as { verified?: unknown; status?: unknown; operationStatus?: unknown; actuallyActive?: unknown } | null;
   const operationStatus = receipt?.operationStatus ?? receipt?.status;
-  if (receipt?.verified !== true || (receipt.status !== "applied" && receipt.status !== "disabled" && receipt.status !== "enabled") || operationStatus !== (targetChecked ? "disabled" : "enabled")) {
+  if (toggleId === "kernelDmaProtect") {
+    if (receipt?.actuallyActive !== targetChecked) {
+      throw new Error(receipt?.actuallyActive === false
+        ? "Kernel DMA Protection is not active. Firmware/IOMMU support and possibly a restart are required. It has not been marked fixed."
+        : receipt?.actuallyActive === true
+          ? "Kernel DMA Protection is still active. Clearing its preference does not disable firmware protection. It has not been marked fixed."
+          : "Windows could not confirm whether Kernel DMA Protection is active. It has not been marked fixed.");
+    }
+  } else if (receipt?.verified !== true || (receipt.status !== "applied" && receipt.status !== "disabled" && receipt.status !== "enabled") || operationStatus !== (targetChecked ? "disabled" : "enabled")) {
     throw new Error("Windows has not confirmed this change. The issue remains listed; refresh its status before retrying.");
   }
   const observed = await readHardeningStatus();

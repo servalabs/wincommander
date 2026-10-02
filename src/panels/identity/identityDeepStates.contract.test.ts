@@ -28,7 +28,8 @@ describe("settings deep-state contracts", () => {
   });
 
   test("Fix All's all-users preference remains a per-user opt-in", () => {
-    expect(identity).toContain("Apply next Fix All to all users");
+    expect(identity).toContain("Apply supported Fix All protections to all users");
+    expect(identity).toContain("User-specific preferences still apply only to the signed-in Windows user");
     expect(identity).toContain("appSettings?.app?.applyFixAllMachineWide === true");
     expect(identity).toContain("patchAppSettings({ app: { applyFixAllMachineWide: enabled } })");
   });
