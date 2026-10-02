@@ -62,6 +62,8 @@ mod vault_mount;
 
 #[cfg(windows)]
 mod vault_drive_letters;
+#[cfg(windows)]
+mod ramdisk_reconcile;
 
 #[cfg(windows)]
 mod pipe;
@@ -316,6 +318,12 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
         }
     };
     vault_access.load_at_startup_after_mount_cleanup(&recovered_mount_identities);
+
+    // Reconcile the legacy TEMP R: disk once per service start. On-demand
+    // creation remains owned by the RAM-disk feature's guarded backend path.
+    if let Err(error) = ramdisk_reconcile::reconcile_temp_r() {
+        eprintln!("[wincommander-svc] TEMP R: reconciliation failed: {error:#}");
+    }
 
     // ── SessionHelper peer gate (D-2) ────────────────────────────────────
     //

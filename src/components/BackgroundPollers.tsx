@@ -117,7 +117,7 @@ export default function BackgroundPollers({
 }: BackgroundPollersProps) {
   useAutoHeal();
   useAdoptCurrentState();
-  const { startPrivacyShield, invokeProductivityEngineMaintenance, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus, getUserProfiles, getAutoEraseSchedules } = useBackend();
+  const { startPrivacyShield, invokeProductivityEngineMaintenance, testRamDiskInstalled, createRamDisk, getAIDependenciesStatus, getUserProfiles, getAutoEraseSchedules } = useBackend();
   const { appSettings, startupComplete } = useAppState();
   const { hasPaid } = useEntitlements();
   const modules = appSettings?.app?.modules;
@@ -841,9 +841,7 @@ export default function BackgroundPollers({
     // silently if:
     //   • Autostart is disabled
     //   • ImDisk isn't installed (no point trying)
-    //   • A disk is already mounted at the configured drive letter
-    //     (user re-launched the app while the previous autostart disk
-    //     is still around — don't error out trying to remount).
+    // The backend reuses a matching mounted disk and removes stale duplicates.
     const ramdiskAutostartTimer = setTimeout(async () => {
       const cfg = ramdiskAutostartRef.current;
       if (!cfg?.enabled) return;
@@ -865,31 +863,6 @@ export default function BackgroundPollers({
         }
         const mountRequest = savedRamDiskMountRequest(cfg);
         const letter = mountRequest?.DriveLetter || 'R';
-        // Don't double-mount if the drive letter is already occupied by ANY volume.
-        let isOccupied = false;
-        const avail = await getAvailableDriveLetters();
-        if (avail.success && avail.data?.letters) {
-          const isAvailable = avail.data.letters.some((l) => l.toUpperCase() === letter.toUpperCase());
-          if (!isAvailable) {
-            isOccupied = true;
-          }
-        } else {
-          // Fallback to only checking existing RAM disks if the full drive list query fails
-          const status = await getRamDiskStatus();
-          const existing = (status?.data?.disks ?? []).some((d) => d.letter?.toUpperCase() === letter.toUpperCase());
-          if (existing) {
-            isOccupied = true;
-          }
-        }
-
-        if (isOccupied) {
-          console.log(`[BackgroundPollers] RAM disk autostart skipped — ${letter}: drive letter is already occupied`);
-          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "preflight",
-            lifecycle: "verified", outcome: "degraded", errorCode: "RAM.DRIVE_LETTER.OCCUPIED",
-            severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
-            privacyClass: "local_sensitive", context: { state: "drive_letter_occupied" } });
-          return;
-        }
         // Never turn a missing/corrupt saved size into a surprise 256 MB disk.
         // The user must explicitly save the size they chose in the RAM Disks
         // panel.  The backend still enforces the total-RAM minus 3 GB cap.
@@ -908,10 +881,11 @@ export default function BackgroundPollers({
         const { SizeMB: sizeMB } = mountRequest;
         const r = await createRamDisk(mountRequest);
         if (r?.success) {
+          const reused = (r.data as { status?: string } | undefined)?.status === "reused";
           recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "runtime",
             lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
-            suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: "mounted" } });
-          showSuccess(`RAM disk auto-started at ${letter}: (${sizeMB} MB).`);
+            suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: reused ? "reused" : "mounted" } });
+          if (!reused) showSuccess(`RAM disk auto-started at ${letter}: (${sizeMB} MB).`);
         } else {
           recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "runtime",
             lifecycle: "applying", outcome: "failed", errorCode: "RAM.AUTOSTART.MOUNT_FAILED",
@@ -1009,7 +983,7 @@ export default function BackgroundPollers({
       clearTimeout(privacyShieldAutostartTimer);
       if (shredTimer.current) clearTimeout(shredTimer.current);
     };
-  }, [startPrivacyShield, invokeProductivityEngineMaintenance, onShredRequest, onPanelChange, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus]);
+  }, [startPrivacyShield, invokeProductivityEngineMaintenance, onShredRequest, onPanelChange, testRamDiskInstalled, createRamDisk, getAIDependenciesStatus]);
 
   // This component renders nothing — it's purely for side effects
   return null;
