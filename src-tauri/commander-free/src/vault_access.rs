@@ -21,6 +21,7 @@ const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
 const ENROLL_PERSONAL_SYNCTHING: &str = "svc.vault.enroll_personal_syncthing";
+const RELEASE_ORPHANED_DRIVE_LETTERS: &str = "svc.vault.release_orphaned_drive_letters";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const DRIVE_LETTERS: &str = "svc.vault.drive_letters";
 const LIST_PRINCIPALS: &str = "svc.vault.list_principals";
@@ -512,6 +513,14 @@ pub async fn vault_enroll_personal_syncthing(
         }),
     )
     .await
+}
+
+/// Checks the caller's Explorer namespace and releases only inaccessible
+/// stale VeraCrypt/TrueCrypt links. The service derives the caller session;
+/// the renderer cannot select a letter or target.
+#[tauri::command]
+pub async fn vault_release_orphaned_drive_letters() -> Result<Value, String> {
+    crate::svc_client::call(RELEASE_ORPHANED_DRIVE_LETTERS, json!({})).await
 }
 
 #[tauri::command]

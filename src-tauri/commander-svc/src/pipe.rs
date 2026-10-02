@@ -695,6 +695,9 @@ async fn dispatch_verb(
             args,
             peer,
         ),
+        "svc.vault.release_orphaned_drive_letters" => {
+            handle_release_orphaned_vault_drive_letters(request_id, args, peer)
+        }
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
                 handle_personal_vault_list(vault_access, vault_mount, &args, peer)
@@ -3015,6 +3018,55 @@ fn handle_personal_vault_syncthing_enroll(
             )
         })?;
     Ok(serde_json::json!({ "enabled": true, "gui_url": gui_url }))
+}
+
+/// Releases only inaccessible VeraCrypt/TrueCrypt links in the authenticated
+/// caller's Explorer namespace.  The service never accepts a selected letter:
+/// Pro rechecks each target and leaves normal, foreign, and usable mappings
+/// alone before removing an exact stale encrypted-volume link.
+fn handle_release_orphaned_vault_drive_letters(
+    request_id: u64,
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    if args != serde_json::json!({}) {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "drive-letter repair request is invalid",
+        ));
+    }
+    let peer = require_personal_mount_peer(peer)?;
+    let reply = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+            crate::pro_broker::VaultCall {
+                request_id,
+                target_session_id: peer.session_id(),
+                caller_sid: peer.caller_sid(),
+                caller_token: Some(peer.token()),
+                caller_authentication_id: Some(peer.authentication_id()),
+                presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
+                feature_id: "vault.broker.release_orphaned_encrypted_links",
+                args: serde_json::json!({ "target_session_id": peer.session_id() }),
+            },
+        ))
+    })
+    .map_err(|_| {
+        VerbError::new(
+            "vault_drive_letter_cleanup_failed",
+            "Unavailable Vault drive letters could not be checked.",
+        )
+    })?;
+    let released = reply
+        .get("released")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|count| *count <= 26)
+        .ok_or_else(|| {
+            VerbError::new(
+                "vault_drive_letter_cleanup_failed",
+                "Unavailable Vault drive letters could not be checked.",
+            )
+        })?;
+    Ok(serde_json::json!({ "released": released }))
 }
 
 fn handle_vault_list_authorized(

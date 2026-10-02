@@ -1964,6 +1964,14 @@ export function useBackend() {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
+    releaseOrphanedVaultDriveLetters: async (): Promise<BackendResponse<{ released: number }>> => {
+      try {
+        const data = await invoke<{ released: number }>("vault_release_orphaned_drive_letters");
+        return { success: true, data };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
     getBitLockerVolumes: () =>
       execute<BitLockerVolume[]>("Get-BitLockerVolumes"),
     eraseEncryptedContainer: async (input: EraseInput): Promise<BackendResponse<EraseReceipt>> => {

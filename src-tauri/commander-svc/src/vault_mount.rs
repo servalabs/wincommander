@@ -498,6 +498,9 @@ impl VaultMountBroker {
             VaultMountReason::CallerAclRepairFailed => "vault_caller_acl_repair_failed",
             VaultMountReason::InvalidRequest => "vault_validation_failed",
             VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
+            VaultMountReason::SyncthingProfileUnavailable => {
+                "vault_syncthing_profile_unavailable"
+            }
             VaultMountReason::ProNotInstalled => "vault_pro_not_installed",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
             VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",
@@ -2963,6 +2966,10 @@ mod tests {
             (
                 VaultMountReason::BrokerUnavailable,
                 "vault_broker_unavailable",
+            ),
+            (
+                VaultMountReason::SyncthingProfileUnavailable,
+                "vault_syncthing_profile_unavailable",
             ),
             (VaultMountReason::BrokerRejected, "vault_broker_rejected"),
             (VaultMountReason::DismountFailed, "vault_cleanup_failed"),

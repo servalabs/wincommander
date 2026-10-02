@@ -706,6 +706,12 @@ fn reason_fields(
             true,
             "retry",
         ),
+        Some(VaultMountReason::SyncthingProfileUnavailable) => (
+            "VLT.SYNCTHING.PROFILE_UNAVAILABLE",
+            DiagnosticSeverity::Error,
+            true,
+            "retry",
+        ),
         Some(VaultMountReason::ProNotInstalled) => (
             "VLT.PRO.NOT_INSTALLED",
             DiagnosticSeverity::Error,

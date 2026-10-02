@@ -16,6 +16,8 @@ interface DriveLetterPickerProps {
   loading?: boolean;
   unavailable?: boolean;
   onRefresh?: () => void;
+  onReleaseOrphaned?: () => void;
+  releasingOrphaned?: boolean;
   onChange: (letter: string) => void;
   onKeyDown?: React.KeyboardEventHandler<HTMLElement>;
   /** Opt-in mount-target mode. Omitted — every call site before this change
@@ -51,6 +53,8 @@ export default function DriveLetterPicker({
   loading = false,
   unavailable = false,
   onRefresh,
+  onReleaseOrphaned,
+  releasingOrphaned = false,
   onChange,
   onKeyDown,
   mode,
@@ -124,7 +128,8 @@ export default function DriveLetterPicker({
             <option value="" disabled>{loading ? "Checking free letters…" : unavailable ? "Drive list unavailable" : "Select a free drive letter"}</option>
             {choices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
           </select>}
-          {onRefresh && <Button minimal disabled={loading} onClick={onRefresh}>Refresh free letters</Button>}
+          {onRefresh && <Button minimal disabled={loading || releasingOrphaned} onClick={onRefresh}>Refresh free letters</Button>}
+          {onReleaseOrphaned && <Button minimal disabled={loading || releasingOrphaned} loading={releasingOrphaned} onClick={onReleaseOrphaned}>Check and free unavailable Vault letters</Button>}
           {loading && <p role="status" className="mount-target-hint">Checking available drive letters…</p>}
           {!loading && unavailable && <VaultOperationNotice message="Free drive letters could not be checked. Refresh the list before continuing." />}
           {!loading && !unavailable && choices.length === 0 && <VaultOperationNotice message="No free drive letters are available. Refresh after a drive letter becomes free." />}

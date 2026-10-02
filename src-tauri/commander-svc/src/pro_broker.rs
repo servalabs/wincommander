@@ -536,6 +536,10 @@ fn process_broker_reply(
             let reason = VaultMountReason::from_wire(&error.kind).unwrap_or_else(|| {
                 if error.kind == "missing_entitlement" {
                     VaultMountReason::EntitlementDenied
+                } else if error.kind == "feature_failed"
+                    && is_syncthing_profile_failure(&error.message)
+                {
+                    VaultMountReason::SyncthingProfileUnavailable
                 } else {
                     VaultMountReason::BrokerRejected
                 }
@@ -549,6 +553,15 @@ fn process_broker_reply(
         | Envelope::Bye
         | Envelope::Signed(_) => Err(VaultMountReason::BrokerReplyRejected),
     }
+}
+
+#[cfg(windows)]
+fn is_syncthing_profile_failure(message: &str) -> bool {
+    message.starts_with("syncthing_vault_")
+        && message.len() <= 80
+        && message
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
 }
 
 #[cfg(windows)]
@@ -1094,6 +1107,39 @@ mod tests {
         let mut notifications = 0;
         assert!(matches!(
             process_broker_reply(legacy, token, REQUEST_ID, &mut notifications),
+            Ok(BrokerReply::Finished(Err(
+                wincmd_shared::vault_access::VaultMountReason::BrokerRejected
+            )))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_classifies_only_bounded_syncthing_profile_failures() {
+        let token = "broker-test-token";
+        let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: REQUEST_ID,
+            kind: "feature_failed".to_string(),
+            message: "syncthing_vault_start_failed".to_string(),
+        })
+        .sign(token);
+        let mut notifications = 0;
+        assert!(matches!(
+            process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
+            Ok(BrokerReply::Finished(Err(
+                wincmd_shared::vault_access::VaultMountReason::SyncthingProfileUnavailable
+            )))
+        ));
+
+        let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: REQUEST_ID,
+            kind: "feature_failed".to_string(),
+            message: "syncthing_vault_start_failed; C:\\secret".to_string(),
+        })
+        .sign(token);
+        let mut notifications = 0;
+        assert!(matches!(
+            process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
             Ok(BrokerReply::Finished(Err(
                 wincmd_shared::vault_access::VaultMountReason::BrokerRejected
             )))

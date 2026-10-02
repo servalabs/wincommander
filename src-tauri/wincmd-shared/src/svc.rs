@@ -125,6 +125,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
+            | "svc.vault.release_orphaned_drive_letters"
             | "svc.vault.list_authorized"
             | "svc.vault.drive_letters"
             | "svc.vault.capabilities"
@@ -349,6 +350,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
         | "svc.vault.enroll_personal_syncthing"
+        | "svc.vault.release_orphaned_drive_letters"
         | "svc.vault.list_authorized"
         | "svc.vault.drive_letters"
         // A policy owner needs to load their own service-filtered fragment
