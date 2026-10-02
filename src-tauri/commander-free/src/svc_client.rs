@@ -36,7 +36,10 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         // Applying a policy first dismounts active vaults and may resolve
         // domain principals. A five-second caller deadline falsely reported a
         // failure while the service continued the exclusive operation.
-        "svc.vault.apply_policy" | "svc.vault.unmount" | "svc.vault.dismount_personal" => {
+        "svc.vault.apply_policy"
+        | "svc.vault.unmount"
+        | "svc.vault.dismount_personal"
+        | "svc.vault.enroll_personal_syncthing" => {
             VAULT_MUTATION_TIMEOUT
         }
         "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
@@ -52,6 +55,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.apply_policy"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
+            | "svc.vault.enroll_personal_syncthing"
     )
 }
 
@@ -404,6 +408,10 @@ mod tests {
             VAULT_MUTATION_TIMEOUT
         );
         assert_eq!(
+            request_timeout_for("svc.vault.enroll_personal_syncthing"),
+            VAULT_MUTATION_TIMEOUT
+        );
+        assert_eq!(
             request_timeout_for("svc.vault.get_policy"),
             SVC_TRANSPORT_TIMEOUT
         );
@@ -419,6 +427,7 @@ mod tests {
         assert!(may_still_be_completing("svc.vault.apply_policy"));
         assert!(may_still_be_completing("svc.vault.unmount"));
         assert!(may_still_be_completing("svc.vault.dismount_personal"));
+        assert!(may_still_be_completing("svc.vault.enroll_personal_syncthing"));
         assert_eq!(
             request_timeout_for("svc.vault.dismount_personal"),
             VAULT_MUTATION_TIMEOUT

@@ -933,9 +933,10 @@ impl VaultMountBroker {
             if let Ok(mut mounts) = self.active.lock() {
                 mounts.insert(entry_id.clone(), active.clone());
                 if self.persist_active(store, &mounts).is_ok() {
-                    // A missing binding is a no-op. Any adapter error is
-                    // conservative: retain the marker so the next normal
-                    // dismount cannot close a possibly active sync folder.
+                    // A missing binding is a no-op. An adapter failure must
+                    // not invent a managed marker: that would make a normal
+                    // dismount depend on a helper which never enrolled this
+                    // Vault. The next mount will try the binding again.
                     active.syncthing_managed = syncthing_lifecycle_call(
                         "vault.syncthing.resume",
                         operation_id,
@@ -943,7 +944,7 @@ impl VaultMountBroker {
                         &active,
                         Some(caller_token),
                     )
-                    .unwrap_or(true);
+                    .unwrap_or(false);
                     if active.syncthing_managed {
                         mounts.insert(entry_id.clone(), active.clone());
                         if self.persist_active(store, &mounts).is_err() {
@@ -1310,7 +1311,7 @@ impl VaultMountBroker {
                     &mount,
                     Some(caller_token),
                 )
-                .unwrap_or(true);
+                .unwrap_or(false);
                 if mount.syncthing_managed {
                     active.insert(entry_id.to_owned(), mount);
                     if self.persist_active(store, &active).is_err() {
