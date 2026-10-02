@@ -114,6 +114,15 @@ fn accepted_hash_matches(expected: &Option<String>, actual: &str) -> bool {
 #[cfg(windows)]
 const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 #[cfg(windows)]
+fn broker_timeout_for(feature_id: &str) -> std::time::Duration {
+    if feature_id == "vault.syncthing.prepare" {
+        // First use can download the verified prerequisite before starting its profile.
+        std::time::Duration::from_secs(180)
+    } else {
+        BROKER_TIMEOUT
+    }
+}
+#[cfg(windows)]
 const MAX_SIGNED_NOTIFICATIONS: usize = 32;
 #[cfg(windows)]
 static NEXT_RECOVERY_REQUEST_ID: std::sync::atomic::AtomicU64 =
@@ -241,7 +250,8 @@ pub(crate) struct VaultCall<'a> {
 pub async fn vault_call(
     call: VaultCall<'_>,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
-    vault_call_until(call, tokio::time::Instant::now() + BROKER_TIMEOUT).await
+    let deadline = tokio::time::Instant::now() + broker_timeout_for(call.feature_id);
+    vault_call_until(call, deadline).await
 }
 
 #[cfg(windows)]
@@ -611,6 +621,10 @@ fn process_broker_reply(
                 if error.kind == "missing_entitlement" {
                     VaultMountReason::EntitlementDenied
                 } else if error.kind == "feature_failed"
+                    && is_syncthing_install_failure(&error.message)
+                {
+                    VaultMountReason::SyncthingInstallFailed
+                } else if error.kind == "feature_failed"
                     && is_syncthing_root_conflict(&error.message)
                 {
                     VaultMountReason::SyncthingRootConflict
@@ -634,11 +648,23 @@ fn process_broker_reply(
 }
 
 #[cfg(windows)]
+fn is_syncthing_install_failure(message: &str) -> bool {
+    matches!(
+        message,
+        "syncthing_vault_install_download_failed"
+            | "syncthing_vault_install_integrity_failed"
+            | "syncthing_vault_install_failed"
+            | "syncthing_vault_install_unsupported_platform"
+    )
+}
+
+#[cfg(windows)]
 fn is_syncthing_root_conflict(message: &str) -> bool {
     matches!(
         message,
         "syncthing_vault_sync_root_overlap"
             | "syncthing_vault_folder_path_conflict"
+            | "syncthing_vault_folder_path_mismatch"
             | "syncthing_vault_binding_conflict"
     )
 }
@@ -1211,6 +1237,55 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn only_explicit_sync_enrollment_has_an_installation_deadline() {
+        assert_eq!(
+            broker_timeout_for("vault.syncthing.prepare"),
+            std::time::Duration::from_secs(180)
+        );
+        for feature in [
+            "vault.syncthing.enroll",
+            "vault.syncthing.resume",
+            "vault.syncthing.pause",
+            "vault.broker.mount",
+            "vault.broker.dismount",
+        ] {
+            assert_eq!(broker_timeout_for(feature), BROKER_TIMEOUT);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_keeps_install_failures_distinct_and_accepts_only_exact_codes() {
+        use wincmd_shared::vault_access::VaultMountReason;
+        let token = "broker-test-token";
+        for message in [
+            "syncthing_vault_install_download_failed",
+            "syncthing_vault_install_integrity_failed",
+            "syncthing_vault_install_failed",
+            "syncthing_vault_install_unsupported_platform",
+            "syncthing_vault_install_failed: C:\\private",
+        ] {
+            let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+                request_id: REQUEST_ID,
+                kind: "feature_failed".to_string(),
+                message: message.to_string(),
+            })
+            .sign(token);
+            let expected = if message.contains(':') {
+                VaultMountReason::BrokerRejected
+            } else {
+                VaultMountReason::SyncthingInstallFailed
+            };
+            let mut notifications = 0;
+            assert!(matches!(
+                process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
+                Ok(BrokerReply::Finished(Err(reason))) if reason == expected
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn broker_classifies_only_bounded_syncthing_profile_failures() {
         let token = "broker-test-token";
         let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
@@ -1251,7 +1326,7 @@ mod tests {
         assert!(matches!(
             process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
             Ok(BrokerReply::Finished(Err(
-                wincmd_shared::vault_access::VaultMountReason::BrokerRejected
+                wincmd_shared::vault_access::VaultMountReason::SyncthingRootConflict
             )))
         ));
     }

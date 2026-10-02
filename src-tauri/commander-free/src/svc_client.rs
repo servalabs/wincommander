@@ -12,6 +12,8 @@ use zeroize::Zeroize;
 const SVC_TRANSPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 const VAULT_MUTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+// Explicit setup prepares its prerequisite (180s), enrolls (120s), then resumes (120s).
+const SYNCTHING_ENROLLMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(440);
 #[cfg(windows)]
 const PIPE_CONNECT_RETRY_DELAYS: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(50),
@@ -39,7 +41,6 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         "svc.vault.apply_policy"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
-        | "svc.vault.enroll_personal_syncthing"
         // The repair is a bounded mutation in the caller's Explorer session.
         // It starts the same authenticated Vault broker as a mount, so its
         // deadline must cover the broker handshake and native DOS-device
@@ -48,6 +49,7 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
             VAULT_MUTATION_TIMEOUT
         }
         "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
+        "svc.vault.enroll_personal_syncthing" => SYNCTHING_ENROLLMENT_TIMEOUT,
         _ => SVC_TRANSPORT_TIMEOUT,
     }
 }
@@ -415,7 +417,7 @@ mod tests {
         );
         assert_eq!(
             request_timeout_for("svc.vault.enroll_personal_syncthing"),
-            VAULT_MUTATION_TIMEOUT
+            SYNCTHING_ENROLLMENT_TIMEOUT
         );
         assert_eq!(
             request_timeout_for("svc.vault.release_orphaned_drive_letters"),

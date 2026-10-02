@@ -177,13 +177,14 @@ fn syncthing_lifecycle_call(
     }
 }
 
-fn syncthing_enroll_call(
+fn syncthing_setup_call(
+    feature_id: &'static str,
     operation_id: u64,
     entry_id: &str,
     mount: &ActiveMount,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     relative_path: &str,
-) -> Result<String, VaultMountReason> {
+) -> Result<serde_json::Value, VaultMountReason> {
     let mut hasher = Sha256::new();
     hasher.update(entry_id.as_bytes());
     // A Vault can have several non-overlapping roots.  Include the normalized
@@ -198,7 +199,7 @@ fn syncthing_enroll_call(
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    let value = tokio::task::block_in_place(|| {
+    tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
             crate::pro_broker::VaultCall {
                 request_id: operation_id,
@@ -207,7 +208,7 @@ fn syncthing_enroll_call(
                 caller_token: Some(caller_token),
                 caller_authentication_id: None,
                 presentation: mount.presentation,
-                feature_id: "vault.syncthing.enroll",
+                feature_id,
                 args: serde_json::json!({
                     "operation_id": operation_id,
                     "vault_entry_id": entry_id,
@@ -220,7 +221,19 @@ fn syncthing_enroll_call(
                 }),
             },
         ))
-    })?;
+    })
+}
+
+fn syncthing_enroll_call(
+    operation_id: u64,
+    entry_id: &str,
+    mount: &ActiveMount,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+    relative_path: &str,
+) -> Result<String, VaultMountReason> {
+    let value = syncthing_setup_call(
+        "vault.syncthing.enroll", operation_id, entry_id, mount, caller_token, relative_path,
+    )?;
     if value.get("managed").and_then(serde_json::Value::as_bool) != Some(true) {
         return Err(VaultMountReason::BrokerRejected);
     }
@@ -548,6 +561,7 @@ impl VaultMountBroker {
                 "vault_syncthing_profile_unavailable"
             }
             VaultMountReason::SyncthingRootConflict => "vault_syncthing_root_conflict",
+            VaultMountReason::SyncthingInstallFailed => "vault_syncthing_install_failed",
             VaultMountReason::ProNotInstalled => "vault_pro_not_installed",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
             VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",
@@ -1760,29 +1774,75 @@ impl VaultMountBroker {
         caller_session: u32,
         caller_sid: &str,
     ) -> Result<String, VaultMountReason> {
+        self.enroll_personal_syncthing_with_prepare(
+            store, operation_id, internal_drive, relative_path, caller_token,
+            caller_session, caller_sid,
+            |entry_id, mount| {
+                let result = syncthing_setup_call(
+                    "vault.syncthing.prepare", operation_id, entry_id, mount,
+                    caller_token, relative_path,
+                )?;
+                if result == serde_json::json!({ "prepared": true }) {
+                    Ok(())
+                } else {
+                    Err(VaultMountReason::BrokerReplyRejected)
+                }
+            },
+        )
+    }
+
+    fn eligible_syncthing_mount_locked(
+        &self,
+        store: &VaultAccessStore,
+        internal_drive: u8,
+        caller_session: u32,
+        caller_sid: &str,
+    ) -> Result<(String, ActiveMount), VaultMountReason> {
+        let (entry_id, active) = self.active.lock().ok().and_then(|mounts| {
+            mounts.iter().find(|(_, mount)| mount.internal_drive == internal_drive)
+                .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
+        }).ok_or(VaultMountReason::MountStateUnknown)?;
+        let eligible_policy_owner = !active.personal
+            && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
+        if !(active.personal || eligible_policy_owner)
+            || active.presentation != VaultPresentation::PerUser
+            || !same_mount_owner(&active, caller_session, caller_sid)
+            || !self.live_mount_matches(&active)?
+        {
+            return Err(VaultMountReason::NotAuthorized);
+        }
+        Ok((entry_id, active))
+    }
+
+    fn enroll_personal_syncthing_with_prepare(
+        &self,
+        store: &VaultAccessStore,
+        operation_id: u64,
+        internal_drive: u8,
+        relative_path: &str,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        caller_session: u32,
+        caller_sid: &str,
+        prepare: impl FnOnce(&str, &ActiveMount) -> Result<(), VaultMountReason>,
+    ) -> Result<String, VaultMountReason> {
         if !valid_relative_sync_path(relative_path) {
             return Err(VaultMountReason::InvalidRequest);
         }
+        let (prepared_entry, prepared_mount) = self.with_exclusive_operation(|| {
+            self.eligible_syncthing_mount_locked(store, internal_drive, caller_session, caller_sid)
+        })?;
+        // Downloading an account prerequisite must not block any Vault inventory or dismount.
+        prepare(&prepared_entry, &prepared_mount)?;
         self.with_exclusive_operation(|| {
-            let (entry_id, active) = self
-                .active
-                .lock()
-                .ok()
-                .and_then(|mounts| {
-                    mounts
-                        .iter()
-                        .find(|(_, mount)| mount.internal_drive == internal_drive)
-                        .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
-                })
-                .ok_or(VaultMountReason::MountStateUnknown)?;
-            let eligible_policy_owner = !active.personal
-                && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
-            if !(active.personal || eligible_policy_owner)
-                || active.presentation != VaultPresentation::PerUser
-                || !same_mount_owner(&active, caller_session, caller_sid)
-                || !self.live_mount_matches(&active)?
+            let (entry_id, active) = self.eligible_syncthing_mount_locked(
+                store, internal_drive, caller_session, caller_sid,
+            )?;
+            if entry_id != prepared_entry
+                || active.container_identity != prepared_mount.container_identity
+                || active.engine_mount_identity != prepared_mount.engine_mount_identity
+                || active.mounted_at != prepared_mount.mounted_at
             {
-                return Err(VaultMountReason::NotAuthorized);
+                return Err(VaultMountReason::MountStateUnknown);
             }
             let gui_url = syncthing_enroll_call(
                 operation_id,
@@ -2953,6 +3013,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sync_preparation_releases_vault_lock_and_rejects_a_removed_or_replaced_mount() {
+        for change in ["removed", "replaced", "remounted"] {
+            let store = mount_store(
+                Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+            );
+            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(
+                Arc::new(Mutex::new(BrokerEvents::default())),
+            )));
+            let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+            mount.personal = true;
+            mount.presentation = VaultPresentation::PerUser;
+            broker.active.lock().unwrap().insert("personal".into(), mount);
+            let result = broker.enroll_personal_syncthing_with_prepare(
+                &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-owner",
+                |_, _| {
+                    let _other_operation = broker.operation.try_lock()
+                        .expect("downloading must allow another Vault operation");
+                    let mut active = broker.active.lock().unwrap();
+                    match change {
+                        "removed" => { active.remove("personal"); }
+                        "replaced" => {
+                            active.get_mut("personal").unwrap().container_identity = "different".into();
+                        }
+                        _ => { active.get_mut("personal").unwrap().mounted_at += 1; }
+                    }
+                    Ok(())
+                },
+            );
+            assert_eq!(result, Err(VaultMountReason::MountStateUnknown), "{change}");
+        }
+    }
+
+    #[test]
+    fn sync_preparation_never_installs_for_another_mount_owner() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+        );
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(
+            Arc::new(Mutex::new(BrokerEvents::default())),
+        )));
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.personal = true;
+        mount.presentation = VaultPresentation::PerUser;
+        broker.active.lock().unwrap().insert("personal".into(), mount);
+        let result = broker.enroll_personal_syncthing_with_prepare(
+            &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-other",
+            |_, _| panic!("unauthorized caller must not start prerequisite installation"),
+        );
+        assert_eq!(result, Err(VaultMountReason::NotAuthorized));
+    }
+
     pub(crate) fn policy_edit_test_broker(entry_id: &str, container_identity: &str) -> VaultMountBroker {
         let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
             BrokerEvents::default(),
@@ -3042,6 +3154,7 @@ mod tests {
                 "vault_syncthing_profile_unavailable",
             ),
             (VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            (VaultMountReason::SyncthingInstallFailed, "vault_syncthing_install_failed"),
             (VaultMountReason::DismountFailed, "vault_cleanup_failed"),
         ] {
             assert_eq!(
