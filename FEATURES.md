@@ -112,6 +112,10 @@ operational risk, or proprietary enforcement logic.
   encrypted-container snapshots with explicit replacement confirmation; restoring
   a snapshot does not grant new Windows account permissions. Fleet-managed
   containers retain their separate selected-user and group permission checks.
+- Personal Vault folder sync through Syncthing. Explicit setup installs a
+  verified per-user engine if needed, retains existing sync identities, and
+  follows the same container when its drive letter changes. Shared Vaults are
+  excluded; connecting another device still requires Syncthing device pairing.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
 - Signed evidence-vault export and advanced verification/reporting options.

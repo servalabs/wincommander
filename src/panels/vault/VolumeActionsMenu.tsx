@@ -1,4 +1,4 @@
-import { Button, Tooltip } from "@/components/ui/bp";
+import { Button, Dialog, DialogBody, DialogFooter, Tooltip } from "@/components/ui/bp";
 import { open } from "@tauri-apps/plugin-shell";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
@@ -6,6 +6,7 @@ import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { personalVaultSyncError } from "@/lib/personalVaultSyncFeedback";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import './VolumeActionsMenu.css';
 
@@ -27,6 +28,8 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const [dismounting, setDismounting] = useState(false);
   const [enrollingSync, setEnrollingSync] = useState(false);
+  const [syncSetupOpen, setSyncSetupOpen] = useState(false);
+  const [syncFolder, setSyncFolder] = useState("Sync");
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [failure, setFailureMessage] = useState("");
   const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
@@ -99,27 +102,21 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const handleEnablePersonalSync = async () => {
     if (internalDrive === undefined) return;
-    const relativePath = window.prompt("Folder inside this personal Vault to sync", "Sync");
-    if (relativePath === null) return;
+    const relativePath = syncFolder.trim();
+    if (!relativePath || enrollingSync) return;
     setEnrollingSync(true);
     setFailure("");
     try {
       const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
-      void open(enrollment.gui_url);
-      showSuccess(`Syncthing setup opened at ${enrollment.gui_url}. ${driveLabel}\\${relativePath} will sync while this personal Vault is mounted.`);
+      setSyncSetupOpen(false);
+      showSuccess(`Sync is configured for ${driveLabel}\\${relativePath}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`);
+      try {
+        await open(enrollment.gui_url);
+      } catch {
+        showError(`Sync is configured, but its setup page could not open. Open ${enrollment.gui_url} in your browser.`, undefined, { kind: "notification" });
+      }
     } catch (error) {
-      const detail = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      const message = detail.includes("vault_not_authorized")
-        ? "Syncthing can only be enabled for a personal or owner-only per-user Vault mounted by this Windows account. Shared Vaults cannot use it."
-        : detail.includes("vault_mount_state_unknown")
-          ? "WinCommander could not confirm that this Vault is still mounted for this Windows account. Refresh Secure Storage, then try again."
-          : detail.includes("vault_syncthing_profile_unavailable")
-            ? "Syncthing did not become ready for this Windows account. Keep the personal Vault mounted, then retry. If it persists, verify the Syncthing installation."
-            : detail.includes("vault_syncthing_root_conflict")
-              ? "This Vault already syncs that folder or an overlapping folder. Choose a separate folder outside the existing sync folder."
-            : detail.includes("vault_broker_unavailable") || detail.includes("vault_broker_rejected")
-            ? "WinCommander could not reach the Syncthing helper for this Windows account. Keep the Vault mounted and try again."
-            : "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
+      const message = personalVaultSyncError(error);
       setFailure(message);
       showError(message, undefined, { kind: "notification" });
     } finally {
@@ -160,8 +157,8 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
             minimal
             small
             loading={enrollingSync}
-            disabled={!accessible || Boolean(statusError) || internalDrive === undefined}
-            onClick={handleEnablePersonalSync}
+            disabled={enrollingSync || !accessible || Boolean(statusError) || internalDrive === undefined}
+            onClick={() => { setFailure(""); setSyncSetupOpen(true); }}
             className="vol-inline-btn"
             aria-label={`Enable Syncthing for a folder in ${driveLabel}`}
           />
@@ -183,6 +180,25 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </TierGate>
       </div>
       {!onErrorChange && <VaultOperationNotice message={failure} />}
+
+      <Dialog isOpen={syncSetupOpen} onClose={() => { if (!enrollingSync) setSyncSetupOpen(false); }}
+        title={`Set up sync for ${driveLabel}`} style={{ width: 560 }} canEscapeKeyClose={!enrollingSync}
+        canOutsideClickClose={!enrollingSync} isCloseButtonShown={!enrollingSync}>
+        <DialogBody>
+          <p>Choose a folder inside this personal Vault. WinCommander will install Syncthing for your Windows account if needed.</p>
+          <label htmlFor={`sync-folder-${internalDrive}`}>Folder inside the Vault</label>
+          <input id={`sync-folder-${internalDrive}`} value={syncFolder} maxLength={240}
+            onChange={event => setSyncFolder(event.target.value)} disabled={enrollingSync}
+            className="w-full rounded-md border p-2" />
+          {enrollingSync && <p role="status" aria-live="polite">Setting up Syncthing… The first setup may need to download it. Keep this Vault mounted.</p>}
+          <VaultOperationNotice message={failure} />
+        </DialogBody>
+        <DialogFooter actions={<>
+          <Button onClick={() => setSyncSetupOpen(false)} disabled={enrollingSync}>Cancel</Button>
+          <Button intent="primary" onClick={handleEnablePersonalSync} loading={enrollingSync}
+            disabled={enrollingSync || !syncFolder.trim()}>Enable sync</Button>
+        </>} />
+      </Dialog>
 
       <VolumePropertiesDialog
         isOpen={propertiesOpen}
