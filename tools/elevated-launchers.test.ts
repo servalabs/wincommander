@@ -130,12 +130,12 @@ $script:scheduledTasks=@{}
 $script:unregisteredTasks=@()
 function Get-ScheduledTask {
   [CmdletBinding()]
-  param([string]$TaskName)
+  param([string]$TaskPath, [string]$TaskName)
   return $script:scheduledTasks[$TaskName]
 }
 function Unregister-ScheduledTask {
   [CmdletBinding(SupportsShouldProcess=$true)]
-  param([string]$TaskName)
+  param([string]$TaskPath, [string]$TaskName)
   $script:unregisteredTasks += $TaskName
   [void]$script:scheduledTasks.Remove($TaskName)
 }

@@ -22,6 +22,17 @@ function Assert-IsAdmin {
     }
 }
 
+$script:SystemMaintenanceTaskPath = '\System Maintenance\'
+$script:SystemMaintenanceTaskFolderPath = '\System Maintenance'
+
+function Initialize-SystemMaintenanceTaskFolder {
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    $root = $service.GetFolder('\')
+    try { [void]$service.GetFolder($script:SystemMaintenanceTaskFolderPath) }
+    catch { [void]$root.CreateFolder('System Maintenance', $null) }
+}
+
 # Registry-write helper used across modules. Previously lived in
 # privacy/telemetry.ps1 — but tweaks/system.ps1, tweaks/security.ps1
 # and privacy/cleanup.ps1 also call it. Since modules are loaded one
@@ -454,7 +465,7 @@ function Schedule-SSDOptimization {
     }
 
     # Deferred path (legacy behaviour): schedule at next 30-minute boundary.
-    $taskName = "WinCommander_SSDOptimize_$drive"
+    $taskName = "SM-TR-$drive"
     $now = Get-Date
     if ($now.Minute -lt 30) {
         $targetTime = $now.Date.AddHours($now.Hour).AddMinutes(30)
@@ -468,9 +479,10 @@ function Schedule-SSDOptimization {
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1)
 
     try {
-        $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        $existing = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction SilentlyContinue
         if ($existing) { return }
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+        Initialize-SystemMaintenanceTaskFolder
+        Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
     } catch {}
 }
 

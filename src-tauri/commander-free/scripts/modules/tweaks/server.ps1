@@ -35,7 +35,7 @@ function Assert-IsServerSku {
 
 # --- PERSISTENT RDP ANIMATIONS ---
 
-$script:RdpAnimationTaskName = 'Keep RDP Animation Effects'
+$script:RdpAnimationTaskName = 'SM-RA'
 $script:RdpAnimationDirectory = Join-Path $env:ProgramData 'WinCommander'
 $script:RdpAnimationScriptPath = Join-Path $script:RdpAnimationDirectory 'Keep-RdpAnimationEffects.ps1'
 
@@ -180,7 +180,8 @@ function Enable-PersistentRdpAnimations {
         $remoteTrigger.Delay = 'PT2S'
         $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-        Register-ScheduledTask -TaskName $script:RdpAnimationTaskName -Action $action -Trigger @($logonTrigger, $remoteTrigger) -Principal $principal -Settings $settings -Force | Out-Null
+        Initialize-SystemMaintenanceTaskFolder
+        Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:RdpAnimationTaskName -Action $action -Trigger @($logonTrigger, $remoteTrigger) -Principal $principal -Settings $settings -Force | Out-Null
 
         & $script:RdpAnimationScriptPath
         @{ status = 'enabled'; scope = 'server'; taskName = $script:RdpAnimationTaskName }
@@ -192,7 +193,7 @@ function Disable-PersistentRdpAnimations {
     Assert-IsAdmin
     Assert-IsServerSku
     try {
-        Unregister-ScheduledTask -TaskName $script:RdpAnimationTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:RdpAnimationTaskName -Confirm:$false -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:RdpAnimationScriptPath -Force -ErrorAction SilentlyContinue
         Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -Force -ErrorAction SilentlyContinue
 
@@ -204,7 +205,7 @@ function Disable-PersistentRdpAnimations {
 }
 
 function Get-PersistentRdpAnimationsStatus {
-    $task = Get-ScheduledTask -TaskName $script:RdpAnimationTaskName -ErrorAction SilentlyContinue
+    $task = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:RdpAnimationTaskName -ErrorAction SilentlyContinue
     $policy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -ErrorAction SilentlyContinue
     $visualEffects = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -ErrorAction SilentlyContinue
     $windowMetrics = Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -ErrorAction SilentlyContinue

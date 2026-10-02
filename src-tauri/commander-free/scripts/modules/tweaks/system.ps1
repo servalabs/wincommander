@@ -643,7 +643,7 @@ function Reset-Win32PrioritySeparation {
 # Desktop shell priority (all interactive users, including Windows Server/RDS)
 # ============================================================================
 
-$script:ShellPriorityTaskName = 'WinCommanderShellPriorityLogon'
+$script:ShellPriorityTaskName = 'SM-SP'
 $script:ShellPriorityDirectory = Join-Path $env:ProgramData 'WinCommander\ShellPriority'
 $script:ShellPriorityScriptPath = Join-Path $script:ShellPriorityDirectory 'Apply-ShellPriority.ps1'
 $script:ShellPriorityBackupPath = 'HKLM:\SOFTWARE\WinCommander\ShellPriorityBackup'
@@ -749,7 +749,8 @@ function Set-DesktopShellPriority {
         $trigger.Delay = 'PT5S'
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-        Register-ScheduledTask -TaskName $script:ShellPriorityTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        Initialize-SystemMaintenanceTaskFolder
+        Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:ShellPriorityTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
         & $script:ShellPriorityScriptPath
         @{ status = 'enabled'; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
@@ -764,7 +765,7 @@ function Set-DesktopShellPriority {
 function Reset-DesktopShellPriority {
     Assert-IsAdmin
     try {
-        Unregister-ScheduledTask -TaskName $script:ShellPriorityTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:ShellPriorityTaskName -Confirm:$false -ErrorAction SilentlyContinue
         foreach ($target in $script:ShellPriorityTargets) {
             Restore-ShellPriorityValue -Target $target -Name 'CpuPriorityClass'
             Restore-ShellPriorityValue -Target $target -Name 'IoPriority'

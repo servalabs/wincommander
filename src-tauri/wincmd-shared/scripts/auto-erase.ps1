@@ -805,32 +805,71 @@ function Resolve-AutoEraseSid {
     ([Security.Principal.NTAccount]::new($Account)).Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
+# Scheduler names are intentionally compact and live in one owned folder.
+# The mapping is documented in wincommander-pro/docs/engineering/SCHEDULED-TASK-MAP.md.
+$script:SystemMaintenanceTaskPath = '\System Maintenance\'
+$script:SystemMaintenanceTaskFolderPath = '\System Maintenance'
+$script:AutoEraseCategoryCodes = [ordered]@{
+    maintenanceTrim = '01'; clipboard = '02'; rdpHistory = '03'; eventLogs = '04'
+    recentFiles = '05'; jumpLists = '06'; psHistory = '07'; dnsCache = '08'
+    browserFootprints = '09'; prefetchFiles = '10'; shellBags = '11'; usbHistory = '12'
+    execCache = '13'; wlanProfiles = '14'; netDrives = '15'; ntfsJournals = '16'
+    recycleBin = '17'; ntUserTraces = '18'; notepadState = '19'; pcaDatabase = '20'
+    crashDumps = '21'; walFiles = '22'; printSpooler = '23'; webCache = '24'
+    thumbnailDb = '25'; notificationDb = '26'; branchCache = '27'; eventTranscript = '28'
+    activitiesTimeline = '29'; rdpBitmapCache = '30'; servicingLogs = '31'; deviceInstallLogs = '32'
+    usageTraceLogs = '33'; defenderHistory = '34'; firewallLog = '35'; appLaunchHistory = '36'
+    officeMru = '37'; embeddedWebCache = '38'; p2pUpdateCache = '39'; reliabilityHistory = '40'
+    explorerSearchHistory = '41'; searchPersonalization = '42'; diskCleanup = '43'
+}
+
 function Get-AutoEraseCategoryCode {
     param([string]$CategoryId)
+    $code = $script:AutoEraseCategoryCodes[$CategoryId]
+    if (-not $code) { throw "Unsupported auto-erase category '$CategoryId'" }
+    $code
+}
+
+function Get-AutoEraseOwnerCode {
+    param([string]$OwnerSid)
     $hash = [Security.Cryptography.SHA256]::Create()
-    try { ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($CategoryId)))).Replace('-', '').Substring(0, 8) }
+    try { ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($OwnerSid)))).Replace('-', '').Substring(0, 8) }
     finally { $hash.Dispose() }
+}
+
+function Initialize-SystemMaintenanceTaskFolder {
+    try {
+        $service = New-Object -ComObject Schedule.Service
+        $service.Connect()
+        $root = $service.GetFolder('\')
+        try { [void]$service.GetFolder($script:SystemMaintenanceTaskFolderPath) }
+        catch { [void]$root.CreateFolder('System Maintenance', $null) }
+    } catch {
+        throw "Windows could not prepare the System Maintenance task folder: $($_.Exception.Message)"
+    }
 }
 
 function Get-AutoEraseTaskName {
     param([string]$CategoryId, [string]$OwnerSid)
     $code = Get-AutoEraseCategoryCode $CategoryId
-    if ($OwnerSid -eq 'S-1-5-18') { return "SL-SW-$code" }
-    "SL-UW-$code-$OwnerSid"
+    if ($OwnerSid -eq 'S-1-5-18') { return "SM-S-$code" }
+    "SM-U-$code-$(Get-AutoEraseOwnerCode $OwnerSid)"
 }
 
 # Name alone is never ownership proof: require a supported category and our
 # protected script location (or a recognizable historical encoded payload).
 function Get-AutoEraseTaskIdentity {
     param($Task)
-    if ($Task.TaskPath -ne '\') { return $null }
+    if ($Task.TaskPath -notin @('\', $script:SystemMaintenanceTaskPath)) { return $null }
     $name = [string]$Task.TaskName
     $category = $null
     $oldNames = @{ WinCommander_ClipboardErase = 'clipboard'; WinCommander_RDPErase = 'rdpHistory'; WinCommander_EventLogErase = 'eventLogs' }
     if ($oldNames.ContainsKey($name)) { $category = $oldNames[$name] }
     foreach ($candidate in $script:AutoEraseScripts.Keys) {
+        $legacyHash = Get-AutoEraseOwnerCode $candidate
         if ($name -match ('^(?:WinCommander|System)_AutoErase_' + [regex]::Escape($candidate) + '(?:_.+)?$') -or
-            $name -match ('^SL-(?:SW|UW)-' + (Get-AutoEraseCategoryCode $candidate) + '(?:-S-1-\d+(?:-\d+)+)?$')) {
+            $name -match ('^SL-(?:SW|UW)-' + $legacyHash + '(?:-S-1-\d+(?:-\d+)+)?$') -or
+            $name -match ('^SM-(?:S|U)-' + (Get-AutoEraseCategoryCode $candidate) + '(?:-[A-F0-9]{8})?$')) {
             $category = $candidate; break
         }
     }
@@ -854,7 +893,7 @@ function Get-AutoEraseTaskIdentity {
     if (-not $owned) { return $null }
     $sid = Resolve-AutoEraseSid ([string]$Task.Principal.UserId)
     $canonical = Get-AutoEraseTaskName $category $sid
-    if ($name.StartsWith('SL-') -and $name -ne $canonical) { return $null }
+    if (($name.StartsWith('SL-') -or $name.StartsWith('SM-')) -and $name -ne $canonical -and $Task.TaskPath -eq $script:SystemMaintenanceTaskPath) { return $null }
     @{ categoryId = $category; ownerSid = $sid; taskName = $canonical }
 }
 
@@ -889,8 +928,9 @@ function Set-AutoEraseSchedule {
         $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
         $migration = Invoke-AutoEraseMigration -CategoryId $CategoryId
         if ($migration.error) { throw $migration.message }
+        Initialize-SystemMaintenanceTaskFolder
         $taskName = Get-AutoEraseTaskName $CategoryId $ownerSid
-        $existing = Get-ScheduledTask -TaskPath '\' -TaskName $taskName -ErrorAction SilentlyContinue
+        $existing = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction SilentlyContinue
         if ($existing -and -not (Get-AutoEraseTaskIdentity $existing)) {
             throw 'A task with this name belongs to another application. It was left unchanged.'
         }
@@ -951,18 +991,18 @@ function Set-AutoEraseSchedule {
 
         if ($CategoryId -eq 'usbHistory') {
             $description = if ($ManagedByAutoSet) {
-                'WinCommander Auto-set scheduled wipe v3'
+                'System Maintenance scheduled cleanup v4 (managed)'
             } else {
-                'WinCommander scheduled wipe v3'
+                'System Maintenance scheduled cleanup v4'
             }
         } else {
             $description = if ($ManagedByAutoSet) {
-                'WinCommander Auto-set scheduled wipe v2'
+                'System Maintenance scheduled cleanup v4 (managed)'
             } else {
-                'WinCommander scheduled wipe v2'
+                'System Maintenance scheduled cleanup v4'
             }
         }
-        Register-ScheduledTask -TaskPath '\' -TaskName $taskName -Action $action -Trigger $triggers `
+        Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
 
         @{
@@ -1147,6 +1187,7 @@ function Invoke-AutoEraseMigration {
     [CmdletBinding()]
     param([string]$CategoryId = '')
     Assert-AutoEraseAdmin
+    Initialize-SystemMaintenanceTaskFolder
     $migrated = @()
     $errors = @()
     foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
@@ -1154,15 +1195,13 @@ function Invoke-AutoEraseMigration {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
             $isUsbHistoryTask = $identity.categoryId -eq 'usbHistory'
-            $currentPayload = if ($isUsbHistoryTask) {
-                $task.Description -like 'WinCommander*scheduled wipe v3'
-            } else { $task.Description -like 'WinCommander*scheduled wipe v2' }
+            $currentPayload = $task.Description -like 'System Maintenance scheduled cleanup v4*'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
-            if ($task.TaskName -eq $identity.taskName -and -not $upgradePayload) { continue }
+            if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload) { continue }
             if ([string]$task.State -eq 'Running') { throw 'An active scheduled cleanup must finish before its task can be migrated.' }
-            $renaming = $task.TaskName -ne $identity.taskName
-            if ($renaming -and (Get-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction SilentlyContinue)) {
+            $renaming = $task.TaskName -ne $identity.taskName -or $task.TaskPath -ne $script:SystemMaintenanceTaskPath
+            if ($renaming -and (Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -ErrorAction SilentlyContinue)) {
                 throw 'The replacement task name is occupied. Both existing tasks were left unchanged.'
             }
             $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -1178,18 +1217,18 @@ function Invoke-AutoEraseMigration {
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
                 $revision = if ($isUsbHistoryTask) { 3 } else { 2 }
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision
-                $xml.Task.RegistrationInfo.Description = if ($task.Description -like 'WinCommander Auto-set scheduled wipe*') { "WinCommander Auto-set scheduled wipe v$revision" } else { "WinCommander scheduled wipe v$revision" }
+                $xml.Task.RegistrationInfo.Description = if ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v4 (managed)' } else { 'System Maintenance scheduled cleanup v4' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false
             $expected = ConvertTo-AutoEraseComparableTaskXml $xml
             # Register disabled so overdue or registration triggers cannot launch a
             # second wipe while the original task still exists.
-            $register = @{ TaskName = $identity.taskName; TaskPath = '\'; Xml = $expected.OuterXml; ErrorAction = 'Stop' }
+            $register = @{ TaskName = $identity.taskName; TaskPath = $script:SystemMaintenanceTaskPath; Xml = $expected.OuterXml; ErrorAction = 'Stop' }
             if (-not $renaming) { $register.Force = $true }
             Register-ScheduledTask @register | Out-Null
             try {
-                [xml]$readback = Export-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop
+                [xml]$readback = Export-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -ErrorAction Stop
                 $readback = ConvertTo-AutoEraseComparableTaskXml $readback
                 foreach ($section in @('Actions', 'Triggers', 'Principals', 'Settings')) {
                     if ($readback.Task.$section.OuterXml -ne $expected.Task.$section.OuterXml) {
@@ -1199,11 +1238,11 @@ function Invoke-AutoEraseMigration {
                 if ($renaming) {
                     Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
                 }
-                if ($enabled) { Enable-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -ErrorAction Stop | Out-Null }
+                if ($enabled) { Enable-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -ErrorAction Stop | Out-Null }
             } catch {
                 # Restore the exact original before removing a staged replacement.
                 Register-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Xml $originalXml -Force -ErrorAction Stop | Out-Null
-                if ($renaming) { Unregister-ScheduledTask -TaskPath '\' -TaskName $identity.taskName -Confirm:$false -ErrorAction Stop }
+                if ($renaming) { Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -Confirm:$false -ErrorAction Stop }
                 throw
             }
             $migrated += $identity.categoryId

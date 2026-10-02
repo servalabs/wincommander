@@ -18,7 +18,8 @@ pub enum StartupElevationResult {
 }
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
-const ELEVATED_LAUNCH_TASK: &str = "SL-EL";
+const ELEVATED_LAUNCH_TASK: &str = "SM-EL";
+const ELEVATED_LAUNCH_TASK_PATH: &str = r"\System Maintenance\";
 
 #[cfg(windows)]
 #[path = "startup_elevation_wait.rs"]
@@ -190,11 +191,12 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     // child without another consent dialog. If the task is absent, blocked by
     // policy, or this is a standard user, deliberately fall through to UAC.
     let task_name = ELEVATED_LAUNCH_TASK;
+    let task_path = ELEVATED_LAUNCH_TASK_PATH;
     let launch_intent = task_launch_intent(args);
     // Never hand a dev/portable launch to an unrelated installed executable.
     // RunEx binds the task to this interactive session on multi-user machines.
     let task_script = std::env::current_exe().ok().map(|path| format!(
-        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
+        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('{task_path}').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
         path.to_string_lossy().replace('\'', "''")
     ));
     use handoff_wait::SchedulerHandoff;

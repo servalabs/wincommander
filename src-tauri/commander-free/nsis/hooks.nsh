@@ -16,6 +16,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
 !define WC_CONFIGURE_ELEVATED_LAUNCHERS "${__FILEDIR__}\configure-elevated-launchers.ps1"
 !define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
+!define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
@@ -328,8 +329,19 @@ ${Using:StrFunc} UnStrStr
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "wipe-tasks-migration" "$0" "$1"
+  ; Task-name migration is best effort. A locked/running old task must never
+  ; abort setup; it remains functional and WinCommander retries later.
   ${If} $0 != 0
-    Abort "WinCommander could not migrate its scheduled cleanup tasks. See installer-lifecycle.log."
+    DetailPrint "Scheduled-cleanup task migration deferred; setup will continue."
+  ${EndIf}
+
+  File /oname=$PLUGINSDIR\wincommander-migrate-system-maintenance-tasks.ps1 "${WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS}"
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-system-maintenance-tasks.ps1"'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "system-maintenance-task-migration" "$0" "$1"
+  ${If} $0 != 0
+    DetailPrint "System Maintenance task migration deferred; setup will continue."
   ${EndIf}
 
   ; Move every existing local profile away from the obsolete per-user binary.

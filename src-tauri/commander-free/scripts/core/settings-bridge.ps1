@@ -673,7 +673,12 @@ function Get-WCSystemProbe {
         if ($wp -and $wp.Win32PrioritySeparation -eq 38) { $state.tweaks.os.win32PrioritySeparation = $true }
     } catch {}
     try {
-        $shellPriorityTask = Get-ScheduledTask -TaskName 'WinCommanderShellPriorityLogon' -ErrorAction SilentlyContinue
+        $shellPriorityTask = Get-ScheduledTask -TaskPath '\System Maintenance\' -TaskName 'SM-SP' -ErrorAction SilentlyContinue
+        if (-not $shellPriorityTask) {
+            # Read legacy installs during the one-time migration only; new tasks
+            # are always registered in the System Maintenance folder.
+            $shellPriorityTask = Get-ScheduledTask -TaskPath '\' -TaskName 'WinCommanderShellPriorityLogon' -ErrorAction SilentlyContinue
+        }
         $shellPriorityHelper = Join-Path $env:ProgramData 'WinCommander\ShellPriority\Apply-ShellPriority.ps1'
         $shellPriorityTargets = @('explorer.exe', 'dwm.exe', 'sihost.exe', 'StartMenuExperienceHost.exe', 'ShellExperienceHost.exe', 'SystemSettings.exe', 'Taskmgr.exe', 'SearchHost.exe', 'SearchApp.exe')
         $shellPriorityRegistryOk = [bool](($shellPriorityTargets | Where-Object {
@@ -710,7 +715,10 @@ function Get-WCSystemProbe {
         $state.tweaks.server.isServerSku = ($pt -eq 2 -or $pt -eq 3)
     } catch {}
     try {
-        $rdpAnimationTask = Get-ScheduledTask -TaskName 'Keep RDP Animation Effects' -EA SilentlyContinue
+        $rdpAnimationTask = Get-ScheduledTask -TaskPath '\System Maintenance\' -TaskName 'SM-RA' -EA SilentlyContinue
+        if (-not $rdpAnimationTask) {
+            $rdpAnimationTask = Get-ScheduledTask -TaskPath '\' -TaskName 'Keep RDP Animation Effects' -EA SilentlyContinue
+        }
         $rdpAnimationPolicy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -EA SilentlyContinue
         $rdpVisualEffects = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -EA SilentlyContinue
         $rdpWindowMetrics = Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -EA SilentlyContinue

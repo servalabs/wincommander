@@ -21,10 +21,11 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(windows)]
 fn task_name() -> String {
-    // Contains the app token so the Lockdown self-destruct sweep (`*WinCommander*`)
-    // removes it along with the other app tasks.
-    format!("{} Session Guard", crate::paths::app_display_name())
+    "SM-SG".to_string()
 }
+
+#[cfg(windows)]
+const TASK_PATH: &str = r"\System Maintenance\";
 
 /// Where the embedded watcher is deployed (machine-wide, SYSTEM-readable, no
 /// spaces in the path so it needs no quoting in the task argument string).
@@ -89,9 +90,11 @@ $cls = Get-CimClass MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/Task
 $tEvt = New-CimInstance -CimClass $cls -ClientOnly -Property @{{ Enabled = $true; Delay = 'PT3S'; Subscription = '<QueryList><Query Id=\"0\"><Select Path=\"Microsoft-Windows-TerminalServices-LocalSessionManager/Operational\">*[System[(EventID=23 or EventID=24)]]</Select></Query></QueryList>' }}
 $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $tPoll, $tEvt -Principal $p -Settings $set -Force | Out-Null",
+$scheduler = New-Object -ComObject Schedule.Service; $scheduler.Connect(); $root = $scheduler.GetFolder('\\'); try {{ [void]$scheduler.GetFolder('\\System Maintenance') }} catch {{ [void]$root.CreateFolder('System Maintenance', $null) }}
+Register-ScheduledTask -TaskPath '{task_path}' -TaskName '{name}' -Action $a -Trigger $tPoll, $tEvt -Principal $p -Settings $set -Force | Out-Null",
         args = task_args,
         name = name_ps,
+        task_path = TASK_PATH,
     );
 
     let out = std::process::Command::new("powershell")
@@ -123,8 +126,9 @@ pub fn remove_attend_watch_task() -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let name_ps = task_name().replace('\'', "''");
     let script = format!(
-        "Unregister-ScheduledTask -TaskName '{name}' -Confirm:$false -ErrorAction SilentlyContinue",
+        "Unregister-ScheduledTask -TaskPath '{path}' -TaskName '{name}' -Confirm:$false -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskPath '\\' -TaskName 'WinCommander Session Guard' -Confirm:$false -ErrorAction SilentlyContinue",
         name = name_ps,
+        path = TASK_PATH,
     );
     let _ = std::process::Command::new("powershell")
         .args([

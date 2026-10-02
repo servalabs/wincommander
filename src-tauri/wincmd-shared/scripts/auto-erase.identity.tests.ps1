@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'auto-erase.ps1')
 function Assert-AutoEraseAdmin {}
+function Initialize-SystemMaintenanceTaskFolder {}
 function Assert-True($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 $script:tasks = @{}
 $script:mutations = @()
@@ -10,14 +11,14 @@ $script:corruptReadback = $false
 function New-Fixture([string]$Name, [string]$Sid = 'S-1-5-21-10-20-30-1001', [bool]$Enabled = $true) {
     $path = Join-Path $env:ProgramData 'WinCommander\auto-erase\scripts\clipboard.user-test.ps1'
     [xml]$xml = @"
-<Task><RegistrationInfo><URI>\$Name</URI><Description>WinCommander Auto-set scheduled wipe v2</Description></RegistrationInfo><Triggers><TimeTrigger><StartBoundary>2025-01-01T12:30:00</StartBoundary><Repetition><Interval>PT17M</Interval><Duration>P9999D</Duration></Repetition></TimeTrigger></Triggers><Principals><Principal><UserId>$Sid</UserId><LogonType>S4U</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><Enabled>$($Enabled.ToString().ToLowerInvariant())</Enabled><StartWhenAvailable>true</StartWhenAvailable></Settings><Actions><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -File &quot;$path&quot;</Arguments></Exec></Actions></Task>
+<Task><RegistrationInfo><URI>\$Name</URI><Description>System Maintenance scheduled cleanup v4 (managed)</Description></RegistrationInfo><Triggers><TimeTrigger><StartBoundary>2025-01-01T12:30:00</StartBoundary><Repetition><Interval>PT17M</Interval><Duration>P9999D</Duration></Repetition></TimeTrigger></Triggers><Principals><Principal><UserId>$Sid</UserId><LogonType>S4U</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><Enabled>$($Enabled.ToString().ToLowerInvariant())</Enabled><StartWhenAvailable>true</StartWhenAvailable></Settings><Actions><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -File &quot;$path&quot;</Arguments></Exec></Actions></Task>
 "@
     Set-Fixture $Name $xml.OuterXml
 }
-function Set-Fixture([string]$Name, [string]$Xml) {
+function Set-Fixture([string]$Name, [string]$Xml, [string]$TaskPath = '\') {
     [xml]$x = $Xml
     $script:tasks[$Name] = [pscustomobject]@{
-        TaskName = $Name; TaskPath = '\'; Description = [string]$x.Task.RegistrationInfo.Description
+        TaskName = $Name; TaskPath = $TaskPath; Description = [string]$x.Task.RegistrationInfo.Description
         State = if ($x.Task.Settings.Enabled -eq 'false') { 'Disabled' } else { 'Ready' }
         Principal = [pscustomobject]@{ UserId = [string]$x.Task.Principals.Principal.UserId }
         Actions = @([pscustomobject]@{ Execute = [string]$x.Task.Actions.Exec.Command; Arguments = [string]$x.Task.Actions.Exec.Arguments })
@@ -33,8 +34,8 @@ function Export-ScheduledTask { param($TaskName, $TaskPath, $ErrorAction) $scrip
 function Register-ScheduledTask { param($TaskName, $TaskPath, $Xml, [switch]$Force, $ErrorAction)
     if ($script:denyCreate) { throw 'simulated register denied' }
     $script:mutations += 'register:' + $TaskName
-    Set-Fixture $TaskName $Xml
-    if ($script:corruptReadback -and $TaskName.StartsWith('SL-')) {
+    Set-Fixture $TaskName $Xml $TaskPath
+    if ($script:corruptReadback -and $TaskName.StartsWith('SM-')) {
         [xml]$changed = $script:tasks[$TaskName].Xml
         $changed.Task.Principals.Principal.UserId = 'S-1-5-18'
         Set-Fixture $TaskName $changed.OuterXml
@@ -61,8 +62,8 @@ function ConvertTo-AutoEraseComparableTaskXml { param([xml]$Document) return $Do
 $legacy = 'WinCommander_AutoErase_clipboard'
 $sid = 'S-1-5-21-10-20-30-1001'
 $newName = Get-AutoEraseTaskName 'clipboard' $sid
-Assert-True ($newName -match '^SL-UW-[A-F0-9]{8}-S-1-') 'Expected coded per-user name'
-Assert-True ((Get-AutoEraseTaskName 'clipboard' 'S-1-5-18') -match '^SL-SW-[A-F0-9]{8}$') 'Expected distinct SYSTEM name'
+Assert-True ($newName -match '^SM-U-02-[A-F0-9]{8}$') 'Expected coded per-user name'
+Assert-True ((Get-AutoEraseTaskName 'clipboard' 'S-1-5-18') -eq 'SM-S-02') 'Expected distinct SYSTEM name'
 Assert-True ($newName -ne (Get-AutoEraseTaskName 'clipboard' 'S-1-5-21-10-20-30-1002')) 'Users must have distinct task names'
 New-Fixture $legacy $sid $false
 $before = $script:tasks[$legacy].Xml

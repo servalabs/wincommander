@@ -39,11 +39,11 @@ function Set-AIControlScheduledTasks {
 function Set-AIControlUpdateCleanup {
     param([ValidateSet('apply', 'revert')][string]$Mode)
     Assert-AIControlAdmin
-    $taskName = 'WinCommander_AI_UpdateCleanup'
+    $taskName = 'SM-UC'
     $root = Get-AIControlDataRoot
     $scriptPath = Join-Path $root 'update-cleanup.ps1'
     if ($Mode -eq 'revert') {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
         return [pscustomobject]@{ status = 'disabled'; operation = 'update-cleanup'; changed = 1; requiresReboot = $false }
     }
@@ -77,7 +77,8 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Na
     $triggers = @((New-ScheduledTaskTrigger -AtLogOn), (New-ScheduledTaskTrigger -Daily -At 3am))
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force | Out-Null
+    Initialize-SystemMaintenanceTaskFolder
+    Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force | Out-Null
     [pscustomobject]@{ status = 'enabled'; operation = 'update-cleanup'; changed = 1; requiresReboot = $false }
 }
 

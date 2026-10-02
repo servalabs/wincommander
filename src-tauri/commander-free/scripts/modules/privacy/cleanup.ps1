@@ -428,25 +428,26 @@ if (Test-Path `$btPath) {
 "@
         $wrapper | Out-File -FilePath $tempScript -Encoding ASCII -Force
 
-        $taskName = "WinCommander_BtScan_System"
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        $taskName = 'SM-BS'
+        Initialize-SystemMaintenanceTaskFolder
+        Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tempScript`""
         $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+        Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
         
-        Start-ScheduledTask -TaskName $taskName
+        Start-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName
         
         # Wait for completion
         $timeout = 10
         while ($timeout -gt 0) {
-            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            $task = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction SilentlyContinue
             if (-not $task -or ($task.State -ne 'Running' -and $task.State -ne 'Queued')) { break }
             Start-Sleep -Seconds 1
             $timeout--
         }
         
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         Invoke-7Erase -Path $tempScript -Type File
 
         $devices = @()
@@ -2128,12 +2129,13 @@ $res | ConvertTo-Json -Compress
             $wrapper = "[scriptblock]::Create('$escapedScript').Invoke() | Out-File -FilePath '$outputFile' -Encoding UTF8 -Force"
             $wrapper | Out-File -FilePath $tempScript -Encoding UTF8 -Force
 
-            $taskName = "WinCommander_BtScan_System"
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            $taskName = 'SM-BS'
+            Initialize-SystemMaintenanceTaskFolder
+            Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
             $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$tempScript`""
             $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-            Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
-            Start-ScheduledTask -TaskName $taskName
+            Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+            Start-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName
             
             $timeout = 10
             while ($timeout -gt 0) {

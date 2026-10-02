@@ -85,7 +85,7 @@ function Dismount-RDPServerVaults {
         $action = 'cmd /c C:\Progra~1\VeraCrypt\VeraCrypt.exe /d /quit /silent /force || C:\Progra~2\VeraCrypt\VeraCrypt.exe /d /quit /silent /force'
 
         foreach ($hostName in $hosts) {
-            $taskName = "\WinCommander-RdpIdleDismount-$([guid]::NewGuid().ToString('N'))"
+            $taskName = "\System Maintenance\SM-RD-$([guid]::NewGuid().ToString('N'))"
             $startAt = (Get-Date).AddMinutes(2).ToString('HH:mm')
             $created = $false
             $ran = $false
