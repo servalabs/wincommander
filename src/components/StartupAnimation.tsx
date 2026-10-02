@@ -11,6 +11,9 @@ const RAIN_CHARS = [
     'S', 'E', 'R', 'V', 'A', 'L', 'B', 'W', 'I', 'N', 'C', 'O', 'M', 'D',
     's', 'e', 'r', 'v', 'a', 'l', 'b', 'w', 'i', 'n', 'c', 'o', 'm', 'd',
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    'A', 'B', 'C', 'D', 'E', 'F', 'a', 'b', 'c', 'd', 'e', 'f',
+    'x', 'y', 'z', 'g', 'h', 'k', 'p', 'q', 'u', 't',
+    'X', 'Y', 'Z', 'G', 'H', 'K', 'P', 'Q', 'U', 'T',
     '#', '*', '|', '/', '\\', '%', '$', '@', '!', '?', ':', '=', '>', '<', '+', '-', '^', '&',
     'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ﾅ', 'ﾆ', 'ﾇ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ',
 ];
@@ -72,6 +75,7 @@ export default function StartupAnimation({
         let characters: string[][] = [];
         let brightness: Float32Array[] = [];
         let drops: Array<Array<{ row: number; speed: number }>> = [];
+        let vignette: CanvasGradient | null = null;
         const cellWidth = 16;
         const rowHeight = 17;
         const prepare = () => {
@@ -93,6 +97,20 @@ export default function StartupAnimation({
                 { length: Math.random() < 0.38 ? 2 : 1 },
                 () => ({ row: -(Math.random() * rows * 0.85), speed: 0.55 + Math.random() * 0.55 }),
             ));
+            const centerX = width / 2;
+            const centerY = height * .44;
+            const innerRadius = Math.min(width, height) * .14;
+            const outerRadius = Math.min(width, height) * .62;
+            vignette = context.createRadialGradient(centerX, centerY, innerRadius, centerX, centerY, outerRadius);
+            if (isLight) {
+                vignette.addColorStop(0, 'rgba(255,255,255,.72)');
+                vignette.addColorStop(.5, 'rgba(255,255,255,.28)');
+                vignette.addColorStop(1, 'rgba(255,255,255,0)');
+            } else {
+                vignette.addColorStop(0, 'rgba(10,15,18,.90)');
+                vignette.addColorStop(.45, 'rgba(10,15,18,.55)');
+                vignette.addColorStop(1, 'rgba(0,0,0,0)');
+            }
             return true;
         };
 
@@ -131,6 +149,10 @@ export default function StartupAnimation({
                     else context.fillStyle = isLight ? `rgba(0,90,140,${(level * 0.88).toFixed(2)})` : `rgba(0,210,190,${(level * 0.88).toFixed(2)})`;
                     context.fillText(characters[column][row], x, row * rowHeight);
                 }
+            }
+            if (vignette) {
+                context.fillStyle = vignette;
+                context.fillRect(0, 0, width, height);
             }
         };
         animationFrameRef.current = requestAnimationFrame(frame);
