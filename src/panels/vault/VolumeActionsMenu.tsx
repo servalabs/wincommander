@@ -108,7 +108,14 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       void open(enrollment.gui_url);
       showSuccess(`Syncthing setup opened at ${enrollment.gui_url}. ${driveLabel}\\${relativePath} will sync while this personal Vault is mounted.`);
     } catch (error) {
-      const message = "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
+      const detail = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      const message = detail.includes("vault_not_authorized")
+        ? "Syncthing can only be enabled for a personal or owner-only per-user Vault mounted by this Windows account. Shared Vaults cannot use it."
+        : detail.includes("vault_mount_state_unknown")
+          ? "WinCommander could not confirm that this Vault is still mounted for this Windows account. Refresh Secure Storage, then try again."
+          : detail.includes("vault_broker_unavailable") || detail.includes("vault_broker_rejected")
+            ? "WinCommander could not reach the Syncthing helper for this Windows account. Keep the Vault mounted and try again."
+            : "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
       setFailure(message);
       showError(message, undefined, { kind: "notification" });
     } finally {

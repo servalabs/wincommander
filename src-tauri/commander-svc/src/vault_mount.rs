@@ -36,8 +36,9 @@ struct ActiveMount {
     #[serde(default)]
     personal: bool,
     /// Set only after the owner-session adapter confirms that this exact
-    /// personal Vault has an enrolled Syncthing binding. It is intentionally
-    /// absent for machine/shared Vaults, which must have one explicit owner.
+    /// owner-only per-user Vault has an enrolled Syncthing binding. It is
+    /// intentionally absent for machine and shared Vaults, where multiple
+    /// Windows profiles could otherwise control the same Syncthing folder.
     #[serde(default)]
     syncthing_managed: bool,
     container_identity: String,
@@ -146,7 +147,7 @@ fn syncthing_lifecycle_call(
     }
     #[cfg(not(test))]
     {
-    if !mount.personal || mount.presentation != VaultPresentation::PerUser {
+    if mount.presentation != VaultPresentation::PerUser {
         return Ok(false);
     }
     let value = tokio::task::block_in_place(|| {
@@ -1257,26 +1258,24 @@ impl VaultMountBroker {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|value| value.as_secs())
                 .unwrap_or(0);
-            active.insert(
-                entry_id.to_owned(),
-                ActiveMount {
-                    drive_letter: reply.drive_letter.clone(),
-                    internal_drive: reply.internal_drive,
-                    presentation,
-                    session_id,
-                    caller_sid,
-                    policy_id,
-                    policy_version,
-                    personal: false,
-                    syncthing_managed: false,
-                    container_identity,
-                    access: effective_access,
-                    mounted_at,
-                    cleanup_required: false,
-                    engine_mount_identity,
-                    canonical_container_path: None,
-                },
-            );
+            let mut mount = ActiveMount {
+                drive_letter: reply.drive_letter.clone(),
+                internal_drive: reply.internal_drive,
+                presentation,
+                session_id,
+                caller_sid,
+                policy_id,
+                policy_version,
+                personal: false,
+                syncthing_managed: false,
+                container_identity,
+                access: effective_access,
+                mounted_at,
+                cleanup_required: false,
+                engine_mount_identity,
+                canonical_container_path: None,
+            };
+            active.insert(entry_id.to_owned(), mount.clone());
             if self.persist_active(store, &active).is_err() {
                 let mount = active.remove(entry_id);
                 drop(active);
@@ -1299,6 +1298,29 @@ impl VaultMountBroker {
                     Some(presentation),
                     VaultMountReason::DismountFailed,
                 );
+            }
+            // A missing binding is a no-op. Only the owner-only per-user
+            // policy shape may resume a binding; a shared policy never gains
+            // a local profile simply because it was mounted.
+            if store.is_exclusive_per_user_policy_owner(entry_id, &mount.caller_sid) {
+                mount.syncthing_managed = syncthing_lifecycle_call(
+                    "vault.syncthing.resume",
+                    operation_id,
+                    entry_id,
+                    &mount,
+                    Some(caller_token),
+                )
+                .unwrap_or(true);
+                if mount.syncthing_managed {
+                    active.insert(entry_id.to_owned(), mount);
+                    if self.persist_active(store, &active).is_err() {
+                        return failed(
+                            entry_id,
+                            Some(presentation),
+                            VaultMountReason::DismountFailed,
+                        );
+                    }
+                }
             }
         } else {
             let _ = self.broker.dismount(BrokerDismountRequest {
@@ -1682,9 +1704,10 @@ impl VaultMountBroker {
         })
     }
 
-    /// Enrols one child directory of an already-mounted personal Vault. The
-    /// service supplies the stable entry, owner and mounted identity; Pro only
-    /// creates/controls the owner-session profile selected by those facts.
+    /// Enrols one child directory of an already-mounted owner-only per-user
+    /// Vault. The service supplies the stable entry, owner and mounted
+    /// identity; Pro only creates/controls the owner-session profile selected
+    /// by those facts.
     pub(crate) fn enroll_personal_syncthing(
         &self,
         store: &VaultAccessStore,
@@ -1710,7 +1733,9 @@ impl VaultMountBroker {
                         .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
                 })
                 .ok_or(VaultMountReason::MountStateUnknown)?;
-            if !active.personal
+            let eligible_policy_owner = !active.personal
+                && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
+            if !(active.personal || eligible_policy_owner)
                 || active.presentation != VaultPresentation::PerUser
                 || !same_mount_owner(&active, caller_session, caller_sid)
                 || !self.live_mount_matches(&active)?
