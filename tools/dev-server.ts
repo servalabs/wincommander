@@ -33,6 +33,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { syncDevelopmentService } from "./dev-service-startup";
+import { assertSharedAssets } from "./check-shared-assets";
 
 const ROOT = resolve(import.meta.dir, "..");
 // The Codex/runtime environment can place a PowerShell-compatible shim ahead
@@ -106,6 +107,7 @@ function desktopDevWindowIsRunning(): boolean {
 }
 
 async function main(): Promise<void> {
+  assertSharedAssets(ROOT);
   // Keep this guard for the shared multi-user server. Normal Tauri startup
   // clears stale processes synchronously at the start of beforeDevCommand and
   // must not classify its own newly launched app as an existing session here.

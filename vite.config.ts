@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
+import { assertSharedAssets } from "./tools/check-shared-assets";
+
+assertSharedAssets(__dirname);
 
 // Tauri injects TAURI_DEV_HOST=localhost for ordinary desktop development.
 // Do not let that hostname choose the bind address: WebView2 can resolve

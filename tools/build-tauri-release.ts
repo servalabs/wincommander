@@ -1,7 +1,9 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { assertSharedAssets } from "./check-shared-assets";
 
 const root = resolve(import.meta.dirname, "..");
+assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
