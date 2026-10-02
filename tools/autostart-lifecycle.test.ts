@@ -50,6 +50,11 @@ if ($script:preference -ne 0 -or $script:tasks.Count -ne 1 -or -not $script:task
 if ($script:tasks.Count -ne 1) { throw 'Integrity repair recreated a task after OFF' }
 & { ${script("ENABLE")} }
 if ($script:preference -ne 1 -or $script:tasks.Count -ne 3 -or -not (Test-CanonicalTask $script:tasks['SM-AS']) -or -not (Test-CanonicalLauncher $script:tasks['SM-EL'])) { throw 'ON did not recreate the safe canonical pair' }
+if ($script:tasks['SM-AS'].Principal.GroupId -ne 'S-1-5-32-545' -or $script:tasks['SM-AS'].Principal.RunLevel -ne 'Highest') { throw 'Installed startup must use each signing-in Users member with their highest available token' }
+$script:tasks['SM-AS'].Principal.RunLevel='Limited'
+if (Test-CanonicalTask $script:tasks['SM-AS']) { throw 'Legacy limited startup was incorrectly accepted as the installed contract' }
+& { ${script("ENSURE")} }
+if ($script:tasks['SM-AS'].Principal.RunLevel -ne 'Highest' -or $script:tasks.Count -ne 3) { throw 'Reconciliation did not replace the limited route without adding a trigger' }
 & { ${script("ENSURE")} }
 if ($script:tasks.Count -ne 3) { throw 'Integrity repair duplicated routes' }
 $script:tasks['SM-EL'].Triggers=$null
@@ -89,6 +94,14 @@ $script:tasks['SM-EL']=LegacyTask '--elevated-relaunch' 'C:\\Other\\app.exe'
 $blocked=$false
 try { & { ${script("ENABLE")} } } catch { $blocked=$true }
 if (-not $blocked -or $script:preference -ne 0 -or $script:tasks.ContainsKey('SM-AS') -or $script:tasks['SM-EL'].Actions[0].Execute -ne 'C:\\Other\\app.exe') { throw 'Foreign canonical launcher was overwritten or failed enable created a logon route' }
+$targetExe='C:\\Portable\\WinCommander\\wincommander-free.exe'
+$ownedExePaths=@($targetExe); $script:tasks=@{}; $script:preference=0
+& { ${script("ENABLE")} }
+if ($script:tasks.Count -ne 1 -or $script:tasks['SM-AS'].Principal.RunLevel -ne 'Limited' -or -not (Test-CanonicalTask $script:tasks['SM-AS'])) { throw 'Portable startup acquired persistent elevated privileges' }
+$script:tasks['SM-AS'].Principal.RunLevel='Highest'
+if (Test-CanonicalTask $script:tasks['SM-AS']) { throw 'Portable elevated startup was incorrectly accepted as healthy' }
+& { ${script("ENSURE")} }
+if ($script:tasks['SM-AS'].Principal.RunLevel -ne 'Limited') { throw 'Portable startup retained a persistent elevated task' }
 Write-Output 'PASS'
 `;
   const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", "$code=[Console]::In.ReadToEnd(); & ([scriptblock]::Create($code))"], { input, encoding: "utf8", windowsHide: true });
@@ -137,6 +150,7 @@ $script:tasks['WinCommander Autostart']=LegacyTask '--autostart'
 $script:tasks['WinCommander Elevated Launcher']=LegacyTask '--elevated-relaunch'
 & $run | Out-Null
 if ($script:tasks.Count -ne 3 -or -not $script:tasks.ContainsKey('SM-AS') -or -not $script:tasks.ContainsKey('SM-EL')) { throw 'Installer did not migrate to compact task names' }
+if ($script:tasks['SM-AS'].Principal.GroupId -ne $usersSid -or $script:tasks['SM-AS'].Principal.RunLevel -ne 'Highest' -or $script:tasks['SM-AS'].Actions[0].Arguments -ne '--autostart') { throw 'Installer did not register direct highest-available startup for all Users members' }
 $manual=$script:tasks['SM-EL']; $manual.Triggers=@(New-ScheduledTaskTrigger -AtLogOn)
 $blocked=$false
 try { Assert-TaskContract $manual $administratorsSid 'Highest' '--elevated-relaunch $(Arg0)' } catch { $blocked=$true }

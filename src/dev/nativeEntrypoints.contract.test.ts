@@ -74,7 +74,8 @@ describe("native and UI-audit entrypoints", () => {
   test("a renderer timeout retries once before reporting persistent failure", async () => {
     const native = await read("src-tauri/commander-free/src/lib.rs");
     const startup = await read("src-tauri/commander-free/src/startup_window.rs");
-    expect(native).toContain("startup_window::recover_if_unready(&fallback_window).await");
+    expect(native).toContain("startup_window::defer_reveal_until_ready(&window)");
+    expect(startup).toContain("recover_if_unready(&target).await");
     expect(native).not.toContain("startup_window::warn_if_unready(&window)");
     expect(native).not.toContain("reveal_armed_startup_window(&fallback_window)");
     expect(startup).toContain("MessageBoxW");

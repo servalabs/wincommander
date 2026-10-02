@@ -20,6 +20,10 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   fonts and animation frames do not gate visibility. Animation clocks wait for
   the reveal acknowledgement or its soft time budget. A late acknowledgement
   keeps the animation running; explicitly suppressed launches stay hidden.
+- Both `--autostart` and legacy `--minimized` launches stay in the tray.
+  An early open request waits for startup content and starts bounded recovery
+  if needed. The bootstrap retains that content until the application takes
+  over, and a tray click restores a minimized window.
 - Settings hydrate from the local cache before background system probes.
   A slow initial read stays shared after the soft recovery budget expires.
   Only a confirmed read failure offers Retry startup; elapsed time alone does

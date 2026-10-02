@@ -122,9 +122,13 @@ flowchart LR
 The Auto Start switch reads actual enabled, owned automatic Windows routes,
 not merely the saved preference or the health of the separate manual elevation
 launcher. Repair validates one sign-in trigger, no restart/repetition/catch-up
-policy, and no automatic triggers on the manual launcher. Scheduled handoff
-preserves background-start intent; a duplicate logon launch does not reveal or
-replace an existing window. Explicit manual launches still request focus.
+policy, and no automatic triggers on the manual launcher. The installed sign-in task runs
+directly at the signed-in account's highest available privilege level: elevated
+for administrators, normal for standard users. Background launches never request
+UAC or a second elevation handoff and remain hidden until explicitly opened.
+A duplicate logon launch does not reveal or replace an existing window.
+Portable/development startup tasks retain normal privileges. Explicit manual
+launches still request focus and may request administrator consent.
 Native startup runs the integrity check once on a background thread. Autostart
 IPC operations use blocking workers rather than the window event thread; the
 renderer does not launch a duplicate startup repair.

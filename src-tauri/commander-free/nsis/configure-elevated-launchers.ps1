@@ -264,11 +264,13 @@ function Register-LogonRouterTask {
     Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths $systemMaintenanceTaskPath
     $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--autostart'
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Limited
+    # Scheduler selects the signed-in account's highest available token;
+    # standard users remain standard without a second launcher or UAC prompt.
+    $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
     Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -Description 'System Maintenance automatic sign-in startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Assert-TaskContract (Get-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Limited' '--autostart' $true
+    Assert-TaskContract (Get-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Highest' '--autostart' $true
 }
 
 try {

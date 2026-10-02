@@ -1,8 +1,7 @@
-// Machine-scoped logon autostart via one Scheduled Task. The task is the
-// single logon router: an Administrator can hand off to the separate,
-// Administrators-only *manual* launcher, while a standard user continues in
-// its own limited session. Do not add a second elevated logon trigger; two
-// independent triggers can race and create duplicate desktop processes.
+// Machine-scoped logon autostart via one Scheduled Task. The installed
+// logon task uses each user's highest available token: administrators
+// run elevated and standard users keep their own limited session. Two separate
+// logon triggers can race and create duplicate desktop processes.
 //
 // The user preference deliberately does not live in a disabled task. A
 // disabled task is still a startup entry and previously made an update/fresh
@@ -361,7 +360,7 @@ function Test-CanonicalTask {
   $repetition = $logonTriggers[0].Repetition
   if ($null -ne $repetition -and -not [string]::IsNullOrWhiteSpace([string]$repetition.Interval)) { return $false }
   return (Resolve-PrincipalSid -GroupId ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-545' -and
-    $Task.Principal.RunLevel -eq 'Limited' -and
+    $Task.Principal.RunLevel -eq (Get-AutostartRunLevel) -and
     $Task.Settings.MultipleInstances -eq 'Parallel' -and
     $Task.Settings.ExecutionTimeLimit -eq 'PT0S' -and $Task.Settings.AllowDemandStart -and (Test-NoAutomaticRestart $Task.Settings)
 }
@@ -567,7 +566,7 @@ function Register-CanonicalTask {
 
   $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--autostart'
   $trigger = New-ScheduledTaskTrigger -AtLogOn
-  $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+  $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel (Get-AutostartRunLevel)
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
   Ensure-SystemMaintenanceTaskFolder
   Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $desiredTaskName -Description 'System Maintenance automatic sign-in startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
@@ -588,6 +587,11 @@ function Test-InstalledLauncherEligible {
     }
   }
   return $false
+}
+
+function Get-AutostartRunLevel {
+  if (Test-InstalledLauncherEligible) { return 'Highest' }
+  return 'Limited'
 }
 
 function Test-CanonicalLauncher {

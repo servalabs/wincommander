@@ -378,12 +378,8 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     if calculator_mode {
         let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
     } else {
-        if let Some(startup) = window.try_state::<startup_window::StartupWindow>() {
-            if !startup.is_ready() {
-                // Startup owns its bounded recovery. A tray click while the
-                // renderer is loading must not turn that delay into an error.
-                return;
-            }
+        if startup_window::defer_reveal_until_ready(&window) {
+            return;
         }
         let reveal_window = window.clone();
         let app = app.clone();
@@ -438,7 +434,10 @@ fn toggle_main_window_from_tray(app: &tauri::AppHandle) {
         log_message_src("warn", "core", "[Tray] main window not found");
         return;
     };
-    if window.is_visible().unwrap_or(false) {
+    if startup_window::should_hide_on_tray_click(
+        window.is_visible().unwrap_or(false),
+        window.is_minimized().unwrap_or(true),
+    ) {
         let _ = window.close();
     } else {
         reveal_main_window(app);
@@ -1168,9 +1167,7 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
             let _ = window.hide();
         } else {
             let _ = window.set_skip_taskbar(false);
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            reveal_main_window(&app);
         }
     }
 
@@ -1838,7 +1835,7 @@ pub fn run() {
                 // Check command line args for a secure-delete path.
                 let args: Vec<String> = std::env::args().collect();
                 let hidden_mode = wincommander_is_hidden();
-                let not_minimized = !args.contains(&"--minimized".to_string());
+                let foreground_launch = !startup_window::should_start_hidden(&args);
                 // Safe Paste must never bring the window forward for any part of
                 // the operation — see session_instance.rs::handle_forwarded_args
                 // for the mirrored warm-forward guard. The only UI surfaces are
@@ -1855,7 +1852,7 @@ pub fn run() {
                     // Skip every window-reveal call below entirely — the window
                     // must stay hidden/backgrounded for the whole Safe Paste
                     // operation, success or failure.
-                } else if not_minimized && calculator_mode_on_startup {
+                } else if foreground_launch && calculator_mode_on_startup {
                     // The calculator PIN gate must always appear on a manual (non-minimized)
                     // launch, even when hidden mode is active. Without it the app becomes
                     // completely inaccessible — the PIN is the only entry path. Hidden mode
@@ -1867,16 +1864,9 @@ pub fn run() {
                     // same native path. Divergent setup here caused a second
                     // transition after React mounted in packaged builds.
                     let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
-                } else if not_minimized && !hidden_mode {
+                } else if foreground_launch && !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
-                    // Native setup can finish before bundled scripts have painted.
-                    app.state::<startup_window::StartupWindow>().arm();
-                    // Retry a stalled renderer once, never reveal a blank HWND.
-                    let fallback_window = window.clone();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                        startup_window::recover_if_unready(&fallback_window).await;
-                    });
+                    reveal_main_window(app.handle());
                 }
                 dev_startup_trace("main window reveal prepared");
                 startup_trace::milestone(app.handle(), "main_window_reveal_prepared");

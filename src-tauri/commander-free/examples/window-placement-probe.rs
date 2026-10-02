@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Disposable native-window check; no application settings, tasks or services.
-#[path = "../src/window_placement.rs"]
-mod window_placement;
 #[path = "../src/startup_window.rs"]
 mod startup_window;
+#[path = "../src/window_placement.rs"]
+mod window_placement;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn set_wincommander_window_icon(_: &tauri::WebviewWindow) {}
-fn log_message_src(level: &str, _: &str, message: &str) { println!("{level}: {message}"); }
-mod startup_trace { pub fn milestone(_: &tauri::AppHandle, _: &str) {} }
+fn log_message_src(level: &str, _: &str, message: &str) {
+    println!("{level}: {message}");
+}
+mod startup_trace {
+    pub fn milestone(_: &tauri::AppHandle, _: &str) {}
+}
 
 #[tauri::command]
 fn probe_ready(state: tauri::State<'_, AtomicBool>) {
@@ -42,29 +46,62 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let result = async {
                     use tauri::Manager;
+                    for flag in ["--autostart", "--minimized"] {
+                        for elevated in [false, true] {
+                            let mut args = vec!["WinCommander.exe".into(), flag.into()];
+                            if elevated { args.push("--elevated-relaunch".into()); }
+                            if !startup_window::should_start_hidden(&args) {
+                                return Err(format!("Background launch would reveal: {args:?}"));
+                            }
+                        }
+                    }
+                    if window.is_visible().map_err(|e| e.to_string())? {
+                        return Err("Background startup exposed its native window".into());
+                    }
+                    println!("PASS current and legacy background flags stay hidden with either elevation state");
+                    if !startup_window::defer_reveal_until_ready(&window)
+                        || !startup_window::defer_reveal_until_ready(&window)
+                        || window.is_visible().map_err(|e| e.to_string())?
+                    {
+                        return Err("Early repeated tray requests exposed an unready window".into());
+                    }
+                    println!("PASS early repeated tray opens queue without exposing a blank native window");
                     tokio::time::timeout(std::time::Duration::from_secs(15), async {
                         while !handle.state::<AtomicBool>().load(Ordering::Acquire) {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         }
                     }).await.map_err(|_| "WebView did not confirm its actual DOM was loaded")?;
                     println!("PASS native WebView JavaScript confirms document content before reveal");
-                    handle.state::<startup_window::StartupWindow>().arm();
                     let recovering = window.clone();
                     tauri::async_runtime::spawn(async move { startup_window::recover_if_unready(&recovering).await; });
                     tokio::time::timeout(std::time::Duration::from_secs(12), async {
-                        while !handle.state::<startup_window::StartupWindow>().is_ready() {
+                        while !handle.state::<startup_window::StartupWindow>().is_ready()
+                            || !window.is_visible().unwrap_or(false)
+                            || !window.is_maximized().unwrap_or(false)
+                        {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         }
                     }).await.map_err(|_| "Automatic document recovery did not complete")?;
-                    println!("PASS automatic native document recovery and generation-bound readiness");
-                    window_placement::show_maximized(&window).await?;
+                    println!("PASS automatic native document recovery consumes the queued tray reveal after DOM readiness");
                     println!("PASS cold hidden reveal: visible={} maximized={} scale={} elevated={}", window.is_visible().unwrap_or(false), window.is_maximized().unwrap_or(false), window.scale_factor().unwrap_or(0.0), unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 });
                     window.minimize().map_err(|e| e.to_string())?;
+                    if startup_window::should_hide_on_tray_click(
+                        window.is_visible().map_err(|e| e.to_string())?,
+                        window.is_minimized().map_err(|e| e.to_string())?,
+                    ) {
+                        return Err("Tray click would hide a minimized window instead of restoring it".into());
+                    }
                     window_placement::show_maximized(&window).await?;
                     println!("PASS minimized reveal");
                     window.hide().map_err(|e| e.to_string())?;
+                    if startup_window::startup_window_ready(window.clone(), false, Some(1)).await? {
+                        return Err("Repeated document readiness reopened a window closed to tray".into());
+                    }
+                    if startup_window::defer_reveal_until_ready(&window) {
+                        return Err("An already ready document discarded a tray request".into());
+                    }
                     window_placement::show_maximized(&window).await?;
-                    println!("PASS tray-style hidden reveal");
+                    println!("PASS repeated readiness stays hidden; next tray open restores immediately");
                     let monitor = window.current_monitor().map_err(|e| e.to_string())?.ok_or("No monitor")?;
                     let work = monitor.work_area();
                     window.unmaximize().map_err(|e| e.to_string())?;

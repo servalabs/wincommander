@@ -61,7 +61,7 @@ Write-Output 'PASS'
     expect(result.stdout.trim()).toBe("PASS");
   });
 
-  test.skipIf(process.platform !== "win32")("logon router accepts every user and rejects disabled or account-specific triggers", () => {
+  test.skipIf(process.platform !== "win32")("logon task uses highest available privileges and rejects disabled or account-specific triggers", () => {
     const runtimeRepair = readFileSync("src-tauri/commander-free/src/autostart.rs", "utf8");
     const runtimePredicate = runtimeRepair.match(
       /^  \$triggers = .+\r?\n  \$logonTriggers = .+\r?\n  \$allUsersLogon = .+$/m,
@@ -82,10 +82,14 @@ ${runtimePredicate}
 }
 $targetPath='C:\\Program Files\\WinCommander\\wincommander-free.exe'
 function Fixture {
-  [pscustomobject]@{State='Ready';Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};Enabled=$true;UserId=$null;Repetition=[pscustomobject]@{Interval=''}});Principal=[pscustomobject]@{GroupId='S-1-5-32-545';RunLevel='Limited'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S';AllowDemandStart=$true;RestartCount=0;StartWhenAvailable=$false;WakeToRun=$false};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--autostart'})}
+  [pscustomobject]@{State='Ready';Triggers=@([pscustomobject]@{CimClass=[pscustomobject]@{CimClassName='MSFT_TaskLogonTrigger'};Enabled=$true;UserId=$null;Repetition=[pscustomobject]@{Interval=''}});Principal=[pscustomobject]@{GroupId='S-1-5-32-545';RunLevel='Highest'};Settings=[pscustomobject]@{MultipleInstances='Parallel';ExecutionTimeLimit='PT0S';AllowDemandStart=$true;RestartCount=0;StartWhenAvailable=$false;WakeToRun=$false};Actions=@([pscustomobject]@{Execute=$targetPath;Arguments='--autostart'})}
 }
-Assert-TaskContract (Fixture) 'S-1-5-32-545' 'Limited' '--autostart' $true
+Assert-TaskContract (Fixture) 'S-1-5-32-545' 'Highest' '--autostart' $true
 Assert-RuntimeRouter (Fixture)
+$legacy=Fixture; $legacy.Principal.RunLevel='Limited'
+$denied=$false
+try { Assert-TaskContract $legacy 'S-1-5-32-545' 'Highest' '--autostart' $true } catch { $denied=$true }
+if (-not $denied) { throw 'Legacy limited-token router was accepted without migration' }
 foreach ($case in @('account','disabled','extra','wrong','missing')) {
   $t=Fixture
   switch ($case) {
@@ -96,7 +100,7 @@ foreach ($case in @('account','disabled','extra','wrong','missing')) {
     missing { $t.Triggers=@() }
   }
   $denied=$false
-  try { Assert-TaskContract $t 'S-1-5-32-545' 'Limited' '--autostart' $true } catch { $denied=$true }
+  try { Assert-TaskContract $t 'S-1-5-32-545' 'Highest' '--autostart' $true } catch { $denied=$true }
   if (-not $denied) { throw "Invalid logon trigger accepted: $case" }
   $denied=$false
   try { Assert-RuntimeRouter $t } catch { $denied=$true }

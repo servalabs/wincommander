@@ -1,4 +1,4 @@
-import { showStartupAnimation, hideStartupAnimation } from './startup/animationRoot';
+import { showStartupAnimation } from './startup/animationRoot';
 import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
 import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
@@ -43,10 +43,9 @@ async function startMainWindow(): Promise<void> {
     const shown = await settleStartupReveal(revealStartupWindow());
     // A timed-out native acknowledgement means "not known yet", not "the
     // window is hidden". Keep the already-rendered animation running so a
-    // late elevated handoff has content to display. Only an explicit false
-    // suppresses the splash (for a deliberately hidden window).
+    // late elevated handoff has content to display. An explicit false pauses
+    // animation while leaving content mounted for an early tray reveal.
     showStartupAnimation({ ...initialAnimation, isWindowVisible: shouldKeepStartupAnimationVisible(shown) });
-    if (shown === false) hideStartupAnimation();
     // Loading the dashboard is deliberately last: a slow module can no longer
     // leave a hidden, white-looking native window during startup.
     await import('./main');
