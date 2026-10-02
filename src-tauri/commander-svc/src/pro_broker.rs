@@ -7,6 +7,14 @@
 #[path = "../../runtime-support/pro_update_guard.rs"]
 mod update_guard;
 
+#[cfg(windows)]
+#[path = "pro_broker_acl.rs"]
+mod root_acl;
+
+#[cfg(windows)]
+#[path = "pro_broker_prepare.rs"]
+mod prepare;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct HashAcceptance {
     current: Option<String>,
@@ -233,6 +241,14 @@ pub(crate) struct VaultCall<'a> {
 pub async fn vault_call(
     call: VaultCall<'_>,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
+    vault_call_until(call, tokio::time::Instant::now() + BROKER_TIMEOUT).await
+}
+
+#[cfg(windows)]
+async fn vault_call_until(
+    call: VaultCall<'_>,
+    deadline: tokio::time::Instant,
+) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
     use tokio::time::{timeout_at, Instant};
     use wincmd_shared::vault_access::VaultMountReason;
@@ -257,10 +273,26 @@ pub async fn vault_call(
         caller_authentication_id,
         presentation,
         feature_id,
-        args,
+        mut args,
     } = call;
 
-    let deadline = Instant::now() + BROKER_TIMEOUT;
+    // A healthy, unchanged driver does not mean the newly installed Pro's
+    // user-mode engine was extracted. Standard users cannot update that cache.
+    if presentation == wincmd_shared::vault_access::VaultPresentation::PerUser {
+        if let Err(reason) = prepare::ensure(request_id, deadline).await {
+            zeroize_json(&mut args);
+            return Err(reason);
+        }
+    }
+
+    let mut root_acl_phase = match root_acl::RootAclPhase::capture(feature_id, request_id, presentation, &args) {
+        Ok(phase) => phase,
+        Err(reason) => {
+            zeroize_json(&mut args);
+            return Err(reason);
+        }
+    };
+
     let pipe_name = random_pipe_name();
     let session_token = random_session_token();
     let mut pipe_security = broker_pipe_security_attributes(caller_sid)?;
@@ -355,7 +387,30 @@ pub async fn vault_call(
                 .map_err(|_| VaultMountReason::BrokerUnavailable)?;
             match process_broker_reply(reply, &session_token, request_id, &mut notification_count)?
             {
-                BrokerReply::Notification => {}
+                BrokerReply::Notification(notification) => {
+                    if notification.event == root_acl::READY_EVENT {
+                        let phase = root_acl_phase.as_mut().ok_or(VaultMountReason::BrokerReplyRejected)?;
+                        let (ready, helper_args) = phase.take_ready(notification.payload)?;
+                        let helper_deadline = deadline.min(Instant::now() + std::time::Duration::from_secs(25));
+                        let applied = Box::pin(vault_call_until(VaultCall {
+                            request_id,
+                            target_session_id: 0,
+                            caller_sid: "S-1-5-18",
+                            caller_token: None,
+                            caller_authentication_id: None,
+                            presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
+                            feature_id: "vault.broker.apply_root_acl",
+                            args: helper_args,
+                        }, helper_deadline)).await;
+                        let ack = Envelope::Response(wincmd_shared::Response {
+                            request_id,
+                            result: root_acl::acknowledgement(&ready, &applied),
+                        }).sign(&session_token);
+                        timeout_at(deadline, write_envelope(&mut pipe, &ack)).await
+                            .map_err(|_| VaultMountReason::BrokerUnavailable)?
+                            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+                    }
+                }
                 BrokerReply::Finished(result) => break result,
             }
         };
@@ -473,6 +528,10 @@ fn zeroize_json(value: &mut serde_json::Value) {
 #[cfg(windows)]
 pub async fn vault_recovery_dismount(
     internal_drive: u8,
+    presented_drive_letter: Option<&str>,
+    presentation: wincmd_shared::vault_access::VaultPresentation,
+    _target_session_id: u32,
+    _caller_sid: &str,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     use wincmd_shared::vault_access::VaultMountReason;
 
@@ -480,8 +539,18 @@ pub async fn vault_recovery_dismount(
     if internal_drive > 25 {
         return Err(VaultMountReason::BrokerRejected);
     }
+    // SYSTEM can close the driver slot, but cannot attest another logon's local aliases.
+    let local_cleanup_unconfirmed = presentation == wincmd_shared::vault_access::VaultPresentation::PerUser;
+    let mut args = serde_json::json!({ "internal_drive": internal_drive });
+    if let Some(letter) = presented_drive_letter {
+        let normalized = letter.trim_end_matches(':');
+        if normalized.len() != 1 || !normalized.as_bytes()[0].is_ascii_alphabetic() {
+            return Err(VaultMountReason::BrokerRejected);
+        }
+        args["presented_drive_letter"] = format!("{}:", normalized.to_ascii_uppercase()).into();
+    }
     let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    vault_call(VaultCall {
+    let result = vault_call(VaultCall {
         request_id,
         target_session_id: 0,
         caller_sid: "S-1-5-18",
@@ -489,14 +558,19 @@ pub async fn vault_recovery_dismount(
         caller_authentication_id: None,
         presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
         feature_id: "vault.broker.dismount",
-        args: serde_json::json!({ "internal_drive": internal_drive }),
+        args,
     })
-    .await
+    .await?;
+    if local_cleanup_unconfirmed {
+        Err(VaultMountReason::DismountFailed)
+    } else {
+        Ok(result)
+    }
 }
 
 #[cfg(windows)]
 enum BrokerReply {
-    Notification,
+    Notification(wincmd_shared::Notification),
     Finished(Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason>),
 }
 
@@ -514,14 +588,14 @@ fn process_broker_reply(
         .verify_and_unwrap(session_token)
         .map_err(|_| VaultMountReason::BrokerReplyRejected)?
     {
-        Envelope::Notification(_) => {
+        Envelope::Notification(notification) => {
             *notification_count = notification_count
                 .checked_add(1)
                 .ok_or(VaultMountReason::BrokerReplyRejected)?;
             if *notification_count > MAX_SIGNED_NOTIFICATIONS {
                 return Err(VaultMountReason::BrokerReplyRejected);
             }
-            Ok(BrokerReply::Notification)
+            Ok(BrokerReply::Notification(notification))
         }
         Envelope::Response(response) if response.request_id == request_id => {
             Ok(BrokerReply::Finished(Ok(response.result)))
@@ -996,7 +1070,7 @@ mod tests {
                 REQUEST_ID,
                 &mut notifications
             ),
-            Ok(BrokerReply::Notification)
+            Ok(BrokerReply::Notification(_))
         ));
         assert_eq!(notifications, 1);
 
@@ -1026,7 +1100,7 @@ mod tests {
                     REQUEST_ID,
                     &mut notifications
                 ),
-                Ok(BrokerReply::Notification)
+                Ok(BrokerReply::Notification(_))
             ));
         }
         assert!(matches!(
@@ -1161,7 +1235,7 @@ mod tests {
     #[tokio::test]
     async fn recovery_dismount_rejects_out_of_range_slots_before_launching_pro() {
         assert_eq!(
-            vault_recovery_dismount(26).await,
+            vault_recovery_dismount(26, None, wincmd_shared::vault_access::VaultPresentation::Machine, 0, "S-1-5-18").await,
             Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         );
     }

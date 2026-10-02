@@ -105,7 +105,7 @@ fn unknown_registry_mount_denials_are_not_reported_as_a_failed_dismount() {
 }
 
 #[test]
-fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override() {
+fn ordinary_machine_dismount_allows_admin_but_private_mounts_never_have_admin_override() {
     for presentation in [VaultPresentation::Machine, VaultPresentation::PerUser] {
         for owner in [false, true] {
             for elevated in [false, true] {
@@ -139,7 +139,8 @@ fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override()
                         caller,
                         elevated,
                     );
-                    let allowed = owner && session == 7;
+                    let allowed = (owner && session == 7)
+                        || (presentation == VaultPresentation::Machine && elevated);
                     assert_eq!(result.state == VaultMountState::Unmounted, allowed);
                     let events = events.lock().unwrap();
                     assert_eq!(
@@ -149,7 +150,11 @@ fn dismount_personal_cross_account_matrix_never_gives_admin_a_private_override()
                     if !allowed {
                         assert_eq!(
                             result.reason,
-                            Some(VaultMountReason::MountStateUnknown)
+                            Some(if presentation == VaultPresentation::PerUser {
+                                VaultMountReason::MountStateUnknown
+                            } else {
+                                VaultMountReason::AdministratorRequired
+                            })
                         );
                         assert!(!serde_json::to_string(&result)
                             .unwrap()
@@ -189,7 +194,7 @@ fn dismount_test_policy_token(
 }
 
 #[test]
-fn dismount_policy_matrix_requires_grant_and_owner_or_shared_elevation_on_both_routes() {
+fn dismount_policy_matrix_requires_grant_and_private_owner_or_shared_elevation_on_both_routes() {
     struct Resolver;
     impl PrincipalResolver for Resolver {
         fn resolve_sid(&self, name: &str) -> Result<String, crate::vault_access::VaultError> {
@@ -256,7 +261,7 @@ fn dismount_policy_matrix_requires_grant_and_owner_or_shared_elevation_on_both_r
                         };
                         let allowed = granted
                             && if presentation == VaultPresentation::Machine {
-                                owner || elevated
+                                elevated
                             } else {
                                 owner
                             };
@@ -334,7 +339,7 @@ fn dismount_refuses_reused_slots_legacy_unknown_and_unconfirmed_engine_success()
 }
 
 #[test]
-fn inventory_prunes_only_proven_absent_slots_and_never_invents_empty_on_error() {
+fn inventory_retains_absent_slot_cleanup_authority_without_reporting_a_mounted_drive() {
     let store = mount_store(
         Arc::new(Mutex::new(HashMap::new())),
         Arc::new(AtomicBool::new(false)),
@@ -370,14 +375,78 @@ fn inventory_prunes_only_proven_absent_slots_and_never_invents_empty_on_error() 
         .personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true)
         .is_err());
     broker.engine_snapshot = Some(|| Ok(HashMap::new()));
-    assert!(broker
+    let rows = broker
         .personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true)
-        .unwrap()
-        .is_empty());
-    assert_eq!(broker.projection("mount").0, VaultMountState::Unmounted);
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].cleanup_required && rows[0].dismount_allowed);
+    assert!(!rows[0].browse_allowed);
+    assert_eq!(broker.projection("mount").0, VaultMountState::Failed);
+    let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+    assert!(saved.mounts["mount"].driver_slot_absent);
     broker.engine_snapshot = Some(|| Ok(HashMap::from([(2, "unknown-volume".into())])));
     assert_eq!(
         broker.personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true),
         Err(VaultMountReason::MountStateUnknown)
     );
+}
+
+#[test]
+fn absent_slot_retains_exact_cleanup_context_until_alias_removal_is_confirmed() {
+    for presentation in [VaultPresentation::Machine, VaultPresentation::PerUser] {
+        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+        let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.personal = true;
+        mount.presentation = presentation;
+        mount.drive_letter = "W:".into();
+        assert!(broker.retain_cleanup_mount(&store, "stale", mount));
+        let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(), 7, "S-1-5-21-owner", false);
+        assert_eq!(result.state, VaultMountState::Failed);
+        let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+        assert!(saved.mounts["stale"].cleanup_required && saved.mounts["stale"].driver_slot_absent);
+        assert_eq!(events.lock().unwrap().cleanup_contexts[0],
+            (12, Some("W:".into()), presentation, 7, "S-1-5-21-owner".into()));
+        broker.engine_snapshot = Some(|| Ok(HashMap::from([(12, "test-mount:12".into())])));
+        let reused = broker.dismount_personal_for_caller(&store, 2, 12, std::ptr::null_mut(), 7, "S-1-5-21-owner", false);
+        assert_eq!(reused.reason, Some(VaultMountReason::MountStateUnknown));
+        assert_eq!(events.lock().unwrap().cleanup_contexts.len(), 1);
+        broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+        events.lock().unwrap().cleanup_fails = false;
+        let result = broker.dismount_personal_for_caller(&store, 2, 12, std::ptr::null_mut(), 7, "S-1-5-21-owner", false);
+        assert_eq!(result.state, VaultMountState::Unmounted);
+        let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+        assert!(saved.mounts.is_empty());
+    }
+}
+
+#[test]
+fn startup_recovery_checks_aliases_even_if_the_driver_slot_is_already_absent() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+    mount.drive_letter = "Y:".into();
+    assert!(broker.retain_cleanup_mount(&store, "stale", mount));
+    assert_eq!(broker.load_and_cleanup(&store), Ok(HashSet::new()));
+    let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+    assert!(saved.mounts["stale"].cleanup_required && saved.mounts["stale"].driver_slot_absent);
+    assert!(!broker.recovery.lock().unwrap().registry_untrusted);
+    assert!(broker.recovery_allows_entry("unrelated", &store));
+    assert_eq!(broker.projection("stale").0, VaultMountState::Failed);
+    assert_eq!(events.lock().unwrap().cleanup_contexts[0].1, Some("Y:".into()));
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+}
+
+#[test]
+fn broker_success_requires_exact_slot_and_verified_presentation_cleanup() {
+    for reply in [serde_json::json!({}), serde_json::json!({"status":"dismounted","internalDrive":12}),
+        serde_json::json!({"status":"dismounted","internalDrive":12,"presentationCleanup":false}),
+        serde_json::json!({"status":"dismounted","internalDrive":13,"presentationCleanup":true})] {
+        assert_eq!(confirmed_broker_dismount(&reply, 12), Err(VaultMountReason::DismountFailed));
+    }
+    assert!(confirmed_broker_dismount(&serde_json::json!({"status":"dismounted","internalDrive":12,"presentationCleanup":true}), 12).is_ok());
 }
