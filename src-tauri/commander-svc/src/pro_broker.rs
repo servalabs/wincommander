@@ -645,11 +645,19 @@ fn is_syncthing_root_conflict(message: &str) -> bool {
 
 #[cfg(windows)]
 fn is_syncthing_profile_failure(message: &str) -> bool {
-    message.starts_with("syncthing_vault_")
-        && message.len() <= 80
-        && message
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+    // Do not turn an exact-folder, binding, or read-back failure into the
+    // user-facing "Syncthing did not become ready" diagnosis. Only errors
+    // produced while finding, validating, or starting the account profile are
+    // retryable profile failures; all other bounded Syncthing errors retain
+    // the normal broker-rejected diagnosis for support evidence.
+    matches!(
+        message,
+        "syncthing_vault_binary_unavailable"
+            | "syncthing_vault_profile_unavailable"
+            | "syncthing_vault_profile_invalid"
+            | "syncthing_vault_api_unavailable"
+            | "syncthing_vault_start_failed"
+    )
 }
 
 #[cfg(windows)]
@@ -1223,6 +1231,20 @@ mod tests {
             request_id: REQUEST_ID,
             kind: "feature_failed".to_string(),
             message: "syncthing_vault_start_failed; C:\\secret".to_string(),
+        })
+        .sign(token);
+        let mut notifications = 0;
+        assert!(matches!(
+            process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
+            Ok(BrokerReply::Finished(Err(
+                wincmd_shared::vault_access::VaultMountReason::BrokerRejected
+            )))
+        ));
+
+        let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: REQUEST_ID,
+            kind: "feature_failed".to_string(),
+            message: "syncthing_vault_folder_path_mismatch".to_string(),
         })
         .sign(token);
         let mut notifications = 0;
