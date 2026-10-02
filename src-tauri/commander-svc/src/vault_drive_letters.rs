@@ -213,12 +213,42 @@ fn global_dos_device_target(letter: char) -> Result<Option<String>, ()> {
     String::from_utf16(&target[..end]).map(Some).map_err(|_| ())
 }
 
-fn global_root_is_readable(letter: char) -> bool {
-    let root = format!("{letter}:\\");
-    let Ok(mut entries) = std::fs::read_dir(root) else {
-        return false;
+/// Ask a disposable child to read an encrypted root. A dead driver can block
+/// a filesystem call indefinitely, so a Vault repair must never perform that
+/// call in the long-lived SYSTEM service. `Ok(true)` preserves a usable drive;
+/// `Ok(false)` is a failed root read and is eligible for exact-match removal;
+/// `Err(())` is inconclusive and leaves the mapping untouched.
+fn bounded_global_root_probe(letter: char) -> Result<bool, ()> {
+    use std::{
+        process::Command,
+        thread,
+        time::{Duration, Instant},
     };
-    entries.next().map_or(true, |entry| entry.is_ok())
+
+    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let cmd = std::path::PathBuf::from(system_root)
+        .join("System32")
+        .join("cmd.exe");
+    let root = format!("{letter}:\\");
+    let mut child = Command::new(cmd)
+        .args(["/d", "/c", "dir", "/a", &root])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| ())?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|_| ())? {
+            return Ok(status.success());
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn remove_global_dos_device(letter: char, target: &str) -> Result<(), ()> {
@@ -246,8 +276,14 @@ pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
         let Some(target) = global_dos_device_target(letter)? else {
             continue;
         };
-        if !encrypted_volume_device_target(&target) || global_root_is_readable(letter) {
+        if !encrypted_volume_device_target(&target) {
             continue;
+        }
+        match bounded_global_root_probe(letter) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            // An uncertain result must never remove a possibly live mapping.
+            Err(()) => continue,
         }
         remove_global_dos_device(letter, &target)?;
         released += 1;
