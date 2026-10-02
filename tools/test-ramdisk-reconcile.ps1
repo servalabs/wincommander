@@ -6,11 +6,18 @@ function Assert-True([bool]$condition, [string]$message) {
     if (-not $condition) { throw $message }
 }
 
+Assert-True (_Test-ImDiskDeviceListResult -ExitCode 1 -Stderr '') 'ImDisk list success code was rejected'
+Assert-True (-not (_Test-ImDiskDeviceListResult -ExitCode 0 -Stderr 'driver unavailable')) 'ImDisk list error was accepted'
+
 function Get-ImDiskExe { return 'imdisk.exe' }
 function Get-SystemRamInfo { return @{ totalMB = 16384 } }
 function Test-Path { param([string]$Path) if ($Path -eq 'R:\') { return $null -ne $script:owner }; return $false }
 function _Get-ImDiskMountOwner { return $script:owner }
 function _Get-RamDiskVolumeLabel { return $script:label }
+function _Get-ImDiskUnitVolumeLabel {
+    param([int]$DeviceNumber)
+    return $script:unitLabels[$DeviceNumber]
+}
 function _Set-ImDiskMountPoint {
     param([string]$Letter, [int]$DeviceNumber, [bool]$Remove = $false)
     $script:calls += "$(if ($Remove) { 'unlink' } else { 'mount' }) $DeviceNumber"
@@ -21,9 +28,11 @@ function _Set-ImDiskMountPoint {
     }
 }
 function _Dismount-ImDiskUnitWithoutMountPoint {
-    param([int]$DeviceNumber)
+    param([int]$DeviceNumber, [string]$ExpectedLabel)
+    if ($PSBoundParameters.ContainsKey('ExpectedLabel') -and $script:unitLabels[$DeviceNumber] -ine $ExpectedLabel) { throw 'unexpected volume label' }
     if ($script:failDetach) { throw 'simulated detach failure' }
     $script:units.Remove($DeviceNumber)
+    $script:unitLabels.Remove($DeviceNumber)
     $script:calls += "eject $DeviceNumber"
 }
 function _Invoke-ImDisk {
@@ -45,13 +54,15 @@ function _Invoke-ImDisk {
         return @{ ok = $true; output = $script:units[$number]; exitCode = 0 }
     }
     if ($Arguments[0] -eq '-a') {
-        $script:owner = 10
-        $script:label = 'TEMP'
+        $script:owner = if ($script:failAttachWithoutMount) { $null } else { 10 }
+        $script:label = if ($script:failAttach) { $null } else { 'TEMP' }
+        $script:unitLabels[10] = $script:label
         $script:units[10] = 'Drive letter: R:' + "`n" + 'No image file.' + "`n" + 'Size: 805306368 bytes (768 MB), Removable, Virtual Memory, HDD.'
         return @{ ok = -not $script:failAttach; output = 'Created device 10: R: -> Image in memory'; exitCode = $(if ($script:failAttach) { 1 } else { 0 }) }
     }
     if ($key -eq '-d -m R:') {
         $script:units.Remove(10)
+        $script:unitLabels.Remove(10)
         $script:owner = $null
         return @{ ok = $true; output = 'Done.'; exitCode = 0 }
     }
@@ -69,9 +80,11 @@ function Reset-Fixture {
         7 = $realOutput
         3 = $realOutput
     }
+    $script:unitLabels = @{ 7 = 'TEMP'; 3 = 'TEMP' }
     $script:calls = @()
     $script:failDetach = $false
     $script:failAttach = $false
+    $script:failAttachWithoutMount = $false
 }
 
 Reset-Fixture
@@ -104,6 +117,11 @@ Assert-True ($wrongLabel.status -eq 'error' -and $script:units.Count -eq 2) 'A d
 Assert-True (-not ($script:calls | Where-Object { $_ -like '-a*' })) 'An occupied letter triggered an attach'
 
 Reset-Fixture
+$script:unitLabels[3] = 'OTHER'
+$wrongStaleLabel = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
+Assert-True ($wrongStaleLabel.status -eq 'error' -and $script:units.Count -eq 2 -and $script:owner -eq 7) 'A same-size disk with another label was detached'
+
+Reset-Fixture
 $script:failDetach = $true
 $failedCleanup = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
 Assert-True ($failedCleanup.status -eq 'error' -and $script:owner -eq 7) 'Failed cleanup did not stop safely'
@@ -124,5 +142,14 @@ $script:failAttach = $true
 $partial = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
 Assert-True ($partial.status -eq 'error' -and $script:units.Count -eq 0 -and $null -eq $script:owner) 'Partial attach left an allocated disk'
 Assert-True ($script:calls -contains '-d -m R:') 'Partial attach was not rolled back by its own mount point'
+
+Reset-Fixture
+$script:owner = $null
+$script:units = @{}
+$script:failAttach = $true
+$script:failAttachWithoutMount = $true
+$unmountedPartial = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
+Assert-True ($unmountedPartial.status -eq 'error' -and $script:units.Count -eq 0) 'Unformatted allocated unit was not rolled back'
+Assert-True ($script:calls -contains 'eject 10') 'Unformatted allocated unit was not detached by unit number'
 
 Write-Output 'RAM disk reconciliation checks passed.'

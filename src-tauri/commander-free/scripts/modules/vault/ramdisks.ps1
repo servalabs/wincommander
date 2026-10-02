@@ -214,6 +214,11 @@ function Install-RamDiskEngine {
     }
 }
 
+function _Test-ImDiskDeviceListResult {
+    param([int]$ExitCode, [string]$Stderr)
+    return $ExitCode -in @(0, 1) -and [string]::IsNullOrWhiteSpace($Stderr)
+}
+
 function _Invoke-ImDisk {
     # Internal helper: runs the engine CLI synchronously, captures stdout
     # and stderr together so callers can grep either stream uniformly.
@@ -248,8 +253,14 @@ function _Invoke-ImDisk {
         $stdout = $proc.StandardOutput.ReadToEnd()
         $stderr = $proc.StandardError.ReadToEnd()
         $proc.WaitForExit()
+        # ImDisk's device-list mode returns 1 on success (including an empty
+        # list); an actual list failure writes to stderr and can return 0.
+        $isDeviceList = $Arguments.Count -eq 2 -and $Arguments[0] -eq '-l' -and $Arguments[1] -eq '-n'
+        $ok = if ($isDeviceList) {
+            _Test-ImDiskDeviceListResult -ExitCode $proc.ExitCode -Stderr $stderr
+        } else { $proc.ExitCode -eq 0 }
         return @{
-            ok       = ($proc.ExitCode -eq 0)
+            ok       = $ok
             output   = "$stdout`n$stderr"
             exitCode = $proc.ExitCode
         }
@@ -338,6 +349,28 @@ function _Get-RamDiskVolumeLabel {
     catch { return $null }
 }
 
+function _Get-ImDiskUnitVolumeLabel {
+    param([int]$DeviceNumber)
+    if (-not ([System.Management.Automation.PSTypeName]'RdkUnitVolumeLabel').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class RdkUnitVolumeLabel {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool GetVolumeInformation(string root, StringBuilder label, int labelSize,
+        IntPtr serial, IntPtr maxComponent, IntPtr flags, IntPtr filesystem, int filesystemSize);
+}
+'@ -ErrorAction Stop
+    }
+    $label = New-Object System.Text.StringBuilder 64
+    $root = "\\?\GLOBALROOT\Device\ImDisk$DeviceNumber\"
+    if (-not [RdkUnitVolumeLabel]::GetVolumeInformation($root, $label, 64,
+        [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, 0)) {
+        return $null
+    }
+    return $label.ToString()
+}
 function _Set-ImDiskMountPoint {
     param([string]$Letter, [int]$DeviceNumber, [bool]$Remove = $false)
     if (-not ([System.Management.Automation.PSTypeName]'RdkDosMount').Type) {
@@ -377,7 +410,11 @@ function _Get-ImDiskUnits {
 }
 
 function _Dismount-ImDiskUnitWithoutMountPoint {
-    param([int]$DeviceNumber)
+    param([int]$DeviceNumber, [string]$ExpectedLabel)
+    if ($PSBoundParameters.ContainsKey('ExpectedLabel') -and
+        (_Get-ImDiskUnitVolumeLabel -DeviceNumber $DeviceNumber) -ine $ExpectedLabel) {
+        throw "RAM disk unit $DeviceNumber has an unexpected or unreadable label"
+}
     # ImDisk's CLI -d -u also removes the unit's recorded drive letter. For
     # duplicate R: units that letter may now belong to a different unit.
     if (-not ([System.Management.Automation.PSTypeName]'RdkSafeUnitEject').Type) {
@@ -660,7 +697,8 @@ function New-RamDisk {
         $sameLetter = @($units | Where-Object { $_.letter -eq "${letter}:" })
         $targetBytes = [int64]$sizeInt * 1MB
         $matching = @($sameLetter | Where-Object {
-            $_.isRam -and $_.sizeBytes -eq $targetBytes -and -not $_.imageFile
+            $_.isRam -and $_.sizeBytes -eq $targetBytes -and -not $_.imageFile -and
+            (_Get-ImDiskUnitVolumeLabel -DeviceNumber $_.deviceNumber) -ieq $safeLabel
         })
         if ($sameLetter.Count -ne $matching.Count) {
             throw "${letter}: has an unrecognized RAM disk unit; refusing another attach"
@@ -697,7 +735,7 @@ function New-RamDisk {
 
         foreach ($stale in $matching) {
             if ($null -ne $owner -and $stale.deviceNumber -eq $owner) { continue }
-            _Dismount-ImDiskUnitWithoutMountPoint -DeviceNumber $stale.deviceNumber
+            _Dismount-ImDiskUnitWithoutMountPoint -DeviceNumber $stale.deviceNumber -ExpectedLabel $safeLabel
             for ($i = 0; $i -lt 15; $i++) {
                 $check = _Invoke-ImDisk -Arguments @('-l', '-u', "$($stale.deviceNumber)")
                 if (-not $check.ok) { break }
