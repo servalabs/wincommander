@@ -39,7 +39,12 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         "svc.vault.apply_policy"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
-        | "svc.vault.enroll_personal_syncthing" => {
+        | "svc.vault.enroll_personal_syncthing"
+        // The repair is a bounded mutation in the caller's Explorer session.
+        // It starts the same authenticated Vault broker as a mount, so its
+        // deadline must cover the broker handshake and native DOS-device
+        // readback rather than the five-second probe allowance.
+        | "svc.vault.release_orphaned_drive_letters" => {
             VAULT_MUTATION_TIMEOUT
         }
         "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
@@ -56,6 +61,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
+            | "svc.vault.release_orphaned_drive_letters"
     )
 }
 
@@ -412,6 +418,10 @@ mod tests {
             VAULT_MUTATION_TIMEOUT
         );
         assert_eq!(
+            request_timeout_for("svc.vault.release_orphaned_drive_letters"),
+            VAULT_MUTATION_TIMEOUT
+        );
+        assert_eq!(
             request_timeout_for("svc.vault.get_policy"),
             SVC_TRANSPORT_TIMEOUT
         );
@@ -428,6 +438,9 @@ mod tests {
         assert!(may_still_be_completing("svc.vault.unmount"));
         assert!(may_still_be_completing("svc.vault.dismount_personal"));
         assert!(may_still_be_completing("svc.vault.enroll_personal_syncthing"));
+        assert!(may_still_be_completing(
+            "svc.vault.release_orphaned_drive_letters"
+        ));
         assert_eq!(
             request_timeout_for("svc.vault.dismount_personal"),
             VAULT_MUTATION_TIMEOUT

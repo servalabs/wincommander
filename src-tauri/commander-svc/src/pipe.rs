@@ -3036,6 +3036,16 @@ fn handle_release_orphaned_vault_drive_letters(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
+    // A crashed service can leave a machine-wide encrypted-volume name in
+    // GLOBAL??.  Clear only a dead, exact VeraCrypt/TrueCrypt mapping before
+    // asking Pro to repair the caller's separate Explorer namespace.
+    let released_global = crate::vault_drive_letters::release_orphaned_global_encrypted_links()
+        .map_err(|_| {
+            VerbError::new(
+                "vault_drive_letter_cleanup_failed",
+                "Unavailable Vault drive letters could not be checked.",
+            )
+        })?;
     let reply = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
             crate::pro_broker::VaultCall {
@@ -3066,7 +3076,7 @@ fn handle_release_orphaned_vault_drive_letters(
                 "Unavailable Vault drive letters could not be checked.",
             )
         })?;
-    Ok(serde_json::json!({ "released": released }))
+    Ok(serde_json::json!({ "released": released + released_global as u64 }))
 }
 
 fn handle_vault_list_authorized(
