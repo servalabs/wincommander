@@ -5,24 +5,23 @@
 // On success it invalidates settings so every panel re-renders with current
 // admin intent and machine state without a manual refresh.
 //
-// A wake-delivered command can arrive between heartbeats, so keep this local
-// sidecar poll short. It performs no network request itself.
+// The native process owns the recurring 60-second policy heartbeat and its
+// failure backoff. The desktop only performs one prompt reconciliation when
+// Fleet becomes enabled. Keeping a second 2-second browser timer here made
+// every open window create a fresh, successful "policy sync" operation even
+// when there was no policy to apply.
 
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { settingsKeys } from "./queries/useSettingsQuery";
 
-const POLL_MS = 2_000;
-
 export default function useFleetEpoch(fleetEnabled: boolean) {
   const qc = useQueryClient();
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
 
   useEffect(() => {
     if (!fleetEnabled) {
-      if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
 
@@ -57,12 +56,9 @@ export default function useFleetEpoch(fleetEnabled: boolean) {
       }
     };
 
-    // Run immediately on enable, then on every tick.
+    // Reconcile once when Fleet is enabled (including a Fleet setting pushed
+    // while this window is open). The native loop handles subsequent changes
+    // without duplicating diagnostics or IPC from every desktop window.
     void apply();
-    timerRef.current = setInterval(() => void apply(), POLL_MS);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
   }, [fleetEnabled, qc]);
 }
