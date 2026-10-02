@@ -4,6 +4,13 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $maintenanceModule = Join-Path $repoRoot 'src-tauri\commander-free\scripts\modules\tweaks\maintenance.ps1'
 . $maintenanceModule
 
+$targets = Get-ServiceProfileTargets
+foreach ($timeService in @('W32Time', 'autotimesvc')) {
+    if ($timeService -in $targets.manual -or $timeService -in $targets.disable) {
+        throw "$timeService must remain under Windows automatic time management."
+    }
+}
+
 $script:mockServices = @{
     ALG = [pscustomobject]@{ Name = 'ALG'; StartType = 'Manual'; Status = 'Stopped' }
     AppMgmt = [pscustomobject]@{ Name = 'AppMgmt'; StartType = 'Automatic'; Status = 'Stopped' }
