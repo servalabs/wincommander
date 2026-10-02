@@ -115,7 +115,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
           ? "WinCommander could not confirm that this Vault is still mounted for this Windows account. Refresh Secure Storage, then try again."
           : detail.includes("vault_syncthing_profile_unavailable")
             ? "Syncthing did not become ready for this Windows account. Keep the personal Vault mounted, then retry. If it persists, verify the Syncthing installation."
-          : detail.includes("vault_broker_unavailable") || detail.includes("vault_broker_rejected")
+            : detail.includes("vault_syncthing_root_conflict")
+              ? "This Vault already syncs that folder or an overlapping folder. Choose a separate folder outside the existing sync folder."
+            : detail.includes("vault_broker_unavailable") || detail.includes("vault_broker_rejected")
             ? "WinCommander could not reach the Syncthing helper for this Windows account. Keep the Vault mounted and try again."
             : "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
       setFailure(message);

@@ -184,6 +184,10 @@ fn syncthing_enroll_call(
 ) -> Result<String, VaultMountReason> {
     let mut hasher = Sha256::new();
     hasher.update(entry_id.as_bytes());
+    // A Vault can have several non-overlapping roots.  Include the normalized
+    // child path so each one has its own deterministic Syncthing folder id.
+    hasher.update([0]);
+    hasher.update(normalized_relative_sync_path(relative_path).as_bytes());
     let folder_id = format!(
         "wcv-{}",
         hasher
@@ -341,6 +345,14 @@ fn valid_relative_sync_path(value: &str) -> bool {
         && path
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn normalized_relative_sync_path(value: &str) -> String {
+    value
+        .split(['\\', '/'])
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join("\\")
 }
 
 fn valid_syncthing_gui_url(value: &str) -> bool {
@@ -501,6 +513,7 @@ impl VaultMountBroker {
             VaultMountReason::SyncthingProfileUnavailable => {
                 "vault_syncthing_profile_unavailable"
             }
+            VaultMountReason::SyncthingRootConflict => "vault_syncthing_root_conflict",
             VaultMountReason::ProNotInstalled => "vault_pro_not_installed",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
             VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",

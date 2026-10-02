@@ -537,6 +537,10 @@ fn process_broker_reply(
                 if error.kind == "missing_entitlement" {
                     VaultMountReason::EntitlementDenied
                 } else if error.kind == "feature_failed"
+                    && is_syncthing_root_conflict(&error.message)
+                {
+                    VaultMountReason::SyncthingRootConflict
+                } else if error.kind == "feature_failed"
                     && is_syncthing_profile_failure(&error.message)
                 {
                     VaultMountReason::SyncthingProfileUnavailable
@@ -553,6 +557,16 @@ fn process_broker_reply(
         | Envelope::Bye
         | Envelope::Signed(_) => Err(VaultMountReason::BrokerReplyRejected),
     }
+}
+
+#[cfg(windows)]
+fn is_syncthing_root_conflict(message: &str) -> bool {
+    matches!(
+        message,
+        "syncthing_vault_sync_root_overlap"
+            | "syncthing_vault_folder_path_conflict"
+            | "syncthing_vault_binding_conflict"
+    )
 }
 
 #[cfg(windows)]
@@ -1142,6 +1156,25 @@ mod tests {
             process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
             Ok(BrokerReply::Finished(Err(
                 wincmd_shared::vault_access::VaultMountReason::BrokerRejected
+            )))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_keeps_syncthing_root_conflicts_distinct_from_profile_failures() {
+        let token = "broker-test-token";
+        let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: REQUEST_ID,
+            kind: "feature_failed".to_string(),
+            message: "syncthing_vault_sync_root_overlap".to_string(),
+        })
+        .sign(token);
+        let mut notifications = 0;
+        assert!(matches!(
+            process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
+            Ok(BrokerReply::Finished(Err(
+                wincmd_shared::vault_access::VaultMountReason::SyncthingRootConflict
             )))
         ));
     }

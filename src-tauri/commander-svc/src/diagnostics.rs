@@ -712,6 +712,12 @@ fn reason_fields(
             true,
             "retry",
         ),
+        Some(VaultMountReason::SyncthingRootConflict) => (
+            "VLT.SYNCTHING.ROOT_CONFLICT",
+            DiagnosticSeverity::Error,
+            false,
+            "choose_non_overlapping_root",
+        ),
         Some(VaultMountReason::ProNotInstalled) => (
             "VLT.PRO.NOT_INSTALLED",
             DiagnosticSeverity::Error,
