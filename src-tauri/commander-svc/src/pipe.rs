@@ -2998,7 +2998,7 @@ fn handle_personal_vault_syncthing_enroll(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
-    vault_mount
+    let gui_url = vault_mount
         .enroll_personal_syncthing(
             vault_access,
             request_id,
@@ -3014,7 +3014,7 @@ fn handle_personal_vault_syncthing_enroll(
                 "personal sync enrollment could not be confirmed",
             )
         })?;
-    Ok(serde_json::json!({ "enabled": true }))
+    Ok(serde_json::json!({ "enabled": true, "gui_url": gui_url }))
 }
 
 fn handle_vault_list_authorized(

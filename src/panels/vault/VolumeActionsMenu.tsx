@@ -1,4 +1,5 @@
 import { Button, Tooltip } from "@/components/ui/bp";
+import { open } from "@tauri-apps/plugin-shell";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
@@ -103,8 +104,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     setEnrollingSync(true);
     setFailure("");
     try {
-      await enablePersonalVaultSync(internalDrive, relativePath);
-      showSuccess(`Syncthing will sync ${driveLabel}\\${relativePath} while this personal Vault is mounted.`);
+      const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
+      void open(enrollment.gui_url);
+      showSuccess(`Syncthing setup opened at ${enrollment.gui_url}. ${driveLabel}\\${relativePath} will sync while this personal Vault is mounted.`);
     } catch (error) {
       const message = "Personal Vault sync could not be enabled. Keep the Vault mounted and check the Syncthing installation.";
       setFailure(message);

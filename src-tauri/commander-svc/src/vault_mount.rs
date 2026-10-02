@@ -180,7 +180,7 @@ fn syncthing_enroll_call(
     mount: &ActiveMount,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     relative_path: &str,
-) -> Result<(), VaultMountReason> {
+) -> Result<String, VaultMountReason> {
     let mut hasher = Sha256::new();
     hasher.update(entry_id.as_bytes());
     let folder_id = format!(
@@ -214,8 +214,14 @@ fn syncthing_enroll_call(
             },
         ))
     })?;
-    (value.get("managed").and_then(serde_json::Value::as_bool) == Some(true))
-        .then_some(())
+    if value.get("managed").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(VaultMountReason::BrokerRejected);
+    }
+    value
+        .get("gui_url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| valid_syncthing_gui_url(url))
+        .map(str::to_owned)
         .ok_or(VaultMountReason::BrokerRejected)
 }
 
@@ -334,6 +340,13 @@ fn valid_relative_sync_path(value: &str) -> bool {
         && path
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn valid_syncthing_gui_url(value: &str) -> bool {
+    value
+        .strip_prefix("http://127.0.0.1:")
+        .and_then(|port| port.parse::<u16>().ok())
+        .is_some_and(|port| port != 0)
 }
 
 /// Private input to the authenticated broker.  It is deliberately not serde
@@ -1681,7 +1694,7 @@ impl VaultMountBroker {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         caller_session: u32,
         caller_sid: &str,
-    ) -> Result<(), VaultMountReason> {
+    ) -> Result<String, VaultMountReason> {
         if !valid_relative_sync_path(relative_path) {
             return Err(VaultMountReason::InvalidRequest);
         }
@@ -1704,7 +1717,13 @@ impl VaultMountBroker {
             {
                 return Err(VaultMountReason::NotAuthorized);
             }
-            syncthing_enroll_call(operation_id, &entry_id, &active, caller_token, relative_path)?;
+            let gui_url = syncthing_enroll_call(
+                operation_id,
+                &entry_id,
+                &active,
+                caller_token,
+                relative_path,
+            )?;
             let resumed = syncthing_lifecycle_call(
                 "vault.syncthing.resume",
                 operation_id,
@@ -1720,7 +1739,8 @@ impl VaultMountBroker {
             let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
             mounts.insert(entry_id, updated);
             self.persist_active(store, &mounts)
-                .map_err(|_| VaultMountReason::DismountFailed)
+                .map_err(|_| VaultMountReason::DismountFailed)?;
+            Ok(gui_url)
         })
     }
 
@@ -4138,6 +4158,15 @@ mod tests {
         assert!(same_mount_owner(&mount, 4, "S-1-5-21-owner"));
         assert!(!same_mount_owner(&mount, 5, "S-1-5-21-owner"));
         assert!(!same_mount_owner(&mount, 4, "S-1-5-21-other"));
+    }
+
+    #[test]
+    fn enrollment_exposes_only_a_loopback_syncthing_gui_url() {
+        assert!(valid_syncthing_gui_url("http://127.0.0.1:8385"));
+        assert!(!valid_syncthing_gui_url("https://127.0.0.1:8385"));
+        assert!(!valid_syncthing_gui_url("http://localhost:8385"));
+        assert!(!valid_syncthing_gui_url("http://192.168.1.10:8385"));
+        assert!(!valid_syncthing_gui_url("http://127.0.0.1:0"));
     }
 
     #[test]
