@@ -6,6 +6,7 @@ import { ThemeProvider } from "../context/ThemeContext";
 import ExternalNotificationBridge from "../components/ExternalNotificationBridge";
 import GlobalErrorBoundary from "../components/ErrorBoundary";
 import { AppConfirmProvider } from "../components/shared/AppConfirmDialog";
+import VaultSyncWarningDialog from "../components/shared/VaultSyncWarningDialog";
 import { UsbHidApprovalProvider } from "../context/UsbHidApprovalContext";
 import { initUniversalLogging } from "../lib/logger";
 import { reportStartupPhase } from "../hooks/startupTrace";
@@ -44,6 +45,7 @@ export function mountMainWindow(): void {
               <UsbHidApprovalProvider>
                 <ExternalNotificationBridge />
                 <App />
+                <VaultSyncWarningDialog />
               </UsbHidApprovalProvider>
             </AppConfirmProvider>
           </ThemeProvider>

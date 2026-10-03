@@ -104,7 +104,7 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain('scope: "machine"');
     expect(vaultSource).toContain("hardenAcl: true");
     expect(vaultSource).toContain('waitForMountReadback(verifyVaultDrive(result.data.drive), "vault_mount_readback_unconfirmed")');
-    expect(vaultSource).toContain("setMountedVolume(result.data)");
+    expect(vaultSource).toContain("setMountedVolume(result.data.syncWarning ? null : result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
     expect(sidebarSource).toContain('scope: "machine"');
     expect(sidebarSource).toContain('readOnly: false');

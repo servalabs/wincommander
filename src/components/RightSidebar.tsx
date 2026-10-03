@@ -18,6 +18,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { showSuccess, showError } from "../utils/toast";
 import { confirmedBulkDismountMessage, confirmedMountObservationError, selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { notifyPersonalMountSyncWarning, notifyPolicyMountSyncWarning } from "@/lib/vaultSyncWarning";
 import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
 import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
@@ -282,6 +283,10 @@ export default function RightSidebar() {
                 showSuccess(vaultMountResultLabel(result), undefined, { kind: 'notification' });
                 setFleetVaultPassword('');
                 setQmFeedback(vaultMountResultLabel(result), 'success');
+                if (result.sync_warning) {
+                    setQmOpen(false);
+                    window.setTimeout(() => notifyPolicyMountSyncWarning(result), 350);
+                }
             } else {
                 setQmFeedback(vaultMountResultLabel(result));
                 showError(vaultMountResultLabel(result), undefined, { kind: 'notification' });
@@ -421,6 +426,10 @@ export default function RightSidebar() {
                 setQmFeedback(`Volume mounted as ${r.data.drive}.`, 'success');
                 setQmMountedDrive(r.data.drive);
                 setQmPassword('');
+                if (r.data.syncWarning) {
+                    setQmOpen(false);
+                    window.setTimeout(() => notifyPersonalMountSyncWarning(r), 350);
+                }
             } else {
                 // Operational mount result → Notifications tab, not System Alerts.
                 const message = vaultOperationError(r?.error || (r?.success

@@ -777,6 +777,13 @@ impl VaultMountReason {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultSyncWarning {
+    Stopped,
+    Unavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultMountResult {
@@ -785,6 +792,8 @@ pub struct VaultMountResult {
     pub presentation: Option<VaultPresentation>,
     pub drive_letter: Option<String>,
     pub reason: Option<VaultMountReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_warning: Option<VaultSyncWarning>,
 }
 
 /// Ordinary-user projection for “My vaults”.  It is deliberately not a
@@ -935,6 +944,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mounted_result_can_report_sync_warning_without_changing_mount_outcome() {
+        let mut value = serde_json::json!({
+            "entry_id": "personal", "state": "mounted", "presentation": "per-user",
+            "drive_letter": "J:", "reason": null,
+        });
+        let legacy: VaultMountResult = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(legacy.sync_warning, None);
+        for warning in ["stopped", "unavailable"] {
+            value["sync_warning"] = serde_json::json!(warning);
+            let result: VaultMountResult = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(result.state, VaultMountState::Mounted);
+            assert_eq!(result.reason, None);
+            assert_eq!(serde_json::to_value(result).unwrap()["sync_warning"], warning);
+        }
+        value["sync_warning"] = serde_json::json!("raw private error");
+        assert!(serde_json::from_value::<VaultMountResult>(value).is_err());
+    }
+
+    #[test]
     fn access_selection_round_trips_without_collapsing_shared_modes() {
         let mut wire = serde_json::json!({
             "id": "example", "label": "Example", "container_path": "D:\\example.ec",
@@ -1049,6 +1077,7 @@ mod tests {
             presentation: None,
             drive_letter: None,
             reason: Some(VaultMountReason::NotAuthorized),
+            sync_warning: None,
         };
         assert!(!serde_json::to_string(&result)
             .unwrap()
@@ -1217,6 +1246,7 @@ mod tests {
             presentation: Some(VaultPresentation::Machine),
             drive_letter: None,
             reason: Some(VaultMountReason::EngineDriveLetterUnavailable),
+            sync_warning: None,
         };
         assert_eq!(
             serde_json::to_value(result).unwrap(),

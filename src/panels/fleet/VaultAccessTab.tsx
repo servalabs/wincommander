@@ -8,6 +8,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "@/hooks/useVaultAccess";
 import useBackend from "@/hooks/useBackend";
 import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { notifyPolicyMountSyncWarning } from "@/lib/vaultSyncWarning";
 import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
 import { vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 import { showError, showSuccess } from "@/utils/toast";
@@ -979,6 +980,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         if (!vaultMountResultConfirmed(result, confirmedEntries)) throw new Error("vault_mount_readback_unconfirmed");
         recordMountResult(result);
         setMountTarget(null);
+        window.setTimeout(() => notifyPolicyMountSyncWarning(result), 350);
         setOperationFeedback(vaultMountResultLabel(result), "success");
         recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
         showSuccess(vaultMountResultLabel(result), undefined, { operationId });

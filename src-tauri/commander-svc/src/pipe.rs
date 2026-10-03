@@ -2334,7 +2334,7 @@ async fn handle_personal_vault_mount(
     // Windows access and the engine's password/PIM/keyfile verification are
     // the authority checks; the short-lived record only pins this mount to the
     // authenticated session and identity.
-    let (drive_letter, internal_drive, acl_attested) = vault_mount
+    let (drive_letter, internal_drive, acl_attested, sync_warning) = vault_mount
         .with_exclusive_operation(|| {
             // Recheck under the policy/mount lock: a policy may have been saved
             // while the driver check was running.
@@ -2384,6 +2384,7 @@ async fn handle_personal_vault_mount(
         "internalDrive": internal_drive,
         "scope": record.scope,
         "aclAttested": acl_attested,
+        "syncWarning": sync_warning,
     }))
 }
 
@@ -2722,6 +2723,7 @@ async fn handle_vault_mount(
             presentation: None,
             drive_letter: None,
             reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
+            sync_warning: None,
         }
     };
     crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "mount", &result, started);
@@ -2870,6 +2872,7 @@ fn handle_vault_unmount(
             presentation: None,
             drive_letter: None,
             reason: Some(wincmd_shared::vault_access::VaultMountReason::MountStateUnknown),
+            sync_warning: None,
         }
     };
     crate::diagnostics::record_vault_terminal(

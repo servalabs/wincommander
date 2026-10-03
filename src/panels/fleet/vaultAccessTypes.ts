@@ -153,6 +153,7 @@ export interface VaultMountEntryResult {
   presentation: VaultPresentation | null;
   drive_letter: string | null;
   reason: VaultMountReason | null;
+  sync_warning?: import("@/lib/vaultSyncWarning").VaultSyncWarning | null;
 }
 
 /** Caller-filtered mount view. It intentionally omits policy and filesystem data. */

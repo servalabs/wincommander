@@ -114,7 +114,10 @@ operational risk, or proprietary enforcement logic.
   containers retain their separate selected-user and group permission checks.
 - Personal Vault folder sync through Syncthing. Explicit setup installs a
   verified per-user engine if needed, retains existing sync identities, and
-  follows the same container when its drive letter changes. Shared Vaults are
+  follows the same container when its drive letter changes. After mounting,
+  stopped folders get an automatic rescan; a remaining sync problem opens a
+  dialog without dismounting the container. Manually paused folders stay paused.
+  Shared Vaults are
   excluded; connecting another device still requires Syncthing device pairing.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
