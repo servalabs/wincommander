@@ -132,11 +132,18 @@ launches still request focus and may request administrator consent.
 Native startup runs the integrity check once on a background thread. Autostart
 IPC operations use blocking workers rather than the window event thread; the
 renderer does not launch a duplicate startup repair.
+Both manual setup and in-app updates preserve an explicit startup OFF choice.
+Upgrade migration removes owned legacy Run/RunOnce entries and Startup shortcuts
+using each Windows account's profile, including expandable registry values and
+both historical per-user install directories. Loaded profiles are repaired during
+setup; inaccessible profiles defer their registry cleanup to their next launch.
+The canonical launcher reconciler owns startup task migration so a later general
+task migration cannot recreate a retired launcher.
 
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |
-| `SL-AS` | Sign-in startup router | One all-user logon trigger; runs in the signed-in session |
-| `SL-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
+| `SM-AS` | Sign-in startup router | One all-user logon trigger; runs in the signed-in session |
+| `SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
 | `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
 | `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
 | `WinCommanderShellPriorityLogon` | Apply configured desktop-shell priority | Machine logon helper |
@@ -144,6 +151,16 @@ renderer does not launch a duplicate startup repair.
 Task migration checks the executable/action identity before changing or removing
 an existing task. Similar names alone do not prove that a task belongs to this
 installation. Task Scheduler names are not a security or concealment boundary.
+On Windows, a failed installer launch leaves the desktop's resources and tray
+available for retry. The updater exits only after Windows accepts the installer
+launch; this does not by itself establish that installation completed.
+WebView2 renderer exit invalidates the main window's readiness before any later
+tray reveal. An unlocked document gets one generation-checked reload within the
+existing recovery budget, preserving whether it was open or hidden. Browser
+process failure, a locked session, exhausted recovery, or failed recovery keeps
+the empty window hidden and provides native restart guidance when opened. These
+paths are exercised by `tools/test-renderer-recovery.ps1` using an isolated
+WebView profile and actual rendered-pixel checks.
 
 The Pro updater holds a machine-wide maintenance reservation while replacing
 the shared component. Desktop and service brokers pause new calls, active

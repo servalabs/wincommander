@@ -32,6 +32,7 @@ ${Using:StrFunc} UnStrStr
   ; `sc query` contains SCM's STATE, CHECKPOINT and WAIT_HINT on separate
   ; lines. Retain that exact output for post-failure diagnosis.
   FileOpen $R9 "${WC_LIFECYCLE_DIAGNOSTIC_LOG}" a
+  FileSeek $R9 0 END
   FileWrite $R9 "stage=${stage} exit=${exit} detail=${detail}$\r$\n"
   FileClose $R9
 !macroend
@@ -80,11 +81,9 @@ ${Using:StrFunc} UnStrStr
 !macro WC_CONFIGURE_ELEVATED_LAUNCHERS
   InitPluginsDir
   File /oname=$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1 "${WC_CONFIGURE_ELEVATED_LAUNCHERS}"
-  ${If} $UpdateMode = 1
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
-  ${Else}
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe"'
-  ${EndIf}
+  ; A manually opened setup is also an upgrade when older routes exist.
+  ; Preserve legacy OFF in both modes; a fresh machine still defaults to ON.
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "elevated-launchers-configure" "$0" "$1"

@@ -70,6 +70,7 @@ function Get-OwnedExecutablePaths {
             $profilePath = [Environment]::ExpandEnvironmentVariables([string]$profile.ProfileImagePath)
             if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
             $paths += [IO.Path]::GetFullPath((Join-Path $profilePath 'AppData\Local\WinCommander\wincommander-free.exe'))
+            $paths += [IO.Path]::GetFullPath((Join-Path $profilePath 'AppData\Local\Programs\WinCommander\wincommander-free.exe'))
         }
     } catch {
         throw "Could not enumerate legacy WinCommander executable locations: $($_.Exception.Message)"

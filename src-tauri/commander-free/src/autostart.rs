@@ -191,7 +191,7 @@ function Get-RegistryValueOrNull {
   try {
     # GetValue returns $null for a missing value without converting that normal
     # first-install state into a terminating PowerShell error.
-    return $key.GetValue($Name, $null)
+    return $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
   } catch {
     throw "Cannot read registry value '$Name' from '$Path': $($_.Exception.Message)"
   }
@@ -287,10 +287,25 @@ function Test-CurrentExecutablePath {
 }
 
 function Test-OwnedExecutableCommand {
-  param([AllowNull()][string]$Command)
+  param([AllowNull()][string]$Command, [AllowNull()][string]$ProfilePath)
   if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+  $commandPaths = @($ownedExePaths)
+  if (-not [string]::IsNullOrWhiteSpace($ProfilePath)) {
+    $local = Join-Path $ProfilePath 'AppData\Local'
+    $variables = @{ USERPROFILE = $ProfilePath; LOCALAPPDATA = $local; APPDATA = (Join-Path $ProfilePath 'AppData\Roaming') }
+    foreach ($name in $variables.Keys) {
+      $replacement = [string]$variables[$name]
+      $Command = [regex]::Replace($Command, ('(?i)%' + $name + '%'), [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement })
+    }
+    foreach ($relative in @($legacyDataDirName, (Join-Path 'Programs' $legacyDataDirName))) {
+      $commandPaths += [IO.Path]::GetFullPath((Join-Path (Join-Path $local $relative) $exeFileName))
+    }
+  } elseif ($Command -match '(?i)%(USERPROFILE|LOCALAPPDATA|APPDATA)%') {
+    # An unknown hive owner must never inherit the installing admin's paths.
+    return $false
+  }
   $expanded = [Environment]::ExpandEnvironmentVariables($Command).TrimStart()
-  foreach ($ownedPath in $ownedExePaths) {
+  foreach ($ownedPath in $commandPaths) {
     foreach ($prefix in @(('"' + $ownedPath + '"'), $ownedPath)) {
       if ($expanded.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
         $tail = $expanded.Substring($prefix.Length)
@@ -395,6 +410,17 @@ function Get-UserRunPaths {
   )
 }
 
+function Get-RunOwnerProfile {
+  param([Parameter(Mandatory)][string]$Path)
+  if ($Path -match '(?i)^(Registry::HKEY_CURRENT_USER|HKCU:)\\') { return $env:USERPROFILE }
+  if ($Path -match '(?i)^Registry::HKEY_USERS\\+(S-1-5-21-\d+-\d+-\d+-\d+)\\') {
+    $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $Matches[1]
+    $profile = Get-RegistryValueOrNull -Path $profileKey -Name 'ProfileImagePath'
+    if ($null -ne $profile) { return [Environment]::ExpandEnvironmentVariables([string]$profile) }
+  }
+  return $null
+}
+
 function Get-RunPaths {
   $paths = @(Get-UserRunPaths -RegistryRoot 'Registry::HKEY_CURRENT_USER')
   $paths += @(
@@ -411,7 +437,7 @@ function Get-RunPaths {
       throw "Cannot enumerate loaded user registry hives: $($_.Exception.Message)"
     }
     foreach ($hive in $loadedHives) {
-      if ($hive.PSChildName -match '^S-1-5-21-\\d+-\\d+-\\d+-\\d+$') {
+      if ($hive.PSChildName -match '^S-1-5-21-\d+-\d+-\d+-\d+$') {
         $paths += @(Get-UserRunPaths -RegistryRoot "Registry::HKEY_USERS\\$($hive.PSChildName)")
       }
     }
@@ -425,9 +451,10 @@ function Get-OwnedRunEntries {
   foreach ($path in @($Paths)) {
     $key = Get-RegistryKeyOrNull -Path $path
     if ($null -eq $key) { continue }
+    $profile = Get-RunOwnerProfile -Path $path
     foreach ($name in $runValueNames) {
       $value = Get-RegistryValueOrNull -Path $path -Name $name
-      if ($null -ne $value -and (Test-OwnedExecutableCommand -Command ([string]$value))) {
+      if ($null -ne $value -and (Test-OwnedExecutableCommand -Command ([string]$value) -ProfilePath $profile)) {
         [PSCustomObject]@{ Path = $path; Name = $name }
       }
     }
@@ -1024,7 +1051,7 @@ mod tests {
     #[test]
     fn cleanup_handles_missing_registry_values_without_suppressing_real_failures() {
         let script = build_autostart_script(false, AutostartOperation::Disable).unwrap();
-        assert!(script.contains("$key.GetValue($Name, $null)"));
+        assert!(script.contains("$key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)"));
         assert!(!script.contains("Get-ItemPropertyValue"));
         assert!(!script.contains("SilentlyContinue"));
         assert!(script.contains("CmdletizationQuery_NotFound"));

@@ -21,6 +21,7 @@ pub(crate) struct StartupWindow {
     warned: AtomicBool,
     recovery_scheduled: AtomicBool,
     recovery_started: AtomicBool,
+    terminal_failure: AtomicBool,
     document_generation: Mutex<u32>,
 }
 
@@ -32,6 +33,7 @@ impl StartupWindow {
             warned: AtomicBool::new(false),
             recovery_scheduled: AtomicBool::new(false),
             recovery_started: AtomicBool::new(false),
+            terminal_failure: AtomicBool::new(false),
             document_generation: Mutex::new(0),
         }
     }
@@ -77,14 +79,32 @@ impl StartupWindow {
         let Ok(current) = self.document_generation.lock() else {
             return false;
         };
-        if *current != generation {
+        if *current != generation || self.terminal_failure.load(Ordering::Acquire) {
             return false;
         }
         self.ready.store(true, Ordering::Release);
+        self.warned.store(false, Ordering::Release);
         true
     }
 
-    fn replace_document(
+    pub(crate) fn invalidate_renderer(&self, reveal: bool, can_reload: bool) -> bool {
+        let Ok(mut generation) = self.document_generation.lock() else {
+            return false;
+        };
+        *generation += 1;
+        self.ready.store(false, Ordering::Release);
+        if reveal {
+            self.arm();
+        }
+        self.recovery_scheduled.store(true, Ordering::Release);
+        let retry = can_reload
+            && !self.terminal_failure.load(Ordering::Acquire)
+            && !self.recovery_started.swap(true, Ordering::AcqRel);
+        self.terminal_failure.store(!retry, Ordering::Release);
+        retry
+    }
+
+    pub(crate) fn replace_document(
         &self,
         navigate: impl FnOnce(u32) -> Result<(), String>,
     ) -> Result<(), String> {
@@ -92,7 +112,7 @@ impl StartupWindow {
             .document_generation
             .lock()
             .map_err(|error| error.to_string())?;
-        if self.is_ready() {
+        if self.is_ready() || self.terminal_failure.load(Ordering::Acquire) {
             return Ok(());
         }
         let next_generation = *generation + 1;
@@ -101,6 +121,27 @@ impl StartupWindow {
         *generation = next_generation;
         Ok(())
     }
+
+    pub(crate) fn fail_recovery_if_unready(&self) {
+        let Ok(_generation) = self.document_generation.lock() else {
+            return;
+        };
+        if !self.is_ready() {
+            self.terminal_failure.store(true, Ordering::Release);
+        }
+    }
+}
+
+pub(crate) fn defer_failed_renderer(window: &tauri::WebviewWindow) -> bool {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return false;
+    };
+    if !state.terminal_failure.load(Ordering::Acquire) {
+        return false;
+    }
+    state.arm();
+    warn_if_unready(window);
+    true
 }
 
 /// Queue an explicit open request while keeping an unpainted window hidden.
@@ -110,6 +151,10 @@ pub(crate) fn defer_reveal_until_ready(window: &tauri::WebviewWindow) -> bool {
     };
     if !state.defer_reveal() {
         return false;
+    }
+    if state.terminal_failure.load(Ordering::Acquire) {
+        warn_if_unready(window);
+        return true;
     }
     if !state.recovery_scheduled.swap(true, Ordering::AcqRel) {
         let target = window.clone();

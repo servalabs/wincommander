@@ -22,9 +22,6 @@ function Test-ExpectedTaskAction($Task, [string]$OldName) {
     if ($null -eq $action) { return $false }
     $execute = [IO.Path]::GetFileName([string]$action.Execute)
     $arguments = [string]$action.Arguments
-    if ($OldName -in @('SL-AS', 'SL-EL')) {
-        return $execute -like 'wincommander*.exe' -and $arguments -like '--*'
-    }
     return $execute -in @('powershell.exe', 'pwsh.exe', 'VeraCrypt.exe') -and
         ($arguments -match '(?i)WinCommander|VeraCrypt|ProgramData')
 }
@@ -53,7 +50,8 @@ function Move-OwnedTask([string]$OldName, [string]$NewName) {
 try {
     Ensure-TaskFolder
     $map = [ordered]@{
-        'SL-AS' = 'SM-AS'; 'SL-EL' = 'SM-EL';
+        # Startup routes belong exclusively to configure-elevated-launchers.
+        # Copying their old XML here could restore obsolete settings or OFF.
         'WinCommander Session Guard' = 'SM-SG';
         'WinCommander_AI_UpdateCleanup' = 'SM-UC';
         'WinCommanderShellPriorityLogon' = 'SM-SP';

@@ -144,8 +144,16 @@ fn updates_disabled() -> bool {
         .unwrap_or(false)
 }
 
-fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    app.updater_builder()
+fn preserve_app_until_installer_launch(
+    builder: tauri_plugin_updater::UpdaterBuilder,
+) -> tauri_plugin_updater::UpdaterBuilder {
+    // The plugin's default cleanup runs before ShellExecute can fail or be cancelled.
+    // Its successful Windows launch exits the process itself; errors must leave the UI usable.
+    builder.on_before_exit(|| {})
+}
+
+pub(crate) fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    preserve_app_until_installer_launch(app.updater_builder())
         .endpoints(crate::cache_busted_endpoints(app)?)
         .map_err(|e| format!("Updater endpoints failed: {}", e))?
         .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
@@ -514,3 +522,7 @@ mod tests {
         assert!(stale.is_none());
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "updater_launch_tests.rs"]
+mod launch_tests;

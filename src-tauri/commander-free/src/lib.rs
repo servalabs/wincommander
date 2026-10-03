@@ -122,6 +122,8 @@ mod startup_elevation;
 mod startup_maintenance;
 mod startup_trace;
 mod startup_window;
+#[cfg(windows)]
+mod startup_renderer;
 mod storage_probe;
 mod svc_client;
 mod trust_store_audit;
@@ -361,6 +363,9 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         log_message_src("warn", "core", "[Reveal] main window not found");
         return;
     };
+    if startup_window::defer_failed_renderer(&window) {
+        return;
+    }
     // Keyed on the runtime lock flag, not "PIN configured": a locked calculator
     // re-enters calc mode; an authenticated session restores the full window.
     let calculator_mode = calc_mode_active(app);
@@ -883,7 +888,6 @@ async fn get_public_ip_trace() -> Result<PublicIpTrace, String> {
 
 #[tauri::command]
 async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInfo, String> {
-    use tauri_plugin_updater::UpdaterExt;
     // Hard 20 s ceiling so a stalled DNS / TLS / HTTP layer can never leave
     // the UI stuck on "Checking for updates…" forever — the resolver itself
     // already has its own short timeouts, this is the seatbelt of last resort.
@@ -892,13 +896,7 @@ async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInf
     // intermediate proxy between us and the manifest host can't serve
     // a stale latest.json. The frontend retry in 3ef0cbe flushed our own
     // in-process cache; this closes the remaining HTTP-layer hole.
-    let updater = app
-        .updater_builder()
-        .endpoints(cache_busted_endpoints(&app)?)
-        .map_err(|e| format!("Updater endpoints failed: {}", e))?
-        .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
-        .build()
-        .map_err(|e| format!("Updater build failed: {}", e))?;
+    let updater = updater::build_updater(&app)?;
     let check_fut = updater.check();
     let result = tokio::time::timeout(std::time::Duration::from_secs(20), check_fut)
         .await
@@ -926,7 +924,6 @@ async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInf
 async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
     updater::require_update_administrator()?;
     use std::sync::atomic::Ordering;
-    use tauri_plugin_updater::UpdaterExt;
 
     // Acquire the shared install lock (same AtomicBool used by
     // app_install_staged_update) so a double-click or race between the two
@@ -941,13 +938,7 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let result: Result<(String, String, Option<String>), String> = async {
-        let updater = app
-            .updater_builder()
-            .endpoints(cache_busted_endpoints(&app)?)
-            .map_err(|e| format!("Updater endpoints failed: {}", e))?
-            .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
-            .build()
-            .map_err(|e| format!("Updater build failed: {}", e))?;
+        let updater = updater::build_updater(&app)?;
         let update = tokio::time::timeout(crate::updater::CHECK_TIMEOUT, updater.check())
             .await
             .map_err(|_| "Update re-check timed out".to_string())?
@@ -1803,6 +1794,8 @@ pub fn run() {
 
             // Get the main window and set it up
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(windows)]
+                startup_renderer::install(&window)?;
                 // Entitlement-FREE startup title. Computing the Pro label here called
                 // has_paid_entitlement() -> current_device_hash() -> 2x PowerShell on the
                 // main thread BEFORE the window could appear (the 45-70s post-login hang).

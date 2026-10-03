@@ -2,6 +2,102 @@
 use super::*;
 
 #[test]
+fn renderer_failure_invalidates_readiness_and_rejects_late_old_document_ack() {
+    for reveal in [false, true] {
+        let state = StartupWindow::new();
+        assert!(state.accept_ready(0));
+        assert!(state.invalidate_renderer(reveal, true));
+        assert!(!state.is_ready());
+        assert!(!state.accept_ready(0));
+        state
+            .replace_document(|generation| {
+                assert_eq!(generation, 2);
+                Ok(())
+            })
+            .unwrap();
+        assert!(state.accept_ready(2));
+        assert_eq!(state.take_reveal(), reveal);
+        assert!(!state.invalidate_renderer(reveal, true));
+        assert!(!state.accept_ready(3));
+    }
+}
+
+#[test]
+fn browser_failure_is_terminal_and_background_failure_never_arms_a_reveal() {
+    let state = StartupWindow::new();
+    assert!(state.accept_ready(0));
+    assert!(!state.invalidate_renderer(false, false));
+    assert!(!state.take_reveal());
+    assert!(!state.accept_ready(1));
+    state
+        .replace_document(|_| panic!("browser failure must never navigate"))
+        .unwrap();
+    assert!(state.defer_reveal());
+    assert!(state.needs_warning());
+    assert!(!state.needs_warning());
+}
+
+#[test]
+fn failed_or_timed_out_hidden_recovery_warns_on_the_next_explicit_open() {
+    for navigation_fails in [false, true] {
+        let state = StartupWindow::new();
+        assert!(state.accept_ready(0));
+        assert!(state.invalidate_renderer(false, true));
+        let result = state.replace_document(|_| {
+            if navigation_fails {
+                Err("navigation rejected".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result.is_err(), navigation_fails);
+        state.fail_recovery_if_unready();
+        assert!(!state.needs_warning(), "background errors stay silent");
+        assert!(state.defer_reveal());
+        assert!(state.terminal_failure.load(Ordering::Acquire));
+        assert!(
+            state.needs_warning(),
+            "next explicit open receives a native explanation"
+        );
+        assert!(!state.accept_ready(if navigation_fails { 1 } else { 2 }));
+    }
+}
+
+#[test]
+fn recovery_deadline_cannot_invalidate_a_document_that_became_ready() {
+    let state = StartupWindow::new();
+    assert!(state.invalidate_renderer(false, true));
+    state.replace_document(|_| Ok(())).unwrap();
+    assert!(state.accept_ready(2));
+    state.fail_recovery_if_unready();
+    assert!(!state.terminal_failure.load(Ordering::Acquire));
+    assert!(!state.defer_reveal());
+}
+
+#[test]
+fn visible_locked_renderer_failure_can_explain_failure_without_accepting_content() {
+    let state = StartupWindow::new();
+    assert!(state.accept_ready(0));
+    assert!(!state.invalidate_renderer(true, false));
+    assert!(state.needs_warning());
+    assert!(!state.accept_ready(1));
+    state
+        .replace_document(|_| panic!("locked renderer must not navigate"))
+        .unwrap();
+}
+
+#[test]
+fn a_resolved_startup_warning_does_not_silence_a_later_renderer_failure() {
+    let state = StartupWindow::new();
+    state.arm();
+    assert!(state.needs_warning());
+    assert!(state.accept_ready(0));
+    assert!(state.take_reveal());
+    assert!(!state.invalidate_renderer(true, false));
+    assert!(state.needs_warning());
+}
+
+#[test]
 fn tray_click_restores_hidden_or_minimized_windows_and_only_hides_an_open_window() {
     for (visible, minimized, should_hide) in [
         (false, false, false),
