@@ -11,6 +11,8 @@ ${Using:StrFunc} UnStrStr
 !define WC_SERVICE_NAME "WinCommanderSvc"
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
+!define WC_PRO_PAYLOAD "$INSTDIR\resources\wincommander-pro.exe"
+!define WC_PRO_EXE "$R5\WinCommander\bin\wincommander-pro.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
@@ -283,9 +285,20 @@ ${Using:StrFunc} UnStrStr
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-payload" "missing" "${WC_SERVICE_PAYLOAD}"
     Abort "The WinCommander service payload is missing; the installation was not completed."
   wc_service_payload_ok:
-  ; Stop the existing service before replacing its owned executable. The
-  ; separately entitled Pro helper is installed on demand and is never bundled
-  ; into, replaced by, or required for a Free installer update.
+  ; This branch's test installer carries the matching Pro sidecar. Free pins
+  ; its hash at build time, while Pro still enforces its normal licence before
+  ; paid capabilities can be used.
+  IfFileExists "${WC_PRO_PAYLOAD}" wc_pro_payload_ok 0
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "pro-payload" "missing" "${WC_PRO_PAYLOAD}"
+    Abort "The bundled WinCommander Pro payload is missing; the installation was not completed."
+  wc_pro_payload_ok:
+  CreateDirectory "$R5\WinCommander\bin"
+  System::Call 'kernel32::CopyFileW(w "${WC_PRO_PAYLOAD}", w "${WC_PRO_EXE}", i 0) i .R8'
+  ${If} $R8 == 0
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "pro-copy" "failed" "${WC_PRO_EXE}"
+    Abort "WinCommander could not install its bundled Pro payload."
+  ${EndIf}
+  ; Stop the existing service before replacing its owned executable.
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "install" ""
   ; Keep the service beside the protected app executable. The service's peer
   ; authorization derives this exact install root, so do not run it from a

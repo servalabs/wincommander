@@ -6,6 +6,7 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+const proBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-pro.exe");
 const contextDeleteIconPath = resolve(
   root,
   "src-tauri",
@@ -17,6 +18,7 @@ const contextDeleteIconPath = resolve(
 // files are handled by a narrow helper rather than the long-lived desktop app.
 const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe");
 const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe");
+const stagedProPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-pro.exe");
 const stagedContextDeleteIconPath = resolve(
   root,
   "src-tauri",
@@ -64,15 +66,18 @@ const config = JSON.parse(readFileSync(configPath, "utf8")) as {
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
 const serviceResource = "resources/wincommander-svc.exe";
+const proResource = "resources/wincommander-pro.exe";
 config.bundle.resources = [
   ...config.bundle.resources.filter(
     resource => resource !== contextShredResource
       && resource !== contextDeleteIconResource
-      && resource !== serviceResource,
+      && resource !== serviceResource
+      && resource !== proResource,
   ),
   contextShredResource,
   contextDeleteIconResource,
   serviceResource,
+  proResource,
 ];
 // Keep one signed NSIS artifact for the updater. The machine-wide installer
 // places the immutable application binary in Program Files, while each person
@@ -82,6 +87,7 @@ config.bundle.targets = ["nsis"];
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 copyFileSync(serviceBuildPath, stagedServicePath);
+copyFileSync(proBuildPath, stagedProPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "--package", "@tauri-apps/cli@2.12.1", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
@@ -90,4 +96,5 @@ try {
   rmSync(stagedContextShredPath, { force: true });
   rmSync(stagedContextDeleteIconPath, { force: true });
   rmSync(stagedServicePath, { force: true });
+  rmSync(stagedProPath, { force: true });
 }
