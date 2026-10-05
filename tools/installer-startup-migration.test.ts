@@ -84,12 +84,17 @@ test.skipIf(process.platform !== "win32" || !existsSync(nsis) || process.arch !=
       const executed = spawnSync(executable, [], { encoding: "utf8", windowsHide: true });
       expect(executed.status).toBe(0);
       const result = JSON.parse(readFileSync(resultPath, "utf8").replace(/^\uFEFF/, ""));
-      expect(result).toEqual({ bits: fixed ? 64 : 32, removed: fixed ? 2 : 1 });
+      expect(result).toEqual({ bits: fixed ? 64 : 32, removed: fixed ? 4 : 2 });
       const views = JSON.parse(fixtureAction("Inspect"));
       for (const view of views) {
         expect(view.foreign).toBe('"C:\\Foreign\\other.exe" --minimized');
-        if (!fixed && view.view === "Registry64") expect(view.owned).toContain("wincommander-free.exe");
-        else expect(view.owned).toBeNull();
+        if (!fixed && view.view === "Registry64") {
+          expect(view.current).toContain("wincommander-free.exe");
+          expect(view.legacy).toContain("wincommander-free.exe");
+        } else {
+          expect(view.current).toBeNull();
+          expect(view.legacy).toBeNull();
+        }
       }
     }
     const cleanupCalls = hooks.split(/\r?\n/).filter(line => line.includes("nsExec::ExecToStack") && /-File .*wincommander-(configure-elevated-launchers|migrate-legacy-user-launches)\.ps1/.test(line));

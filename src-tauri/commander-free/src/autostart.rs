@@ -85,6 +85,14 @@ fn run_value_names_ps() -> String {
         crate::paths::app_display_name().to_string(),
         crate::paths::app_display_name_with_edition(false),
     ];
+    // Concealment historically renamed Run values rather than disabling them.
+    // Windows ignores the value name and still executes these aliases, so they
+    // remain startup routes and must participate in status/reconciliation.
+    let canonical = names.clone();
+    for name in canonical {
+        names.push(format!("{}{}", name, crate::paths::hidden_marker_suffix()));
+        names.push(format!("{}__WC_Hidden", name));
+    }
     names.sort_unstable();
     names.dedup();
     names
@@ -1064,6 +1072,22 @@ mod tests {
         assert!(script.contains("CmdletizationQuery_NotFound"));
         assert!(script.contains("Remove-OwnedRunValues"));
         assert!(script.contains("Remove-OwnedStartupShortcuts"));
+    }
+
+    #[test]
+    fn hidden_run_aliases_are_bounded_and_reconciled() {
+        let names = run_value_names_ps();
+        for base in ["WinCommander", "WinCommander Free", "WinCommander Pro"] {
+            assert!(names.contains(&ps_literal(base)));
+            assert!(names.contains(&ps_literal(&format!(
+                "{}{}",
+                base,
+                crate::paths::hidden_marker_suffix()
+            ))));
+            assert!(names.contains(&ps_literal(&format!("{base}__WC_Hidden"))));
+        }
+        assert!(!names.contains("*__SystemCache"));
+        assert!(!names.contains("*__WC_Hidden"));
     }
 
     #[test]

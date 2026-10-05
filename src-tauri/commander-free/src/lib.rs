@@ -119,6 +119,7 @@ mod sidecar;
 mod sidecar_process_auth;
 mod startup_auth;
 mod startup_elevation;
+mod process_privileges;
 mod startup_maintenance;
 mod startup_trace;
 mod startup_window;
@@ -983,8 +984,8 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
 /// The frontend uses this to avoid auto-starting a machine-wide update from a
 /// normal token; that path must remain a visible UAC-approved action.
 #[tauri::command]
-fn is_current_process_elevated() -> bool {
-    startup_elevation::is_current_process_elevated()
+fn is_current_process_elevated() -> Result<bool, String> {
+    process_privileges::current_process_elevation()
 }
 
 /// Build the updater endpoint list with a `?t=<unix_ms>` cache-buster

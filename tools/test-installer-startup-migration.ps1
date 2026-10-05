@@ -26,7 +26,8 @@ if ($RegistryViewFixtureAction) {
         foreach ($definition in $config.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] }) {
             . ([scriptblock]::Create($definition.Extent.Text))
         }
-        $runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+        $canonicalRunValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+        $runValueNames = @($canonicalRunValueNames) + @($canonicalRunValueNames | ForEach-Object { "${_}__SystemCache"; "${_}__WC_Hidden" })
         $paths = @("Registry::HKEY_CURRENT_USER\$subkey", "Registry::HKEY_CURRENT_USER\$($subkey.Replace('Classes\', 'Classes\WOW6432Node\'))")
         $removed = Remove-OwnedRunValues $paths @($target)
         @{ bits = [IntPtr]::Size * 8; removed = $removed } | ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath
@@ -43,12 +44,13 @@ if ($RegistryViewFixtureAction) {
             }
             if ($RegistryViewFixtureAction -eq 'Seed') {
                 $key = $base.CreateSubKey($subkey)
-                $key.SetValue('WinCommander', ('"' + $target + '" --minimized'))
-                $key.SetValue('WinCommander Free', $foreign)
+                $key.SetValue('WinCommander__SystemCache', ('"' + $target + '" --minimized'))
+                $key.SetValue('WinCommander Pro__WC_Hidden', ('"' + $target + '" --autostart'))
+                $key.SetValue('WinCommander Free__SystemCache', $foreign)
             } else {
                 $key = $base.OpenSubKey($subkey)
                 if ($null -eq $key) { throw 'Fixture registry key disappeared.' }
-                $observations += @{ view = $view.ToString(); owned = $key.GetValue('WinCommander', $null); foreign = $key.GetValue('WinCommander Free', $null) }
+                $observations += @{ view = $view.ToString(); current = $key.GetValue('WinCommander__SystemCache', $null); legacy = $key.GetValue('WinCommander Pro__WC_Hidden', $null); foreign = $key.GetValue('WinCommander Free__SystemCache', $null) }
             }
         } finally {
             if ($null -ne $key) { $key.Dispose() }
@@ -63,7 +65,8 @@ $ast = Read-ScriptAst '../src-tauri/commander-free/nsis/migrate-legacy-user-laun
 foreach ($definition in $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] }) {
     . ([scriptblock]::Create($definition.Extent.Text))
 }
-$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+$canonicalRunValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+$runValueNames = @($canonicalRunValueNames) + @($canonicalRunValueNames | ForEach-Object { "${_}__SystemCache"; "${_}__WC_Hidden" })
 $root = "HKCU:\Software\ServaLabs\WinCommander\InstallerTests\$([guid]::NewGuid().ToString('N'))"
 $shared = 'C:\Program Files\WinCommander\wincommander-free.exe'
 New-Item -Path $root -Force | Out-Null
@@ -74,11 +77,13 @@ try {
         $owned = @($shared, (Join-Path $profilePath 'AppData\Local\WinCommander\wincommander-free.exe'), (Join-Path $profilePath 'AppData\Local\Programs\WinCommander\wincommander-free.exe'))
         foreach ($command in @('"%LOCALAPPDATA%\WinCommander\wincommander-free.exe" --autostart', '"%USERPROFILE%\AppData\Local\WinCommander\wincommander-free.exe" --minimized', '"%LOCALAPPDATA%\Programs\WinCommander\wincommander-free.exe" --autostart')) {
             foreach ($kind in @('String', 'ExpandString')) {
-                New-ItemProperty -Path $root -Name 'WinCommander Pro' -PropertyType $kind -Value $command -Force | Out-Null
+                New-ItemProperty -Path $root -Name 'WinCommander Pro__SystemCache' -PropertyType $kind -Value $command -Force | Out-Null
+                New-ItemProperty -Path $root -Name 'WinCommander__WC_Hidden' -PropertyType $kind -Value $command -Force | Out-Null
                 New-ItemProperty -Path $root -Name 'WinCommander Free' -PropertyType String -Value '"%LOCALAPPDATA%\Foreign\wincommander-free.exe" --autostart' -Force | Out-Null
                 $removed = Remove-OwnedRunValues @($root) $owned $profilePath
-                if ($removed -ne 1) { throw "Profile-relative $kind startup survived migration for $profilePath" }
-                if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander Pro')) { throw 'Owned Pro-labelled Run entry survived' }
+                if ($removed -ne 2) { throw "Profile-relative hidden $kind startup survived migration for $profilePath" }
+                if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander Pro__SystemCache')) { throw 'Owned current hidden Run entry survived' }
+                if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander__WC_Hidden')) { throw 'Owned legacy hidden Run entry survived' }
                 if ($null -eq (Get-OptionalRegistryValue $root 'WinCommander Free')) { throw 'Foreign Run entry was removed' }
                 if ((Remove-OwnedRunValues @($root) $owned $profilePath) -ne 0) { throw 'Repeated migration was not idempotent' }
             }

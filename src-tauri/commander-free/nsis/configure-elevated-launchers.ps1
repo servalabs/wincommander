@@ -27,7 +27,8 @@ $systemMaintenanceTaskFolderPath = '\System Maintenance'
 $legacyManualTaskName = 'WinCommander Elevated Launcher'
 $obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
 $genericAutostartTaskNames = @('SL-AS', 'SL-EL', 'WinCommander Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
-$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+$canonicalRunValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+$runValueNames = @($canonicalRunValueNames) + @($canonicalRunValueNames | ForEach-Object { "${_}__SystemCache"; "${_}__WC_Hidden" })
 $preferencePath = 'Registry::HKEY_LOCAL_MACHINE\Software\ServaLabs\WinCommander'
 $preferenceName = 'AutostartEnabled'
 

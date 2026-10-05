@@ -61,6 +61,9 @@ the backend and private component before execution.
 - Secret Settings includes **Start silently in tray** beside auto-start. It is
   on by default, including after upgrades. Turning it off opens sign-in launches
   maximized within the display's usable area; PIN and hide settings still apply.
+- Secret Settings shows whether the running app is **Administrator (elevated)**
+  or **Standard (not elevated)**. An unreadable privilege status is shown as
+  unavailable, with a retry control.
 - Auto Heal checks observed drift every minute while the app is running and
   retries failed repairs. Unavailable Windows status is not treated as OFF;
   changes requiring administrator access remain blocked without that access.

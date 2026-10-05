@@ -39,6 +39,7 @@ import { useSecretSessionState } from "./secretSessionState";
 import RuntimeStatusSection from "./RuntimeStatusSection";
 import SupportConsole from "./SupportConsole";
 import SilentStartSetting from "./SilentStartSetting";
+import ProcessElevationStatus from "./ProcessElevationStatus";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
@@ -871,6 +872,7 @@ export default function SecretPanel() {
             />
             {/* F9: show when AD admin has pushed policy via commander.admx */}
             <ManagedPolicyBanner />
+            <ProcessElevationStatus />
             <Tabs value={activeTab} onValueChange={setActiveTab} className="secret-tabs">
                 <TabsList className="w-full flex-wrap justify-start">
                     <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>

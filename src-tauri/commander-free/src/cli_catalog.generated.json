@@ -9649,6 +9649,7 @@
       "frontendReferences": [
         "src/App.tsx",
         "src/components/LicenseQuickPanel.tsx",
+        "src/hooks/useProcessElevation.ts",
         "src/panels/identity/components/AppLicensePanel.tsx"
       ]
     },

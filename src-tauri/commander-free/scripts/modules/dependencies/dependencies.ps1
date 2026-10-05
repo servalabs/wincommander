@@ -2536,9 +2536,16 @@ function Set-WinCommanderVisibility {
             try {
                 $rp = $entry.path
                 if (-not (Test-Path $rp)) { continue }
+                # A startup reconciliation may deliberately remove the hidden
+                # source while WinCommander is concealed.  The saved snapshot
+                # is recovery metadata, not authority to recreate a startup
+                # route that no longer exists.
+                $hiddenValue = Get-ItemProperty $rp -Name $entry.hidden -ErrorAction SilentlyContinue
+                if ($null -eq $hiddenValue) { continue }
                 if (-not [string]::IsNullOrEmpty($entry.original) -and
                     -not (Get-ItemProperty $rp -Name $entry.original -ErrorAction SilentlyContinue)) {
-                    New-ItemProperty $rp -Name $entry.original -Value $entry.value -PropertyType String -Force | Out-Null
+                    $liveValue = $hiddenValue.PSObject.Properties[$entry.hidden].Value
+                    New-ItemProperty $rp -Name $entry.original -Value $liveValue -PropertyType String -Force | Out-Null
                 }
                 if (-not [string]::IsNullOrEmpty($entry.hidden)) {
                     Remove-ItemProperty $rp -Name $entry.hidden -ErrorAction SilentlyContinue

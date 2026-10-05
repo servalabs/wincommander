@@ -2,6 +2,45 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+test.skipIf(process.platform !== "win32")("visibility restore honors deleted routes and current Registry values instead of stale snapshots", () => {
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", String.raw`
+$ErrorActionPreference = 'Stop'
+$tokens=$null; $errors=$null
+$source=[IO.File]::ReadAllText((Join-Path (Get-Location) 'src-tauri/commander-free/scripts/modules/dependencies/dependencies.ps1'))
+$ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Visibility script does not parse.' }
+$function=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-WinCommanderVisibility'},$true)
+$loops=@($function.Body.FindAll({param($node) $node -is [Management.Automation.Language.ForEachStatementAst] -and $node.Variable.VariablePath.UserPath -eq 'entry' -and $node.Condition.Extent.Text -eq '$runEntries'},$true))
+if ($loops.Count -ne 1) { throw 'Expected the bounded Run-value restore loop.' }
+$restore=[scriptblock]::Create($loops[0].Extent.Text)
+$root='HKCU:\Software\WinCommander.Tests\VisibilityRestore_'+[guid]::NewGuid().ToString('N')
+New-Item -Path $root -Force | Out-Null
+try {
+  foreach ($suffix in @('__SystemCache','__WC_Hidden')) {
+    $original='WinCommander'; $hidden=$original+$suffix
+    $runEntries=@(@{path=$root;original=$original;hidden=$hidden;value='stale-saved-command'})
+    $itemsChanged=0; $warnings=@()
+    . $restore
+    if ($warnings.Count -or (Get-Item -LiteralPath $root).GetValue($original,$null)) { throw 'A removed startup route was recreated from saved state.' }
+    New-ItemProperty -LiteralPath $root -Name $hidden -Value 'current-live-command' -PropertyType String | Out-Null
+    . $restore
+    $key=Get-Item -LiteralPath $root
+    if ($warnings.Count -or $key.GetValue($original,$null) -ne 'current-live-command' -or $null -ne $key.GetValue($hidden,$null)) { throw 'Restore did not use the live source.' }
+    New-ItemProperty -LiteralPath $root -Name $original -Value 'foreign-existing-command' -PropertyType String -Force | Out-Null
+    New-ItemProperty -LiteralPath $root -Name $hidden -Value 'current-live-command' -PropertyType String | Out-Null
+    . $restore
+    if ($warnings.Count -or (Get-Item -LiteralPath $root).GetValue($original,$null) -ne 'foreign-existing-command') { throw 'Restore overwrote an existing command.' }
+    Remove-ItemProperty -LiteralPath $root -Name $original
+    . $restore
+    if ((Get-Item -LiteralPath $root).GetValue($original,$null)) { throw 'Repeated restore resurrected the removed route.' }
+  }
+} finally { Remove-Item -LiteralPath $root -Recurse -Force }
+'PASS: live Registry restore and stale-snapshot cases'
+  `], { encoding: "utf8", windowsHide: true });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(result.stdout).toContain("PASS: live Registry restore and stale-snapshot cases");
+});
+
 describe("installer task readback", () => {
   test.skipIf(process.platform !== "win32")("retries after leftover offline hive mounts and preserves real cleanup failures", () => {
     const result = spawnSync("powershell.exe", [
@@ -127,7 +166,8 @@ foreach ($functionName in @('Get-OptionalRegistryValue','Test-OwnedExecutablePat
   if ($null -eq $definition) { throw "Missing installer function: $functionName" }
   Invoke-Expression $definition.Extent.Text
 }
-$runValueNames=@('WinCommander','WinCommander Free')
+$canonicalRunValueNames=@('WinCommander','WinCommander Free','WinCommander Pro')
+$runValueNames=@($canonicalRunValueNames) + @($canonicalRunValueNames | ForEach-Object { "\${_}__SystemCache"; "\${_}__WC_Hidden" })
 $autostartTaskName='WinCommander Autostart'
 $genericAutostartTaskNames=@('System Update Service','Sys Health Checker','WinCommander Input Service')
 $script:scheduledTasks=@{}
@@ -174,9 +214,15 @@ try {
   if ($script:unregisteredTasks -notcontains 'System Update Service') { throw 'Owned task did not trigger an unregister call.' }
   New-ItemProperty -Path $root -Name 'WinCommander' -PropertyType String -Value ('"' + $target + '" --minimized') | Out-Null
   New-ItemProperty -Path $root -Name 'WinCommander Free' -PropertyType String -Value '"C:\\Other\\other.exe" --minimized' | Out-Null
-  if ((Remove-OwnedRunValues @($root) @($target)) -ne 1) { throw 'Owned value was not removed exactly once.' }
+  New-ItemProperty -Path $root -Name 'WinCommander Pro__SystemCache' -PropertyType String -Value ('"' + $target + '" --autostart') | Out-Null
+  New-ItemProperty -Path $root -Name 'WinCommander__WC_Hidden' -PropertyType String -Value ('"' + $target + '" --autostart') | Out-Null
+  New-ItemProperty -Path $root -Name 'WinCommander Free__SystemCache' -PropertyType String -Value '"C:\\Other\\other.exe" --autostart' | Out-Null
+  if ((Remove-OwnedRunValues @($root) @($target)) -ne 3) { throw 'Owned canonical and hidden values were not removed exactly.' }
   if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander')) { throw 'Owned value remained.' }
+  if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander Pro__SystemCache')) { throw 'Owned current hidden alias remained.' }
+  if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander__WC_Hidden')) { throw 'Owned legacy hidden alias remained.' }
   if ($null -eq (Get-OptionalRegistryValue $root 'WinCommander Free')) { throw 'Foreign value was removed.' }
+  if ($null -eq (Get-OptionalRegistryValue $root 'WinCommander Free__SystemCache')) { throw 'Foreign hidden alias was removed.' }
 } finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }
