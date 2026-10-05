@@ -21,6 +21,7 @@ export function FixtureProvider({ children }) {
   window.__canSave = setCanSave;
   const patchAppSettings = async patch => {
     window.__saveCalls.push(patch);
+    if (window.__saveMode === 'pending') await new Promise(resolve => { window.__completeSave = resolve; });
     if (window.__saveMode === 'fail') throw new Error('The test settings store rejected the change');
     const next = { ...app, ...patch.app };
     sessionStorage.setItem('silent-start-settings', JSON.stringify(next));
@@ -101,8 +102,31 @@ async function main() {
     await control.click();
     await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('silent-start-settings')).startSilentlyAtSignIn === true);
     assert.equal(await control.isChecked(), true);
+    // A slow native persistence round trip must keep the settings view painted
+    // and prevent another request until the authoritative write completes.
+    await page.evaluate(() => {
+      window.__saveCalls = [];
+      window.__saveMode = 'pending';
+      window.__settingsView = document.querySelector('.dgz-tile');
+    });
+    await control.click();
+    await page.getByText('Saving…', { exact: true }).waitFor();
+    assert.equal(await control.isEnabled(), false);
+    assert.equal(await page.evaluate(() => window.__settingsView === document.querySelector('.dgz-tile')), true);
+    assert.equal(await control.isChecked(), true, 'Pending OFF keeps the last confirmed ON');
+    assert.equal(await page.evaluate(() => window.__saveCalls.length), 1);
+    await page.evaluate(() => { window.__saveMode = 'success'; window.__completeSave(); });
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('silent-start-settings')).startSilentlyAtSignIn === false);
+    for (const expected of [true, false, true, false]) {
+      await control.click();
+      await page.waitForFunction(value => JSON.parse(sessionStorage.getItem('silent-start-settings')).startSilentlyAtSignIn === value, expected);
+      assert.equal(await control.isChecked(), expected);
+      assert.equal(await page.evaluate(() => window.__settingsView === document.querySelector('.dgz-tile')), true,
+        'Changing the next-start preference must preserve the current settings view');
+    }
+    assert.deepEqual(await page.evaluate(() => window.__saveCalls), [false, true, false, true, false].map(value => ({ app: { startSilentlyAtSignIn: value } })));
     assert.deepEqual(errors, []);
-    console.log('PASS: silent default, saved OFF/reopen, failed-write rollback, disabled autostart/policy/unavailable storage, and saved ON. Browser-local persistence only; no native startup execution.');
+    console.log('PASS: silent default, saved OFF/reopen, failed-write rollback, disabled autostart/policy/unavailable storage, pending persistence, and repeated ON/OFF preserve the current view. Browser-local persistence only; no native startup execution.');
   } catch (error) {
     console.error({ errors, fixtureText: await page.locator('body').innerText() });
     throw error;

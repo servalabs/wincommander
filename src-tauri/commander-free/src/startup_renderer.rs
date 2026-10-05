@@ -64,16 +64,10 @@ fn recover(window: &tauri::WebviewWindow, can_reload: bool) {
         let _ = target.run_on_main_thread(move || {
             let state = reload_target.state::<crate::startup_window::StartupWindow>();
             if let Err(error) = state.replace_document(|generation| {
-                let mut url = reload_target.url().map_err(|e| e.to_string())?;
-                let retained: Vec<(String, String)> = url
-                    .query_pairs()
-                    .filter(|(key, _)| key != "wc-startup-generation")
-                    .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                    .collect();
-                url.set_query(None);
-                url.query_pairs_mut()
-                    .extend_pairs(retained)
-                    .append_pair("wc-startup-generation", &generation.to_string());
+                let url = crate::startup_window::recovery_url(
+                    reload_target.url().map_err(|e| e.to_string())?,
+                    generation,
+                );
                 reload_target.navigate(url).map_err(|e| e.to_string())
             }) {
                 state.fail_recovery_if_unready();

@@ -26,6 +26,10 @@ fn place(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() == "main" && crate::calc_mode_active(window.app_handle()) {
         return Err("Window reveal cancelled because the session was locked.".into());
     }
+    // A renderer can fail after a tray request was queued but before it reaches this thread.
+    if window.label() == "main" && crate::startup_window::defer_reveal_until_ready(window) {
+        return Err("Window reveal deferred until its interface is ready.".into());
+    }
     let monitor = window
         .current_monitor()
         .map_err(|e| e.to_string())?

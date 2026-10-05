@@ -15,6 +15,20 @@ pub(crate) fn should_hide_on_tray_click(visible: bool, minimized: bool) -> bool 
     visible && !minimized
 }
 
+pub(crate) fn recovery_url(mut url: tauri::Url, generation: u32) -> tauri::Url {
+    // URLSearchParams.get reads the first value, so replace every stale generation.
+    let retained: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| key != "wc-startup-generation")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.set_query(None);
+    url.query_pairs_mut()
+        .extend_pairs(retained)
+        .append_pair("wc-startup-generation", &generation.to_string());
+    url
+}
+
 pub(crate) struct StartupWindow {
     armed: AtomicBool,
     ready: AtomicBool,
@@ -210,9 +224,8 @@ pub(crate) async fn recover_if_unready(window: &tauri::WebviewWindow) {
                 return;
             }
             if let Err(error) = state.replace_document(|generation| {
-                let mut url = target.url().map_err(|error| error.to_string())?;
-                url.query_pairs_mut()
-                    .append_pair("wc-startup-generation", &generation.to_string());
+                let url =
+                    recovery_url(target.url().map_err(|error| error.to_string())?, generation);
                 crate::log_message_src(
                     "warn",
                     "core",
@@ -243,7 +256,10 @@ pub(crate) async fn startup_window_ready(
     if window.label() != "main" {
         return Err("Startup readiness is only available to the main window".into());
     }
-    if window.try_state::<StartupWindow>().is_none() {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return Ok(false);
+    };
+    if !state.accept_ready(generation.unwrap_or(0)) {
         return Ok(false);
     }
     let background = if is_light {
@@ -251,14 +267,12 @@ pub(crate) async fn startup_window_ready(
     } else {
         tauri::window::Color(10, 15, 18, 255)
     };
-    window
-        .set_background_color(Some(background))
-        .map_err(|error| error.to_string())?;
-    if !window
-        .state::<StartupWindow>()
-        .accept_ready(generation.unwrap_or(0))
-    {
-        return Ok(false);
+    if let Err(error) = window.set_background_color(Some(background)) {
+        crate::log_message_src(
+            "warn",
+            "core",
+            &format!("[Startup] native background update failed: {error}"),
+        );
     }
     reveal_armed_startup_window(&window).await
 }

@@ -50,8 +50,11 @@ fn main() {
                         for elevated in [false, true] {
                             let mut args = vec!["WinCommander.exe".into(), flag.into()];
                             if elevated { args.push("--elevated-relaunch".into()); }
-                            if !startup_window::should_start_hidden(&args) {
+                            if !startup_window::should_start_hidden(&args, true) {
                                 return Err(format!("Background launch would reveal: {args:?}"));
+                            }
+                            if startup_window::should_start_hidden(&args, false) != (flag == "--minimized") {
+                                return Err(format!("Visible sign-in preference was ignored: {args:?}"));
                             }
                         }
                     }
@@ -108,6 +111,13 @@ fn main() {
                     window.set_min_size(Some(tauri::PhysicalSize::new(work.size.width + 200, work.size.height + 200))).map_err(|e| e.to_string())?;
                     window_placement::show_maximized(&window).await?;
                     println!("PASS oversized previous minimum repaired; client={:?} size={:?} work={:?}", window.inner_position().unwrap(), window.inner_size().unwrap(), work);
+                    window.hide().map_err(|e| e.to_string())?;
+                    handle.state::<startup_window::StartupWindow>().invalidate_renderer(false, true);
+                    if window_placement::show_maximized(&window).await.is_ok()
+                        || window.is_visible().map_err(|e| e.to_string())? {
+                        return Err("A queued reveal exposed an invalidated renderer".into());
+                    }
+                    println!("PASS invalidated renderer rejects native placement and stays hidden");
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     Ok::<(), String>(())
                 }.await;

@@ -2,6 +2,37 @@
 use super::*;
 
 #[test]
+fn recovery_replaces_all_stale_generation_values_preserving_route_and_options() {
+    let url = recovery_url(
+        "http://tauri.localhost/settings?theme=dark&wc-startup-generation=0&view=secret&wc-startup-generation=1#startup"
+            .parse().unwrap(),
+        2,
+    );
+    assert_eq!(url.path(), "/settings");
+    assert_eq!(url.fragment(), Some("startup"));
+    let pairs: Vec<_> = url.query_pairs().collect();
+    assert_eq!(
+        pairs,
+        [
+            ("theme".into(), "dark".into()),
+            ("view".into(), "secret".into()),
+            ("wc-startup-generation".into(), "2".into())
+        ]
+    );
+    let state = StartupWindow::new();
+    assert!(state.invalidate_renderer(false, true));
+    state.replace_document(|_| Ok(())).unwrap();
+    let frontend_generation = url
+        .query_pairs()
+        .find(|(key, _)| key == "wc-startup-generation")
+        .unwrap()
+        .1
+        .parse()
+        .unwrap();
+    assert!(state.accept_ready(frontend_generation));
+}
+
+#[test]
 fn renderer_failure_invalidates_readiness_and_rejects_late_old_document_ack() {
     for reveal in [false, true] {
         let state = StartupWindow::new();
