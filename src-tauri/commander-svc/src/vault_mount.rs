@@ -41,6 +41,10 @@ struct ActiveMount {
     /// Windows profiles could otherwise control the same Syncthing folder.
     #[serde(default)]
     syncthing_managed: bool,
+    /// A failed or interrupted resume cannot prove this container is unbound.
+    /// Older retained records likewise need an authoritative owner-profile check.
+    #[serde(default = "unresolved_syncthing_resume")]
+    syncthing_resume_unresolved: bool,
     container_identity: String,
     access: wincmd_shared::vault_access::VaultAccess,
     mounted_at: u64,
@@ -146,6 +150,37 @@ fn syncthing_lifecycle_result(value: &serde_json::Value) -> SyncthingLifecycleRe
         None
     };
     SyncthingLifecycleResult { managed, warning }
+}
+
+fn mounted_syncthing_result(
+    mount: &mut ActiveMount,
+    result: Result<SyncthingLifecycleResult, VaultMountReason>,
+) -> SyncthingLifecycleResult {
+    mount.syncthing_resume_unresolved = result.is_err();
+    let observed = result.unwrap_or(SyncthingLifecycleResult {
+        managed: false,
+        warning: Some(VaultSyncWarning::Unavailable),
+    });
+    if !mount.syncthing_resume_unresolved {
+        mount.syncthing_managed = observed.managed;
+    }
+    observed
+}
+
+fn unresolved_syncthing_resume() -> bool {
+    true
+}
+
+fn requires_syncthing_pause(mount: &ActiveMount) -> bool {
+    mount.syncthing_managed
+        || (mount.presentation == VaultPresentation::PerUser && mount.syncthing_resume_unresolved)
+}
+
+fn syncthing_pause_confirmed(
+    previously_managed: bool,
+    result: &Result<SyncthingLifecycleResult, VaultMountReason>,
+) -> bool {
+    matches!(result, Ok(paused) if paused.managed || !previously_managed)
 }
 
 /// Calls the private, per-user adapter through the existing service-created
@@ -955,6 +990,7 @@ impl VaultMountBroker {
                         policy_version: 1,
                         personal: true,
                         syncthing_managed: false,
+                        syncthing_resume_unresolved: false,
                         container_identity: record.container_identity.clone(),
                         access,
                         mounted_at,
@@ -998,6 +1034,7 @@ impl VaultMountBroker {
             policy_version: 1,
             personal: true,
             syncthing_managed: false,
+            syncthing_resume_unresolved: record.scope == VaultPresentation::PerUser,
             container_identity: record.container_identity.clone(),
             access,
             mounted_at,
@@ -1015,24 +1052,19 @@ impl VaultMountBroker {
             if let Ok(mut mounts) = self.active.lock() {
                 mounts.insert(entry_id.clone(), active.clone());
                 if self.persist_active(store, &mounts).is_ok() {
-                    // A missing binding is a no-op. An adapter failure must
-                    // not invent a managed marker: that would make a normal
-                    // dismount depend on a helper which never enrolled this
-                    // Vault. The next mount will try the binding again.
-                    let sync = syncthing_lifecycle_call(
+                    // Persist both confirmed-unbound and unresolved outcomes.
+                    // A helper error must never masquerade as no binding.
+                    let resumed = syncthing_lifecycle_call(
                         "vault.syncthing.resume",
                         operation_id,
                         &entry_id,
                         &active,
                         Some(caller_token),
-                    )
-                    .unwrap_or_default();
-                    active.syncthing_managed = sync.managed;
-                    if active.syncthing_managed {
-                        mounts.insert(entry_id.clone(), active.clone());
-                        if self.persist_active(store, &mounts).is_err() {
-                            return Err(VaultMountReason::DismountFailed);
-                        }
+                    );
+                    let sync = mounted_syncthing_result(&mut active, resumed);
+                    mounts.insert(entry_id.clone(), active.clone());
+                    if self.persist_active(store, &mounts).is_err() {
+                        return Err(VaultMountReason::DismountFailed);
                     }
                     return Ok((reply.drive_letter, reply.internal_drive, reply.acl_attested, sync.warning));
                 }
@@ -1320,6 +1352,7 @@ impl VaultMountBroker {
                         policy_version,
                         personal: false,
                         syncthing_managed: false,
+                        syncthing_resume_unresolved: false,
                         container_identity,
                         access: effective_access,
                         mounted_at: std::time::SystemTime::now()
@@ -1345,6 +1378,8 @@ impl VaultMountBroker {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|value| value.as_secs())
                 .unwrap_or(0);
+            let sync_eligible = presentation == VaultPresentation::PerUser
+                && store.is_exclusive_per_user_policy_owner(entry_id, &caller_sid);
             let mut mount = ActiveMount {
                 drive_letter: reply.drive_letter.clone(),
                 internal_drive: reply.internal_drive,
@@ -1355,6 +1390,7 @@ impl VaultMountBroker {
                 policy_version,
                 personal: false,
                 syncthing_managed: false,
+                syncthing_resume_unresolved: sync_eligible,
                 container_identity,
                 access: effective_access,
                 mounted_at,
@@ -1391,25 +1427,22 @@ impl VaultMountBroker {
             // policy shape may resume a binding; a shared policy never gains
             // a local profile simply because it was mounted.
             if store.is_exclusive_per_user_policy_owner(entry_id, &mount.caller_sid) {
-                let sync = syncthing_lifecycle_call(
+                let resumed = syncthing_lifecycle_call(
                     "vault.syncthing.resume",
                     operation_id,
                     entry_id,
                     &mount,
                     Some(caller_token),
-                )
-                .unwrap_or_default();
-                mount.syncthing_managed = sync.managed;
+                );
+                let sync = mounted_syncthing_result(&mut mount, resumed);
                 sync_warning = sync.warning;
-                if mount.syncthing_managed {
-                    active.insert(entry_id.to_owned(), mount);
-                    if self.persist_active(store, &active).is_err() {
-                        return failed(
-                            entry_id,
-                            Some(presentation),
-                            VaultMountReason::DismountFailed,
-                        );
-                    }
+                active.insert(entry_id.to_owned(), mount);
+                if self.persist_active(store, &active).is_err() {
+                    return failed(
+                        entry_id,
+                        Some(presentation),
+                        VaultMountReason::DismountFailed,
+                    );
                 }
             }
         } else {
@@ -1452,7 +1485,10 @@ impl VaultMountBroker {
         entry_id: &str,
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
     ) -> VaultMountResult {
-        self.dismount_entry_locked_for_client_inner(operation_id, store, entry_id, caller_token)
+        self.dismount_entry_locked_for_client_inner(
+            operation_id, store, entry_id, caller_token,
+            |feature_id, active| syncthing_lifecycle_call(feature_id, operation_id, entry_id, active, caller_token),
+        )
     }
 
     fn dismount_entry_locked_for_client_inner(
@@ -1461,13 +1497,14 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         entry_id: &str,
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+        mut sync_call: impl FnMut(&'static str, &ActiveMount) -> Result<SyncthingLifecycleResult, VaultMountReason>,
     ) -> VaultMountResult {
         let active = self
             .active
             .lock()
             .ok()
             .and_then(|mut active| active.remove(entry_id));
-        let Some(active) = active else {
+        let Some(mut active) = active else {
             return VaultMountResult {
                 entry_id: entry_id.to_owned(),
                 state: VaultMountState::Unmounted,
@@ -1477,15 +1514,10 @@ impl VaultMountBroker {
                 sync_warning: None,
             };
         };
-        if active.syncthing_managed {
-            let paused = syncthing_lifecycle_call(
-                "vault.syncthing.pause",
-                operation_id,
-                entry_id,
-                &active,
-                caller_token,
-            );
-            if !matches!(paused, Ok(SyncthingLifecycleResult { managed: true, .. })) && caller_token.is_some() {
+        // A partial resume may have failed before recording that the folder is managed.
+        if requires_syncthing_pause(&active) {
+            let paused = sync_call("vault.syncthing.pause", &active);
+            if !syncthing_pause_confirmed(active.syncthing_managed, &paused) && caller_token.is_some() {
                 if let Ok(mut mounts) = self.active.lock() {
                     mounts.insert(entry_id.to_owned(), active);
                 }
@@ -1494,6 +1526,10 @@ impl VaultMountBroker {
                     Some(VaultPresentation::PerUser),
                     VaultMountReason::BrokerUnavailable,
                 );
+            }
+            if let Ok(paused) = paused {
+                active.syncthing_managed |= paused.managed;
+                active.syncthing_resume_unresolved = false;
             }
         }
         let live = match self.live_mount_matches(&active) {
@@ -1526,13 +1562,8 @@ impl VaultMountBroker {
                 .map_or(true, |slots| slots.contains_key(&active.internal_drive))
         {
             if active.syncthing_managed {
-                let _ = syncthing_lifecycle_call(
-                    "vault.syncthing.resume",
-                    operation_id,
-                    entry_id,
-                    &active,
-                    caller_token,
-                );
+                let resumed = sync_call("vault.syncthing.resume", &active);
+                mounted_syncthing_result(&mut active, resumed);
             }
             let mut pending = active.clone();
             pending.cleanup_required = true;
@@ -1860,7 +1891,7 @@ impl VaultMountBroker {
         // Downloading an account prerequisite must not block any Vault inventory or dismount.
         prepare(&prepared_entry, &prepared_mount)?;
         self.with_exclusive_operation(|| {
-            let (entry_id, active) = self.eligible_syncthing_mount_locked(
+            let (entry_id, mut active) = self.eligible_syncthing_mount_locked(
                 store, internal_drive, caller_session, caller_sid,
             )?;
             if entry_id != prepared_entry
@@ -1869,6 +1900,14 @@ impl VaultMountBroker {
                 || active.mounted_at != prepared_mount.mounted_at
             {
                 return Err(VaultMountReason::MountStateUnknown);
+            }
+            // Enrollment can mutate the folder before its reply is received.
+            // Persist uncertainty first so a failed reply cannot skip pause.
+            active.syncthing_resume_unresolved = true;
+            {
+                let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
+                mounts.insert(entry_id.clone(), active.clone());
+                self.persist_active(store, &mounts).map_err(|_| VaultMountReason::DismountFailed)?;
             }
             let gui_url = syncthing_enroll_call(
                 operation_id,
@@ -1889,6 +1928,7 @@ impl VaultMountBroker {
             }
             let mut updated = active;
             updated.syncthing_managed = true;
+            updated.syncthing_resume_unresolved = false;
             let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
             mounts.insert(entry_id, updated);
             self.persist_active(store, &mounts)
@@ -2716,6 +2756,94 @@ fn failed(
 mod tests {
     use super::*;
     #[test]
+    fn confirmed_mount_reports_resume_failure_but_not_an_unenrolled_vault() {
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        let failed = mounted_syncthing_result(&mut mount, Err(VaultMountReason::SyncthingProfileUnavailable));
+        assert!(!failed.managed);
+        assert_eq!(failed.warning, Some(VaultSyncWarning::Unavailable));
+        assert!(mount.syncthing_resume_unresolved);
+        let unenrolled = mounted_syncthing_result(&mut mount, Ok(SyncthingLifecycleResult::default()));
+        assert!(!unenrolled.managed);
+        assert_eq!(unenrolled.warning, None);
+        assert!(!mount.syncthing_resume_unresolved);
+        assert!(!requires_syncthing_pause(&mount));
+    }
+
+    #[test]
+    fn failed_resume_still_requires_a_confirmed_pause_before_dismount() {
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        mounted_syncthing_result(&mut mount,
+            Err(VaultMountReason::SyncthingProfileUnavailable),
+        );
+        assert!(requires_syncthing_pause(&mount));
+        assert!(!syncthing_pause_confirmed(
+            mount.syncthing_managed, &Err(VaultMountReason::SyncthingProfileUnavailable),
+        ));
+        assert!(syncthing_pause_confirmed(false, &Ok(SyncthingLifecycleResult::default())));
+        assert!(!syncthing_pause_confirmed(true, &Ok(SyncthingLifecycleResult::default())));
+        assert!(syncthing_pause_confirmed(true, &Ok(SyncthingLifecycleResult {
+            managed: true, warning: None,
+        })));
+        mount.presentation = VaultPresentation::Machine;
+        assert!(!requires_syncthing_pause(&mount));
+    }
+
+    #[test]
+    fn retained_syncthing_resume_state_defaults_unknown_and_preserves_known_unbound() {
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        let mut value = serde_json::to_value(&mount).unwrap();
+        let known: ActiveMount = serde_json::from_value(value.clone()).unwrap();
+        assert!(!requires_syncthing_pause(&known));
+        value.as_object_mut().unwrap().remove("syncthing_resume_unresolved");
+        let recovered: ActiveMount = serde_json::from_value(value).unwrap();
+        assert!(recovered.syncthing_resume_unresolved);
+        assert!(requires_syncthing_pause(&recovered));
+        mount.syncthing_managed = true;
+        mounted_syncthing_result(&mut mount, Err(VaultMountReason::BrokerUnavailable));
+        assert!(mount.syncthing_managed);
+        assert!(mount.syncthing_resume_unresolved);
+    }
+
+    #[test]
+    fn unavailable_syncthing_blocks_only_bound_or_unresolved_user_dismounts() {
+        for (managed, unresolved) in [(false, false), (true, false), (false, true)] {
+            let store = mount_store(
+                Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+            );
+            let events = Arc::new(Mutex::new(BrokerEvents::default()));
+            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+            let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+            mount.presentation = VaultPresentation::PerUser;
+            mount.syncthing_managed = managed;
+            mount.syncthing_resume_unresolved = unresolved;
+            broker.active.lock().unwrap().insert("personal".into(), mount);
+            let mut pause_calls = 0;
+            let result = broker.dismount_entry_locked_for_client_inner(
+                42, &store, "personal", Some(std::ptr::null_mut()), |feature, _| {
+                    assert_eq!(feature, "vault.syncthing.pause");
+                    pause_calls += 1;
+                    Err(VaultMountReason::BrokerUnavailable)
+                },
+            );
+            if managed || unresolved {
+                assert_eq!(pause_calls, 1);
+                assert_eq!(result.reason, Some(VaultMountReason::BrokerUnavailable));
+                assert!(events.lock().unwrap().dismounted.is_empty());
+                assert!(broker.active.lock().unwrap().contains_key("personal"));
+            } else {
+                assert_eq!(pause_calls, 0);
+                assert_eq!(result.state, VaultMountState::Unmounted);
+                assert_eq!(result.reason, None);
+                assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+                assert!(!broker.active.lock().unwrap().contains_key("personal"));
+            }
+        }
+    }
+
+    #[test]
     fn sync_warning_preserves_managed_lifecycle_and_ignores_untrusted_details() {
         let result = syncthing_lifecycle_result(&serde_json::json!({
             "managed": true, "sync_warning": "stopped",
@@ -3052,6 +3180,7 @@ mod tests {
             policy_version: 1,
             personal: false,
             syncthing_managed: false,
+            syncthing_resume_unresolved: false,
             container_identity: "identity".into(),
             access: wincmd_shared::vault_access::VaultAccess::Write,
             mounted_at: 1,

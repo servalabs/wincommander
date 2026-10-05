@@ -146,8 +146,8 @@ task migration cannot recreate a retired launcher.
 
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |
-| `SM-AS` | Sign-in startup router | One all-user logon trigger; runs in the signed-in session |
-| `SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
+| `\System Maintenance\SM-AS` | Hidden sign-in startup | One all-user logon trigger; highest available token in the signed-in session |
+| `\System Maintenance\SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
 | `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
 | `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
 | `WinCommanderShellPriorityLogon` | Apply configured desktop-shell priority | Machine logon helper |
@@ -165,6 +165,8 @@ process failure, a locked session, exhausted recovery, or failed recovery keeps
 the empty window hidden and provides native restart guidance when opened. These
 paths are exercised by `tools/test-renderer-recovery.ps1` using an isolated
 WebView profile and actual rendered-pixel checks.
+
+Early open requests remain queued until the startup content has painted.
 
 The Pro updater holds a machine-wide maintenance reservation while replacing
 the shared component. Desktop and service brokers pause new calls, active

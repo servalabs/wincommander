@@ -1088,7 +1088,7 @@ mod tests {
         assert!(!POWERSHELL_STATUS.contains("Get-AutostartPreference"));
         assert!(!POWERSHELL_STATUS.contains("Test-CanonicalTask"));
         assert!(!POWERSHELL_STATUS.contains("Test-LauncherNeedsRepair"));
-        assert!(status.contains("return $arguments -in @('--autostart', '--minimized')"));
+        assert!(status.contains("return $arguments -in @('', '--autostart', '--minimized')"));
         assert!(status.contains("$arguments -notmatch '(?i)autostart\\.stderr\\.log'"));
         assert!(status.contains("$arguments -eq '--elevated-relaunch --autostart'"));
     }

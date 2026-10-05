@@ -11810,6 +11810,16 @@
       ]
     },
     {
+      "id": "tauri:vault_enroll_personal_syncthing",
+      "name": "vault_enroll_personal_syncthing",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_list_authorized_entries",
       "name": "vault_list_authorized_entries",
       "transport": "tauri",
@@ -11837,6 +11847,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_release_orphaned_drive_letters",
+      "name": "vault_release_orphaned_drive_letters",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
       ]
     },
     {

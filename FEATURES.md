@@ -55,7 +55,9 @@ the backend and private component before execution.
   system tasks and `SL-UW-<code>-<SID>` for per-user tasks. App updates migrate
   recognized legacy tasks while preserving their schedules and disabled state.
 - Turning auto-start off removes the app's logon and elevated-launch tasks;
-  turning it on recreates them as `SL-AS` and `SL-EL`. Updates preserve OFF.
+  turning it on recreates them as `SM-AS` and `SM-EL` under `\System Maintenance\`.
+  Installed sign-in startup uses the account's highest available token;
+  standard users remain in their own limited session. Updates preserve OFF.
 - Preview-first maintenance flows for supported cleanup categories.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;
@@ -117,7 +119,9 @@ operational risk, or proprietary enforcement logic.
   follows the same container when its drive letter changes. After mounting,
   stopped folders get an automatic rescan; a remaining sync problem opens a
   dialog without dismounting the container. Manually paused folders stay paused.
-  Shared Vaults are
+  Bound folders pause before dismount and resume after mount; cold startup waits
+  for folder readiness within a bounded deadline. New containers require their
+  own setup; account/container bindings survive owner-only policy changes. Shared Vaults are
   excluded; connecting another device still requires Syncthing device pairing.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.

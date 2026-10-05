@@ -1,4 +1,4 @@
-param([switch]$SkipBuild)
+param([switch]$SkipBuild, [switch]$Release)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
@@ -10,10 +10,13 @@ New-Item -ItemType Directory -Path $logs | Out-Null
 Push-Location (Join-Path $repo 'src-tauri')
 try {
     if (-not $SkipBuild) {
-        cargo build --locked -p commander-free --example renderer-recovery-probe
+        $buildArgs = @('build', '--locked', '-p', 'commander-free', '--example', 'renderer-recovery-probe')
+        if ($Release) { $buildArgs += '--release' }
+        & cargo @buildArgs
         if ($LASTEXITCODE -ne 0) { throw 'Renderer probe build failed.' }
     }
-    $executable = Join-Path (Get-Location) 'target\debug\examples\renderer-recovery-probe.exe'
+    $profile = if ($Release) { 'release' } else { 'debug' }
+    $executable = Join-Path (Get-Location) "target\$profile\examples\renderer-recovery-probe.exe"
     & $manifestTool.FullName -nologo -manifest commander-free/app.manifest "-outputresource:${executable};#1"
     if ($LASTEXITCODE -ne 0) { throw 'Probe manifest embedding failed.' }
     foreach ($mode in @('baseline', 'visible', 'hidden', 'minimized', 'locked')) {

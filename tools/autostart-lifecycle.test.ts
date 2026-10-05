@@ -148,6 +148,8 @@ if ($script:tasks.Count -ne 1 -or -not $script:tasks.ContainsKey('Sys Health Che
 $script:enabled=$true
 $script:tasks['WinCommander Autostart']=LegacyTask '--autostart'
 $script:tasks['WinCommander Elevated Launcher']=LegacyTask '--elevated-relaunch'
+$script:tasks['SL-AS']=LegacyTask '--autostart'
+$script:tasks['SL-EL']=LegacyTask '--elevated-relaunch $(Arg0)'
 & $run | Out-Null
 if ($script:tasks.Count -ne 3 -or -not $script:tasks.ContainsKey('SM-AS') -or -not $script:tasks.ContainsKey('SM-EL')) { throw 'Installer did not migrate to compact task names' }
 if ($script:tasks['SM-AS'].Principal.GroupId -ne $usersSid -or $script:tasks['SM-AS'].Principal.RunLevel -ne 'Highest' -or $script:tasks['SM-AS'].Actions[0].Arguments -ne '--autostart') { throw 'Installer did not register direct highest-available startup for all Users members' }
