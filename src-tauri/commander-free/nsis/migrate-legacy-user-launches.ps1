@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) {
     throw "The shared WinCommander executable is missing: $shared"
 }
 
-$runValueNames = @('WinCommander', 'WinCommander Free')
+$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
 $systemProfileSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
 $shell = New-Object -ComObject WScript.Shell
 $summary = [ordered]@{ profiles = 0; runValuesRemoved = 0; startupShortcutsRemoved = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; registryHivesDeferred = 0; failures = 0 }
@@ -27,35 +27,52 @@ $failureMessages = [System.Collections.Generic.List[string]]::new()
 
 function Get-OptionalRegistryValue([string]$Path, [string]$Name) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    $item = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
-    $property = $item.PSObject.Properties[$Name]
-    if ($null -eq $property) { return $null }
-    return $property.Value
+    $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+    try {
+        # REG_EXPAND_SZ must be resolved for the profile being migrated, not
+        # for the administrator who supplied credentials to setup.
+        return $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally { $key.Close() }
 }
 
-function Test-OwnedExecutablePath([AllowNull()][string]$Path, [string[]]$OwnedPaths) {
+function Expand-ProfileEnvironment([string]$Value, [string]$ProfilePath) {
+    if (-not [string]::IsNullOrWhiteSpace($ProfilePath)) {
+        $variables = @{
+            USERPROFILE = $ProfilePath
+            LOCALAPPDATA = Join-Path $ProfilePath 'AppData\Local'
+            APPDATA = Join-Path $ProfilePath 'AppData\Roaming'
+        }
+        $Value = [regex]::Replace($Value, '(?i)%(USERPROFILE|LOCALAPPDATA|APPDATA)%', {
+            param($match)
+            return $variables[$match.Groups[1].Value]
+        })
+    }
+    return [Environment]::ExpandEnvironmentVariables($Value)
+}
+
+function Test-OwnedExecutablePath([AllowNull()][string]$Path, [string[]]$OwnedPaths, [string]$ProfilePath = '') {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
     try {
-        $resolved = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
+        $resolved = [IO.Path]::GetFullPath((Expand-ProfileEnvironment $Path $ProfilePath))
         return @($OwnedPaths | Where-Object { [string]::Equals($_, $resolved, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
     } catch {
         return $false
     }
 }
 
-function Test-OwnedExecutableCommand([AllowNull()][string]$Command, [string[]]$OwnedPaths) {
+function Test-OwnedExecutableCommand([AllowNull()][string]$Command, [string[]]$OwnedPaths, [string]$ProfilePath = '') {
     if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
-    $expanded = [Environment]::ExpandEnvironmentVariables($Command).Trim()
+    $expanded = (Expand-ProfileEnvironment $Command $ProfilePath).Trim()
     $match = [regex]::Match($expanded, '^\s*(?:"(?<path>[^"]+)"|(?<path>[^\s]+))(?=\s|$)')
-    return $match.Success -and (Test-OwnedExecutablePath $match.Groups['path'].Value $OwnedPaths)
+    return $match.Success -and (Test-OwnedExecutablePath $match.Groups['path'].Value $OwnedPaths $ProfilePath)
 }
 
-function Remove-OwnedRunValues([string[]]$Paths, [string[]]$OwnedPaths) {
+function Remove-OwnedRunValues([string[]]$Paths, [string[]]$OwnedPaths, [string]$ProfilePath = '') {
     $removed = 0
     foreach ($path in $Paths) {
         foreach ($name in $runValueNames) {
             $value = Get-OptionalRegistryValue $path $name
-            if ($null -ne $value -and (Test-OwnedExecutableCommand ([string]$value) $OwnedPaths)) {
+            if ($null -ne $value -and (Test-OwnedExecutableCommand ([string]$value) $OwnedPaths $ProfilePath)) {
                 Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop
                 $removed++
             }
@@ -64,12 +81,12 @@ function Remove-OwnedRunValues([string[]]$Paths, [string[]]$OwnedPaths) {
     return $removed
 }
 
-function Remove-OwnedStartupShortcuts([string]$Root, [string[]]$OwnedPaths) {
+function Remove-OwnedStartupShortcuts([string]$Root, [string[]]$OwnedPaths, [string]$ProfilePath = '') {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return 0 }
     $removed = 0
     Get-ChildItem -LiteralPath $Root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
         $shortcut = $shell.CreateShortcut($_.FullName)
-        if (Test-OwnedExecutablePath $shortcut.TargetPath $OwnedPaths) {
+        if (Test-OwnedExecutablePath $shortcut.TargetPath $OwnedPaths $ProfilePath) {
             Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
             $removed++
         }
@@ -77,13 +94,13 @@ function Remove-OwnedStartupShortcuts([string]$Root, [string[]]$OwnedPaths) {
     return $removed
 }
 
-function Update-LegacyShortcuts([string]$Root, [string]$StartupRoot, [string]$LegacyExecutable) {
+function Update-LegacyShortcuts([string]$Root, [string]$StartupRoot, [string[]]$LegacyExecutables, [string]$ProfilePath = '') {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return 0 }
     $updated = 0
     Get-ChildItem -LiteralPath $Root -Filter '*.lnk' -File -Recurse -Force -ErrorAction Stop | ForEach-Object {
         if (-not $_.FullName.StartsWith($StartupRoot, [StringComparison]::OrdinalIgnoreCase)) {
             $shortcut = $shell.CreateShortcut($_.FullName)
-            if ([string]::Equals($shortcut.TargetPath, $LegacyExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+            if (Test-OwnedExecutablePath $shortcut.TargetPath $LegacyExecutables $ProfilePath) {
                 $shortcut.TargetPath = $shared
                 $shortcut.WorkingDirectory = Split-Path -Parent $shared
                 $shortcut.IconLocation = "$shared,0"
@@ -160,21 +177,25 @@ try {
 $allOwnedPaths = @($shared)
 foreach ($profile in $profiles) {
     $allOwnedPaths += Join-Path $profile.Path 'AppData\Local\WinCommander\wincommander-free.exe'
+    $allOwnedPaths += Join-Path $profile.Path 'AppData\Local\Programs\WinCommander\wincommander-free.exe'
 }
 $allOwnedPaths = @($allOwnedPaths | ForEach-Object { [IO.Path]::GetFullPath($_) } | Sort-Object -Unique)
 
 foreach ($profile in $profiles) {
     $summary.profiles++
-    $legacyRoot = Join-Path $profile.Path 'AppData\Local\WinCommander'
-    $legacyExecutable = Join-Path $legacyRoot 'wincommander-free.exe'
-    $ownedPaths = @($shared, [IO.Path]::GetFullPath($legacyExecutable))
+    $legacyRoots = @(
+        (Join-Path $profile.Path 'AppData\Local\WinCommander'),
+        (Join-Path $profile.Path 'AppData\Local\Programs\WinCommander')
+    )
+    $legacyExecutables = @($legacyRoots | ForEach-Object { Join-Path $_ 'wincommander-free.exe' })
+    $ownedPaths = @($shared) + $legacyExecutables
     $startupRoot = Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
 
     try {
-        $summary.startupShortcutsRemoved += Remove-OwnedStartupShortcuts $startupRoot $ownedPaths
+        $summary.startupShortcutsRemoved += Remove-OwnedStartupShortcuts $startupRoot $ownedPaths $profile.Path
         if (-not $Uninstall) {
-            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'Desktop') $startupRoot $legacyExecutable
-            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs') $startupRoot $legacyExecutable
+            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'Desktop') $startupRoot $legacyExecutables $profile.Path
+            $summary.shortcutsUpdated += Update-LegacyShortcuts (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs') $startupRoot $legacyExecutables $profile.Path
         }
     } catch {
         $summary.failures++
@@ -190,7 +211,7 @@ foreach ($profile in $profiles) {
                 "$hiveRoot\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
                 "$hiveRoot\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"
             )
-            $summary.runValuesRemoved += Remove-OwnedRunValues $runPaths $ownedPaths
+            $summary.runValuesRemoved += Remove-OwnedRunValues $runPaths $ownedPaths $profile.Path
             $uninstallKey = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
             if (Test-Path -LiteralPath $uninstallKey) {
                 Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction Stop
@@ -210,25 +231,27 @@ foreach ($profile in $profiles) {
     # The old payload must not survive an explicit uninstall either. These are
     # exact product files/directories only; no profile root or user data is
     # removed here.
-    foreach ($legacyFile in @($legacyExecutable, (Join-Path $legacyRoot 'uninstall.exe'))) {
-        if (-not (Test-Path -LiteralPath $legacyFile -PathType Leaf)) { continue }
-        try {
-            Remove-Item -LiteralPath $legacyFile -Force -ErrorAction Stop
-            $summary.staleFilesRemoved++
-        } catch {
-            $summary.failures++
-            $failureMessages.Add("payload ${legacyFile}: $($_.Exception.Message)")
+    foreach ($legacyRoot in $legacyRoots) {
+        foreach ($legacyFile in @((Join-Path $legacyRoot 'wincommander-free.exe'), (Join-Path $legacyRoot 'uninstall.exe'))) {
+            if (-not (Test-Path -LiteralPath $legacyFile -PathType Leaf)) { continue }
+            try {
+                Remove-Item -LiteralPath $legacyFile -Force -ErrorAction Stop
+                $summary.staleFilesRemoved++
+            } catch {
+                $summary.failures++
+                $failureMessages.Add("payload ${legacyFile}: $($_.Exception.Message)")
+            }
         }
-    }
-    foreach ($legacyDirectory in @('resources', 'scripts')) {
-        $payloadPath = Join-Path $legacyRoot $legacyDirectory
-        if (-not (Test-Path -LiteralPath $payloadPath -PathType Container)) { continue }
-        try {
-            Remove-Item -LiteralPath $payloadPath -Recurse -Force -ErrorAction Stop
-            $summary.staleFilesRemoved++
-        } catch {
-            $summary.failures++
-            $failureMessages.Add("payload ${payloadPath}: $($_.Exception.Message)")
+        foreach ($legacyDirectory in @('resources', 'scripts')) {
+            $payloadPath = Join-Path $legacyRoot $legacyDirectory
+            if (-not (Test-Path -LiteralPath $payloadPath -PathType Container)) { continue }
+            try {
+                Remove-Item -LiteralPath $payloadPath -Recurse -Force -ErrorAction Stop
+                $summary.staleFilesRemoved++
+            } catch {
+                $summary.failures++
+                $failureMessages.Add("payload ${payloadPath}: $($_.Exception.Message)")
+            }
         }
     }
 }

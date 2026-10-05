@@ -24,8 +24,8 @@ $manualTaskName = 'SL-EL'
 $autostartTaskName = 'SL-AS'
 $legacyManualTaskName = 'WinCommander Elevated Launcher'
 $obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
-$genericAutostartTaskNames = @('WinCommander Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
-$runValueNames = @('WinCommander', 'WinCommander Free')
+$genericAutostartTaskNames = @('SL-AS', 'SL-EL', 'WinCommander Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
+$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
 $preferencePath = 'Registry::HKEY_LOCAL_MACHINE\Software\ServaLabs\WinCommander'
 $preferenceName = 'AutostartEnabled'
 
@@ -60,6 +60,7 @@ function Get-OwnedExecutablePaths {
             $profilePath = [Environment]::ExpandEnvironmentVariables([string]$profile.ProfileImagePath)
             if ([string]::IsNullOrWhiteSpace($profilePath)) { continue }
             $paths += [IO.Path]::GetFullPath((Join-Path $profilePath 'AppData\Local\WinCommander\wincommander-free.exe'))
+            $paths += [IO.Path]::GetFullPath((Join-Path $profilePath 'AppData\Local\Programs\WinCommander\wincommander-free.exe'))
         }
     } catch {
         throw "Could not enumerate legacy WinCommander executable locations: $($_.Exception.Message)"
@@ -171,8 +172,14 @@ function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPat
     $actions = @($Task.Actions)
     if ($actions.Count -ne 1) { return $false }
     $actualArguments = [string]$actions[0].Arguments
+    # A short-lived release created the known automatic-start task without an
+    # argument. This helper calls this check only for finite known task names
+    # and exact owned executable paths, so normalize it to --autostart rather
+    # than letting it launch as a foreground process at sign-in.
     if (Test-OwnedExecutableCommand ([string]$actions[0].Execute) $OwnedPaths) {
-        return $actualArguments -eq $Arguments -or ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized') -or
+        return ($actualArguments -eq $Arguments) -or
+            ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized') -or
+            ($Arguments -eq '--autostart' -and [string]::IsNullOrWhiteSpace($actualArguments)) -or
             ($Arguments -eq '--elevated-relaunch' -and $actualArguments -eq '--elevated-relaunch $(Arg0)')
     }
     # Match the historic wrapper by both its bounded argument contract and an
