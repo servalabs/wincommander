@@ -1,3 +1,9 @@
+export function personalVaultSyncSetupMessage(path: string, recoveryRequired: boolean): string {
+  return recoveryRequired
+    ? `The deleted sync entry for ${path} has been restored and left paused. Open Syncthing, check the folder's files and sharing settings, then resume it when ready. Deleted files have not been restored.`
+    : `Sync is configured for ${path}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`;
+}
+
 /** Translate bounded service outcomes without exposing private helper diagnostics. */
 export function personalVaultSyncError(error: unknown): string {
   const detail = error instanceof Error ? error.message.toLowerCase() : typeof error === "string" ? error.toLowerCase() : "";

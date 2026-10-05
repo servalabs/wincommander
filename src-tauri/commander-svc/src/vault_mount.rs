@@ -275,25 +275,42 @@ fn syncthing_setup_call(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SyncthingEnrollmentResult {
+    pub gui_url: String,
+    pub recovery_required: bool,
+}
+
 fn syncthing_enroll_call(
     operation_id: u64,
     entry_id: &str,
     mount: &ActiveMount,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     relative_path: &str,
-) -> Result<String, VaultMountReason> {
+) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
     let value = syncthing_setup_call(
         "vault.syncthing.enroll", operation_id, entry_id, mount, caller_token, relative_path,
     )?;
+    syncthing_enrollment_result(&value)
+}
+
+fn syncthing_enrollment_result(
+    value: &serde_json::Value,
+) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
     if value.get("managed").and_then(serde_json::Value::as_bool) != Some(true) {
         return Err(VaultMountReason::BrokerRejected);
     }
-    value
+    let gui_url = value
         .get("gui_url")
         .and_then(serde_json::Value::as_str)
         .filter(|url| valid_syncthing_gui_url(url))
         .map(str::to_owned)
-        .ok_or(VaultMountReason::BrokerRejected)
+        .ok_or(VaultMountReason::BrokerRejected)?;
+    let recovery_required = match value.get("recovery_required") {
+        None => false,
+        Some(value) => value.as_bool().ok_or(VaultMountReason::BrokerRejected)?,
+    };
+    Ok(SyncthingEnrollmentResult { gui_url, recovery_required })
 }
 
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
@@ -1518,13 +1535,14 @@ impl VaultMountBroker {
         if requires_syncthing_pause(&active) {
             let paused = sync_call("vault.syncthing.pause", &active);
             if !syncthing_pause_confirmed(active.syncthing_managed, &paused) && caller_token.is_some() {
+                let reason = paused.err().unwrap_or(VaultMountReason::BrokerRejected);
                 if let Ok(mut mounts) = self.active.lock() {
                     mounts.insert(entry_id.to_owned(), active);
                 }
                 return failed(
                     entry_id,
                     Some(VaultPresentation::PerUser),
-                    VaultMountReason::BrokerUnavailable,
+                    reason,
                 );
             }
             if let Ok(paused) = paused {
@@ -1830,7 +1848,7 @@ impl VaultMountBroker {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         caller_session: u32,
         caller_sid: &str,
-    ) -> Result<String, VaultMountReason> {
+    ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
         self.enroll_personal_syncthing_with_prepare(
             store, operation_id, internal_drive, relative_path, caller_token,
             caller_session, caller_sid,
@@ -1881,7 +1899,7 @@ impl VaultMountBroker {
         caller_session: u32,
         caller_sid: &str,
         prepare: impl FnOnce(&str, &ActiveMount) -> Result<(), VaultMountReason>,
-    ) -> Result<String, VaultMountReason> {
+    ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
         if !valid_relative_sync_path(relative_path) {
             return Err(VaultMountReason::InvalidRequest);
         }
@@ -1909,7 +1927,7 @@ impl VaultMountBroker {
                 mounts.insert(entry_id.clone(), active.clone());
                 self.persist_active(store, &mounts).map_err(|_| VaultMountReason::DismountFailed)?;
             }
-            let gui_url = syncthing_enroll_call(
+            let enrollment = syncthing_enroll_call(
                 operation_id,
                 &entry_id,
                 &active,
@@ -1933,7 +1951,7 @@ impl VaultMountBroker {
             mounts.insert(entry_id, updated);
             self.persist_active(store, &mounts)
                 .map_err(|_| VaultMountReason::DismountFailed)?;
-            Ok(gui_url)
+            Ok(enrollment)
         })
     }
 
@@ -2865,6 +2883,7 @@ mod tests {
     }
 
     include!("vault_dismount_tests.rs");
+    include!("vault_syncthing_dismount_tests.rs");
     include!("vault_policy_mount_tests.rs");
     use crate::vault_access::{AclApplier, AclSnapshot, PrincipalResolver, VaultAclPlan, VaultFs};
     use std::path::{Path, PathBuf};

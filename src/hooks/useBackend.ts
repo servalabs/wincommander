@@ -1867,7 +1867,7 @@ export function useBackend() {
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
     enablePersonalVaultSync: (internalDrive: number, relativePath: string) =>
-      invoke<{ enabled: boolean; gui_url: string }>("vault_enroll_personal_syncthing", { internalDrive, relativePath }),
+      invoke<{ enabled: boolean; gui_url: string; recovery_required?: boolean }>("vault_enroll_personal_syncthing", { internalDrive, relativePath }),
     dismountAllVolumes: (force = false) => afterVaultMutation(() => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force })),
     createVolume: (params: CreateVolumeParams) =>
       execute("Create-EncryptionVolume", {

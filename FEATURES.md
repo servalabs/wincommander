@@ -131,6 +131,9 @@ operational risk, or proprietary enforcement logic.
   for folder readiness within a bounded deadline. New containers require their
   own setup; account/container bindings survive owner-only policy changes. Shared Vaults are
   excluded; connecting another device still requires Syncthing device pairing.
+- Removing a bound folder from Syncthing does not block Vault dismount.
+  Enabling sync again restores the saved folder identity in a paused state for
+  review and sharing. This does not restore deleted files or safety markers.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
 - Signed evidence-vault export and advanced verification/reporting options.

@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { personalVaultSyncError } from "./personalVaultSyncFeedback";
+import { personalVaultSyncError, personalVaultSyncSetupMessage } from "./personalVaultSyncFeedback";
+
+test("recreated sync configuration explains the paused recovery without claiming restored files", () => {
+  const message = personalVaultSyncSetupMessage("V:\\Sync", true);
+  expect(message).toContain("left paused");
+  expect(message).toContain("sharing settings");
+  expect(message).toContain("Deleted files have not been restored");
+  expect(personalVaultSyncSetupMessage("V:\\Sync", false)).toContain("Connect your other device");
+});
 
 test("a responding helper's rejected folder is not reported as unreachable", () => {
   expect(personalVaultSyncError(new Error("vault_broker_rejected"))).toContain("helper responded");

@@ -3008,7 +3008,7 @@ fn handle_personal_vault_syncthing_enroll(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
-    let gui_url = vault_mount
+    let enrollment = vault_mount
         .enroll_personal_syncthing(
             vault_access,
             request_id,
@@ -3024,7 +3024,11 @@ fn handle_personal_vault_syncthing_enroll(
                 "personal sync enrollment could not be confirmed",
             )
         })?;
-    Ok(serde_json::json!({ "enabled": true, "gui_url": gui_url }))
+    Ok(serde_json::json!({
+        "enabled": true,
+        "gui_url": enrollment.gui_url,
+        "recovery_required": enrollment.recovery_required,
+    }))
 }
 
 /// Releases only inaccessible VeraCrypt/TrueCrypt links in the authenticated

@@ -4,9 +4,9 @@ import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
-import { showSuccess, showError } from "../../utils/toast";
+import { showSuccess, showError, showWarning } from "../../utils/toast";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
-import { personalVaultSyncError } from "@/lib/personalVaultSyncFeedback";
+import { personalVaultSyncError, personalVaultSyncSetupMessage } from "@/lib/personalVaultSyncFeedback";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import './VolumeActionsMenu.css';
 
@@ -109,7 +109,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     try {
       const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
       setSyncSetupOpen(false);
-      showSuccess(`Sync is configured for ${driveLabel}\\${relativePath}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`);
+      const message = personalVaultSyncSetupMessage(`${driveLabel}\\${relativePath}`, enrollment.recovery_required === true);
+      if (enrollment.recovery_required) showWarning(message, undefined, { kind: "notification" });
+      else showSuccess(message);
       try {
         await open(enrollment.gui_url);
       } catch {
