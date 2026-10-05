@@ -27,7 +27,7 @@ $systemMaintenanceTaskFolderPath = '\System Maintenance'
 $legacyManualTaskName = 'WinCommander Elevated Launcher'
 $obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
 $genericAutostartTaskNames = @('SL-AS', 'SL-EL', 'WinCommander Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
-$runValueNames = @('WinCommander', 'WinCommander Free')
+$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
 $preferencePath = 'Registry::HKEY_LOCAL_MACHINE\Software\ServaLabs\WinCommander'
 $preferenceName = 'AutostartEnabled'
 
@@ -183,8 +183,14 @@ function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPat
     $actions = @($Task.Actions)
     if ($actions.Count -ne 1) { return $false }
     $actualArguments = [string]$actions[0].Arguments
+    # A short-lived release created the known automatic-start task without an
+    # argument. This helper calls this check only for finite known task names
+    # and exact owned executable paths, so normalize it to --autostart rather
+    # than letting it launch as a foreground process at sign-in.
     if (Test-OwnedExecutableCommand ([string]$actions[0].Execute) $OwnedPaths) {
-        return $actualArguments -eq $Arguments -or ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized') -or
+        return ($actualArguments -eq $Arguments) -or
+            ($Arguments -eq '--autostart' -and $actualArguments -eq '--minimized') -or
+            ($Arguments -eq '--autostart' -and [string]::IsNullOrWhiteSpace($actualArguments)) -or
             ($Arguments -eq '--elevated-relaunch' -and $actualArguments -eq '--elevated-relaunch $(Arg0)')
     }
     # Match the historic wrapper by both its bounded argument contract and an

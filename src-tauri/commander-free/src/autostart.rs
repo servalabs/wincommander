@@ -78,6 +78,10 @@ fn run_value_names_ps() -> String {
     let mut names = vec![
         "WinCommander".to_string(),
         "WinCommander Free".to_string(),
+        // Some older entitled installs registered the public desktop under
+        // this edition-qualified value name. Ownership still requires an
+        // exact known executable path before it can be removed.
+        "WinCommander Pro".to_string(),
         crate::paths::app_display_name().to_string(),
         crate::paths::app_display_name_with_edition(false),
     ];
@@ -345,7 +349,10 @@ function Test-OwnedManagedTask {
     if ($Name -eq 'WinCommander Elevated Autostart') {
       return $arguments -eq '--elevated-relaunch --autostart'
     }
-    return $arguments -in @('--autostart', '--minimized')
+    # A short-lived release created known startup tasks without an argument.
+    # These are recognized only after the exact executable path and a finite
+    # known task name have already matched, then rewritten as --autostart.
+    return $arguments -in @('', '--autostart', '--minimized')
   }
   # The covered identity is deliberately generic. It is owned only when both
   # the executable and its canonical autostart argument match. Older releases

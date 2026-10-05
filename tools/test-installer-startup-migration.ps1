@@ -13,7 +13,7 @@ $ast = Read-ScriptAst '../src-tauri/commander-free/nsis/migrate-legacy-user-laun
 foreach ($definition in $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] }) {
     . ([scriptblock]::Create($definition.Extent.Text))
 }
-$runValueNames = @('WinCommander', 'WinCommander Free')
+$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
 $root = "HKCU:\Software\ServaLabs\WinCommander\InstallerTests\$([guid]::NewGuid().ToString('N'))"
 $shared = 'C:\Program Files\WinCommander\wincommander-free.exe'
 New-Item -Path $root -Force | Out-Null
@@ -24,11 +24,11 @@ try {
         $owned = @($shared, (Join-Path $profilePath 'AppData\Local\WinCommander\wincommander-free.exe'), (Join-Path $profilePath 'AppData\Local\Programs\WinCommander\wincommander-free.exe'))
         foreach ($command in @('"%LOCALAPPDATA%\WinCommander\wincommander-free.exe" --autostart', '"%USERPROFILE%\AppData\Local\WinCommander\wincommander-free.exe" --minimized', '"%LOCALAPPDATA%\Programs\WinCommander\wincommander-free.exe" --autostart')) {
             foreach ($kind in @('String', 'ExpandString')) {
-                New-ItemProperty -Path $root -Name 'WinCommander' -PropertyType $kind -Value $command -Force | Out-Null
+                New-ItemProperty -Path $root -Name 'WinCommander Pro' -PropertyType $kind -Value $command -Force | Out-Null
                 New-ItemProperty -Path $root -Name 'WinCommander Free' -PropertyType String -Value '"%LOCALAPPDATA%\Foreign\wincommander-free.exe" --autostart' -Force | Out-Null
                 $removed = Remove-OwnedRunValues @($root) $owned $profilePath
                 if ($removed -ne 1) { throw "Profile-relative $kind startup survived migration for $profilePath" }
-                if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander')) { throw 'Owned Run entry survived' }
+                if ($null -ne (Get-OptionalRegistryValue $root 'WinCommander Pro')) { throw 'Owned Pro-labelled Run entry survived' }
                 if ($null -eq (Get-OptionalRegistryValue $root 'WinCommander Free')) { throw 'Foreign Run entry was removed' }
                 if ((Remove-OwnedRunValues @($root) $owned $profilePath) -ne 0) { throw 'Repeated migration was not idempotent' }
             }
@@ -85,7 +85,7 @@ try {
             $runKey = Join-Path $hive $suffix
             New-Item -Path $runKey -Force | Out-Null
             $runLayout = if ($suffix -like '*WOW6432Node*') { 'Programs\WinCommander' } else { 'WinCommander' }
-            New-ItemProperty -Path $runKey -Name 'WinCommander' -PropertyType ExpandString -Value ('"%LOCALAPPDATA%\' + $runLayout + '\wincommander-free.exe" --autostart') | Out-Null
+            New-ItemProperty -Path $runKey -Name 'WinCommander Pro' -PropertyType ExpandString -Value ('"%LOCALAPPDATA%\' + $runLayout + '\wincommander-free.exe" --autostart') | Out-Null
             New-ItemProperty -Path $runKey -Name 'WinCommander Free' -PropertyType String -Value '"C:\Other\other.exe" --autostart' | Out-Null
         }
         $script:fixtureProfiles += [pscustomobject]@{ PSChildName = $sid; ProfileImagePath = $profilePath }
@@ -123,7 +123,7 @@ try {
             if ($desktopLink.TargetPath -ne $SharedExecutable) { throw 'Manual shortcut retained the old executable' }
         }
         foreach ($key in Get-ChildItem -LiteralPath $script:fixtureHives[$entry.PSChildName] -Recurse | Where-Object { $_.PSChildName -in @('Run', 'RunOnce') }) {
-            if ($null -ne (Get-OptionalRegistryValue $key.PSPath 'WinCommander')) { throw 'Profile Run route survived complete migration' }
+            if ($null -ne (Get-OptionalRegistryValue $key.PSPath 'WinCommander Pro')) { throw 'Profile Pro-labelled Run route survived complete migration' }
             if ($null -eq (Get-OptionalRegistryValue $key.PSPath 'WinCommander Free')) { throw 'Foreign profile Run route removed' }
         }
     }
@@ -171,6 +171,11 @@ Write-Output 'PASS: complete upgrade replaces admin and standard profile routes 
     $script:fixturePreference = $null
     $script:fixtureDisabledTask.Actions[0].Execute = 'C:\Users\FixtureStandard\AppData\Local\Programs\Foreign\wincommander-free.exe'
     if (-not (Get-AutostartEnabled $true $paths)) { throw 'Foreign task disabled WinCommander startup' }
+
+    $ownedBareTask = [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = $targetPath; Arguments = '' }) }
+    if (-not (Test-TaskActionOwnership $ownedBareTask '--autostart' $paths)) { throw 'Known owned no-argument autostart task was not recognized for normalization' }
+    $foreignBareTask = [pscustomobject]@{ Actions = @([pscustomobject]@{ Execute = 'C:\Foreign\wincommander-free.exe'; Arguments = '' }) }
+    if (Test-TaskActionOwnership $foreignBareTask '--autostart' $paths) { throw 'Foreign no-argument task was treated as owned' }
 }
 Write-Output 'PASS: both legacy install layouts preserve disabled tasks for every profile'
 

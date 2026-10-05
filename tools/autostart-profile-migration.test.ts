@@ -21,9 +21,9 @@ $otherProfile=Join-Path $env:SystemDrive 'Users\\StartupMigrationFixture'
 try {
   New-Item -Path $fixture -Force | Out-Null
   $command='"%LOCALAPPDATA%\\Programs\\WinCommander\\wincommander-free.exe" --minimized'
-  New-ItemProperty -LiteralPath $fixture -Name 'WinCommander' -PropertyType ExpandString -Value $command | Out-Null
-  New-ItemProperty -LiteralPath $fixture -Name 'WinCommander Pro' -PropertyType String -Value '"C:\\Other\\wincommander-free.exe" --autostart' | Out-Null
-  if ((Get-RegistryValueOrNull $fixture 'WinCommander') -cne $command) { throw 'REG_EXPAND_SZ was expanded under the administrator instead of its owner' }
+  New-ItemProperty -LiteralPath $fixture -Name 'WinCommander Pro' -PropertyType ExpandString -Value $command | Out-Null
+  New-ItemProperty -LiteralPath $fixture -Name 'WinCommander Free' -PropertyType String -Value '"C:\\Other\\wincommander-free.exe" --autostart' | Out-Null
+  if ((Get-RegistryValueOrNull $fixture 'WinCommander Pro') -cne $command) { throw 'REG_EXPAND_SZ was expanded under the administrator instead of its owner' }
   $resolved='"'+(Join-Path $otherProfile 'AppData\\Local\\Programs\\WinCommander\\wincommander-free.exe')+'" --minimized'
   if (-not (Test-OwnedExecutableCommand $resolved $otherProfile)) { throw 'Other profile absolute route was missed' }
   if (-not (Test-OwnedExecutableCommand $command $otherProfile)) { throw 'Other profile environment route was missed' }
@@ -43,8 +43,8 @@ try {
   if ((Get-RunOwnerProfile $loaded[0]) -ne $otherProfile) { throw 'Loaded hive owner lookup failed' }
   function Get-RunOwnerProfile { return $otherProfile }
   Remove-OwnedRunValues -Paths @($fixture)
-  if ($null -ne (Get-RegistryValueOrNull $fixture 'WinCommander')) { throw 'Owned route survived migration' }
-  if ($null -eq (Get-RegistryValueOrNull $fixture 'WinCommander Pro')) { throw 'Foreign route was removed' }
+  if ($null -ne (Get-RegistryValueOrNull $fixture 'WinCommander Pro')) { throw 'Owned Pro-labelled route survived migration' }
+  if ($null -eq (Get-RegistryValueOrNull $fixture 'WinCommander Free')) { throw 'Foreign route was removed' }
   Remove-OwnedRunValues -Paths @($fixture)
   'PASS raw registry values, loaded hive ownership, exact paths, cleanup, and idempotence'
 } finally {
@@ -55,4 +55,10 @@ try {
   expect(result.stderr.trim()).toBe("");
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("PASS raw registry values, loaded hive ownership, exact paths, cleanup, and idempotence");
+});
+
+test("runtime migration recognizes the historical Pro-labelled Run value", () => {
+  const source = readFileSync("src-tauri/commander-free/src/autostart.rs", "utf8");
+  expect(source).toContain('"WinCommander Pro".to_string()');
+  expect(source).toContain("return $arguments -in @('', '--autostart', '--minimized')");
 });

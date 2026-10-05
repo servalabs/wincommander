@@ -1,9 +1,10 @@
 //! Optional Windows elevation at an interactive launch.
 //!
 //! The executable manifest deliberately remains `asInvoker`: a standard user
-//! must always be able to open WinCommander.  For a foreground launch we ask
-//! Windows to start a second, elevated copy.  Accepting the UAC consent starts
-//! that copy; cancelling it leaves the already-running copy untouched.
+//! must always be able to open WinCommander. For a foreground launch made by
+//! a split-token administrator, Windows may start a second elevated copy.
+//! Standard accounts always continue normally; accepting UAC consent starts
+//! the administrator copy, while cancelling it leaves the original untouched.
 //!
 //! This is intentionally not a generic privilege broker.  It only chooses the
 //! integrity level for the normal desktop process.  Individual machine-wide
@@ -158,6 +159,10 @@ fn quote_windows_argument(argument: &str) -> String {
     quoted
 }
 
+fn should_request_admin_handoff(is_elevated: bool, has_split_admin_token: bool) -> bool {
+    !is_elevated && has_split_admin_token
+}
+
 #[cfg(windows)]
 pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     use std::os::windows::ffi::OsStrExt;
@@ -169,7 +174,20 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
 
     // A user may explicitly choose "Run as administrator" from Explorer.
     // Do not spawn a needless second elevated instance in that case.
-    if unsafe { IsUserAnAdmin() } != 0 || is_logon_router_launch(args) {
+    let elevated = unsafe { IsUserAnAdmin() } != 0;
+    if elevated || is_logon_router_launch(args) {
+        return StartupElevationResult::ContinueNormally;
+    }
+
+    // A standard account cannot use the Administrators-only scheduled
+    // launcher. Never turn an ordinary WinCommander launch into a credential
+    // prompt; machine-wide operations still request approval when invoked.
+    if !should_request_admin_handoff(elevated, current_user_has_split_admin_token()) {
+        crate::log_message_src(
+            "info",
+            "core",
+            "[StartupElevation] standard account continues without elevation",
+        );
         return StartupElevationResult::ContinueNormally;
     }
 
@@ -187,7 +205,7 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
         path.to_string_lossy().replace('\'', "''")
     ));
     use handoff_wait::SchedulerHandoff;
-    let task_status = if !cfg!(debug_assertions) && current_user_has_split_admin_token() {
+    let task_status = if !cfg!(debug_assertions) {
         task_script.map_or(SchedulerHandoff::NotStarted, |script| {
             let child = std::process::Command::new("powershell.exe")
                 .args([
@@ -346,6 +364,13 @@ mod tests {
             false,
             &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()]
         ));
+    }
+
+    #[test]
+    fn only_a_split_token_administrator_uses_the_elevated_launcher() {
+        assert!(should_request_admin_handoff(false, true));
+        assert!(!should_request_admin_handoff(false, false));
+        assert!(!should_request_admin_handoff(true, true));
     }
 
     #[test]

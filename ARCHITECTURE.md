@@ -133,8 +133,12 @@ Native startup runs the integrity check once on a background thread. Autostart
 IPC operations use blocking workers rather than the window event thread; the
 renderer does not launch a duplicate startup repair.
 Both manual setup and in-app updates preserve an explicit startup OFF choice.
-Upgrade migration removes owned legacy Run/RunOnce entries and Startup shortcuts
-using each Windows account's profile, including expandable registry values and
+Upgrade migration removes owned legacy Run/RunOnce entries (including the
+historical `WinCommander Pro` value), Startup shortcuts, and exact owned
+automatic tasks that were incorrectly created without their background marker.
+Those repaired tasks are recreated with `--autostart`, so they cannot be
+mistaken for an interactive elevated launch at sign-in. Migration uses each
+Windows account's profile, including expandable registry values and
 both historical per-user install directories. Loaded profiles are repaired during
 setup; inaccessible profiles defer their registry cleanup to their next launch.
 The canonical launcher reconciler owns startup task migration so a later general

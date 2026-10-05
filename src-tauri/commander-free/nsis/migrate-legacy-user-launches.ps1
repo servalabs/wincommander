@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) {
     throw "The shared WinCommander executable is missing: $shared"
 }
 
-$runValueNames = @('WinCommander', 'WinCommander Free')
+$runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
 $systemProfileSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
 $shell = New-Object -ComObject WScript.Shell
 $summary = [ordered]@{ profiles = 0; runValuesRemoved = 0; startupShortcutsRemoved = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; registryHivesDeferred = 0; failures = 0 }
