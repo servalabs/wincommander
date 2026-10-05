@@ -666,6 +666,7 @@ fn is_syncthing_root_conflict(message: &str) -> bool {
             | "syncthing_vault_folder_path_conflict"
             | "syncthing_vault_folder_path_mismatch"
             | "syncthing_vault_binding_conflict"
+            | "syncthing_vault_recovery_stale"
     )
 }
 

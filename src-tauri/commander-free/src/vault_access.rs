@@ -500,9 +500,16 @@ pub async fn vault_unmount_entry(
 pub async fn vault_enroll_personal_syncthing(
     internal_drive: u8,
     relative_path: String,
+    recovery_action: Option<String>,
+    recovery_token: Option<String>,
 ) -> Result<Value, String> {
     if internal_drive > 25 || relative_path.len() > 240 {
         return Err("personal sync enrollment request is invalid".to_string());
+    }
+    match (recovery_action.as_deref(), recovery_token.as_deref()) {
+        (None | Some("inspect"), None) => {},
+        (Some("recreate"), Some(token)) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => {},
+        _ => return Err("personal sync recovery request is invalid".into()),
     }
     crate::svc_client::call(
         ENROLL_PERSONAL_SYNCTHING,
@@ -510,6 +517,8 @@ pub async fn vault_enroll_personal_syncthing(
             "personal": true,
             "internal_drive": internal_drive,
             "relative_path": relative_path,
+            "recovery_action": recovery_action,
+            "recovery_token": recovery_token,
         }),
     )
     .await

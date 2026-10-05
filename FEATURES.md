@@ -132,8 +132,11 @@ operational risk, or proprietary enforcement logic.
   own setup; account/container bindings survive owner-only policy changes. Shared Vaults are
   excluded; connecting another device still requires Syncthing device pairing.
 - Removing a bound folder from Syncthing does not block Vault dismount.
-  Enabling sync again restores the saved folder identity in a paused state for
-  review and sharing. This does not restore deleted files or safety markers.
+  A missing sync directory, safety marker, or configuration entry opens a
+  recovery choice when the Vault mounts or sync is enabled again. Keep it paused,
+  or explicitly recreate that folder's sync setup. Recreation preserves existing
+  files, uses a fresh sync history, and resumes automatically; that folder must
+  be shared with the other device again. Deleted files are not restored.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
 - Signed evidence-vault export and advanced verification/reporting options.

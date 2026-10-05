@@ -2989,6 +2989,10 @@ struct PersonalVaultSyncthingEnrollmentRequest {
     personal: bool,
     internal_drive: u8,
     relative_path: String,
+    #[serde(default)]
+    recovery_action: Option<crate::vault_syncthing_recovery::RecoveryAction>,
+    #[serde(default)]
+    recovery_token: Option<String>,
 }
 
 fn handle_personal_vault_syncthing_enroll(
@@ -3017,6 +3021,10 @@ fn handle_personal_vault_syncthing_enroll(
             peer.token(),
             peer.session_id(),
             peer.caller_sid(),
+            &crate::vault_syncthing_recovery::RecoveryOptions {
+                action: request.recovery_action,
+                token: request.recovery_token,
+            },
         )
         .map_err(|reason| {
             VerbError::new(
@@ -3025,9 +3033,11 @@ fn handle_personal_vault_syncthing_enroll(
             )
         })?;
     Ok(serde_json::json!({
-        "enabled": true,
+        "enabled": enrollment.managed,
         "gui_url": enrollment.gui_url,
         "recovery_required": enrollment.recovery_required,
+        "recovery_roots": enrollment.recovery_roots,
+        "pairing_required": enrollment.pairing_required,
     }))
 }
 

@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
+use crate::vault_syncthing_recovery::{RecoveryAction, RecoveryOptions, RecoveryRoot, recovery_roots};
 use wincmd_shared::vault_access::{
     PersonalVaultMountRequest, PersonalVaultMountedVolume, PersonalVaultRecord,
     VaultBrokerVolumeRole, VaultContainerKind, VaultMountMode, VaultMountPlan, VaultMountReason,
@@ -235,6 +236,7 @@ fn syncthing_setup_call(
     mount: &ActiveMount,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     relative_path: &str,
+    recovery: &RecoveryOptions,
 ) -> Result<serde_json::Value, VaultMountReason> {
     let mut hasher = Sha256::new();
     hasher.update(entry_id.as_bytes());
@@ -250,6 +252,17 @@ fn syncthing_setup_call(
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
+    let mut args = serde_json::json!({
+        "operation_id": operation_id,
+        "vault_entry_id": entry_id,
+        "owner_sid": mount.caller_sid,
+        "volume_identity": mount.container_identity,
+        "drive_letter": mount.drive_letter,
+        "target_session_id": mount.session_id,
+        "folder_id": folder_id,
+        "relative_path": relative_path,
+    });
+    recovery.add_to(&mut args);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
             crate::pro_broker::VaultCall {
@@ -260,16 +273,7 @@ fn syncthing_setup_call(
                 caller_authentication_id: None,
                 presentation: mount.presentation,
                 feature_id,
-                args: serde_json::json!({
-                    "operation_id": operation_id,
-                    "vault_entry_id": entry_id,
-                    "owner_sid": mount.caller_sid,
-                    "volume_identity": mount.container_identity,
-                    "drive_letter": mount.drive_letter,
-                    "target_session_id": mount.session_id,
-                    "folder_id": folder_id,
-                    "relative_path": relative_path,
-                }),
+                args,
             },
         ))
     })
@@ -277,8 +281,11 @@ fn syncthing_setup_call(
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SyncthingEnrollmentResult {
+    pub managed: bool,
     pub gui_url: String,
     pub recovery_required: bool,
+    pub recovery_roots: Vec<RecoveryRoot>,
+    pub pairing_required: bool,
 }
 
 fn syncthing_enroll_call(
@@ -287,9 +294,10 @@ fn syncthing_enroll_call(
     mount: &ActiveMount,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     relative_path: &str,
+    recovery: &RecoveryOptions,
 ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
     let value = syncthing_setup_call(
-        "vault.syncthing.enroll", operation_id, entry_id, mount, caller_token, relative_path,
+        "vault.syncthing.enroll", operation_id, entry_id, mount, caller_token, relative_path, recovery,
     )?;
     syncthing_enrollment_result(&value)
 }
@@ -297,9 +305,8 @@ fn syncthing_enroll_call(
 fn syncthing_enrollment_result(
     value: &serde_json::Value,
 ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
-    if value.get("managed").and_then(serde_json::Value::as_bool) != Some(true) {
-        return Err(VaultMountReason::BrokerRejected);
-    }
+    let managed = value.get("managed").and_then(serde_json::Value::as_bool)
+        .ok_or(VaultMountReason::BrokerRejected)?;
     let gui_url = value
         .get("gui_url")
         .and_then(serde_json::Value::as_str)
@@ -310,7 +317,17 @@ fn syncthing_enrollment_result(
         None => false,
         Some(value) => value.as_bool().ok_or(VaultMountReason::BrokerRejected)?,
     };
-    Ok(SyncthingEnrollmentResult { gui_url, recovery_required })
+    let recovery_roots = recovery_roots(value)?;
+    let pairing_required = match value.get("pairing_required") {
+        None => false,
+        Some(value) => value.as_bool().ok_or(VaultMountReason::BrokerRejected)?,
+    };
+    if recovery_required == recovery_roots.is_empty()
+        || (recovery_required && !managed)
+        || (pairing_required && !managed) {
+        return Err(VaultMountReason::BrokerRejected);
+    }
+    Ok(SyncthingEnrollmentResult { managed, gui_url, recovery_required, recovery_roots, pairing_required })
 }
 
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
@@ -453,7 +470,7 @@ fn recovery_dismount_request(active: &ActiveMount) -> BrokerDismountRequest<'_> 
     }
 }
 
-fn valid_relative_sync_path(value: &str) -> bool {
+pub(crate) fn valid_relative_sync_path(value: &str) -> bool {
     let path = std::path::Path::new(value);
     !value.is_empty()
         && !path.is_absolute()
@@ -1848,14 +1865,15 @@ impl VaultMountBroker {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         caller_session: u32,
         caller_sid: &str,
+        recovery: &RecoveryOptions,
     ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
         self.enroll_personal_syncthing_with_prepare(
             store, operation_id, internal_drive, relative_path, caller_token,
-            caller_session, caller_sid,
+            caller_session, caller_sid, recovery,
             |entry_id, mount| {
                 let result = syncthing_setup_call(
                     "vault.syncthing.prepare", operation_id, entry_id, mount,
-                    caller_token, relative_path,
+                    caller_token, relative_path, recovery,
                 )?;
                 if result == serde_json::json!({ "prepared": true }) {
                     Ok(())
@@ -1898,8 +1916,10 @@ impl VaultMountBroker {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         caller_session: u32,
         caller_sid: &str,
+        recovery: &RecoveryOptions,
         prepare: impl FnOnce(&str, &ActiveMount) -> Result<(), VaultMountReason>,
     ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
+        recovery.validate()?;
         if !valid_relative_sync_path(relative_path) {
             return Err(VaultMountReason::InvalidRequest);
         }
@@ -1919,6 +1939,9 @@ impl VaultMountBroker {
             {
                 return Err(VaultMountReason::MountStateUnknown);
             }
+            if recovery.action == Some(RecoveryAction::Inspect) {
+                return syncthing_enroll_call(operation_id, &entry_id, &active, caller_token, relative_path, recovery);
+            }
             // Enrollment can mutate the folder before its reply is received.
             // Persist uncertainty first so a failed reply cannot skip pause.
             active.syncthing_resume_unresolved = true;
@@ -1933,7 +1956,14 @@ impl VaultMountBroker {
                 &active,
                 caller_token,
                 relative_path,
+                recovery,
             )?;
+            if !enrollment.managed {
+                return Err(VaultMountReason::BrokerRejected);
+            }
+            if enrollment.recovery_required {
+                return Ok(enrollment);
+            }
             let resumed = syncthing_lifecycle_call(
                 "vault.syncthing.resume",
                 operation_id,
@@ -3225,6 +3255,7 @@ mod tests {
             broker.active.lock().unwrap().insert("personal".into(), mount);
             let result = broker.enroll_personal_syncthing_with_prepare(
                 &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-owner",
+                &RecoveryOptions::default(),
                 |_, _| {
                     let _other_operation = broker.operation.try_lock()
                         .expect("downloading must allow another Vault operation");
@@ -3257,6 +3288,7 @@ mod tests {
         broker.active.lock().unwrap().insert("personal".into(), mount);
         let result = broker.enroll_personal_syncthing_with_prepare(
             &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-other",
+            &RecoveryOptions::default(),
             |_, _| panic!("unauthorized caller must not start prerequisite installation"),
         );
         assert_eq!(result, Err(VaultMountReason::NotAuthorized));

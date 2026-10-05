@@ -32,6 +32,13 @@ describe("post-mount Syncthing warning", () => {
     expect(notices).toEqual([{ drive: "I:", warning: "unavailable" }]);
   });
 
+  it("asks for a recovery decision after a confirmed mount", () => {
+    const { target, notices } = capture();
+    notifyPolicyMountSyncWarning({ state: "mounted", drive_letter: "I:", sync_warning: "recovery_required" }, target);
+    expect(notices).toEqual([{ drive: "I:", warning: "recovery_required" }]);
+    expect(vaultSyncWarningMessage(notices[0])).toContain("remain paused");
+  });
+
   it("does not warn for healthy, manually paused, unmanaged, missing, or failed receipts", () => {
     const { target, notices } = capture();
     notifyPersonalMountSyncWarning({ success: false, data: { status: "mounted", drive: "J:", syncWarning: "stopped" } }, target);

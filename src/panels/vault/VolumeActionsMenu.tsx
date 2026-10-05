@@ -4,7 +4,9 @@ import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
-import { showSuccess, showError, showWarning } from "../../utils/toast";
+import { showSuccess, showError } from "../../utils/toast";
+import { notifyVaultSyncRecovery } from "@/lib/vaultSyncWarning";
+import { isSyncthingSetupUrl } from "@/lib/vaultSyncRecovery";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
 import { personalVaultSyncError, personalVaultSyncSetupMessage } from "@/lib/personalVaultSyncFeedback";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
@@ -109,10 +111,15 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     try {
       const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
       setSyncSetupOpen(false);
-      const message = personalVaultSyncSetupMessage(`${driveLabel}\\${relativePath}`, enrollment.recovery_required === true);
-      if (enrollment.recovery_required) showWarning(message, undefined, { kind: "notification" });
-      else showSuccess(message);
+      if (enrollment.recovery_required) {
+        window.setTimeout(() => notifyVaultSyncRecovery(driveLabel, internalDrive, enrollment), 350);
+        return;
+      }
+      if (!enrollment.enabled) throw new Error("vault_broker_rejected");
+      const message = personalVaultSyncSetupMessage(`${driveLabel}\\${relativePath}`, enrollment.pairing_required === true);
+      showSuccess(message);
       try {
+        if (!isSyncthingSetupUrl(enrollment.gui_url)) throw new Error("invalid_gui_url");
         await open(enrollment.gui_url);
       } catch {
         showError(`Sync is configured, but its setup page could not open. Open ${enrollment.gui_url} in your browser.`, undefined, { kind: "notification" });

@@ -1,12 +1,16 @@
 import { expect, test } from "bun:test";
 import { personalVaultSyncError, personalVaultSyncSetupMessage } from "./personalVaultSyncFeedback";
 
-test("recreated sync configuration explains the paused recovery without claiming restored files", () => {
+test("confirmed new sync setup explains the remaining device connection step", () => {
+  expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("Connect your other device");
+});
+
+test("reopening recreated sync preserves phone sharing and existing-file guidance", () => {
   const message = personalVaultSyncSetupMessage("V:\\Sync", true);
-  expect(message).toContain("left paused");
-  expect(message).toContain("sharing settings");
-  expect(message).toContain("Deleted files have not been restored");
-  expect(personalVaultSyncSetupMessage("V:\\Sync", false)).toContain("Connect your other device");
+  expect(message).toContain("Share this new folder");
+  expect(message).toContain("old Syncthing folder entry while keeping the files");
+  expect(message).toContain("accept the new share");
+  expect(message).not.toContain("Connect your other device");
 });
 
 test("a responding helper's rejected folder is not reported as unreachable", () => {

@@ -59,6 +59,8 @@ mod vault_access;
 
 #[cfg(windows)]
 mod vault_mount;
+#[cfg(windows)]
+mod vault_syncthing_recovery;
 
 #[cfg(windows)]
 mod vault_drive_letters;

@@ -1,7 +1,8 @@
-export function personalVaultSyncSetupMessage(path: string, recoveryRequired: boolean): string {
-  return recoveryRequired
-    ? `The deleted sync entry for ${path} has been restored and left paused. Open Syncthing, check the folder's files and sharing settings, then resume it when ready. Deleted files have not been restored.`
-    : `Sync is configured for ${path}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`;
+export const RECOVERED_SYNC_SHARING_GUIDANCE = "Share this new folder with your phone in Syncthing and accept it there. If the phone says the folder location is already in use, remove its old Syncthing folder entry while keeping the files, then accept the new share.";
+
+export function personalVaultSyncSetupMessage(path: string, pairingRequired = false): string {
+  if (pairingRequired) return `Sync setup for ${path} is ready. ${RECOVERED_SYNC_SHARING_GUIDANCE}`;
+  return `Sync is configured for ${path}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`;
 }
 
 /** Translate bounded service outcomes without exposing private helper diagnostics. */

@@ -782,6 +782,7 @@ impl VaultMountReason {
 pub enum VaultSyncWarning {
     Stopped,
     Unavailable,
+    RecoveryRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

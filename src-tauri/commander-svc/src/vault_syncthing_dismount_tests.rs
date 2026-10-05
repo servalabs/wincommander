@@ -1,6 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[test]
+fn sync_recovery_receipt_keeps_each_target_and_mount_warning() {
+    let response = serde_json::json!({
+        "managed":true, "gui_url":"http://127.0.0.1:8385", "recovery_required":true,
+        "recovery_roots":[
+            {"relative_path":"Photos", "reason":"root_missing", "token":"a".repeat(64)},
+            {"relative_path":"Documents", "reason":"configuration_missing", "token":"b".repeat(64)},
+        ],
+    });
+    let receipt = syncthing_enrollment_result(&response).unwrap();
+    assert!(receipt.recovery_required);
+    assert_eq!(receipt.recovery_roots.len(), 2);
+    let mut mixed = response.clone();
+    mixed["pairing_required"] = serde_json::json!(true);
+    assert!(syncthing_enrollment_result(&mixed).unwrap().pairing_required);
+    let mut inconsistent = response.clone();
+    inconsistent["recovery_required"] = serde_json::json!(false);
+    assert_eq!(syncthing_enrollment_result(&inconsistent), Err(VaultMountReason::BrokerRejected));
+    let lifecycle = syncthing_lifecycle_result(&serde_json::json!({"managed":true, "sync_warning":"recovery_required"}));
+    assert!(lifecycle.managed);
+    assert_eq!(lifecycle.warning, Some(VaultSyncWarning::RecoveryRequired));
+}
+
+#[test]
 fn sync_enrollment_preserves_recovery_notice_and_rejects_malformed_flags() {
     let legacy = serde_json::json!({ "managed": true, "gui_url": "http://127.0.0.1:8385" });
     let result = syncthing_enrollment_result(&legacy).unwrap();
@@ -9,8 +32,18 @@ fn sync_enrollment_preserves_recovery_notice_and_rejects_malformed_flags() {
     for flag in [false, true] {
         let mut response = legacy.clone();
         response["recovery_required"] = serde_json::json!(flag);
+        if flag {
+            response["recovery_roots"] = serde_json::json!([
+                {"relative_path":"Sync", "reason":"root_missing", "token":"a".repeat(64)}
+            ]);
+        }
         assert_eq!(syncthing_enrollment_result(&response).unwrap().recovery_required, flag);
     }
+    let mut empty_recovery = legacy.clone();
+    empty_recovery["recovery_required"] = serde_json::json!(true);
+    assert_eq!(syncthing_enrollment_result(&empty_recovery), Err(VaultMountReason::BrokerRejected));
+    empty_recovery["recovery_roots"] = serde_json::json!([]);
+    assert_eq!(syncthing_enrollment_result(&empty_recovery), Err(VaultMountReason::BrokerRejected));
     for invalid in [serde_json::Value::Null, serde_json::json!("true"), serde_json::json!(1)] {
         let mut response = legacy.clone();
         response["recovery_required"] = invalid;
