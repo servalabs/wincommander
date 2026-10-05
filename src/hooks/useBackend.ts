@@ -6,6 +6,7 @@ import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
+import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -603,6 +604,7 @@ export interface MountVolumeResult {
   hiddenProtection: boolean;
   /** False when an unmanaged mount preserves existing ACLs without applying a Fleet policy. */
   aclAttested: boolean;
+  syncWarning?: VaultSyncWarning | null;
 }
 
 export const buildMountVolumeRequest = (params: MountVolumeParams) => ({

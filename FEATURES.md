@@ -109,6 +109,12 @@ operational risk, or proprietary enforcement logic.
   containers retain their separate selected-user and group permission checks.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
+- Personal Vault Syncthing setup can install the engine for the current Windows
+  account when needed. Sync bindings follow the verified container and account
+  across drive-letter or owner-only policy changes. WinCommander pauses bound
+  folders before dismount and resumes them after mount, preserving manual pauses.
+  New containers require their own setup; shared policy Vaults are not enrolled.
+  A mounted container remains accessible if sync recovery reports a warning.
 - Signed evidence-vault export and advanced verification/reporting options.
 - Deception and tripwire capabilities such as canaries or honeypots.
 - VM/sandbox, backup, recovery, and premium monitoring capabilities.

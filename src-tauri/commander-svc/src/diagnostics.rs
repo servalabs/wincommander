@@ -718,6 +718,12 @@ fn reason_fields(
             false,
             "choose_non_overlapping_root",
         ),
+        Some(VaultMountReason::SyncthingInstallFailed) => (
+            "VLT.SYNCTHING.INSTALL_FAILED",
+            DiagnosticSeverity::Error,
+            true,
+            "check_syncthing_installation",
+        ),
         Some(VaultMountReason::ProNotInstalled) => (
             "VLT.PRO.NOT_INSTALLED",
             DiagnosticSeverity::Error,

@@ -626,6 +626,7 @@ pub enum VaultMountReason {
     ProNotInstalled,
     BrokerUnavailable,
     SyncthingProfileUnavailable,
+    SyncthingInstallFailed,
     SyncthingRootConflict,
     BrokerRejected,
     BrokerIdentityRejected,
@@ -646,7 +647,7 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -657,6 +658,7 @@ impl VaultMountReason {
         Self::ProNotInstalled,
         Self::BrokerUnavailable,
         Self::SyncthingProfileUnavailable,
+        Self::SyncthingInstallFailed,
         Self::SyncthingRootConflict,
         Self::BrokerRejected,
         Self::BrokerIdentityRejected,
@@ -676,7 +678,7 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 27] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 28] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -687,6 +689,7 @@ impl VaultMountReason {
         "pro_not_installed",
         "broker_unavailable",
         "syncthing_profile_unavailable",
+        "syncthing_install_failed",
         "syncthing_root_conflict",
         "broker_rejected",
         "broker_identity_rejected",
@@ -718,6 +721,7 @@ impl VaultMountReason {
             Self::ProNotInstalled => "pro_not_installed",
             Self::BrokerUnavailable => "broker_unavailable",
             Self::SyncthingProfileUnavailable => "syncthing_profile_unavailable",
+            Self::SyncthingInstallFailed => "syncthing_install_failed",
             Self::SyncthingRootConflict => "syncthing_root_conflict",
             Self::BrokerRejected => "broker_rejected",
             Self::BrokerIdentityRejected => "broker_identity_rejected",
@@ -750,6 +754,7 @@ impl VaultMountReason {
             "pro_not_installed" => Some(Self::ProNotInstalled),
             "broker_unavailable" => Some(Self::BrokerUnavailable),
             "syncthing_profile_unavailable" => Some(Self::SyncthingProfileUnavailable),
+            "syncthing_install_failed" => Some(Self::SyncthingInstallFailed),
             "syncthing_root_conflict" => Some(Self::SyncthingRootConflict),
             "broker_rejected" => Some(Self::BrokerRejected),
             "broker_identity_rejected" => Some(Self::BrokerIdentityRejected),
@@ -772,6 +777,13 @@ impl VaultMountReason {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultSyncWarning {
+    Stopped,
+    Unavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultMountResult {
@@ -780,6 +792,8 @@ pub struct VaultMountResult {
     pub presentation: Option<VaultPresentation>,
     pub drive_letter: Option<String>,
     pub reason: Option<VaultMountReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_warning: Option<VaultSyncWarning>,
 }
 
 /// Ordinary-user projection for “My vaults”.  It is deliberately not a
@@ -930,6 +944,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mounted_result_can_report_sync_warning_without_changing_mount_outcome() {
+        let mut value = serde_json::json!({
+            "entry_id": "personal", "state": "mounted", "presentation": "per-user",
+            "drive_letter": "J:", "reason": null,
+        });
+        let legacy: VaultMountResult = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(legacy.sync_warning, None);
+        for warning in ["stopped", "unavailable"] {
+            value["sync_warning"] = serde_json::json!(warning);
+            let result: VaultMountResult = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(result.state, VaultMountState::Mounted);
+            assert_eq!(result.reason, None);
+            assert_eq!(serde_json::to_value(result).unwrap()["sync_warning"], warning);
+        }
+        value["sync_warning"] = serde_json::json!("raw private error");
+        assert!(serde_json::from_value::<VaultMountResult>(value).is_err());
+    }
+
+    #[test]
     fn access_selection_round_trips_without_collapsing_shared_modes() {
         let mut wire = serde_json::json!({
             "id": "example", "label": "Example", "container_path": "D:\\example.ec",
@@ -1044,6 +1077,7 @@ mod tests {
             presentation: None,
             drive_letter: None,
             reason: Some(VaultMountReason::NotAuthorized),
+            sync_warning: None,
         };
         assert!(!serde_json::to_string(&result)
             .unwrap()
@@ -1212,6 +1246,7 @@ mod tests {
             presentation: Some(VaultPresentation::Machine),
             drive_letter: None,
             reason: Some(VaultMountReason::EngineDriveLetterUnavailable),
+            sync_warning: None,
         };
         assert_eq!(
             serde_json::to_value(result).unwrap(),

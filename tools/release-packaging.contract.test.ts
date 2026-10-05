@@ -52,14 +52,15 @@ describe("Free machine-wide release packaging", () => {
     expect(baseConfig.bundle.windows.nsis.startMenuFolder).toBe("ServaLabs\\WinCommander");
   });
 
-  test("bundles its machine service but leaves the entitled Pro helper to its verified runtime installer", () => {
+  test("bundles the machine service and matching Pro helper in the paired test installer", () => {
     expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-svc.exe");
     expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-pro.exe");
     expect(baseConfig.bundle.resources).not.toContain("resources/EncVolKm.sys");
     expect(releaseTool).toContain("commander-svc");
     expect(releaseTool).toContain("wincommander-svc.exe");
-    expect(releaseTool).not.toContain("commander-pro");
-    expect(releaseTool).not.toContain("wincommander-pro.exe");
+    expect(releaseTool).toContain('const proResource = "resources/wincommander-pro.exe"');
+    expect(releaseTool).toContain("copyFileSync(proBuildPath, stagedProPath)");
+    expect(releaseTool).toContain("rmSync(stagedProPath, { force: true })");
     expect(releaseTool).not.toContain('run(["bun", "run", "hash-pro"], "WinCommander Pro service-helper hash")');
     expect(releaseTool).not.toContain("EncVolKm.sys");
     expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
@@ -150,8 +151,8 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("startupShortcutsRemoved");
     expect(legacyLaunchMigration).toContain("$env:ProgramData 'Microsoft\\Windows\\Start Menu\\Programs\\Startup'");
     expect(legacyLaunchMigration).not.toContain("Remove-Item -LiteralPath $legacyRoot");
-    expect(hooks).not.toContain("WC_PRO_PAYLOAD");
-    expect(hooks).not.toContain("WC_PRO_EXE");
+    expect(hooks).toContain("WC_PRO_PAYLOAD");
+    expect(hooks).toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
     expect(hooks).toContain('cmd.exe /c net.exe localgroup "WinCommander Vault Policy Administrators" "%USERNAME%" /add');
     expect(hooks).not.toContain('Abort "WinCommander could not create the Vault Policy Administrators group."');

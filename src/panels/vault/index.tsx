@@ -26,6 +26,7 @@ import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import { confirmedMountObservationError, vaultOperationError } from "@/lib/vaultOperationFeedback";
+import { notifyPersonalMountSyncWarning } from "@/lib/vaultSyncWarning";
 import MountProgress from "./MountProgress";
 import { waitForMountOptions, waitForMountReadback, type MountStage } from "./mountOperationProgress";
 
@@ -399,7 +400,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       }
       setMountDialogOpen(false);
       resetMountForm();
-      setMountedVolume(result.data);
+      setMountedVolume(result.data.syncWarning ? null : result.data);
+      // Let the mount dialog release its focus trap before opening another modal.
+      window.setTimeout(() => notifyPersonalMountSyncWarning(result), 350);
       showSuccess(`Encrypted volume mounted as ${result.data.drive}.`, undefined, { kind: "notification", operationId });
       recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "windows_readback",
         lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never",
