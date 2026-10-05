@@ -1,4 +1,9 @@
-param([switch]$SkipBuild, [switch]$Release)
+param(
+    [switch]$SkipBuild,
+    [switch]$Release,
+    [ValidateSet('baseline', 'visible', 'unresponsive', 'hidden', 'minimized', 'locked')]
+    [string[]]$Mode = @('baseline', 'visible', 'hidden', 'minimized', 'locked')
+)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
@@ -19,27 +24,27 @@ try {
     $executable = Join-Path (Get-Location) "target\$profile\examples\renderer-recovery-probe.exe"
     & $manifestTool.FullName -nologo -manifest commander-free/app.manifest "-outputresource:${executable};#1"
     if ($LASTEXITCODE -ne 0) { throw 'Probe manifest embedding failed.' }
-    foreach ($mode in @('baseline', 'visible', 'hidden', 'minimized', 'locked')) {
+    foreach ($scenario in $Mode) {
         $launch = @{
             FilePath = $executable; WindowStyle = 'Hidden'; PassThru = $true
-            RedirectStandardOutput = Join-Path $logs "$mode.stdout.log"
-            RedirectStandardError = Join-Path $logs "$mode.stderr.log"
+            RedirectStandardOutput = Join-Path $logs "$scenario.stdout.log"
+            RedirectStandardError = Join-Path $logs "$scenario.stderr.log"
         }
-        if ($mode -eq 'baseline') { $launch.ArgumentList = '--without-recovery' }
-        elseif ($mode -ne 'visible') { $launch.ArgumentList = "--$mode" }
+        if ($scenario -eq 'baseline') { $launch.ArgumentList = '--without-recovery' }
+        elseif ($scenario -ne 'visible') { $launch.ArgumentList = "--$scenario" }
         # Only this isolated, freshly started probe is terminated on timeout.
         # No installed app, profile, scheduled task, service or registry is touched.
         $probe = Start-Process @launch
         $null = $probe.Handle # Retain the handle so Windows PowerShell keeps ExitCode after exit.
         if (-not $probe.WaitForExit(45000)) {
             $probe.Kill()
-            throw "Renderer probe timed out in $mode mode. Logs: $logs"
+            throw "Renderer probe timed out in $scenario mode. Logs: $logs"
         }
         $probe.WaitForExit()
         Get-Content -LiteralPath $launch.RedirectStandardOutput
         if ($probe.ExitCode -ne 0) {
             Get-Content -LiteralPath $launch.RedirectStandardError
-            throw "Renderer probe failed in $mode mode ($($probe.ExitCode)). Logs: $logs"
+            throw "Renderer probe failed in $scenario mode ($($probe.ExitCode)). Logs: $logs"
         }
     }
     Write-Output "Renderer recovery checks passed. Logs: $logs"

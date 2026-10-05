@@ -39,6 +39,8 @@ mod settings_scope;
 mod personal_settings;
 #[path = "settings_legacy_migration.rs"]
 mod legacy_migration;
+#[path = "settings_startup_scope.rs"]
+mod startup_scope;
 
 pub(crate) fn personal_settings_automation_available() -> bool {
     personal_settings::automation_available()
@@ -50,7 +52,6 @@ const ROOT_SETTINGS_SCOPE_TABLE: &[(&str, SettingsScope)] = &[
     ("deviceId", SettingsScope::Machine),
     ("createdAt", SettingsScope::Machine),
     ("lastSeenAt", SettingsScope::User),
-    ("app", SettingsScope::User),
     ("policy", SettingsScope::Machine),
 ];
 // ── Device Identifiers ───────────────────────────────────────────────
@@ -350,6 +351,7 @@ pub struct AppPreferences {
     pub auto_update: bool,
     #[serde(default)]
     pub start_minimized: bool,
+    // Machine-wide sign-in presentation. Personal overlays cannot override it.
     // The legacy start_minimized field was unused and persisted false; do not
     // reinterpret it as consent to reveal existing installations at sign-in.
     #[serde(default = "default_true")]
@@ -2495,6 +2497,16 @@ fn parse_and_migrate_json_val(json: serde_json::Value) -> Result<AppSettings, St
 }
 
 fn scope_for_path(path: &str) -> Result<Option<SettingsScope>, String> {
+    if path == "app" {
+        return Ok(None);
+    }
+    if path.starts_with("app.") {
+        return Ok(Some(if path == startup_scope::PATH {
+            SettingsScope::Machine
+        } else {
+            SettingsScope::User
+        }));
+    }
     if let Some((_, scope)) = ROOT_SETTINGS_SCOPE_TABLE
         .iter()
         .find(|(root_path, _)| *root_path == path)
@@ -2590,8 +2602,9 @@ fn split_settings_value(
 
 fn merge_user_overlay(
     machine: AppSettings,
-    overlay: serde_json::Value,
+    mut overlay: serde_json::Value,
 ) -> Result<AppSettings, String> {
+    startup_scope::remove_personal_choice(&mut overlay);
     let mut merged = serde_json::to_value(machine)
         .map_err(|error| format!("Failed to serialize machine settings: {error}"))?;
     merge_json(&mut merged, &overlay);
@@ -2675,7 +2688,9 @@ fn load_settings_for_startup() -> Result<LoadedSettings, String> {
                     "info",
                     "[Settings] Migrating plaintext settings.json to encoded store",
                 );
-                let settings = parse_and_migrate_json_val(json)?;
+                let mut settings = parse_and_migrate_json_val(json)?;
+                // A legacy profile's choice is not consent to change every account.
+                settings.app.start_silently_at_sign_in = true;
                 let (machine, user) =
                     split_settings_value(serde_json::to_value(settings).map_err(|error| {
                         format!("Failed to serialize legacy settings: {error}")
@@ -2825,9 +2840,33 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
     if DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("Settings are read-only in decoy mode.".to_string());
     }
+    let elevated = crate::process_privileges::current_process_elevation()?;
+    // All device-store writers share this lease from disk read through persistence.
+    // A current-user install owns its local store; standard users of a machine
+    // install only save their overlay and never need the protected lockfile.
+    let machine_writer = startup_scope::acquire_writer(
+        elevated,
+        crate::paths::current_user_install_uses_local_datastore(),
+    )?;
+    let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
+    let cached_silent = SETTINGS_CACHE
+        .lock()
+        .map_err(|_| "Settings cache lock poisoned")?
+        .as_ref()
+        .map(|cached| cached.app.start_silently_at_sign_in);
+    startup_scope::authorize_write(
+        &stored_machine,
+        settings.app.start_silently_at_sign_in,
+        cached_silent,
+        || Ok(elevated),
+    )?;
     let value = serde_json::to_value(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     let (machine, user) = split_settings_value(value)?;
+    let machine_changed = machine_settings_changed(&stored_machine, &machine)?;
+    if machine_changed && machine_writer.is_none() {
+        return Err("Administrator privileges are required to change machine settings.".into());
+    }
     legacy_migration::before_persistence(&machine, &user)?;
     let service_backed = personal_settings::save(&user)?;
 
@@ -2835,8 +2874,7 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
     // needs to rewrite the read-only machine blob when no device policy changed.
     // Compare partitions so user writes do not fail merely because ProgramData
     // is (correctly) protected.
-    let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
-    let res = if !machine_settings_changed(&stored_machine, &machine)? {
+    let res = if !machine_changed {
         Ok(())
     } else {
         crate::datastore::save("settings", &machine)
@@ -4243,16 +4281,16 @@ mod tests {
     }
 
     #[test]
-    fn silent_sign_in_is_restored_from_the_personal_overlay_not_machine_defaults() {
+    fn silent_sign_in_is_restored_from_the_machine_partition() {
         for silent in [false, true] {
             let mut original = create_default_settings();
             original.app.start_silently_at_sign_in = silent;
             let (machine, personal) =
                 split_settings_value(serde_json::to_value(original).unwrap()).unwrap();
-            assert!(machine.get("app").is_none());
-            assert_eq!(personal["app"]["startSilentlyAtSignIn"], silent);
+            assert_eq!(machine["app"]["startSilentlyAtSignIn"], silent);
+            assert!(personal["app"].get("startSilentlyAtSignIn").is_none());
             let machine = parse_and_migrate_json_val(machine).unwrap();
-            assert!(machine.app.start_silently_at_sign_in);
+            assert_eq!(machine.app.start_silently_at_sign_in, silent);
             let restored = merge_user_overlay(machine, personal).unwrap();
             assert_eq!(restored.app.start_silently_at_sign_in, silent);
         }

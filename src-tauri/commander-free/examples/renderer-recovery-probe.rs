@@ -121,8 +121,33 @@ async fn crash(window: &tauri::WebviewWindow) -> Result<(), String> {
     receive.await.map_err(|e| e.to_string())?
 }
 
+async fn hang_renderer(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    window
+        .with_webview(move |webview| unsafe {
+            let result = webview.controller().CoreWebView2().and_then(|core| {
+                core.CallDevToolsProtocolMethod(
+                    w!("Runtime.evaluate"),
+                    w!(r#"{"expression":"setTimeout(()=>{while(true){}},100);'scheduled'"}"#),
+                    &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
+                )
+            });
+            let _ = send.send(result.map_err(|e| e.to_string()));
+        })
+        .map_err(|e| e.to_string())?;
+    receive.await.map_err(|e| e.to_string())?
+}
+
 async fn wait_ready(app: &tauri::AppHandle, generation: u32) -> Result<(), String> {
-    tokio::time::timeout(Duration::from_secs(12), async {
+    wait_ready_for(app, generation, Duration::from_secs(12)).await
+}
+
+async fn wait_ready_for(
+    app: &tauri::AppHandle,
+    generation: u32,
+    timeout: Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(timeout, async {
         while app.state::<AtomicU32>().load(Ordering::Acquire) != generation
             || !app.state::<startup_window::StartupWindow>().is_ready()
         {
@@ -138,6 +163,7 @@ fn main() {
     let minimized = std::env::args().any(|arg| arg == "--minimized");
     let locked = std::env::args().any(|arg| arg == "--locked");
     let baseline = std::env::args().any(|arg| arg == "--without-recovery");
+    let unresponsive = std::env::args().any(|arg| arg == "--unresponsive");
     let profile = tempfile::tempdir().expect("isolated probe profile");
     let mut context = tauri::generate_context!();
     context.config_mut().app.windows.clear();
@@ -169,7 +195,11 @@ fn main() {
                     if hidden || locked { window.hide().map_err(|e| e.to_string())?; }
                     if minimized { window.minimize().map_err(|e| e.to_string())?; }
                     handle.state::<AtomicBool>().store(locked, Ordering::Release);
-                    crash(&window).await?;
+                    if unresponsive {
+                        hang_renderer(&window).await?;
+                    } else {
+                        crash(&window).await?;
+                    }
                     if locked {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         if handle.state::<startup_window::StartupWindow>().is_ready()
@@ -188,7 +218,14 @@ fn main() {
                         println!("PASS reproduced original defect: crashed renderer retains ready=true");
                         return Ok(());
                     }
-                    wait_ready(&handle, 2).await?;
+                    if unresponsive {
+                        wait_ready_for(&handle, 2, Duration::from_secs(30)).await?;
+                    } else {
+                        wait_ready(&handle, 2).await?;
+                    }
+                    if unresponsive {
+                        println!("PASS actual WebView2 unresponsive event recovered by one bounded reload");
+                    }
                     if window.is_visible().map_err(|e| e.to_string())? == (hidden || minimized) {
                         return Err("recovery did not preserve the prior reveal intent".into());
                     }

@@ -61,6 +61,25 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn managed_startup_presentation_lock_blocks_patch_replace_and_import() {
+    let fixture = Fixture::managed();
+    SETTINGS_CACHE
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .policy
+        .locked_paths = vec!["app.startSilentlyAtSignIn".into()];
+    fixture.deny(Mutation::Patch(
+        json!({"app":{"startSilentlyAtSignIn":false}}),
+    ));
+    let mut candidate = fixture.current();
+    candidate["app"]["startSilentlyAtSignIn"] = json!(false);
+    fixture.deny(Mutation::Replace(candidate.clone()));
+    fixture.deny(Mutation::Import(candidate.to_string()));
+}
+
+#[test]
 fn renderer_cannot_remove_management_or_the_pinned_key() {
     let fixture = Fixture::managed();
     fixture.deny(Mutation::Patch(json!({"policy": {

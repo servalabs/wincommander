@@ -17,8 +17,10 @@ export function FixtureProvider({ children }) {
   const [app, setApp] = React.useState(() => JSON.parse(sessionStorage.getItem('silent-start-settings') || '{}'));
   const [lockedPaths, setLockedPaths] = React.useState([]);
   const [canSave, setCanSave] = React.useState(true);
+  const [snapshotMode, setSnapshotMode] = React.useState('ready');
   window.__lock = setLockedPaths;
   window.__canSave = setCanSave;
+  window.__snapshotMode = setSnapshotMode;
   const patchAppSettings = async patch => {
     window.__saveCalls.push(patch);
     if (window.__saveMode === 'pending') await new Promise(resolve => { window.__completeSave = resolve; });
@@ -28,7 +30,7 @@ export function FixtureProvider({ children }) {
     setApp(next);
   };
   return React.createElement(Context.Provider, { value: {
-    appSettings: { app, policy: { lockedPaths } },
+    appSettings: snapshotMode === 'missing' ? null : snapshotMode === 'partial' ? {} : { app, policy: { lockedPaths } },
     patchAppSettings,
     personalSettingsStatus: { canSave },
   } }, children);
@@ -50,11 +52,14 @@ setPopupAlertsEnabled(false);
 window.__notifications = listNotifications;
 window.__saveCalls = [];
 window.__saveMode = 'success';
+window.__privileges = true;
 function Fixture() {
   const [enabled, setEnabled] = React.useState(true);
+  const [version, setVersion] = React.useState(0);
   window.__enableAutostart = setEnabled;
+  window.__remount = () => setVersion(value => value + 1);
   return React.createElement('div', { className: 'dgz-tile', style: { width: '520px', margin: '24px' } },
-    React.createElement(SilentStartSetting, { autostartEnabled: enabled }));
+    React.createElement(SilentStartSetting, { key: version, autostartEnabled: enabled }));
 }
 ReactDOM.createRoot(document.getElementById('fixture')).render(
   React.createElement(FixtureProvider, null,
@@ -71,6 +76,14 @@ async function main() {
     const source = await (await page.request.get(new URL('/src/panels/secret/SilentStartSetting.tsx', origin).href)).text();
     const reactModule = source.match(/from "([^"]*\/react\.js[^"]*)"/)?.[1];
     assert.ok(reactModule);
+    const privilegeSource = await (await page.request.get(new URL('/src/hooks/useProcessElevation.ts', origin).href)).text();
+    const nativeModule = privilegeSource.match(/from "([^"]*tauri-apps_api_core[^"]*)"/)?.[1];
+    assert.ok(nativeModule);
+    await page.route(new URL(nativeModule, origin).href, route => route.fulfill({ contentType: 'application/javascript', body: `export async function invoke(command) {
+      if (command !== 'is_current_process_elevated') throw new Error('Unexpected native command: ' + command);
+      if (window.__privileges === 'error') throw new Error('Token unavailable');
+      return window.__privileges;
+    }` }));
     await page.route('**/src/context/AppContext.tsx*', route => route.fulfill({ contentType: 'application/javascript', body: contextModule.replaceAll('__REACT_MODULE__', reactModule) }));
     await page.route('**/__silent_start_fixture.js', route => route.fulfill({ contentType: 'application/javascript', body: fixtureModule.replaceAll('__REACT_MODULE__', reactModule) }));
     await page.route('**/__silent_start__', route => route.fulfill({ contentType: 'text/html', body: document }));
@@ -125,8 +138,30 @@ async function main() {
         'Changing the next-start preference must preserve the current settings view');
     }
     assert.deepEqual(await page.evaluate(() => window.__saveCalls), [false, true, false, true, false].map(value => ({ app: { startSilentlyAtSignIn: value } })));
+    await page.getByText(/For everyone on this PC/).waitFor();
+    const savedCalls = await page.evaluate(() => window.__saveCalls.length);
+    await page.evaluate(() => { window.__privileges = false; window.__remount(); });
+    await page.getByText('Open WinCommander as administrator to change this PC-wide setting.', { exact: true }).waitFor();
+    assert.equal(await control.isEnabled(), false, 'Standard sessions read but cannot change the shared choice');
+    assert.equal(await control.isChecked(), false, 'Privilege changes do not replace the machine choice');
+    await page.evaluate(() => window.__lock(['app.startSilentlyAtSignIn']));
+    await page.getByText('Set by your administrator.', { exact: true }).waitFor();
+    assert.equal(await page.getByText('Open WinCommander as administrator to change this PC-wide setting.', { exact: true }).count(), 0);
+    await page.evaluate(() => window.__lock([]));
+    await page.evaluate(() => { window.__privileges = 'error'; window.__remount(); });
+    await page.getByRole('button', { name: 'Check permission again' }).waitFor();
+    assert.equal(await control.isEnabled(), false, 'Unverified privileges never enable a machine write');
+    await page.evaluate(() => { window.__privileges = true; });
+    await page.getByRole('button', { name: 'Check permission again' }).click();
+    await page.waitForFunction(() => !document.querySelector('[role="switch"]').disabled);
+    assert.equal(await page.evaluate(() => window.__saveCalls.length), savedCalls);
+    for (const mode of ['missing', 'partial']) {
+      await page.evaluate(value => window.__snapshotMode(value), mode);
+      await page.getByText('Waiting for this PC’s startup settings…', { exact: true }).waitFor();
+      assert.equal(await control.isEnabled(), false, 'Missing settings cannot be mistaken for a saved machine choice');
+    }
     assert.deepEqual(errors, []);
-    console.log('PASS: silent default, saved OFF/reopen, failed-write rollback, disabled autostart/policy/unavailable storage, pending persistence, and repeated ON/OFF preserve the current view. Browser-local persistence only; no native startup execution.');
+    console.log('PASS: silent default, saved OFF/reopen, failed-write rollback, disabled autostart/policy/unavailable storage, pending persistence, repeated ON/OFF preserve the current view, PC-wide scope, standard/unverified privileges block writes, and permission retry. Browser-local persistence only; no native startup execution.');
   } catch (error) {
     console.error({ errors, fixtureText: await page.locator('body').innerText() });
     throw error;

@@ -59,8 +59,10 @@ the backend and private component before execution.
   Installed sign-in startup uses the account's highest available token;
   standard users remain in their own limited session. Updates preserve OFF.
 - Secret Settings includes **Start silently in tray** beside auto-start. It is
-  on by default, including after upgrades. Turning it off opens sign-in launches
-  maximized within the display's usable area; PIN and hide settings still apply.
+  one shared setting for everyone on the PC, changeable from an elevated app.
+  It defaults to on when no machine choice is saved; old personal choices no
+  longer override it. Turning it off opens sign-in launches maximized within
+  the display's usable area; PIN and hide settings still apply.
 - Secret Settings shows whether the running app is **Administrator (elevated)**
   or **Standard (not elevated)**. An unreadable privilege status is shown as
   unavailable, with a retry control.

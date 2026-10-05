@@ -192,7 +192,7 @@ export interface AppPreferences {
    *  `ideal.apps.autoUpdate`, which is the winget *installed-apps* policy. */
   autoUpdate: boolean;
   startMinimized: boolean;
-  /** Sign-in launches stay in the tray by default. Manual launches are unaffected. */
+  /** Machine-wide sign-in choice, editable by an elevated app. Defaults to tray; manual launches are unaffected. */
   startSilentlyAtSignIn?: boolean;
   contextMenuEnabled: boolean;
   scrubContextMenuEnabled: boolean;

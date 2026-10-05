@@ -125,7 +125,11 @@ launcher. Repair validates one sign-in trigger, no restart/repetition/catch-up
 policy, and no automatic triggers on the manual launcher. The installed sign-in task runs
 directly at the signed-in account's highest available privilege level: elevated
 for administrators, normal for standard users. Background launches never request
-UAC or a second elevation handoff and remain hidden until explicitly opened.
+UAC or a second elevation handoff. Machine installations store
+`app.startSilentlyAtSignIn` in the shared settings partition: ON keeps sign-in
+launches hidden; OFF reveals the ready interface maximized within the work area.
+Old personal overlays cannot override this choice, and changing it requires an
+elevated process. PIN and hide policies continue to apply.
 A duplicate logon launch does not reveal or replace an existing window.
 Portable/development startup tasks retain normal privileges. Explicit manual
 launches still request focus and may request administrator consent.
@@ -146,7 +150,7 @@ task migration cannot recreate a retired launcher.
 
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |
-| `\System Maintenance\SM-AS` | Hidden sign-in startup | One all-user logon trigger; highest available token in the signed-in session |
+| `\System Maintenance\SM-AS` | Sign-in startup using the shared silent preference | One all-user logon trigger; highest available token in the signed-in session |
 | `\System Maintenance\SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
 | `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
 | `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
