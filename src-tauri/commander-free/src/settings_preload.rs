@@ -7,18 +7,20 @@ const PRELOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The GUI must not open without the snapshot that carries its PIN and policy.
 /// A stalled worker causes a closed startup, never a second read or defaults.
-pub(crate) fn preload_settings() -> Result<(), String> {
-    preload_with(|| super::read_settings().map(|_| ()))
+pub(crate) fn preload_settings() -> Result<bool, String> {
+    preload_with(|| super::read_settings().map(|settings| settings.app.start_silently_at_sign_in))
 }
 
-fn preload_with(load: impl FnOnce() -> Result<(), String> + Send + 'static) -> Result<(), String> {
+fn preload_with(
+    load: impl FnOnce() -> Result<bool, String> + Send + 'static,
+) -> Result<bool, String> {
     preload_with_timeout(load, PRELOAD_TIMEOUT)
 }
 
 fn preload_with_timeout(
-    load: impl FnOnce() -> Result<(), String> + Send + 'static,
+    load: impl FnOnce() -> Result<bool, String> + Send + 'static,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("settings-preload".into())
@@ -27,7 +29,7 @@ fn preload_with_timeout(
         })
         .map_err(|_| "Settings initialization could not start".to_string())?;
     match receive.recv_timeout(timeout) {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(start_silently)) => Ok(start_silently),
         // Keep filesystem and account details out of the pre-window dialog.
         Ok(Err(_)) => Err("Settings could not be loaded safely".into()),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(
@@ -43,7 +45,9 @@ mod tests {
 
     #[test]
     fn preload_reports_success_and_sanitizes_failure() {
-        assert!(preload_with(|| Ok(())).is_ok());
+        for silent in [false, true] {
+            assert_eq!(preload_with(move || Ok(silent)), Ok(silent));
+        }
         assert_eq!(
             preload_with(|| Err("private-path-and-account".into())),
             Err("Settings could not be loaded safely".into())
@@ -60,7 +64,7 @@ mod tests {
                     .recv_timeout(std::time::Duration::from_secs(2))
                     .unwrap();
                 finished.send(()).unwrap();
-                Ok(())
+                Ok(false)
             })
         });
         assert!(complete
@@ -70,7 +74,7 @@ mod tests {
         complete
             .recv_timeout(std::time::Duration::from_secs(1))
             .unwrap();
-        assert!(caller.join().unwrap().is_ok());
+        assert_eq!(caller.join().unwrap(), Ok(false));
     }
 
     #[test]
@@ -84,7 +88,7 @@ mod tests {
                 worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 blocked.recv_timeout(Duration::from_secs(2)).unwrap();
                 finished.send(()).unwrap();
-                Ok(())
+                Ok(false)
             },
             Duration::from_millis(25),
         );

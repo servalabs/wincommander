@@ -18,7 +18,7 @@ export function getToggleDrift(appSettings: AppSettings, toggle: ToggleDef): Tog
   if (idealRaw === null || idealRaw === undefined) return null;
 
   const currentRaw = getByPath(appSettings, toggle.currentPath);
-  if (currentRaw === null) return null;
+  if (currentRaw === null || currentRaw === undefined) return null;
 
   const targetChecked = isToggleCheckedValue(idealRaw, toggle.checkedWhen);
   const currentChecked = isToggleCheckedValue(currentRaw, toggle.checkedWhen);

@@ -350,6 +350,10 @@ pub struct AppPreferences {
     pub auto_update: bool,
     #[serde(default)]
     pub start_minimized: bool,
+    // The legacy start_minimized field was unused and persisted false; do not
+    // reinterpret it as consent to reveal existing installations at sign-in.
+    #[serde(default = "default_true")]
+    pub start_silently_at_sign_in: bool,
     #[serde(default)]
     pub context_menu_enabled: bool,
     #[serde(default)]
@@ -878,6 +882,7 @@ impl Default for AppPreferences {
             has_seen_mandatory_tour: false,
             auto_update: true,
             start_minimized: false,
+            start_silently_at_sign_in: true,
             context_menu_enabled: false,
             scrub_context_menu_enabled: false,
             safe_copy_context_menu_enabled: false,
@@ -4234,6 +4239,45 @@ mod tests {
         for (path, enable_command, disable_command) in mappings {
             assert_eq!(get_convergence_command(path, true), Some(enable_command));
             assert_eq!(get_convergence_command(path, false), Some(disable_command));
+        }
+    }
+
+    #[test]
+    fn silent_sign_in_is_restored_from_the_personal_overlay_not_machine_defaults() {
+        for silent in [false, true] {
+            let mut original = create_default_settings();
+            original.app.start_silently_at_sign_in = silent;
+            let (machine, personal) =
+                split_settings_value(serde_json::to_value(original).unwrap()).unwrap();
+            assert!(machine.get("app").is_none());
+            assert_eq!(personal["app"]["startSilentlyAtSignIn"], silent);
+            let machine = parse_and_migrate_json_val(machine).unwrap();
+            assert!(machine.app.start_silently_at_sign_in);
+            let restored = merge_user_overlay(machine, personal).unwrap();
+            assert_eq!(restored.app.start_silently_at_sign_in, silent);
+        }
+    }
+
+    #[test]
+    fn silent_sign_in_preserves_existing_installations_and_round_trips_the_explicit_choice() {
+        assert!(AppPreferences::default().start_silently_at_sign_in);
+        for old_preferences in [
+            serde_json::json!({}),
+            serde_json::json!({"startMinimized": false}),
+            serde_json::json!({"startMinimized": true}),
+        ] {
+            let parsed: AppPreferences = serde_json::from_value(old_preferences).unwrap();
+            assert!(parsed.start_silently_at_sign_in);
+        }
+        for silent in [false, true] {
+            let parsed: AppPreferences = serde_json::from_value(serde_json::json!({
+                "startMinimized": false,
+                "startSilentlyAtSignIn": silent
+            }))
+            .unwrap();
+            assert_eq!(parsed.start_silently_at_sign_in, silent);
+            let serialized = serde_json::to_value(parsed).unwrap();
+            assert_eq!(serialized["startSilentlyAtSignIn"], silent);
         }
     }
 

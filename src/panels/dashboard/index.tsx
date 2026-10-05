@@ -547,7 +547,9 @@ export default function DashboardPanel() {
         });
       }
       const res = await executeBackendCommand(targetChecked ? toggle.enableCmd : toggle.disableCmd, { MachineWide: machineWide });
-      await verifyDashboardToggleFix(toggleId, targetChecked, res, () => executeBackendCommand('Get-HardeningStatus'));
+      await verifyDashboardToggleFix(toggleId, targetChecked, res, () => executeBackendCommand(
+        toggleId === 'kernelDmaProtect' ? 'Get-HardeningStatus' : 'Get-DashboardPrivacyPolicyStatus',
+      ));
       if (targetChecked && toggle.id === 'suggestions') {
         assertDashboardFixSucceeded(await executeBackendCommand('Disable-SetupCompletionNags', { MachineWide: machineWide }));
       }
@@ -1026,7 +1028,6 @@ export default function DashboardPanel() {
                     <div className="dashboard-fix-actions">
                       <NeedsAttention
                         findings={activeFindings}
-                        fixErrors={Object.fromEntries(Object.entries(fixAttempts).flatMap(([id, attempt]) => attempt.error ? [[id, attempt.error]] : []))}
                         busyIds={busyIds}
                         onFixOne={handleFixOne}
                         onFixAll={handleFixAll}

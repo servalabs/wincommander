@@ -6,9 +6,9 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
-pub(crate) fn should_start_hidden(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| matches!(arg.as_str(), "--autostart" | "--minimized"))
+pub(crate) fn should_start_hidden(args: &[String], start_silently_at_sign_in: bool) -> bool {
+    args.iter().any(|arg| arg == "--minimized")
+        || (start_silently_at_sign_in && args.iter().any(|arg| arg == "--autostart"))
 }
 
 pub(crate) fn should_hide_on_tray_click(visible: bool, minimized: bool) -> bool {

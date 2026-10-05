@@ -187,13 +187,6 @@
 }
 
 .na-list::-webkit-scrollbar { width: 7px; }
-.na-fix-error {
-    margin-top: 6px;
-    color: var(--color-danger, #b42318);
-    font-size: 12px;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-}
 .na-list::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--text-mute) 58%, transparent);
     border-radius: var(--r-pill);

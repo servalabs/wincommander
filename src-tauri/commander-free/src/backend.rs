@@ -2230,6 +2230,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-USBStorageLockdown" => Some("tweaks/system"),
         "Get-USBStorageLockdownStatus" => Some("tweaks/system"),
         "Get-HardeningStatus" => Some("tweaks/system"),
+        "Get-DashboardPrivacyPolicyStatus" => Some("tweaks/system"),
         "Create-RestorePoint" => Some("tweaks/system"),
         "Enable-RdpKeepAlive" => Some("tweaks/system"),
         "Disable-RdpKeepAlive" => Some("tweaks/system"),
@@ -4233,6 +4234,8 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Enable-LocationTracking",
     "Disable-RecallSnapshots",
     "Enable-RecallSnapshots",
+    "Disable-BitLockerAutoEncrypt",
+    "Enable-BitLockerAutoEncrypt",
     "Disable-InternetCommunication",
     "Enable-InternetCommunication",
     "Disable-OfficeLogging",
@@ -4259,6 +4262,18 @@ fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool,
 
 fn is_machine_wide_fix_command(command: &str) -> bool {
     MACHINE_WIDE_FIX_COMMANDS.contains(&command)
+}
+
+fn local_admin_preflight(command: &str, elevated: bool) -> Option<serde_json::Value> {
+    if elevated || !is_machine_wide_fix_command(command) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "error": true,
+        "status": "blocked",
+        "code": "administrator_required",
+        "message": "Open WinCommander as administrator to apply this setting.",
+    }))
 }
 
 fn machine_wide_status(command: &str, status: &str, reason: &str) -> serde_json::Value {
@@ -4291,6 +4306,36 @@ fn is_elevated_process() -> bool {
 mod param_env_tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn local_machine_policies_require_elevation_without_fix_all_flag() {
+        for command in [
+            "Disable-DiagnosticEventTracing",
+            "Enable-DiagnosticEventTracing",
+            "Disable-InternetCommunication",
+            "Disable-OfficeLogging",
+        ] {
+            let blocked = local_admin_preflight(command, false).unwrap();
+            assert_eq!(blocked["code"], "administrator_required");
+            assert_eq!(blocked["error"], true);
+            assert_eq!(blocked["status"], "blocked");
+            assert!(blocked.get("details").is_none());
+            assert!(get_settings_sync_patch(command, &HashMap::new(), Some(&blocked)).is_none());
+            assert!(local_admin_preflight(command, true).is_none());
+        }
+        for command in [
+            "Get-DashboardPrivacyPolicyStatus",
+            "Get-HardeningStatus",
+            "Disable-TerminalHistory",
+        ] {
+            assert!(local_admin_preflight(command, false).is_none());
+        }
+        assert_eq!(
+            get_module_for_command("Get-DashboardPrivacyPolicyStatus"),
+            Some("tweaks/system")
+        );
+        assert_eq!(get_command_tier("Get-DashboardPrivacyPolicyStatus"), "free");
+    }
 
     #[test]
     fn malicious_key_becomes_inert_json_data() {
@@ -4341,6 +4386,13 @@ mod param_env_tests {
     fn machine_wide_scope_allowlist_excludes_user_profile_commands() {
         assert!(is_machine_wide_fix_command("Disable-ActivityHistory"));
         assert!(is_machine_wide_fix_command("Set-AppCapabilityAccess"));
+        for command in ["Disable-BitLockerAutoEncrypt", "Enable-BitLockerAutoEncrypt"] {
+            assert_eq!(
+                fix_scope::resolve(command, is_machine_wide_fix_command(command)),
+                Some(fix_scope::Scope::Machine)
+            );
+            assert_eq!(get_command_tier(command), "paid");
+        }
         assert!(!is_machine_wide_fix_command("Disable-RecentFilesTracking"));
         assert!(!is_machine_wide_fix_command("Disable-TerminalHistory"));
     }
@@ -5186,6 +5238,12 @@ pub(crate) async fn run_backend_script_with_timeout(
         });
     }
 
+    // Local machine policies need the effective token even outside Fix All.
+    // Paid commands retain their own sidecar authorization above.
+    if let Some(blocked) = local_admin_preflight(&command, is_elevated_process()) {
+        return Ok(blocked);
+    }
+
     // Module gate — refuse to run commands whose frontend module is disabled
     if let Some(required_mod) = get_required_frontend_module(&command) {
         let modules = settings::read_settings()
@@ -5269,6 +5327,9 @@ pub(crate) async fn run_backend_script_with_timeout(
         additional_modules.push_str(&load_module("productivity")?);
         additional_modules.push_str("\n\n");
         additional_modules.push_str(&load_module("apps/winget")?);
+        additional_modules.push_str("\n\n");
+    } else if command == "Get-DashboardPrivacyPolicyStatus" {
+        additional_modules.push_str(&load_module("privacy/telemetry")?);
         additional_modules.push_str("\n\n");
     } else if command == "Get-HardeningStatus" {
         // Get-HardeningStatus calls Get-DiagnosticEventTracingStatus from

@@ -1,128 +1,72 @@
-// src/hooks/useAutoHeal.ts
-//
-// When app.autoHeal is enabled, this hook detects drift (ideal ≠ current)
-// after every system probe and silently re-applies the desired commands.
-//
-// Safeguards:
-//   - Never auto-heals isAction (one-shot) or irreversible toggles
-//   - Requires ideal.* to be explicitly set (undefined = user never chose)
-//   - Per-toggle 60-second cooldown prevents infinite heal loops if the
-//     OS keeps reverting (e.g., a policy or another app owns the setting)
-//   - Only fires when current.* actually changes (post-probe), not on
-//     every render, to avoid hammering the backend during normal use
-
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { useSettingsQuery, settingsKeys } from "./queries/useSettingsQuery";
+import { settingsKeys } from "./queries/useSettingsQuery";
 import { executeBackendCommand } from "./useBackend";
-import { getRadarDriftToggles } from "../registry";
-import { getToggleDrift } from "../lib/toggleDrift";
+import { getRadarDriftToggles, getToggleById } from "../registry";
 import { useAuthMode } from "../context/AuthModeContext";
-
-const HEAL_COOLDOWN_MS = 60_000;
-const DRIFT_PROBE_INTERVAL_MS = 60_000;
+import { useAppState } from "../context/AppContext";
+import useEntitlements from "./useEntitlements";
+import type { AppSettings } from "../types/settings";
+import { buildToggleCommandParams, setByPath } from "../types/toggles";
+import { createAutoHealer, HEAL_COOLDOWN_MS, isAutoHealEnabled, TOGGLE_REPAIR_VERIFIED_EVENT } from "../lib/autoHeal";
+import { DASHBOARD_POLICY_FIELDS } from "../lib/dashboardPolicyObservation";
+import { dashboardFixFailure, verifyDashboardToggleFix } from "../panels/dashboard/fixVerification";
+import { showWarning } from "../utils/toast";
 
 export default function useAutoHeal() {
-  const { mode: authMode } = useAuthMode();
-  const { data: appSettings } = useSettingsQuery();
+  const { mode } = useAuthMode();
+  const { appSettings, refreshSettings } = useAppState();
+  const { canUse } = useEntitlements();
   const queryClient = useQueryClient();
-  const healCooldown = useRef<Record<string, number>>({});
-  const isHealingRef = useRef(false);
-  const lastCurrentHashRef = useRef<string>("");
-
-  useEffect(() => {
-    if (authMode === "decoy" || !appSettings?.app?.firstRunComplete) return;
-
-    const managed = appSettings.policy?.syncMode === "managed";
-    const lockEnforcing = managed && (appSettings.policy?.lockedPaths?.length ?? 0) > 0;
-    if (!appSettings.app.autoHeal && !lockEnforcing) return;
-
-    let cancelled = false;
-    const refreshProbe = async () => {
-      try {
-        const probe = await executeBackendCommand<unknown>("Get-WCSystemProbe");
-        if (!probe.success || !probe.data || cancelled) return;
-        const updated = await invoke("update_current_state", { probe: probe.data });
-        if (!cancelled && updated) queryClient.setQueryData(settingsKeys.detail(), updated);
-      } catch {
-        // The next interval retries. A failed probe must never overwrite current.*.
+  const mounted = useRef(false);
+  const latest = useRef({ mode, appSettings, refreshSettings, canUse });
+  latest.current = { mode, appSettings, refreshSettings, canUse };
+  const run = useMemo(() => createAutoHealer({
+    getSettings: () => !mounted.current || latest.current.mode === "decoy" ? undefined : latest.current.appSettings ?? undefined,
+    toggles: getRadarDriftToggles(),
+    canUse: toggle => latest.current.canUse(toggle.tier),
+    probe: async () => {
+      const mayRun = () => mounted.current && latest.current.mode !== "decoy" && isAutoHealEnabled(latest.current.appSettings ?? undefined);
+      const [base, privacy] = await Promise.all([
+        executeBackendCommand<Record<string, unknown>>("Get-WCSystemProbe"),
+        executeBackendCommand<Record<string, unknown>>("Get-DashboardPrivacyPolicyStatus"),
+      ]);
+      if (!mayRun()) return;
+      if (!base.success || !base.data) throw new Error(base.error || "Windows status is unavailable. Auto Heal will check again.");
+      const probe = structuredClone(base.data);
+      // The general probe does not cover these policies. Invalidate missing
+      // observations instead of repairing against their old cached values.
+      for (const [id, field] of Object.entries({ ...DASHBOARD_POLICY_FIELDS, diagTracing: "diagnosticEventTracingDisabled" })) {
+        if (id === "kernelDmaProtect") continue;
+        const toggle = getToggleById(id);
+        const value = privacy.success ? privacy.data?.[field] : null;
+        if (toggle) setByPath(probe, toggle.currentPath.replace(/^current\./, ""), typeof value === "boolean" ? value : null);
       }
-    };
-
-    const interval = window.setInterval(() => { void refreshProbe(); }, DRIFT_PROBE_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [authMode, appSettings?.app?.autoHeal, appSettings?.app?.firstRunComplete,
-    appSettings?.policy?.lockedPaths, appSettings?.policy?.syncMode, queryClient]);
-
+      const updated = await invoke<AppSettings>("update_current_state", { probe });
+      if (!mayRun()) return;
+      queryClient.setQueryData(settingsKeys.detail(), updated);
+      await latest.current.refreshSettings();
+      return { ...updated, current: probe as unknown as AppSettings["current"] };
+    },
+    repair: async (toggle, target) => {
+      const params = buildToggleCommandParams(toggle, target, toggle.capabilityKey
+        ? { Capability: toggle.capabilityKey, Access: target ? "Deny" : "Allow" } : undefined);
+      const result = await executeBackendCommand(toggle.capabilityKey ? "Set-AppCapabilityAccess" : target ? toggle.enableCmd : toggle.disableCmd, params);
+      await verifyDashboardToggleFix(toggle.id, target, result, () => executeBackendCommand(
+        toggle.id === "kernelDmaProtect" ? "Get-HardeningStatus" : "Get-DashboardPrivacyPolicyStatus",
+      ));
+    },
+    failureMessage: dashboardFixFailure,
+    notify: (label, message) => { void showWarning(`Auto Heal — ${label}: ${message}`, undefined, { kind: "notification" }); },
+    verified: repair => { window.dispatchEvent(new CustomEvent(TOGGLE_REPAIR_VERIFIED_EVENT, { detail: repair })); },
+  }), [queryClient]);
+  const enabled = mode !== "decoy" && isAutoHealEnabled(appSettings ?? undefined);
   useEffect(() => {
-    // KT: decoy guard — real hardening commands fired during a coerced decoy
-    // session would be observable on the machine (registry writes, PS invokes).
-    if (authMode === 'decoy') return;
-    if (!appSettings?.app?.firstRunComplete) return;
-    if (isHealingRef.current) return;
-
-    const autoHealOn = !!appSettings?.app?.autoHeal;
-    // Fleet Control Plane P2: a fleet-managed device must keep org-LOCKED
-    // settings at their published value even if the user has auto-heal OFF —
-    // the lock holds against direct-in-Windows edits. Locked paths are
-    // ideal-relative dot prefixes (same convention the backend enforces in
-    // patch_settings_cmd via `path.starts_with(p)`).
-    const managed = appSettings?.policy?.syncMode === "managed";
-    const lockedPaths = appSettings?.policy?.lockedPaths ?? [];
-    const lockEnforcing = managed && lockedPaths.length > 0;
-    if (!autoHealOn && !lockEnforcing) return;
-
-    const isLocked = (t: { settingsPath?: string }) => {
-      const p = (t.settingsPath ?? "").replace(/^ideal\./, "");
-      return p !== "" && lockedPaths.some((lp) => p === lp || p.startsWith(`${lp}.`));
-    };
-
-    // Only react when current.* changes (a probe just ran)
-    const currentHash = JSON.stringify(appSettings.current);
-    if (currentHash === lastCurrentHashRef.current) return;
-    lastCurrentHashRef.current = currentHash;
-
-    const now = Date.now();
-
-    const drifted = getRadarDriftToggles().filter(t => {
-      // One-shot actions and incomplete registry rows cannot be safely replayed.
-      if (t.isAction || (!t.capabilityKey && (!t.enableCmd || !t.disableCmd))) return false;
-      if (!getToggleDrift(appSettings, t)) return false;
-      const lastHeal = healCooldown.current[t.id] ?? 0;
-      if ((now - lastHeal) <= HEAL_COOLDOWN_MS) return false;
-      // When auto-heal is off, only re-assert org-locked toggles.
-      return autoHealOn || isLocked(t);
-    });
-
-    if (drifted.length === 0) return;
-
-    isHealingRef.current = true;
-    drifted.forEach(t => { healCooldown.current[t.id] = now; });
-
-    Promise.all(
-      drifted.map(async t => {
-        const drift = getToggleDrift(appSettings, t);
-        if (!drift) return;
-        try {
-          if (t.capabilityKey) {
-            await executeBackendCommand("Set-AppCapabilityAccess", {
-              Capability: t.capabilityKey,
-              Access: drift.targetChecked ? "Deny" : "Allow",
-            });
-          } else {
-            await executeBackendCommand(drift.targetChecked ? t.enableCmd : t.disableCmd);
-          }
-        } catch {
-          // Best-effort — silent; cooldown prevents a tight retry loop
-        }
-      })
-    ).finally(async () => {
-      isHealingRef.current = false;
-      await queryClient.refetchQueries({ queryKey: settingsKeys.all });
-    });
-  }, [authMode, appSettings, queryClient]);
+    if (!enabled) return;
+    mounted.current = true;
+    void run();
+    const timer = window.setInterval(() => { void run(); }, HEAL_COOLDOWN_MS);
+    return () => { mounted.current = false; window.clearInterval(timer); };
+  }, [enabled, run]);
 }

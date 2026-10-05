@@ -20,6 +20,11 @@ import { useFindingFixAttempts } from '/src/panels/dashboard/useFindingFixAttemp
 import { retainUnverifiedFindings, verifyDashboardToggleFix } from '/src/panels/dashboard/fixVerification.ts';
 import { DASHBOARD_POLICY_FIELDS } from '/src/lib/dashboardPolicyObservation.ts';
 import { getToggleById } from '/src/registry/index.ts';
+import { listNotifications, setPopupAlertsEnabled } from '/src/lib/notificationStore.ts';
+import { TOGGLE_REPAIR_VERIFIED_EVENT } from '/src/lib/autoHeal.ts';
+setPopupAlertsEnabled(false);
+window.__notifications = listNotifications;
+window.__healVerified = (toggleId, targetChecked) => window.dispatchEvent(new CustomEvent(TOGGLE_REPAIR_VERIFIED_EVENT, { detail: { toggleId, targetChecked } }));
 const ids = Object.keys(DASHBOARD_POLICY_FIELDS);
 const findings = ids.map(id => ({ id, label: getToggleById(id).label, impact: getToggleById(id).impact, category: 'privacy', severity: 'warning' }));
 window.__fixModes = { recallSnapshots: 'ack', internetComm: 'mismatch', officeLog: 'unknown', bitlockerAuto: 'verified', kernelDmaProtect: 'pending' };
@@ -46,13 +51,12 @@ function Fixture() {
         window.__verifiedFixes.push(finding.id);
         sessionStorage.setItem('fixture-verified', JSON.stringify(window.__verifiedFixes));
       });
-    } catch { /* inline failure is owned by the real hook; no notifications */ }
+    } catch { /* The real hook owns the notification and retains the finding. */ }
     finally { setBusy(new Set()); }
   };
   const visible = retainUnverifiedFindings(findings.filter(finding => !cached[finding.id]), fixAttempts).filter(finding => !ignored.includes(finding.id));
   return React.createElement(NeedsAttention, {
     findings: visible, busyIds: busy,
-    fixErrors: Object.fromEntries(Object.entries(fixAttempts).filter(([, value]) => value.error).map(([id, value]) => [id, value.error])),
     onFixOne: fix, onFixAll: () => {},
     ignoredFindingIds: ignored, knownFindings: findings,
     onIgnore: finding => setIgnored(current => [...current, finding.id]),
@@ -62,7 +66,7 @@ function Fixture() {
 ReactDOM.createRoot(document.getElementById('fixture')).render(React.createElement(Fixture));
 `;
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.WINCOMMANDER_BROWSER_EXECUTABLE || undefined });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -86,7 +90,8 @@ async function main() {
     ];
     for (const [label, message] of scenarios) {
       await row(label).getByRole('button', { name: 'Fix', exact: true }).click();
-      await row(label).getByRole('alert').filter({ hasText: message }).waitFor();
+      await page.waitForFunction(message => window.__notifications().some(item => item.message.includes(message) && item.kind === 'notification'), message);
+      assert.equal(await row(label).getByRole('alert').count(), 0, 'Action errors belong to Notifications');
       assert.equal(await page.locator('.na-item').count(), 5, 'Unverified rows survive optimistic snapshots');
     }
     await row('BitLocker').getByRole('button', { name: 'Fix', exact: true }).click();
@@ -104,13 +109,18 @@ async function main() {
     await row('Office').waitFor({ state: 'detached' });
     assert.deepEqual(await page.evaluate(() => window.__verifiedFixes), ['bitlockerAuto', 'officeLog']);
     await row('Kernel DMA').getByRole('button', { name: 'Fix', exact: true }).click();
-    await row('Kernel DMA').getByRole('alert').filter({ hasText: 'not active' }).waitFor();
+    await page.waitForFunction(() => window.__notifications().some(item => item.message.includes('not active')));
     await page.evaluate(() => { window.__fixModes.kernelDmaProtect = 'verified'; });
     await row('Kernel DMA').getByRole('button', { name: 'Fix', exact: true }).click();
     await row('Kernel DMA').waitFor({ state: 'detached' });
     assert.deepEqual(await page.evaluate(() => window.__verifiedFixes), ['bitlockerAuto', 'officeLog', 'kernelDmaProtect']);
+    // Auto Heal must clear a failed attempt only after its independent readback.
+    await row('Internet').getByRole('button', { name: 'Fix', exact: true }).click();
+    await page.waitForFunction(() => window.__notifications().some(item => item.message.includes('Windows still reports')));
+    await page.evaluate(() => window.__healVerified('internetComm', true));
+    await row('Internet').waitFor({ state: 'detached' });
     assert.deepEqual(errors, []);
-    console.log('PASS: acknowledgement, mismatch and unknown readback stay visible with inline errors; exact verified readback clears rows; Ignore never counts as fixed; reload preserves only verified state. Simulated native responses only.');
+    console.log('PASS: failed readbacks remain actionable and notify without inline errors; verified readback and Auto Heal clear rows; Ignore never counts as fixed; reload preserves verified state. Simulated native responses only.');
   } catch (error) {
     console.error({ errors, fixtureText: await page.locator('body').innerText() });
     throw error;

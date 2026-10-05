@@ -89,5 +89,13 @@ export function retainUnverifiedFindings(findings: readonly ScanFinding[], attem
 
 export function dashboardFixFailure(error: unknown): string {
   const text = error instanceof Error ? error.message : typeof error === "string" ? error : "The change could not be confirmed. The issue has not been marked fixed.";
-  return text.replace(/\s+/g, " ").trim().slice(0, 360);
+  if (/administrator (?:privileges|approval)|elevation.*required|requires? elevation/i.test(text)) {
+    return "Administrator approval is required. Open WinCommander as administrator and retry.";
+  }
+  const message = text.split(/\bCommand:|\bAt line:|\bCategoryInfo\s*:|\bFullyQualifiedErrorId\s*:|--- Diagnostic Logs ---/i)[0]
+    .replace(/\s+/g, " ").trim();
+  if (!message || /^(?:true|false|\[object Object\])$/i.test(message)) {
+    return "The change could not be confirmed. Refresh its status and retry.";
+  }
+  return message.slice(0, 360);
 }

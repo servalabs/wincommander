@@ -5,10 +5,9 @@ import type { ScanFinding } from "../startup/WizardAnimations";
 
 const finding: ScanFinding = { id: "officeLog", label: "Disable Office logging", category: "privacy", severity: "warning", impact: "Logging policy needs attention" };
 
-test("unverified fixes stay actionable with inline errors independent of notifications", () => {
-  const html = renderToStaticMarkup(<NeedsAttention findings={[finding]} busyIds={new Set()} fixErrors={{ officeLog: "Windows could not verify this change." }} onFixOne={() => undefined} onFixAll={() => undefined} onIgnore={() => undefined} />);
-  expect(html).toContain('role="alert"');
-  expect(html).toContain("Windows could not verify this change.");
+test("unverified fixes stay actionable without error logs inside the finding list", () => {
+  const html = renderToStaticMarkup(<NeedsAttention findings={[finding]} busyIds={new Set()} onFixOne={() => undefined} onFixAll={() => undefined} onIgnore={() => undefined} />);
+  expect(html).not.toContain('role="alert"');
   expect(html).toContain("Disable Office logging");
   expect(html).toContain(">Fix</button>");
 });

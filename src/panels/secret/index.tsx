@@ -38,6 +38,7 @@ import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
 import { useSecretSessionState } from "./secretSessionState";
 import RuntimeStatusSection from "./RuntimeStatusSection";
 import SupportConsole from "./SupportConsole";
+import SilentStartSetting from "./SilentStartSetting";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
@@ -251,6 +252,7 @@ function AutoStartTile() {
             <p className="dgz-autostart-note">
                 {autostartPolicyLocked ? "Set by your administrator." : "Windows will ask for approval if needed."}
             </p>
+            <SilentStartSetting autostartEnabled={autostartEnabled === true} />
         </DgzTile>
     );
 }

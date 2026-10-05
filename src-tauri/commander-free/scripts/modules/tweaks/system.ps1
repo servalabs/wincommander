@@ -363,16 +363,27 @@ function Get-BitLockerAutoEncryptPolicyStatus {
 }
 
 function Get-DashboardPrivacyPolicyStatus {
-    $recall = Get-RecallSnapshotsStatus
-    $office = Get-OfficeLoggingStatus
-    $internet = Get-InternetCommunicationStatus
-    $bitlocker = Get-BitLockerAutoEncryptPolicyStatus
-    @{
-        recallSnapshotsDisabled = $(if ($recall.verified) { $recall.disabled } else { $null })
-        officeLoggingDisabled = $(if ($office.verified) { $office.disabled } else { $null })
-        internetCommRestricted = $(if ($internet.verified) { $internet.restricted } else { $null })
-        bitlockerAutoEncryptDisabled = $(if ($bitlocker.verified) { $bitlocker.disabled } else { $null })
+    # A missing Windows provider must not discard independent policy readbacks.
+    $ErrorActionPreference = 'Stop'
+    $observed = @{}
+    $probes = @(
+        @{ Field = 'recallSnapshotsDisabled'; Command = 'Get-RecallSnapshotsStatus'; Value = 'disabled' },
+        @{ Field = 'officeLoggingDisabled'; Command = 'Get-OfficeLoggingStatus'; Value = 'disabled' },
+        @{ Field = 'internetCommRestricted'; Command = 'Get-InternetCommunicationStatus'; Value = 'restricted' },
+        @{ Field = 'bitlockerAutoEncryptDisabled'; Command = 'Get-BitLockerAutoEncryptPolicyStatus'; Value = 'disabled' },
+        @{ Field = 'diagnosticEventTracingDisabled'; Command = 'Get-DiagnosticEventTracingStatus'; Value = 'disabled' }
+    )
+    foreach ($probe in $probes) {
+        $observed[$probe.Field] = $null
+        try {
+            $result = & $probe.Command
+            $verified = if ($probe.Command -eq 'Get-DiagnosticEventTracingStatus') { -not $result.error } else { $result.verified -eq $true }
+            if ($verified -and $result[$probe.Value] -is [bool]) {
+                $observed[$probe.Field] = $result[$probe.Value]
+            }
+        } catch {}
     }
+    $observed
 }
 
 function Get-HardeningStatus {
@@ -503,8 +514,7 @@ function Get-HardeningStatus {
     # after Windows re-enabled it), and (b) a missing `Start` value counts as
     # "off" — Windows treats absent autologger Start as "do not auto-start",
     # so `$null -ne 0` (which is $true in PowerShell) is the wrong test.
-    $diagEventTracingState = Get-DiagnosticEventTracingStatus
-    $diagEventTracingDisabled = if ($diagEventTracingState.error) { $null } else { [bool]$diagEventTracingState.disabled }
+    $diagEventTracingDisabled = $dashboardPrivacy.diagnosticEventTracingDisabled
     @{
         defenderDisabled         = (-not $defender.serviceRunning -or -not $defender.realtimeEnabled)
         updatesPaused            = ($updates.paused -or -not $updates.serviceRunning)

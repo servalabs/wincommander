@@ -58,6 +58,14 @@ the backend and private component before execution.
   turning it on recreates them as `SM-AS` and `SM-EL` under `\System Maintenance\`.
   Installed sign-in startup uses the account's highest available token;
   standard users remain in their own limited session. Updates preserve OFF.
+- Secret Settings includes **Start silently in tray** beside auto-start. It is
+  on by default, including after upgrades. Turning it off opens sign-in launches
+  maximized within the display's usable area; PIN and hide settings still apply.
+- Auto Heal checks observed drift every minute while the app is running and
+  retries failed repairs. Unavailable Windows status is not treated as OFF;
+  changes requiring administrator access remain blocked without that access.
+  Dashboard action failures appear in Notifications, with unresolved findings
+  kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;

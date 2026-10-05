@@ -1493,14 +1493,19 @@ pub fn run() {
     // Log and diagnostic retention is intentionally deferred until after the
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
-    if !cli_mode {
+    let start_silently_at_sign_in = if !cli_mode {
         // Security settings must be known before creating the window. A stalled
         // preload fails closed; it never starts a second read or bypasses PIN policy.
-        if let Err(error) = settings::preload_settings() {
-            startup_window::show_initialization_error(&error);
-            return;
+        match settings::preload_settings() {
+            Ok(start_silently) => start_silently,
+            Err(error) => {
+                startup_window::show_initialization_error(&error);
+                return;
+            }
         }
-    }
+    } else {
+        true
+    };
     startup_trace::pre_window_milestone("pre-builder.complete");
     dev_startup_trace("pre-builder work complete");
     let mut context = tauri::generate_context!();
@@ -1521,8 +1526,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        // Autostart at Windows login uses the same maximized window as a manual
-        // launch so the Windows taskbar remains available.
+        // Keep launch intent separate from the user's saved visibility choice.
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name(paths::app_display_name())
@@ -1828,7 +1832,8 @@ pub fn run() {
                 // Check command line args for a secure-delete path.
                 let args: Vec<String> = std::env::args().collect();
                 let hidden_mode = wincommander_is_hidden();
-                let foreground_launch = !startup_window::should_start_hidden(&args);
+                let foreground_launch =
+                    !startup_window::should_start_hidden(&args, start_silently_at_sign_in);
                 // Safe Paste must never bring the window forward for any part of
                 // the operation — see session_instance.rs::handle_forwarded_args
                 // for the mirrored warm-forward guard. The only UI surfaces are

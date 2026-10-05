@@ -136,3 +136,10 @@ test("visible failure messages are bounded and support native string errors", ()
   expect(dashboardFixFailure("  Windows\n denied   access ")).toBe("Windows denied access");
   expect(dashboardFixFailure(new Error("a".repeat(500)))).toHaveLength(360);
 });
+
+test("action notifications omit PowerShell details and boolean-only failures", () => {
+  const raw = 'Administrator privileges required. Command: Disable-DiagnosticEventTracing At line:10 char:9 CategoryInfo : OperationStopped FullyQualifiedErrorId : Administrator';
+  expect(dashboardFixFailure(raw)).toBe("Administrator approval is required. Open WinCommander as administrator and retry.");
+  expect(dashboardFixFailure("Windows denied this write. Command: Disable-Test At line:1 char:1")).toBe("Windows denied this write.");
+  expect(dashboardFixFailure("true")).toBe("The change could not be confirmed. Refresh its status and retry.");
+});

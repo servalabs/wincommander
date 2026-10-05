@@ -121,7 +121,7 @@ fn logon_launches_remain_hidden_before_and_after_elevation() {
             if elevated {
                 args.push("--elevated-relaunch".to_string());
             }
-            assert!(should_start_hidden(&args), "{args:?}");
+            assert!(should_start_hidden(&args, true), "{args:?}");
         }
     }
 }
@@ -135,7 +135,38 @@ fn manual_launches_open_normally_including_elevated_relaunch() {
             "--elevated-relaunch".to_string(),
         ],
     ] {
-        assert!(!should_start_hidden(&args), "{args:?}");
+        for silent in [false, true] {
+            assert!(!should_start_hidden(&args, silent), "{args:?}");
+        }
+    }
+}
+
+#[test]
+fn disabling_silent_start_opens_logon_launches_but_honors_explicit_minimized() {
+    for elevated in [false, true] {
+        let mut args = vec!["WinCommander.exe".into(), "--autostart".into()];
+        if elevated {
+            args.push("--elevated-relaunch".into());
+        }
+        assert!(!should_start_hidden(&args, false));
+        args.push("--minimized".into());
+        assert!(should_start_hidden(&args, false));
+        assert!(should_start_hidden(&args, true));
+    }
+    assert!(should_start_hidden(&["--minimized".into()], false));
+}
+
+#[test]
+fn sign_in_visibility_choice_waits_for_renderer_readiness_before_reveal() {
+    for silent in [false, true] {
+        let state = StartupWindow::new();
+        if !should_start_hidden(&["--autostart".into()], silent) {
+            assert!(state.defer_reveal());
+        }
+        assert!(!state.is_ready());
+        assert!(state.accept_ready(0));
+        assert_eq!(state.take_reveal(), !silent);
+        assert!(!state.take_reveal());
     }
 }
 
