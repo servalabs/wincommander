@@ -15,9 +15,22 @@ describe("startup logo", () => {
 
     expect(entry).not.toContain("preloadAppLogo");
     expect(asset).toContain('logo.png?inline');
-    expect(splash).toContain('const [logoReady] = useState(true);');
+    expect(splash).toContain('const [scrambleText, setScrambleText] = useState');
     expect(splash).not.toContain('sp-logo-fallback');
     expect(styles).not.toContain('sp-logo-fallback');
     expect(styles).not.toContain("animation: sp-fade-in 0.5s ease-out both;");
+  });
+
+  test("keeps the release Matrix animation rather than replacing it", async () => {
+    const [splash, styles] = await Promise.all([
+      Bun.file("src/components/StartupAnimation.tsx").text(),
+      Bun.file("src/components/SplashScreen.css").text(),
+    ]);
+
+    expect(splash).toContain('className="sp-matrix-canvas"');
+    expect(splash).toContain("SCRAMBLE_GLYPHS");
+    expect(styles).toContain(".sp-matrix-canvas");
+    expect(styles).toContain("--color-bg-primary: #0a0f12");
+    expect(styles).not.toContain(".sp-blueprint-grid");
   });
 });
