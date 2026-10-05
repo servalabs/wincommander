@@ -50,7 +50,9 @@ the backend and private component before execution.
   system tasks and `SL-UW-<code>-<SID>` for per-user tasks. App updates migrate
   recognized legacy tasks while preserving their schedules and disabled state.
 - Turning auto-start off removes the app's logon and elevated-launch tasks;
-  turning it on recreates them as `SL-AS` and `SL-EL`. Updates preserve OFF.
+  turning it on recreates them as `SM-AS` and `SM-EL` under `\System Maintenance\`.
+  Installed sign-in startup uses the account's highest available token;
+  standard users remain in their own limited session. Updates preserve OFF.
 - Preview-first maintenance flows for supported cleanup categories.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;

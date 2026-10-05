@@ -9,7 +9,6 @@ test.skipIf(process.platform !== "win32")("runtime migration reads raw Run value
   const common = match[1].replace(/__[A-Z_]+__/g, token => ({
     __TARGET_EXE__: "(Join-Path $env:ProgramFiles 'WinCommander\\wincommander-free.exe')",
     __DESIRED_TASK_NAME__: "'SM-AS'", __ALTERNATE_TASK_NAME__: "'SM-AS'",
-    __COVERED_TASK_NAME__: "'System Update Service'",
     __TASK_PATH__: "'\\System Maintenance\\'", __PREFERENCE_PATH__: "'unused'",
     __PREFERENCE_VALUE_NAME__: "'AutostartEnabled'", __LEGACY_DATA_DIR_NAME__: "'WinCommander'",
     __RUN_VALUE_NAMES__: "'WinCommander', 'WinCommander Pro'",

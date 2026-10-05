@@ -6,11 +6,22 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
+pub(crate) fn should_start_hidden(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "--autostart" | "--minimized"))
+}
+
+pub(crate) fn should_hide_on_tray_click(visible: bool, minimized: bool) -> bool {
+    visible && !minimized
+}
+
 pub(crate) struct StartupWindow {
     armed: AtomicBool,
     ready: AtomicBool,
     warned: AtomicBool,
+    recovery_scheduled: AtomicBool,
     recovery_started: AtomicBool,
+    terminal_failure: AtomicBool,
     document_generation: Mutex<u32>,
 }
 
@@ -20,13 +31,28 @@ impl StartupWindow {
             armed: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             warned: AtomicBool::new(false),
+            recovery_scheduled: AtomicBool::new(false),
             recovery_started: AtomicBool::new(false),
+            terminal_failure: AtomicBool::new(false),
             document_generation: Mutex::new(0),
         }
     }
 
     pub(crate) fn arm(&self) {
         self.armed.store(true, Ordering::Release);
+    }
+
+    fn defer_reveal(&self) -> bool {
+        // Readiness and reveal intent must be ordered: an early tray click
+        // cannot be lost between the document's acknowledgement and its reveal.
+        let Ok(_generation) = self.document_generation.lock() else {
+            return true;
+        };
+        if self.is_ready() {
+            return false;
+        }
+        self.arm();
+        true
     }
 
     fn take_reveal(&self) -> bool {
@@ -53,12 +79,91 @@ impl StartupWindow {
         let Ok(current) = self.document_generation.lock() else {
             return false;
         };
-        if *current != generation {
+        if *current != generation || self.terminal_failure.load(Ordering::Acquire) {
             return false;
         }
         self.ready.store(true, Ordering::Release);
+        self.warned.store(false, Ordering::Release);
         true
     }
+
+    pub(crate) fn invalidate_renderer(&self, reveal: bool, can_reload: bool) -> bool {
+        let Ok(mut generation) = self.document_generation.lock() else {
+            return false;
+        };
+        *generation += 1;
+        self.ready.store(false, Ordering::Release);
+        if reveal {
+            self.arm();
+        }
+        self.recovery_scheduled.store(true, Ordering::Release);
+        let retry = can_reload
+            && !self.terminal_failure.load(Ordering::Acquire)
+            && !self.recovery_started.swap(true, Ordering::AcqRel);
+        self.terminal_failure.store(!retry, Ordering::Release);
+        retry
+    }
+
+    pub(crate) fn replace_document(
+        &self,
+        navigate: impl FnOnce(u32) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut generation = self
+            .document_generation
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if self.is_ready() || self.terminal_failure.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let next_generation = *generation + 1;
+        // A failed navigation leaves the original document eligible to become ready.
+        navigate(next_generation)?;
+        *generation = next_generation;
+        Ok(())
+    }
+
+    pub(crate) fn fail_recovery_if_unready(&self) {
+        let Ok(_generation) = self.document_generation.lock() else {
+            return;
+        };
+        if !self.is_ready() {
+            self.terminal_failure.store(true, Ordering::Release);
+        }
+    }
+}
+
+pub(crate) fn defer_failed_renderer(window: &tauri::WebviewWindow) -> bool {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return false;
+    };
+    if !state.terminal_failure.load(Ordering::Acquire) {
+        return false;
+    }
+    state.arm();
+    warn_if_unready(window);
+    true
+}
+
+/// Queue an explicit open request while keeping an unpainted window hidden.
+pub(crate) fn defer_reveal_until_ready(window: &tauri::WebviewWindow) -> bool {
+    let Some(state) = window.try_state::<StartupWindow>() else {
+        return false;
+    };
+    if !state.defer_reveal() {
+        return false;
+    }
+    if state.terminal_failure.load(Ordering::Acquire) {
+        warn_if_unready(window);
+        return true;
+    }
+    if !state.recovery_scheduled.swap(true, Ordering::AcqRel) {
+        let target = window.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            recover_if_unready(&target).await;
+        });
+    }
+    true
 }
 
 async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bool, String> {
@@ -101,26 +206,20 @@ pub(crate) async fn recover_if_unready(window: &tauri::WebviewWindow) {
     let _ = window.run_on_main_thread(move || {
         // Readiness may arrive while this callback is queued.
         if let Some(state) = target.try_state::<StartupWindow>() {
-            // Serialize generation change with readiness so a delayed IPC from
-            // the previous document cannot reveal its unpainted replacement.
-            let Ok(mut generation) = state.document_generation.lock() else {
-                return;
-            };
-            if state.is_ready() || crate::calc_mode_active(target.app_handle()) {
+            if crate::calc_mode_active(target.app_handle()) {
                 return;
             }
-            let Ok(mut url) = target.url() else {
-                return;
-            };
-            *generation += 1;
-            url.query_pairs_mut()
-                .append_pair("wc-startup-generation", &generation.to_string());
-            crate::log_message_src(
-                "warn",
-                "core",
-                "[Startup] retrying stalled interface document once",
-            );
-            if let Err(error) = target.navigate(url) {
+            if let Err(error) = state.replace_document(|generation| {
+                let mut url = target.url().map_err(|error| error.to_string())?;
+                url.query_pairs_mut()
+                    .append_pair("wc-startup-generation", &generation.to_string());
+                crate::log_message_src(
+                    "warn",
+                    "core",
+                    "[Startup] retrying stalled interface document once",
+                );
+                target.navigate(url).map_err(|error| error.to_string())
+            }) {
                 crate::log_message_src(
                     "error",
                     "core",
@@ -213,71 +312,5 @@ pub(crate) fn show_error_dialog(title: &str, message: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn readiness_does_not_reveal_a_suppressed_launch() {
-        let state = StartupWindow::new();
-        assert!(!state.take_reveal());
-    }
-
-    #[test]
-    fn repeated_readiness_does_not_reopen_the_window() {
-        let state = StartupWindow::new();
-        state.arm();
-        assert!(state.take_reveal());
-        assert!(!state.take_reveal());
-    }
-
-    #[test]
-    fn timeout_warns_once_without_consuming_a_late_reveal() {
-        let state = StartupWindow::new();
-        assert!(!state.needs_warning());
-        state.arm();
-        assert!(state.needs_warning());
-        assert!(!state.needs_warning());
-        state.ready.store(true, Ordering::Release);
-        assert!(state.take_reveal());
-    }
-
-    #[test]
-    fn ready_or_suppressed_windows_never_show_timeout_errors() {
-        let state = StartupWindow::new();
-        assert!(!state.needs_warning());
-        state.arm();
-        state.ready.store(true, Ordering::Release);
-        assert!(!state.needs_warning());
-    }
-
-    #[test]
-    fn recovery_is_once_only_and_preserves_late_readiness() {
-        let state = StartupWindow::new();
-        assert!(!state.begin_recovery());
-        state.arm();
-        assert!(state.begin_recovery());
-        assert!(!state.begin_recovery());
-        state.ready.store(true, Ordering::Release);
-        assert!(!state.needs_warning());
-        assert!(state.take_reveal());
-    }
-
-    #[test]
-    fn a_ready_document_is_never_reloaded() {
-        let state = StartupWindow::new();
-        state.arm();
-        state.ready.store(true, Ordering::Release);
-        assert!(!state.begin_recovery());
-    }
-
-    #[test]
-    fn old_document_readiness_cannot_reveal_a_replacement() {
-        let state = StartupWindow::new();
-        state.arm();
-        *state.document_generation.lock().unwrap() = 1;
-        assert!(!state.accept_ready(0));
-        assert!(!state.is_ready());
-        assert!(state.accept_ready(1));
-        assert!(state.is_ready());
-    }
-}
+#[path = "startup_window_tests.rs"]
+mod tests;

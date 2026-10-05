@@ -5,6 +5,12 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Administrator sign-in uses the installed elevated startup route directly;
+  background launches stay hidden and manual launches retain the elevation handoff.
+  Installer reconciliation preserves startup opt-outs and removes only owned legacy
+  routes. Early open requests wait for painted content, and a failed renderer gets
+  one bounded recovery without displaying a blank window. The restored 3.6.4 splash
+  animation is unchanged.
 - Restored Stego video backup, container attachment, extraction, and snapshot
   refresh. Ordinary mounts retain existing Windows permissions and do not open
   the retired account-repair prompt. Fleet access restrictions remain unchanged.

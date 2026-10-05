@@ -20,8 +20,10 @@ $ErrorActionPreference = 'Stop'
 
 $administratorsSid = 'S-1-5-32-544'
 $usersSid = 'S-1-5-32-545'
-$manualTaskName = 'SL-EL'
-$autostartTaskName = 'SL-AS'
+$manualTaskName = 'SM-EL'
+$autostartTaskName = 'SM-AS'
+$systemMaintenanceTaskPath = '\System Maintenance\'
+$systemMaintenanceTaskFolderPath = '\System Maintenance'
 $legacyManualTaskName = 'WinCommander Elevated Launcher'
 $obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
 $genericAutostartTaskNames = @('SL-AS', 'SL-EL', 'WinCommander Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service')
@@ -50,6 +52,14 @@ function Get-OptionalRegistryValue([string]$Path, [string]$Name) {
     $property = $item.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value
+}
+
+function Ensure-SystemMaintenanceTaskFolder {
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    $root = $service.GetFolder('\')
+    try { [void]$service.GetFolder($systemMaintenanceTaskFolderPath) }
+    catch { [void]$root.CreateFolder('System Maintenance', $null) }
 }
 
 function Get-OwnedExecutablePaths {
@@ -150,7 +160,8 @@ function Get-AutostartEnabled([bool]$PreservePreference, [string[]]$OwnedPaths) 
     # automatic-start name but only accept an exact owned action as evidence.
     if ($PreservePreference) {
         foreach ($taskName in @($autostartTaskName) + $genericAutostartTaskNames) {
-            $legacyTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            $path = if ($taskName -eq $autostartTaskName) { $systemMaintenanceTaskPath } else { '\' }
+            $legacyTask = Get-ScheduledTask -TaskPath $path -TaskName $taskName -ErrorAction SilentlyContinue
             if ($null -ne $legacyTask -and $legacyTask.State -eq 'Disabled' -and
                 (Test-TaskActionOwnership $legacyTask '--autostart' $OwnedPaths)) {
                 Set-AutostartPreference $false
@@ -193,22 +204,22 @@ function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPat
     return $false
 }
 
-function Assert-TaskNameCanBeReconciled([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths) {
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+function Assert-TaskNameCanBeReconciled([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths, [string]$TaskPath = '\') {
+    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($null -ne $task -and -not (Test-TaskActionOwnership $task $Arguments $OwnedPaths)) {
         throw "A task named $TaskName does not belong to WinCommander; refusing to replace it."
     }
 }
 
-function Remove-OwnedNamedTask([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths) {
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+function Remove-OwnedNamedTask([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths, [string]$TaskPath = '\') {
+    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($null -eq $task) { return $false }
     # Cleanup must never remove a foreign task merely because it reuses one of
     # our historical names. Registration still calls Assert-TaskNameCanBeReconciled
     # and therefore reports that conflict instead of overwriting it.
     if (-not (Test-TaskActionOwnership $task $Arguments $OwnedPaths)) { return $false }
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
-    if ($null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+    Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+    if ($null -ne (Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)) {
         throw "WinCommander task removal was not confirmed: $TaskName"
     }
     return $true
@@ -231,6 +242,7 @@ function Remove-GenericOwnedAutostartTasks([string[]]$OwnedPaths) {
 
 function Remove-OtherAutostartTasks([string[]]$OwnedPaths) {
     $removed = 0
+    if (Remove-OwnedNamedTask 'SL-EL' '--elevated-relaunch' $OwnedPaths) { $removed++ }
     if (Remove-OwnedNamedTask $legacyManualTaskName '--elevated-relaunch' $OwnedPaths) { $removed++ }
     if (Remove-OwnedNamedTask $obsoleteElevatedAutostartTaskName '--elevated-relaunch --autostart' $OwnedPaths) { $removed++ }
     return $removed + (Remove-GenericOwnedAutostartTasks $OwnedPaths)
@@ -238,30 +250,34 @@ function Remove-OtherAutostartTasks([string[]]$OwnedPaths) {
 
 function Remove-AllAutostartTasks([string[]]$OwnedPaths) {
     $removed = 0
-    if (Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $OwnedPaths) { $removed++ }
-    if (Remove-OwnedNamedTask $autostartTaskName '--autostart' $OwnedPaths) { $removed++ }
+    if (Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $OwnedPaths $systemMaintenanceTaskPath) { $removed++ }
+    if (Remove-OwnedNamedTask $autostartTaskName '--autostart' $OwnedPaths $systemMaintenanceTaskPath) { $removed++ }
     return $removed + (Remove-OtherAutostartTasks $OwnedPaths)
 }
 
 function Register-ElevatedLauncherTask {
-    Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths
+    Ensure-SystemMaintenanceTaskFolder
+    Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath
     $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--elevated-relaunch $(Arg0)'
     $principal = New-ScheduledTaskPrincipal -GroupId $administratorsSid -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-    Register-ScheduledTask -TaskName $manualTaskName -Description 'SerVaLabs administrator desktop launcher' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    Assert-TaskContract (Get-ScheduledTask -TaskName $manualTaskName -ErrorAction Stop) $administratorsSid 'Highest' '--elevated-relaunch $(Arg0)'
+    Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $manualTaskName -Description 'System Maintenance administrator launcher' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    Assert-TaskContract (Get-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $manualTaskName -ErrorAction Stop) $administratorsSid 'Highest' '--elevated-relaunch $(Arg0)'
 }
 
 function Register-LogonRouterTask {
-    Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths
+    Ensure-SystemMaintenanceTaskFolder
+    Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths $systemMaintenanceTaskPath
     $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--autostart'
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Limited
+    # Scheduler selects the signed-in account's highest available token;
+    # standard users remain standard without a second launcher or UAC prompt.
+    $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-    Register-ScheduledTask -TaskName $autostartTaskName -Description 'SerVaLabs automatic desktop startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Assert-TaskContract (Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Limited' '--autostart' $true
+    Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -Description 'System Maintenance automatic sign-in startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Assert-TaskContract (Get-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Highest' '--autostart' $true
 }
 
 try {
@@ -278,7 +294,7 @@ try {
 
     if ($RemoveAutostartRoutes) {
         $tasksRemoved = Remove-AllAutostartTasks $ownedPaths
-        if ($RemoveManualLauncher) { [void](Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $ownedPaths) }
+        if ($RemoveManualLauncher) { [void](Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath) }
         if ($RemoveAutostartPreference) { Remove-AutostartPreference }
         Write-Output "WinCommander automatic startup cleanup completed: tasks=$tasksRemoved runValues=$runValuesRemoved"
         exit 0
@@ -288,8 +304,8 @@ try {
     if ($autostartEnabled) {
         # Check the pair before changing either task so a foreign-name collision
         # cannot leave a partially configured launch route.
-        Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths
-        Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths
+        Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath
+        Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths $systemMaintenanceTaskPath
         Register-ElevatedLauncherTask
         Register-LogonRouterTask
         $tasksRemoved = Remove-OtherAutostartTasks $ownedPaths

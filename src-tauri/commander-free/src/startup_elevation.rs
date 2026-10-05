@@ -19,15 +19,15 @@ pub enum StartupElevationResult {
 }
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
-const ELEVATED_LAUNCH_TASK: &str = "SL-EL";
+const ELEVATED_LAUNCH_TASK: &str = "SM-EL";
+const ELEVATED_LAUNCH_TASK_PATH: &str = r"\System Maintenance\";
 
 #[cfg(windows)]
 #[path = "startup_elevation_wait.rs"]
 mod handoff_wait;
 
-/// A UAC prompt is useful for every interactive desktop launch, including the
-/// logon launch. This lets Windows show its normal consent/credential prompt
-/// instead of silently pinning WinCommander to a limited token.
+/// Only foreground launches may request consent. Scheduler already chooses
+/// the account's highest available token for the automatic sign-in task.
 pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String]) -> bool {
     if cli_mode || args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG) {
         return false;
@@ -38,7 +38,7 @@ pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String]) -> bool {
     // upgrade and fires beside the canonical `--autostart` task, an elevation
     // request here can create a second launch race before either process owns
     // the per-session mutex.  It is deliberately a quiet duplicate instead.
-    !is_helper_launch(args) && !is_legacy_background_launch(args)
+    !is_helper_launch(args) && !is_logon_router_launch(args) && !is_legacy_background_launch(args)
 }
 
 fn is_helper_launch(args: &[String]) -> bool {
@@ -58,10 +58,6 @@ fn is_legacy_background_launch(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--minimized") && !is_logon_router_launch(args)
 }
 
-fn should_continue_normal_logon(args: &[String], user_has_split_admin_token: bool) -> bool {
-    is_logon_router_launch(args) && !user_has_split_admin_token
-}
-
 pub fn is_elevated_relaunch(args: &[String]) -> bool {
     args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG)
 }
@@ -74,8 +70,8 @@ pub fn is_current_process_elevated() -> bool {
 /// A UAC-filtered Administrator token is not elevated, so IsUserAnAdmin()
 /// returns false. TokenElevationTypeLimited is the Windows-supported way to
 /// distinguish that account from a standard account without parsing localized
-/// group names or invoking a shell command. This only decides whether a broken
-/// trusted logon route should fall back to consent; it grants no authority.
+/// group names or invoking a shell command. This only decides whether to try
+/// the installer-owned elevated launcher; it grants no authority.
 #[cfg(windows)]
 fn current_user_has_split_admin_token() -> bool {
     use windows_sys::Win32::{
@@ -116,14 +112,6 @@ pub fn is_current_process_elevated() -> bool {
 /// forwards, even when Explorer already started them elevated.
 pub fn should_handoff_existing_instance(args: &[String]) -> bool {
     !is_helper_launch(args) && !is_logon_router_launch(args) && is_elevated_relaunch(args)
-}
-
-fn task_launch_intent(args: &[String]) -> &'static str {
-    if is_logon_router_launch(args) {
-        "--autostart"
-    } else {
-        "--focus"
-    }
 }
 
 /// Build the child arguments without passing the internal sentinel on again.
@@ -186,20 +174,34 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
 
     // A user may explicitly choose "Run as administrator" from Explorer.
     // Do not spawn a needless second elevated instance in that case.
-    if unsafe { IsUserAnAdmin() } != 0 {
+    let elevated = unsafe { IsUserAnAdmin() } != 0;
+    if elevated || is_logon_router_launch(args) {
+        return StartupElevationResult::ContinueNormally;
+    }
+
+    // A standard account cannot use the Administrators-only scheduled
+    // launcher. Never turn an ordinary WinCommander launch into a credential
+    // prompt; machine-wide operations still request approval when invoked.
+    if !should_request_admin_handoff(elevated, current_user_has_split_admin_token()) {
+        crate::log_message_src(
+            "info",
+            "core",
+            "[StartupElevation] standard account continues without elevation",
+        );
         return StartupElevationResult::ContinueNormally;
     }
 
     // The machine installer owns this Administrators-group task. Task
     // Scheduler verifies group membership and starts the configured high-token
-    // child without another consent dialog. If the task is absent, blocked by
-    // policy, or this is a standard user, deliberately fall through to UAC.
+    // child without another consent dialog. Only a foreground launch may
+    // fall back to UAC when the task is unavailable.
     let task_name = ELEVATED_LAUNCH_TASK;
-    let launch_intent = task_launch_intent(args);
+    let task_path = ELEVATED_LAUNCH_TASK_PATH;
+    let launch_intent = "--focus";
     // Never hand a dev/portable launch to an unrelated installed executable.
     // RunEx binds the task to this interactive session on multi-user machines.
     let task_script = std::env::current_exe().ok().map(|path| format!(
-        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
+        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('{task_path}').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
         path.to_string_lossy().replace('\'', "''")
     ));
     use handoff_wait::SchedulerHandoff;
@@ -241,20 +243,6 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
         crate::log_message_src(
             "warn", "core",
             "[StartupElevation] scheduler handoff outcome unknown; continuing without another elevation request",
-        );
-        return StartupElevationResult::ContinueNormally;
-    }
-
-    // The sole logon task runs at the caller's normal token. For a standard
-    // user the Administrators-only launcher is correctly unavailable; logon
-    // must continue normally without a disruptive UAC prompt. A split-token
-    // Administrator instead falls through to Windows UAC if the installer
-    // task is missing or blocked, rather than silently losing elevation.
-    if should_continue_normal_logon(args, current_user_has_split_admin_token()) {
-        crate::log_message_src(
-            "info",
-            "core",
-            "[StartupElevation] elevated launcher unavailable at logon; continuing with the normal user token",
         );
         return StartupElevationResult::ContinueNormally;
     }
@@ -324,14 +312,14 @@ mod tests {
     }
 
     #[test]
-    fn helpers_never_prompt_but_autostart_is_routed_without_ui() {
+    fn helpers_and_automatic_launches_never_request_elevation() {
         for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste"] {
             assert!(!should_offer_startup_elevation(
                 false,
                 &["app.exe".into(), flag.into()]
             ));
         }
-        assert!(should_offer_startup_elevation(
+        assert!(!should_offer_startup_elevation(
             false,
             &["app.exe".into(), "--autostart".into()]
         ));
@@ -361,11 +349,13 @@ mod tests {
     }
 
     #[test]
-    fn only_standard_user_logon_skips_uac_when_the_trusted_task_is_unavailable() {
-        let logon = ["app.exe".into(), "--autostart".into()];
-        assert!(should_continue_normal_logon(&logon, false));
-        assert!(!should_continue_normal_logon(&logon, true));
-        assert!(!should_continue_normal_logon(&["app.exe".into()], false));
+    fn automatic_launch_never_retries_elevation_regardless_of_other_flags() {
+        for extra in ["--focus", "--minimized", ELEVATED_RELAUNCH_FLAG] {
+            assert!(!should_offer_startup_elevation(
+                false,
+                &["app.exe".into(), "--autostart".into(), extra.into()]
+            ));
+        }
     }
 
     #[test]
@@ -400,18 +390,6 @@ mod tests {
             ELEVATED_RELAUNCH_FLAG.into(),
             "--autostart".into()
         ]));
-    }
-
-    #[test]
-    fn scheduler_only_receives_fixed_launch_intent_and_keeps_background_duplicates_quiet() {
-        assert_eq!(
-            task_launch_intent(&["app.exe".into(), "--autostart".into()]),
-            "--autostart"
-        );
-        assert_eq!(
-            task_launch_intent(&["app.exe".into(), "untrusted argument".into()]),
-            "--focus"
-        );
     }
 
     #[test]

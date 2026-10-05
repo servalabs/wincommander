@@ -142,8 +142,8 @@ task migration cannot recreate a retired launcher.
 
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |
-| `SL-AS` | Sign-in startup router | One all-user logon trigger; runs in the signed-in session |
-| `SL-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
+| `\System Maintenance\SM-AS` | Hidden sign-in startup | One all-user logon trigger; highest available token in the signed-in session |
+| `\System Maintenance\SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
 | `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
 | `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
 | `WinCommanderShellPriorityLogon` | Apply configured desktop-shell priority | Machine logon helper |
@@ -151,6 +151,11 @@ task migration cannot recreate a retired launcher.
 Task migration checks the executable/action identity before changing or removing
 an existing task. Similar names alone do not prove that a task belongs to this
 installation. Task Scheduler names are not a security or concealment boundary.
+
+Early open requests remain queued until the startup content has painted.
+`startup_renderer.rs` invalidates stale readiness after WebView2 renderer loss
+and attempts one document reload, preserving hidden/minimized/locked intent.
+A repeated or browser-process failure remains hidden with a bounded diagnostic.
 
 The Pro updater holds a machine-wide maintenance reservation while replacing
 the shared component. Desktop and service brokers pause new calls, active

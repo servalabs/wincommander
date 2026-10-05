@@ -153,6 +153,8 @@ tauri = { version = "^2.12", features = ["test"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "=0.38.2"
+webview2-com-runtime = { package = "webview2-com", version = "=0.39.1" }
+windows-runtime = { package = "windows", version = "=0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
 # explorer_context.rs — the Ctrl+Space "in this folder" chip asks the shell
 # which Explorer window the user was last in. That needs the COM shell
 # automation surface, which windows-sys cannot express (no vtable wrappers):

@@ -98,8 +98,9 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("WC_REMOVE_AUTOSTART_ROUTES_OR_ABORT");
     expect(hooks).toContain("-RemoveAutostartRoutes -RemoveManualLauncher -RemoveAutostartPreference");
     expect(hooks).toContain("could not configure its required automatic startup route");
-    expect(elevatedLaunchers).toContain("$manualTaskName = 'SL-EL'");
-    expect(elevatedLaunchers).toContain("$autostartTaskName = 'SL-AS'");
+    expect(elevatedLaunchers).toContain("$manualTaskName = 'SM-EL'");
+    expect(elevatedLaunchers).toContain("$autostartTaskName = 'SM-AS'");
+    expect(elevatedLaunchers).toContain("$systemMaintenanceTaskPath = '\\System Maintenance\\'");
     expect(elevatedLaunchers).toContain("$obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'");
     expect(elevatedLaunchers).toContain("Register-LogonRouterTask");
     expect(elevatedLaunchers).toContain("Remove-OwnedRunValues");

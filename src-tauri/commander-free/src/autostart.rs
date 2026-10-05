@@ -1,8 +1,7 @@
-// Machine-scoped logon autostart via one Scheduled Task. The task is the
-// single logon router: an Administrator can hand off to the separate,
-// Administrators-only *manual* launcher, while a standard user continues in
-// its own limited session. Do not add a second elevated logon trigger; two
-// independent triggers can race and create duplicate desktop processes.
+// Machine-scoped logon autostart via one Scheduled Task. The installed
+// logon task uses each user's highest available token: administrators
+// run elevated and standard users keep their own limited session. Two separate
+// logon triggers can race and create duplicate desktop processes.
 //
 // The user preference deliberately does not live in a disabled task. A
 // disabled task is still a startup entry and previously made an update/fresh
@@ -16,8 +15,8 @@
 // This lets a toggle remove real startup entries while preserving an explicit
 // opt-out across ordinary launches and updates.
 
-const COVERED_TASK_NAME: &str = "System Update Service";
-const AUTOSTART_TASK_NAME: &str = "SL-AS";
+const AUTOSTART_TASK_NAME: &str = "SM-AS";
+const SYSTEM_MAINTENANCE_TASK_PATH: &str = r"\System Maintenance\";
 const AUTOSTART_PREFERENCE_PATH: &str = r"HKLM:\Software\ServaLabs\WinCommander";
 const AUTOSTART_PREFERENCE_VALUE: &str = "AutostartEnabled";
 const ELEVATION_REQUIRED_EXIT_CODE: i32 = 77;
@@ -109,7 +108,7 @@ fn build_autostart_script(covered: bool, operation: AutostartOperation) -> Resul
         ("__TARGET_EXE__", ps_literal(&target_exe)),
         ("__DESIRED_TASK_NAME__", ps_literal(&desired_task_name)),
         ("__ALTERNATE_TASK_NAME__", ps_literal(&alternate_task_name)),
-        ("__COVERED_TASK_NAME__", ps_literal(COVERED_TASK_NAME)),
+        ("__TASK_PATH__", ps_literal(SYSTEM_MAINTENANCE_TASK_PATH)),
         ("__PREFERENCE_PATH__", ps_literal(AUTOSTART_PREFERENCE_PATH)),
         (
             "__PREFERENCE_VALUE_NAME__",
@@ -145,14 +144,15 @@ Set-StrictMode -Version Latest
 $targetExe = __TARGET_EXE__
 $desiredTaskName = __DESIRED_TASK_NAME__
 $alternateTaskName = __ALTERNATE_TASK_NAME__
-$coveredTaskName = __COVERED_TASK_NAME__
+$systemMaintenanceTaskPath = __TASK_PATH__
+$systemMaintenanceTaskFolderPath = '\System Maintenance'
 $preferencePath = __PREFERENCE_PATH__
 $preferenceValueName = __PREFERENCE_VALUE_NAME__
 $legacyDataDirName = __LEGACY_DATA_DIR_NAME__
 $runValueNames = @(__RUN_VALUE_NAMES__)
-$manualTaskName = 'SL-EL'
-$legacyTaskNames = @('WinCommander Autostart', 'WinCommander Elevated Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service', 'WinCommander Elevated Launcher', $manualTaskName)
-$allTaskNames = @($desiredTaskName, $alternateTaskName) + $legacyTaskNames | Select-Object -Unique
+$manualTaskName = 'SM-EL'
+$legacyTaskNames = @('SL-AS', 'SL-EL', 'WinCommander Autostart', 'WinCommander Elevated Autostart', 'System Update Service', 'Sys Health Checker', 'WinCommander Input Service', 'WinCommander Elevated Launcher')
+$allTaskNames = @($desiredTaskName, $alternateTaskName, $manualTaskName) + $legacyTaskNames | Select-Object -Unique
 
 $exeFileName = [IO.Path]::GetFileName($targetExe)
 $ownedExePaths = @([IO.Path]::GetFullPath($targetExe))
@@ -193,9 +193,8 @@ function Get-RegistryValueOrNull {
   $key = Get-RegistryKeyOrNull -Path $Path
   if ($null -eq $key) { return $null }
   try {
-    # Preserve REG_EXPAND_SZ text until ownership is checked against the
-    # profile that owns its hive. Expanding it here would use the current
-    # elevated installer account and could identify the wrong executable.
+    # GetValue returns $null for a missing value without converting that normal
+    # first-install state into a terminating PowerShell error.
     return $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
   } catch {
     throw "Cannot read registry value '$Name' from '$Path': $($_.Exception.Message)"
@@ -241,7 +240,8 @@ function Require-AutostartElevation {
 function Get-TaskOrNull {
   param([Parameter(Mandatory)][string]$Name)
   try {
-    return Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+    $taskPath = if ($Name -in @($desiredTaskName, $manualTaskName)) { $systemMaintenanceTaskPath } else { '\' }
+    return Get-ScheduledTask -TaskPath $taskPath -TaskName $Name -ErrorAction Stop
   } catch {
     $hresult = $_.Exception.HResult
     $id = [string]$_.FullyQualifiedErrorId
@@ -250,6 +250,18 @@ function Get-TaskOrNull {
       return $null
     }
     throw "Cannot inspect scheduled task '$Name': $message"
+  }
+}
+
+function Ensure-SystemMaintenanceTaskFolder {
+  try {
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    $root = $service.GetFolder('\')
+    try { [void]$service.GetFolder($systemMaintenanceTaskFolderPath) }
+    catch { [void]$root.CreateFolder('System Maintenance', $null) }
+  } catch {
+    throw "Cannot prepare the System Maintenance task folder: $($_.Exception.Message)"
   }
 }
 
@@ -329,16 +341,13 @@ function Test-OwnedManagedTask {
   if ($actions.Count -ne 1) { return $false }
   $arguments = [string]$actions[0].Arguments
   if (Test-OwnedExecutablePath -Path ([string]$actions[0].Execute)) {
-    if ($Name -in @($manualTaskName, 'WinCommander Elevated Launcher')) {
+    if ($Name -in @($manualTaskName, 'SL-EL', 'WinCommander Elevated Launcher')) {
       return $arguments -in @('--elevated-relaunch', '--elevated-relaunch $(Arg0)')
     }
     # Never remove a same-named task merely because its executable happens to
     # be ours. Each known historic route also needs its known launch contract.
     if ($Name -eq 'WinCommander Elevated Autostart') {
       return $arguments -eq '--elevated-relaunch --autostart'
-    }
-    if ($Name -eq $coveredTaskName) {
-      return $arguments -eq '--autostart'
     }
     # A short-lived release created known startup tasks without an argument.
     # These are recognized only after the exact executable path and a finite
@@ -373,7 +382,7 @@ function Test-CanonicalTask {
   $repetition = $logonTriggers[0].Repetition
   if ($null -ne $repetition -and -not [string]::IsNullOrWhiteSpace([string]$repetition.Interval)) { return $false }
   return (Resolve-PrincipalSid -GroupId ([string]$Task.Principal.GroupId)) -eq 'S-1-5-32-545' -and
-    $Task.Principal.RunLevel -eq 'Limited' -and
+    $Task.Principal.RunLevel -eq (Get-AutostartRunLevel) -and
     $Task.Settings.MultipleInstances -eq 'Parallel' -and
     $Task.Settings.ExecutionTimeLimit -eq 'PT0S' -and $Task.Settings.AllowDemandStart -and (Test-NoAutomaticRestart $Task.Settings)
 }
@@ -393,7 +402,7 @@ function Get-OwnedTaskEntries {
 
 function Test-AnyOwnedDisabledTask {
   foreach ($entry in @(Get-OwnedTaskEntries)) {
-    if ($entry.Name -notin @($manualTaskName, 'WinCommander Elevated Launcher') -and $entry.Task.State -eq 'Disabled') { return $true }
+    if ($entry.Name -notin @($manualTaskName, 'SL-EL', 'WinCommander Elevated Launcher') -and $entry.Task.State -eq 'Disabled') { return $true }
   }
   return $false
 }
@@ -412,7 +421,7 @@ function Get-RunOwnerProfile {
   param([Parameter(Mandatory)][string]$Path)
   if ($Path -match '(?i)^(Registry::HKEY_CURRENT_USER|HKCU:)\\') { return $env:USERPROFILE }
   if ($Path -match '(?i)^Registry::HKEY_USERS\\+(S-1-5-21-\d+-\d+-\d+-\d+)\\') {
-    $profileKey = 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $Matches[1]
+    $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $Matches[1]
     $profile = Get-RegistryValueOrNull -Path $profileKey -Name 'ProfileImagePath'
     if ($null -ne $profile) { return [Environment]::ExpandEnvironmentVariables([string]$profile) }
   }
@@ -545,7 +554,8 @@ function Remove-OwnedTasks {
   foreach ($entry in @(Get-OwnedTaskEntries)) {
     if (-not [string]::IsNullOrWhiteSpace($KeepTaskName) -and $entry.Name -eq $KeepTaskName) { continue }
     if (-not [string]::IsNullOrWhiteSpace($KeepTaskName) -and $entry.Name -eq $manualTaskName -and (Test-CanonicalLauncher -Task $entry.Task)) { continue }
-    Unregister-ScheduledTask -TaskName $entry.Name -Confirm:$false -ErrorAction Stop
+    $taskPath = if ($entry.Name -in @($desiredTaskName, $manualTaskName)) { $systemMaintenanceTaskPath } else { '\' }
+    Unregister-ScheduledTask -TaskPath $taskPath -TaskName $entry.Name -Confirm:$false -ErrorAction Stop
   }
 }
 
@@ -590,9 +600,10 @@ function Register-CanonicalTask {
 
   $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--autostart'
   $trigger = New-ScheduledTaskTrigger -AtLogOn
-  $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+  $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel (Get-AutostartRunLevel)
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-  Register-ScheduledTask -TaskName $desiredTaskName -Description 'SerVaLabs automatic desktop startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  Ensure-SystemMaintenanceTaskFolder
+  Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $desiredTaskName -Description 'System Maintenance automatic sign-in startup' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
 
   $registered = Get-TaskOrNull -Name $desiredTaskName
   if (-not (Test-CanonicalTask -Task $registered)) {
@@ -610,6 +621,11 @@ function Test-InstalledLauncherEligible {
     }
   }
   return $false
+}
+
+function Get-AutostartRunLevel {
+  if (Test-InstalledLauncherEligible) { return 'Highest' }
+  return 'Limited'
 }
 
 function Test-CanonicalLauncher {
@@ -648,7 +664,8 @@ function Register-CanonicalLauncher {
   $action = New-ScheduledTaskAction -Execute $targetExe -Argument '--elevated-relaunch $(Arg0)'
   $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-544' -RunLevel Highest
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
-  Register-ScheduledTask -TaskName $manualTaskName -Description 'SerVaLabs administrator desktop launcher' -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+  Ensure-SystemMaintenanceTaskFolder
+  Register-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $manualTaskName -Description 'System Maintenance administrator launcher' -Action $action -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
   if (-not (Test-CanonicalLauncher (Get-TaskOrNull -Name $manualTaskName))) { throw 'Windows did not confirm the administrator launcher.' }
 }
 "#;
@@ -1041,7 +1058,7 @@ mod tests {
     #[test]
     fn cleanup_handles_missing_registry_values_without_suppressing_real_failures() {
         let script = build_autostart_script(false, AutostartOperation::Disable).unwrap();
-        assert!(script.contains("DoNotExpandEnvironmentNames"));
+        assert!(script.contains("$key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)"));
         assert!(!script.contains("Get-ItemPropertyValue"));
         assert!(!script.contains("SilentlyContinue"));
         assert!(script.contains("CmdletizationQuery_NotFound"));
@@ -1071,8 +1088,7 @@ mod tests {
         assert!(!POWERSHELL_STATUS.contains("Get-AutostartPreference"));
         assert!(!POWERSHELL_STATUS.contains("Test-CanonicalTask"));
         assert!(!POWERSHELL_STATUS.contains("Test-LauncherNeedsRepair"));
-        assert!(status.contains("if ($Name -eq $coveredTaskName)"));
-        assert!(status.contains("return $arguments -eq '--autostart'"));
+        assert!(status.contains("return $arguments -in @('', '--autostart', '--minimized')"));
         assert!(status.contains("$arguments -notmatch '(?i)autostart\\.stderr\\.log'"));
         assert!(status.contains("$arguments -eq '--elevated-relaunch --autostart'"));
     }

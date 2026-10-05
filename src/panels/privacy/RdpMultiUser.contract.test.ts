@@ -39,10 +39,11 @@ describe("RDP machine-scope multi-user contracts", () => {
     expect(source).toContain("Blocked: needs-elevation");
   });
 
-  test("keeps autostart limited and records the child stderr", async () => {
+  test("uses highest available privilege only for installed autostart", async () => {
     const source = await Bun.file("src-tauri/commander-free/src/autostart.rs").text();
     expect(source).toContain("RunAsInvoker");
-    expect(source).toContain("autostart.stderr.log");
-    expect(source).toContain("-RunLevel Limited");
+    expect(source).toContain("-RunLevel (Get-AutostartRunLevel)");
+    expect(source).toContain("if (Test-InstalledLauncherEligible) { return 'Highest' }");
+    expect(source).toContain("return 'Limited'");
   });
 });

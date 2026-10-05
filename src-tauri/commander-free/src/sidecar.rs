@@ -2031,7 +2031,7 @@ pub async fn test_pro_dispatch(
     dispatch_paid_command(&feature_id, args.unwrap_or(serde_json::Value::Null)).await
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 fn test_dispatch_allows(feature_id: &str) -> bool {
     matches!(feature_id, "get_decoy_recent")
 }
