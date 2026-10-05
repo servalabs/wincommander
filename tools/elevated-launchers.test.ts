@@ -121,7 +121,7 @@ $tokens=$null; $parseErrors=$null
 $scriptPath=Join-Path (Get-Location) 'src-tauri/commander-free/nsis/configure-elevated-launchers.ps1'
 $ast=[Management.Automation.Language.Parser]::ParseFile($scriptPath,[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Invalid launcher installer script' }
-foreach ($functionName in @('Get-OptionalRegistryValue','Test-OwnedExecutablePath','Test-OwnedExecutableCommand','Remove-OwnedRunValues','Set-AutostartPreference','Get-AutostartEnabled','Test-TaskActionOwnership','Remove-OwnedNamedTask')) {
+foreach ($functionName in @('Get-OptionalRegistryValue','Test-OwnedExecutablePath','Test-OwnedExecutableCommand','Remove-OwnedRunValues','Open-AutostartPreferenceKey','Get-AutostartPreferenceValue','Set-AutostartPreference','Get-AutostartEnabled','Test-TaskActionOwnership','Remove-OwnedNamedTask')) {
   $finder={ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName }.GetNewClosure()
   $definition=$ast.Find($finder,$true)
   if ($null -eq $definition) { throw "Missing installer function: $functionName" }

@@ -133,24 +133,61 @@ function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [strin
     }
 }
 
+function Open-AutostartPreferenceKey([Microsoft.Win32.RegistryView]$View, [bool]$Writable, [bool]$Create = $false) {
+    if ($preferencePath -match '^(Registry::HKEY_LOCAL_MACHINE|HKLM:)\\(.+)$') {
+        $hive = [Microsoft.Win32.RegistryHive]::LocalMachine
+    } elseif ($preferencePath -match '^(Registry::HKEY_CURRENT_USER|HKCU:)\\(.+)$') {
+        $hive = [Microsoft.Win32.RegistryHive]::CurrentUser
+    } else { throw 'The WinCommander automatic-start preference path is invalid.' }
+    $subkey = $Matches[2]
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $View)
+    try {
+        if ($Create) { return $base.CreateSubKey($subkey) }
+        return $base.OpenSubKey($subkey, $Writable)
+    } finally { $base.Dispose() }
+}
+
+function Get-AutostartPreferenceValue([Microsoft.Win32.RegistryView]$View) {
+    $key = Open-AutostartPreferenceKey $View $false
+    if ($null -eq $key) { return $null }
+    try { return $key.GetValue($preferenceName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+    finally { $key.Dispose() }
+}
+
 function Set-AutostartPreference([bool]$Enabled) {
-    if (-not (Test-Path -LiteralPath $preferencePath)) {
-        New-Item -Path $preferencePath -Force -ErrorAction Stop | Out-Null
-    }
-    New-ItemProperty -LiteralPath $preferencePath -Name $preferenceName -PropertyType DWord -Value ([int]$Enabled) -Force -ErrorAction Stop | Out-Null
-    $readback = Get-OptionalRegistryValue $preferencePath $preferenceName
-    if ($null -eq $readback -or [int]$readback -ne [int]$Enabled) {
-        throw 'The WinCommander automatic-start preference did not persist.'
+    $key = Open-AutostartPreferenceKey ([Microsoft.Win32.RegistryView]::Registry64) $true $true
+    try {
+        $key.SetValue($preferenceName, [int]$Enabled, [Microsoft.Win32.RegistryValueKind]::DWord)
+        $readback = $key.GetValue($preferenceName, $null)
+        if ($null -eq $readback -or [int]$readback -ne [int]$Enabled) {
+            throw 'The WinCommander automatic-start preference did not persist.'
+        }
+    } finally { $key.Dispose() }
+}
+
+function Remove-AutostartPreference {
+    # Full uninstall must also clear a legacy OFF marker, otherwise a later
+    # fresh install would import it after the canonical marker was removed.
+    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+        $key = Open-AutostartPreferenceKey $view $true
+        if ($null -eq $key) { continue }
+        try { $key.DeleteValue($preferenceName, $false) }
+        finally { $key.Dispose() }
     }
 }
 
 function Get-AutostartEnabled([bool]$PreservePreference, [string[]]$OwnedPaths) {
-    $value = Get-OptionalRegistryValue $preferencePath $preferenceName
+    # Desktop writes the native view. Old 32-bit installers could persist OFF
+    # in the redirected view; import it only when no native preference exists.
+    $value = Get-AutostartPreferenceValue ([Microsoft.Win32.RegistryView]::Registry64)
+    $legacy = $null -eq $value
+    if ($legacy) { $value = Get-AutostartPreferenceValue ([Microsoft.Win32.RegistryView]::Registry32) }
     if ($null -ne $value) {
-        $number = [Convert]::ToInt32($value)
-        if ($number -eq 0) { return $false }
-        if ($number -eq 1) { return $true }
-        throw 'The WinCommander automatic-start preference is invalid.'
+        try { $number = [Convert]::ToInt32($value) }
+        catch { throw 'The WinCommander automatic-start preference is invalid.' }
+        if ($number -notin @(0, 1)) { throw 'The WinCommander automatic-start preference is invalid.' }
+        if ($legacy) { Set-AutostartPreference ([bool]$number) }
+        return [bool]$number
     }
 
     # Releases before the persisted marker represented explicit off by leaving
@@ -170,13 +207,6 @@ function Get-AutostartEnabled([bool]$PreservePreference, [string[]]$OwnedPaths) 
         }
     }
     return $true
-}
-
-function Remove-AutostartPreference {
-    if (-not (Test-Path -LiteralPath $preferencePath)) { return }
-    if ($null -ne (Get-OptionalRegistryValue $preferencePath $preferenceName)) {
-        Remove-ItemProperty -LiteralPath $preferencePath -Name $preferenceName -ErrorAction Stop
-    }
 }
 
 function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPaths) {

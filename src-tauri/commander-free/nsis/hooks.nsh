@@ -28,6 +28,17 @@ ${Using:StrFunc} UnStrStr
 ; record before the update tries to create a service with the same name.
 !define WC_SERVICE_DELETE_TIMEOUT_SECONDS 30
 
+!macro WC_SELECT_NATIVE_POWERSHELL target
+  ; NSIS is 32-bit even for x64 payloads. Bare powershell.exe consequently
+  ; sees only the redirected registry view, leaving native HKLM Run entries.
+  ; Use the native host so the helpers inspect both normal and WOW6432Node
+  ; paths without changing process-wide filesystem redirection.
+  StrCpy ${target} "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  ${If} ${FileExists} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    StrCpy ${target} "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  ${EndIf}
+!macroend
+
 !macro WC_WRITE_LIFECYCLE_DIAGNOSTIC stage exit detail
   ; `sc query` contains SCM's STATE, CHECKPOINT and WAIT_HINT on separate
   ; lines. Retain that exact output for post-failure diagnosis.
@@ -83,7 +94,8 @@ ${Using:StrFunc} UnStrStr
   File /oname=$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1 "${WC_CONFIGURE_ELEVATED_LAUNCHERS}"
   ; A manually opened setup is also an upgrade when older routes exist.
   ; Preserve legacy OFF in both modes; a fresh machine still defaults to ON.
-  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "elevated-launchers-configure" "$0" "$1"
@@ -98,7 +110,8 @@ ${Using:StrFunc} UnStrStr
 !macro WC_REMOVE_AUTOSTART_ROUTES_OR_ABORT stage
   InitPluginsDir
   File /oname=$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1 "${WC_CONFIGURE_ELEVATED_LAUNCHERS}"
-  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -RemoveAutostartRoutes -RemoveManualLauncher -RemoveAutostartPreference'
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -RemoveAutostartRoutes -RemoveManualLauncher -RemoveAutostartPreference'
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-autostart-cleanup" "$0" "$1"
@@ -348,7 +361,8 @@ ${Using:StrFunc} UnStrStr
   ; old executable payloads, and never removes profile-owned settings/caches.
   InitPluginsDir
   File /oname=$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1 "${WC_LEGACY_LAUNCH_MIGRATION}"
-  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe"'
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe"'
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
@@ -407,7 +421,8 @@ ${Using:StrFunc} UnStrStr
     !insertmacro WC_REMOVE_AUTOSTART_ROUTES_OR_ABORT "uninstall"
     InitPluginsDir
     File /oname=$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1 "${WC_LEGACY_LAUNCH_MIGRATION}"
-    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe" -Uninstall'
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe" -Uninstall'
     Pop $0
     Pop $1
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-profile-autostart-cleanup" "$0" "$1"

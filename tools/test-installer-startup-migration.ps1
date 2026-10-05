@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Seed', 'Inspect', 'Migrate', 'Cleanup')][string]$RegistryViewFixtureAction,
+    [guid]$RegistryFixtureId,
+    [string]$ResultPath
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -9,6 +13,52 @@ function Read-ScriptAst([string]$RelativePath) {
     if ($errors.Count) { throw "Invalid script: $RelativePath" }
     return $ast
 }
+
+if ($RegistryViewFixtureAction) {
+    # CLSID is redirected per architecture even in HKCU, allowing a real
+    # two-view test without administrator rights or any live startup key.
+    if ($RegistryFixtureId -eq [guid]::Empty) { throw 'A disposable fixture ID is required.' }
+    $subkey = "Software\Classes\CLSID\{$RegistryFixtureId}\WinCommanderInstallerTests"
+    $target = 'C:\Program Files\WinCommander\wincommander-free.exe'
+    $foreign = '"C:\Foreign\other.exe" --minimized'
+    if ($RegistryViewFixtureAction -eq 'Migrate') {
+        $config = Read-ScriptAst '../src-tauri/commander-free/nsis/configure-elevated-launchers.ps1'
+        foreach ($definition in $config.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] }) {
+            . ([scriptblock]::Create($definition.Extent.Text))
+        }
+        $runValueNames = @('WinCommander', 'WinCommander Free', 'WinCommander Pro')
+        $paths = @("Registry::HKEY_CURRENT_USER\$subkey", "Registry::HKEY_CURRENT_USER\$($subkey.Replace('Classes\', 'Classes\WOW6432Node\'))")
+        $removed = Remove-OwnedRunValues $paths @($target)
+        @{ bits = [IntPtr]::Size * 8; removed = $removed } | ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath
+        exit 0
+    }
+    $observations = @()
+    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)
+        $key = $null
+        try {
+            if ($RegistryViewFixtureAction -eq 'Cleanup') {
+                $base.DeleteSubKeyTree("Software\Classes\CLSID\{$RegistryFixtureId}", $false)
+                continue
+            }
+            if ($RegistryViewFixtureAction -eq 'Seed') {
+                $key = $base.CreateSubKey($subkey)
+                $key.SetValue('WinCommander', ('"' + $target + '" --minimized'))
+                $key.SetValue('WinCommander Free', $foreign)
+            } else {
+                $key = $base.OpenSubKey($subkey)
+                if ($null -eq $key) { throw 'Fixture registry key disappeared.' }
+                $observations += @{ view = $view.ToString(); owned = $key.GetValue('WinCommander', $null); foreign = $key.GetValue('WinCommander Free', $null) }
+            }
+        } finally {
+            if ($null -ne $key) { $key.Dispose() }
+            $base.Dispose()
+        }
+    }
+    if ($RegistryViewFixtureAction -eq 'Inspect') { ConvertTo-Json -InputObject $observations -Compress }
+    exit 0
+}
+
 $ast = Read-ScriptAst '../src-tauri/commander-free/nsis/migrate-legacy-user-launches.ps1'
 foreach ($definition in $ast.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] }) {
     . ([scriptblock]::Create($definition.Extent.Text))
@@ -151,7 +201,7 @@ Write-Output 'PASS: complete upgrade replaces admin and standard profile routes 
         param($Path, $ErrorAction)
         return @([pscustomobject]@{ ProfileImagePath = 'C:\Users\FixtureAdmin' }, [pscustomobject]@{ ProfileImagePath = 'C:\Users\FixtureStandard' })
     }
-    function Get-OptionalRegistryValue { return $script:fixturePreference }
+    function Get-AutostartPreferenceValue { return $script:fixturePreference }
     function Set-AutostartPreference($Enabled) { $script:fixturePreference = [int]$Enabled }
     function Get-ScheduledTask {
         param($TaskPath, $TaskName, $ErrorAction)
