@@ -4270,6 +4270,7 @@ fn machine_wide_status(command: &str, status: &str, reason: &str) -> serde_json:
     })
 }
 
+#[cfg(test)]
 fn with_machine_wide_status(command: &str, result: serde_json::Value) -> serde_json::Value {
     fix_scope::annotate(command, fix_scope::Scope::Machine, result)
 }

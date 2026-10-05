@@ -946,6 +946,7 @@ impl VaultAccessStore {
     /// A per-group reconcile error remains visible in the result, but does not
     /// discard the administrator's durable configuration. On the next save
     /// it is retried from that configuration rather than browser storage.
+    #[cfg(test)]
     pub fn save_access_directory(
         &self,
         directory: VaultAccessDirectory,
@@ -961,6 +962,7 @@ impl VaultAccessStore {
 
     /// Internal directory reconciliation seam. Pipe callers must use the
     /// authenticated save path, which rejects changes while Vaults are mounted.
+    #[cfg(test)]
     pub fn save_access_directory_before_change<F>(
         &self,
         directory: VaultAccessDirectory,
@@ -1002,6 +1004,7 @@ impl VaultAccessStore {
     /// Reserves durable service-owned registration before the caller-session
     /// engine is allowed to create the file. This prevents a later ACL or
     /// persistence failure from leaving an untracked container behind.
+    #[cfg(test)]
     pub fn begin_personal_registration(
         &self,
         container_path: &str,
@@ -1975,6 +1978,7 @@ impl VaultAccessStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn status(&self) -> VaultPolicyStatus {
         self.state
             .lock()
@@ -3175,6 +3179,7 @@ impl VaultAccessStore {
     /// Internal bounded group reconciliation; the legacy raw RPC is retired.
     /// Runtime callers authorize against the protected directory first.
     /// Per-group failures remain in-band for the verified save path to roll back.
+    #[cfg(test)]
     pub fn reconcile_access_groups(
         &self,
         groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],

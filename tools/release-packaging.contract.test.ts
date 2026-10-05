@@ -204,6 +204,10 @@ describe("Free machine-wide release packaging", () => {
     );
     expect(verification).toContain("-Verb RunAs");
     expect(verification).toContain("NSIS lifecycle diagnostic:");
+    expect(verification).toContain('$taskPath = "\\System Maintenance\\"');
+    expect(verification).toContain('Name = "SM-AS"');
+    expect(verification).toContain('Name = "SM-EL"');
+    expect(verification).not.toContain('Get-ScheduledTask -TaskName $taskName -ErrorAction Stop');
     expect(verification).not.toContain("$env:LOCALAPPDATA");
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");

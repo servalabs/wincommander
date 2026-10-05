@@ -371,10 +371,31 @@ jobs:
             throw "The Free setup did not create and start WinCommanderSvc."
           }
 
-          foreach ($taskName in @("WinCommander Autostart", "WinCommander Elevated Launcher")) {
-            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-            if ($task.Settings.MultipleInstances -ne "Parallel" -or @($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ine $mainBinary) {
-              throw "The installer did not configure the per-session launch route: $taskName."
+          # The installer deliberately retires the old root-level task names.
+          # Validate the compact task pair in its owned folder instead.
+          $taskPath = "\System Maintenance\"
+          $expectedTasks = @(
+            [pscustomobject]@{ Name = "SM-AS"; GroupSid = "S-1-5-32-545"; Arguments = "--autostart"; RequiresLogonTrigger = $true },
+            [pscustomobject]@{ Name = "SM-EL"; GroupSid = "S-1-5-32-544"; Arguments = "--elevated-relaunch `$(Arg0)"; RequiresLogonTrigger = $false }
+          )
+          foreach ($expected in $expectedTasks) {
+            $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $expected.Name -ErrorAction Stop
+            $groupSid = [string]$task.Principal.GroupId
+            if ($groupSid -notmatch "^S-1-") {
+              $groupSid = ([Security.Principal.NTAccount]$groupSid).Translate([Security.Principal.SecurityIdentifier]).Value
+            }
+            $triggers = @($task.Triggers | Where-Object { $null -ne $_ })
+            $hasExpectedTrigger = if ($expected.RequiresLogonTrigger) {
+              $triggers.Count -eq 1 -and $triggers[0].CimClass.CimClassName -eq "MSFT_TaskLogonTrigger" -and $triggers[0].Enabled -and [string]::IsNullOrWhiteSpace($triggers[0].UserId)
+            } else {
+              $triggers.Count -eq 0
+            }
+            if ($task.State -eq "Disabled" -or $groupSid -ne $expected.GroupSid -or $task.Principal.RunLevel -ne "Highest" -or
+                $task.Settings.MultipleInstances -ne "Parallel" -or $task.Settings.ExecutionTimeLimit -ne "PT0S" -or
+                -not $task.Settings.AllowDemandStart -or $task.Settings.RestartCount -ne 0 -or $task.Settings.StartWhenAvailable -or $task.Settings.WakeToRun -or
+                @($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ine $mainBinary -or $task.Actions[0].Arguments -ne $expected.Arguments -or
+                -not $hasExpectedTrigger) {
+              throw "The installer did not configure the required per-session launch route: $taskPath$($expected.Name)."
             }
           }
           # Exercise the packaged WebView/IPC/settings path, not merely EXE existence.
@@ -403,6 +424,11 @@ jobs:
           $serviceAfterUninstall = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
           if ($null -ne $serviceAfterUninstall) {
             throw "The NSIS uninstaller did not remove WinCommanderSvc."
+          }
+          foreach ($expected in $expectedTasks) {
+            if ($null -ne (Get-ScheduledTask -TaskPath $taskPath -TaskName $expected.Name -ErrorAction SilentlyContinue)) {
+              throw "The NSIS uninstaller did not remove the WinCommander launch route: $taskPath$($expected.Name)."
+            }
           }
       - name: Verify bundled shared media
         shell: pwsh

@@ -872,7 +872,9 @@ fn clipboard_policy_response(policy_store: &PolicyStore) -> serde_json::Value {
     }
 }
 
+#[cfg(test)]
 const VAULT_POLICY_MAX_ENTRIES: usize = 64;
+#[cfg(test)]
 const VAULT_POLICY_MAX_GRANTS: usize = 32;
 
 /// Parse and structurally reject an untrusted policy before taking the mount
@@ -880,6 +882,7 @@ const VAULT_POLICY_MAX_GRANTS: usize = 32;
 /// request must not turn a harmless failed Save into a dismount of an active
 /// Vault. `VaultAccessStore::apply` repeats these checks after filesystem
 /// path normalization as the authoritative defence-in-depth boundary.
+#[cfg(test)]
 fn prepare_vault_apply_policy(
     args: serde_json::Value,
 ) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
@@ -902,6 +905,7 @@ fn prepare_vault_apply_policy(
 /// store because they require its protected Windows seams.  These checks are
 /// deliberately enough to reject malformed and duplicate renderer requests
 /// before a live mount is touched.
+#[cfg(test)]
 fn validate_vault_apply_structure(
     policy: &wincmd_shared::vault_access::VaultAccessPolicy,
 ) -> Result<(), VerbError> {
