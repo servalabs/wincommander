@@ -28,6 +28,7 @@ pub(super) fn resolve(command: &str, machine_policy: bool) -> Option<Scope> {
         | "Disable-TerminalHistory" | "Enable-TerminalHistory" => Scope::CurrentUser,
         "Disable-CrashDumps" | "Enable-CrashDumps"
         | "Enable-KernelDMAProtection" | "Disable-KernelDMAProtection"
+        | "Set-DesktopShellPriority" | "Reset-DesktopShellPriority"
         | "Enable-ForensicToolBlock" | "Disable-ForensicToolBlock"
         | "Enable-LidClosePowerOff" | "Disable-LidClosePowerOff"
         | "Enable-RamSpillControl" | "Disable-RamSpillControl"
@@ -83,7 +84,7 @@ mod tests {
     }
     #[test]
     fn machine_and_mixed_actions_never_become_user_only() {
-        for command in ["Disable-CrashDumps", "Enable-KernelDMAProtection", "Enable-ForensicToolBlock",
+        for command in ["Disable-CrashDumps", "Enable-KernelDMAProtection", "Set-DesktopShellPriority", "Enable-ForensicToolBlock",
             "Enable-LidClosePowerOff", "Enable-RamSpillControl", "Enable-IEEnhancedSecurity"] {
             assert_eq!(resolve(command, false), Some(Scope::Machine));
         }
