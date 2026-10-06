@@ -227,6 +227,16 @@ describe("Free machine-wide release packaging", () => {
     );
     expect(hooks).toContain('license_cache.json');
     expect(hooks).toContain('icacls.exe "$R5\\WinCommander" /inheritance:r');
+    // Even if retaining the licence prevents removal of the parent directory,
+    // an explicit uninstall must still clear every machine-owned Vault journal.
+    const preserveFailure = uninstallHook.slice(
+      uninstallHook.indexOf("wc_preserve_license_failed:"),
+      uninstallHook.indexOf("wc_restore_license_failed:"),
+    );
+    expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-access-v1.json"');
+    expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-active-mounts-v1.json"');
+    expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-personal-v1.json"');
+    expect(preserveFailure).toContain('uninstall-remove-vault-policy');
     expect(hooks).not.toContain('IfFileExists "$PROGRAMDATA\\');
     expect(hooks).not.toContain('IfFileExists "$COMMONAPPDATA\\');
     expect(hooks).not.toContain('RMDir /r "$LOCALAPPDATA\\WinCommander"');

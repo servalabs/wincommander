@@ -485,6 +485,18 @@ fn service_presented_drive_letter(
     valid_drive_letter(drive_letter).then_some(drive_letter)
 }
 
+#[cfg_attr(test, allow(dead_code))]
+fn cleanup_machine_alias(active: &ActiveMount) -> Result<bool, ()> {
+    let letter = active
+        .drive_letter
+        .strip_suffix(':')
+        .filter(|letter| letter.len() == 1)
+        .and_then(|letter| letter.chars().next())
+        .filter(|letter| letter.is_ascii_alphabetic())
+        .ok_or(())?;
+    crate::vault_drive_letters::global_drive_letter_absent(letter.to_ascii_uppercase())
+}
+
 fn recovery_dismount_request(active: &ActiveMount) -> BrokerDismountRequest<'_> {
     BrokerDismountRequest {
         owner_logon_ended: false,
@@ -632,6 +644,7 @@ pub struct VaultMountBroker {
     drive_letter_probe: fn() -> Result<HashSet<String>, ()>,
     engine_snapshot: Option<fn() -> Result<HashMap<u8, String>, String>>,
     owner_logon_probe: fn(&ActiveMount) -> Result<bool, ()>,
+    machine_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     policy_authorizer: fn(
         &VaultAccessStore,
         &str,
@@ -713,6 +726,10 @@ impl VaultMountBroker {
                 #[cfg(test)] { |_| Ok(false) }
                 #[cfg(not(test))] { recovery::owner_logon_ended }
             },
+            machine_alias_cleanup: {
+                #[cfg(test)] { |_| Ok(false) }
+                #[cfg(not(test))] { cleanup_machine_alias }
+            },
             drive_letter_probe: {
                 #[cfg(test)]
                 {
@@ -762,6 +779,14 @@ impl VaultMountBroker {
             Some(identity) if !mount.driver_slot_absent && mount.engine_mount_identity.as_ref() == Some(identity) => Ok(true),
             Some(_) => Err(VaultMountReason::MountStateUnknown),
         }
+    }
+
+    /// A machine presentation can be retired after a missing driver slot only
+    /// when the exact global encrypted-volume alias is absent. This recovery
+    /// check never removes a drive name; per-user aliases are untouched.
+    fn clean_absent_machine_alias(&self, mount: &ActiveMount) -> bool {
+        mount.presentation == VaultPresentation::Machine
+            && (self.machine_alias_cleanup)(mount).unwrap_or(false)
     }
 
     /// Called only after the captured named-pipe peer token was revalidated
@@ -1714,11 +1739,15 @@ impl VaultMountBroker {
                 return failed(entry_id, None, reason);
             }
         };
-        if self.broker.recover_dismount(self.recovery_request_with_logon_proof(&active, owner_logon_ended)).is_err()
-            || self
-                .snapshot()
-                .map_or(true, |slots| slots.contains_key(&active.internal_drive))
-        {
+        let broker_closed = self.broker
+            .recover_dismount(self.recovery_request_with_logon_proof(&active, owner_logon_ended))
+            .is_ok()
+            && self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
+        // The fallback is intentionally narrower than broker cleanup: it
+        // applies only to an already-absent machine slot and exact missing
+        // global alias. It cannot remove a drive name or private-session alias.
+        let presentation_clean = !live && self.clean_absent_machine_alias(&active);
+        if !broker_closed && !presentation_clean {
             let mut pending = active.clone();
             pending.cleanup_required = true;
             pending.driver_slot_absent = !live || self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
@@ -2453,15 +2482,14 @@ impl VaultMountBroker {
             return Err(VaultMountReason::MountStateUnknown);
         }
         for (entry_id, mut mount) in registry.mounts {
-            self.live_mount_matches(&mount).map_err(|reason| {
+            let live = self.live_mount_matches(&mount).map_err(|reason| {
                 self.mark_registry_untrusted();
                 reason
             })?;
-            if self.broker.recover_dismount(self.recovery_request(&mount)).is_err()
-                || self
-                    .snapshot()
-                    .map_or(true, |slots| slots.contains_key(&mount.internal_drive))
-            {
+            let broker_closed = self.broker.recover_dismount(self.recovery_request(&mount)).is_ok()
+                && self.snapshot().is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
+            let presentation_clean = !live && self.clean_absent_machine_alias(&mount);
+            if !broker_closed && !presentation_clean {
                 mount.cleanup_required = true;
                 mount.driver_slot_absent = self.snapshot().is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
                 pending.insert(entry_id, mount);

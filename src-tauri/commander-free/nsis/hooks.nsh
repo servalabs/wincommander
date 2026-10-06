@@ -478,6 +478,20 @@ ${Using:StrFunc} UnStrStr
     Goto wc_uninstall_cleanup_done
   wc_preserve_license_failed:
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-preserve-license" "failed" "$R5\WinCommander\license_cache.json"
+    ; Preserve the entitlement rather than deleting its parent directory, but
+    ; never retain Vault authority after an explicit uninstall. These are the
+    ; complete machine-owned Vault journals; Vault containers are user-chosen
+    ; files outside ProgramData and are deliberately not touched.
+    ClearErrors
+    Delete "$R5\WinCommander\policy\vault-access-v1.json"
+    IfErrors wc_remove_vault_policy_failed
+    Delete "$R5\WinCommander\policy\vault-active-mounts-v1.json"
+    IfErrors wc_remove_vault_policy_failed
+    Delete "$R5\WinCommander\policy\vault-personal-v1.json"
+    IfErrors wc_remove_vault_policy_failed
+    Goto wc_remove_legacy_current_user
+  wc_remove_vault_policy_failed:
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-remove-vault-policy" "failed" "$R5\WinCommander\policy"
     Goto wc_remove_legacy_current_user
   wc_restore_license_failed:
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-restore-license" "failed" "$PLUGINSDIR\wincommander-license_cache.json"

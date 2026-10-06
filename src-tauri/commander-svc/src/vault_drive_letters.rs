@@ -264,31 +264,76 @@ fn remove_global_dos_device(letter: char, target: &str) -> Result<(), ()> {
     (removed != 0).then_some(()).ok_or(())
 }
 
+/// Result of checking one explicit global encrypted-volume drive name.  This
+/// never inspects or changes a per-user namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GlobalEncryptedLinkCleanup {
+    /// No global link exists for this letter.
+    Absent,
+    /// A dead, exact encrypted-volume link was removed.
+    Removed,
+    /// The name is foreign, usable, or could not safely be classified as dead.
+    Retained,
+}
+
+/// Returns true only when the exact global DOS name is absent.  This is used
+/// by durable-mount recovery as a read-only proof; unlike the repair action it
+/// never removes a mapping based on a drive letter alone.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn global_drive_letter_absent(letter: char) -> Result<bool, ()> {
+    Ok(global_dos_device_target(letter)?.is_none())
+}
+
+/// Confirm that one global encrypted-volume letter is absent, removing it
+/// only when Windows still reports the exact dead VeraCrypt/TrueCrypt target.
+/// A live/foreign mapping is deliberately retained. An uncertain root probe
+/// is also retained so a bulk scan can continue with other drive letters.
+pub(crate) fn cleanup_global_encrypted_link(
+    letter: char,
+) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    let Some(target) = global_dos_device_target(letter)? else {
+        return Ok(GlobalEncryptedLinkCleanup::Absent);
+    };
+    if !encrypted_volume_device_target(&target) {
+        return Ok(GlobalEncryptedLinkCleanup::Retained);
+    }
+    match bounded_global_root_probe(letter) {
+        Ok(true) => Ok(GlobalEncryptedLinkCleanup::Retained),
+        Ok(false) => {
+            remove_global_dos_device(letter, &target)?;
+            Ok(GlobalEncryptedLinkCleanup::Removed)
+        }
+        // An inaccessible root is inconclusive. Preserve the exact mapping
+        // and let the bulk scan continue with later letters.
+        Err(()) => Ok(GlobalEncryptedLinkCleanup::Retained),
+    }
+}
+
 /// Remove only a dead global VeraCrypt/TrueCrypt drive name. This is the
 /// SYSTEM counterpart to Pro's current-Explorer cleanup: it never touches a
 /// per-user mapping, a normal drive target, or a mapping whose root can still
 /// be read. The exact target is supplied back to Windows on removal so a
 /// concurrently replaced mapping cannot be deleted.
-pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
-    let mut released = 0;
+fn release_orphaned_global_encrypted_links_with(
+    mut cleanup: impl FnMut(char) -> Result<GlobalEncryptedLinkCleanup, ()>,
+) -> Result<usize, ()> {
+    let mut released: usize = 0;
     for byte in b'A'..=b'Z' {
         let letter = char::from(byte);
-        let Some(target) = global_dos_device_target(letter)? else {
-            continue;
-        };
-        if !encrypted_volume_device_target(&target) {
-            continue;
+        // `Retained` includes an inconclusive root probe, so a single dead
+        // drive cannot prevent later safe cleanups. Query/remove errors still
+        // abort: they are not evidence that this exact mapping is harmless.
+        if cleanup(letter)? == GlobalEncryptedLinkCleanup::Removed {
+            released = released.saturating_add(1);
         }
-        match bounded_global_root_probe(letter) {
-            Ok(true) => continue,
-            Ok(false) => {}
-            // An uncertain result must never remove a possibly live mapping.
-            Err(()) => continue,
-        }
-        remove_global_dos_device(letter, &target)?;
-        released += 1;
     }
     Ok(released)
+}
+
+pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
+    release_orphaned_global_encrypted_links_with(
+        cleanup_global_encrypted_link,
+    )
 }
 
 #[cfg(test)]
@@ -342,6 +387,24 @@ mod tests {
             Buffer: std::ptr::null_mut(),
         };
         assert!(bounded_string(&value, &buffer, size_of_val(&buffer)).is_err());
+    }
+
+    #[test]
+    fn bulk_cleanup_keeps_scanning_after_an_uncertain_earlier_letter() {
+        let released = release_orphaned_global_encrypted_links_with(|letter| match letter {
+            'A' => Ok(GlobalEncryptedLinkCleanup::Retained),
+            'B' => Ok(GlobalEncryptedLinkCleanup::Removed),
+            _ => Ok(GlobalEncryptedLinkCleanup::Retained),
+        }).unwrap();
+        assert_eq!(released, 1);
+    }
+
+    #[test]
+    fn bulk_cleanup_propagates_exact_query_or_remove_failure() {
+        assert_eq!(
+            release_orphaned_global_encrypted_links_with(|_| Err(())),
+            Err(())
+        );
     }
 
     #[test]
