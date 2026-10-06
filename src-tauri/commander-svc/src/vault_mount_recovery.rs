@@ -100,7 +100,14 @@ impl VaultMountBroker {
         let mut changed = false;
         active.retain(|_, mount| {
             if slots.contains_key(&mount.internal_drive) { return true; }
-            if mount.presentation == VaultPresentation::PerUser && self.owner_logon_ended(mount)
+            // A missing driver slot alone does not prove a DOS alias is gone.
+            // In particular a Machine presentation can retain its global
+            // alias, and a live per-user logon can retain its private alias.
+            // Retire without broker cleanup only after the original per-user
+            // namespace is proven ended; Sync-bound records stay durable
+            // until their pause obligation has been confirmed by the owner.
+            if mount.presentation == VaultPresentation::PerUser
+                && self.owner_logon_ended(mount)
                 && !requires_syncthing_pause(mount) {
                 changed = true;
                 return false;

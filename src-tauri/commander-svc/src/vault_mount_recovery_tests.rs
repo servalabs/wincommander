@@ -32,6 +32,143 @@ fn ended_logon_and_native_absence_retire_only_unbound_private_records() {
 }
 
 #[test]
+fn legacy_machine_alias_is_cleaned_before_its_absent_slot_record_is_retired() {
+    // Exact v3.6.5 upgrade fixture: standalone/personal Machine record,
+    // no auth LUID, no native slot and a retained cleanup marker.  A global
+    // alias may still exist, so startup must use the privileged recovery
+    // broker and only then clear the durable record.
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.owner_logon_probe = |_| Ok(false);
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    mount.cleanup_required = true;
+    mount.driver_slot_absent = true;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+
+    assert!(broker.load_and_cleanup(&store).unwrap().contains("identity"));
+    assert!(broker.active.lock().unwrap().is_empty());
+    let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+    assert!(saved.mounts.is_empty());
+    // The policy-save guard is the service route used by Edit/Remove.  Once
+    // the exact cleanup was confirmed, it must no longer turn this stale
+    // record into a generic "service did not save" failure.
+    assert_eq!(broker.reject_policy_changes_while_mounted_locked(
+        &HashSet::from(["legacy".into()]),
+        &HashSet::from(["identity".into()]),
+    ), Ok(()));
+    let events = events.lock().unwrap();
+    assert_eq!(events.recovered, vec![12]);
+    assert_eq!(events.cleanup_contexts[0].1.as_deref(), Some("V:"));
+    assert_eq!(events.cleanup_contexts[0].2, VaultPresentation::Machine);
+}
+
+#[test]
+fn administrator_sidebar_cleanup_removes_an_absent_legacy_machine_record() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.owner_logon_probe = |_| Ok(false);
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    mount.cleanup_required = true;
+    mount.driver_slot_absent = true;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+
+    let result = broker.dismount_personal_for_caller(
+        &store, 1, 12, std::ptr::null_mut(), 8, "S-1-5-21-admin", true,
+    );
+    assert_eq!(result.state, VaultMountState::Unmounted);
+    assert!(broker.active.lock().unwrap().is_empty());
+    let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+    assert!(saved.mounts.is_empty());
+    let events = events.lock().unwrap();
+    assert_eq!(events.recovered, vec![12]);
+    assert_eq!(events.cleanup_contexts[0].1.as_deref(), Some("V:"));
+    assert_eq!(events.cleanup_contexts[0].2, VaultPresentation::Machine);
+}
+
+#[test]
+fn absent_machine_alias_fallback_recovers_when_the_pro_broker_is_unavailable() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    // Production uses a read-only QueryDosDevice check.  This seam models its
+    // only successful result: the exact global name is absent.
+    broker.machine_alias_cleanup = |_| Ok(true);
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    mount.cleanup_required = true;
+    mount.driver_slot_absent = true;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+
+    assert!(broker.load_and_cleanup(&store).unwrap().contains("identity"));
+    assert!(broker.active.lock().unwrap().is_empty());
+    let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+    assert!(saved.mounts.is_empty());
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+}
+
+#[test]
+fn administrator_sidebar_uses_absent_machine_alias_fallback_after_broker_failure() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    broker.machine_alias_cleanup = |_| Ok(true);
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    mount.cleanup_required = true;
+    mount.driver_slot_absent = true;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+
+    let result = broker.dismount_personal_for_caller(
+        &store, 1, 12, std::ptr::null_mut(), 8, "S-1-5-21-admin", true,
+    );
+    assert_eq!(result.state, VaultMountState::Unmounted);
+    assert!(broker.active.lock().unwrap().is_empty());
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+}
+
+#[test]
+fn machine_alias_uncertainty_never_discards_a_record_when_broker_cleanup_failed() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events)));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    broker.machine_alias_cleanup = |_| Ok(false);
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+    assert!(broker.load_and_cleanup(&store).unwrap().is_empty());
+    assert!(broker.active.lock().unwrap().contains_key("legacy"));
+}
+
+#[test]
+fn machine_alias_probe_error_never_discards_a_record_when_broker_cleanup_failed() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events)));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    broker.machine_alias_cleanup = |_| Err(());
+    let mut mount = expired_private_mount();
+    mount.presentation = VaultPresentation::Machine;
+    mount.authentication_id = None;
+    assert!(broker.retain_cleanup_mount(&store, "legacy", mount));
+    assert!(broker.load_and_cleanup(&store).unwrap().is_empty());
+    assert!(broker.active.lock().unwrap().contains_key("legacy"));
+}
+
+#[test]
 fn relogged_owner_can_close_verified_private_mount_without_using_old_alias() {
     let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
     let events = Arc::new(Mutex::new(BrokerEvents::default()));
