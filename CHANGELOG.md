@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Silent startup avoids a redundant Windows capture-setting call that can leave
+  an unclickable white window in Remote Desktop while the real window is hidden.
+  Capture protection still verifies actual changes in either direction.
 - Machine-wide Vault cleanup no longer requires an interactive Explorer session.
   This prevents completed dismounts from leaving cleanup records that block
   later mounts. Matching Pro and service components are required; changed mount
