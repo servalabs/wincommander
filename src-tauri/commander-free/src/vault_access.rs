@@ -502,8 +502,10 @@ pub async fn vault_enroll_personal_syncthing(
     relative_path: String,
     recovery_action: Option<String>,
     recovery_token: Option<String>,
+    expected_mount_receipt: Option<String>,
 ) -> Result<Value, String> {
-    if internal_drive > 25 || relative_path.len() > 240 {
+    if internal_drive > 25 || relative_path.len() > 240
+        || expected_mount_receipt.as_deref().is_some_and(|value|value.len()!=64 || !value.bytes().all(|c|c.is_ascii_hexdigit())) {
         return Err("personal sync enrollment request is invalid".to_string());
     }
     if !valid_personal_sync_recovery_request(
@@ -520,9 +522,29 @@ pub async fn vault_enroll_personal_syncthing(
             "relative_path": relative_path,
             "recovery_action": recovery_action,
             "recovery_token": recovery_token,
+            "expected_mount_receipt": expected_mount_receipt,
         }),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn vault_manage_personal_syncthing(
+    internal_drive: u8, action: wincmd_shared::vault_sync::VaultSyncAction,
+    relative_path: Option<String>, folder_label: Option<String>,
+    folder_id: Option<String>,
+    expected_mount_receipt: Option<String>,
+) -> Result<wincmd_shared::vault_sync::VaultSyncManagementResult, String> {
+    let request = wincmd_shared::vault_sync::VaultSyncManagementRequest {
+        personal:true, internal_drive, action, relative_path, folder_label, folder_id, expected_mount_receipt,
+    };
+    if !request.valid() { return Err("personal sync management request is invalid".into()); }
+    let value = crate::svc_client::call("svc.vault.manage_personal_syncthing", serde_json::to_value(request)
+        .map_err(|_| "personal sync request could not be encoded")?).await?;
+    let result: wincmd_shared::vault_sync::VaultSyncManagementResult = serde_json::from_value(value)
+        .map_err(|_| "personal sync management result is invalid")?;
+    if !result.valid() { return Err("personal sync management result is invalid".into()); }
+    Ok(result)
 }
 
 fn valid_personal_sync_recovery_request(action: Option<&str>, token: Option<&str>) -> bool {

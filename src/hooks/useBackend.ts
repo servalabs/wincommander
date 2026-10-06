@@ -8,6 +8,7 @@ import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
+import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1867,9 +1868,14 @@ export function useBackend() {
       })),
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
-    enablePersonalVaultSync: (internalDrive: number, relativePath: string, recoveryAction?: VaultSyncRecoveryAction, recoveryToken?: string) =>
-      invoke<PersonalVaultSyncEnrollment>("vault_enroll_personal_syncthing", { internalDrive, relativePath,
-        ...(recoveryAction ? { recoveryAction } : {}), ...(recoveryToken ? { recoveryToken } : {}) }),
+    enablePersonalVaultSync: (internalDrive: number, relativePath: string, recoveryAction?: VaultSyncRecoveryAction, recoveryToken?: string, expectedMountReceipt?: string) =>
+      afterVaultMutation(() => invoke<PersonalVaultSyncEnrollment>("vault_enroll_personal_syncthing", { internalDrive, relativePath,
+        ...(recoveryAction ? { recoveryAction } : {}), ...(recoveryToken ? { recoveryToken } : {}),
+        ...(expectedMountReceipt ? { expectedMountReceipt } : {}) })),
+    managePersonalVaultSync: (internalDrive: number, action: VaultSyncAction, relativePath?: string, folderLabel?: string, folderId?: string, expectedMountReceipt?: string) => {
+      const call = () => invoke<VaultSyncManagementResult>("vault_manage_personal_syncthing", { internalDrive, action, relativePath, folderLabel, folderId, expectedMountReceipt });
+      return action === "list" ? call() : afterVaultMutation(call);
+    },
     dismountAllVolumes: (force = false) => afterVaultMutation(() => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force })),
     createVolume: (params: CreateVolumeParams) =>
       execute("Create-EncryptionVolume", {

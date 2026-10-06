@@ -250,6 +250,7 @@ fn dismount_policy_matrix_requires_grant_and_private_owner_or_shared_elevation_o
                             broker.dismount_authorized(
                                 &store,
                                 AuthorizedDismount {
+                    caller_authentication_id: None,
                                     operation_id: 1,
                                     entry_id: "managed",
                                     caller_token: token,
@@ -336,7 +337,7 @@ fn dismount_refuses_reused_slots_legacy_unknown_and_unconfirmed_engine_success()
         true,
     );
     assert_eq!(result.state, VaultMountState::Failed);
-    assert_eq!(broker.projection("mount").0, VaultMountState::Mounted);
+    assert_eq!(broker.projection("mount").0, VaultMountState::Failed);
 }
 
 #[test]
@@ -370,7 +371,7 @@ fn inventory_retains_absent_slot_cleanup_authority_without_reporting_a_mounted_d
         broker.personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true),
         Err(VaultMountReason::MountStateUnknown)
     );
-    assert_eq!(broker.projection("mount").0, VaultMountState::Mounted);
+    assert_eq!(broker.projection("mount").0, VaultMountState::Failed);
     broker.engine_snapshot = Some(|| Ok(HashMap::from([(12, "different-generation".into())])));
     assert!(broker
         .personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true)

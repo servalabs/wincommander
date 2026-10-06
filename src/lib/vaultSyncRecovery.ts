@@ -7,6 +7,7 @@ export interface VaultSyncRecoveryRoot {
 }
 export interface PersonalVaultSyncEnrollment {
   enabled: boolean;
+  folder_id?: string | null;
   gui_url: string;
   recovery_required?: boolean;
   recovery_roots?: VaultSyncRecoveryRoot[];

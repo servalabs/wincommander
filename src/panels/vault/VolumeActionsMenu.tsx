@@ -1,14 +1,11 @@
-import { Button, Dialog, DialogBody, DialogFooter, Tooltip } from "@/components/ui/bp";
-import { open } from "@tauri-apps/plugin-shell";
+import { Button, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
-import { notifyVaultSyncRecovery } from "@/lib/vaultSyncWarning";
-import { isSyncthingSetupUrl } from "@/lib/vaultSyncRecovery";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
-import { personalVaultSyncError, personalVaultSyncSetupMessage, validatePersonalVaultSyncFolders } from "@/lib/personalVaultSyncFeedback";
+import PersonalVaultSyncDialog from "@/components/shared/PersonalVaultSyncDialog";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import './VolumeActionsMenu.css';
 
@@ -26,12 +23,10 @@ interface VolumeActionsMenuProps {
 }
 
 function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, dismountAllowed, dismountReason, statusError, onDismounted, onErrorChange }: VolumeActionsMenuProps) {
-  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume, enablePersonalVaultSync } = useBackend();
+  const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
-  const [enrollingSync, setEnrollingSync] = useState(false);
   const [syncSetupOpen, setSyncSetupOpen] = useState(false);
-  const [syncFolders, setSyncFolders] = useState(["Phone\\Camera"]);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [failure, setFailureMessage] = useState("");
   const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
@@ -102,49 +97,6 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
     } catch (error) { setFailure(vaultOperationError(error, "open")); }
   };
 
-  const handleEnablePersonalSync = async () => {
-    if (internalDrive === undefined) return;
-    const validated = validatePersonalVaultSyncFolders(syncFolders);
-    if (enrollingSync) return;
-    if (!validated.ok) {
-      setFailure(validated.message);
-      return;
-    }
-    setEnrollingSync(true);
-    setFailure("");
-    try {
-      let guiUrl = "";
-      let pairingRequired = false;
-      for (const relativePath of validated.folders) {
-        const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
-        if (enrollment.recovery_required) {
-          setSyncSetupOpen(false);
-          window.setTimeout(() => notifyVaultSyncRecovery(driveLabel, internalDrive, enrollment), 350);
-          return;
-        }
-        if (!enrollment.enabled) throw new Error("vault_broker_rejected");
-        pairingRequired ||= enrollment.pairing_required === true;
-        if (isSyncthingSetupUrl(enrollment.gui_url)) guiUrl = enrollment.gui_url;
-      }
-      setSyncSetupOpen(false);
-      const configured = validated.folders.map(relativePath => `${driveLabel}\\${relativePath}`).join(", ");
-      const message = personalVaultSyncSetupMessage(configured, pairingRequired);
-      showSuccess(message);
-      try {
-        if (!guiUrl) throw new Error("invalid_gui_url");
-        await open(guiUrl);
-      } catch {
-        showError("Sync is configured, but its setup page could not open. Use Open Syncthing from this Vault after setup.", undefined, { kind: "notification" });
-      }
-    } catch (error) {
-      const message = personalVaultSyncError(error);
-      setFailure(message);
-      showError(message, undefined, { kind: "notification" });
-    } finally {
-      setEnrollingSync(false);
-    }
-  };
-
   return (
     <div className="vol-actions-group">
       <div className="flex items-center gap-1 flex-shrink-0">
@@ -172,16 +124,15 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </Tooltip>
 
       <TierGate tier="paid" featureLabel="Encrypted volumes">
-        <Tooltip content="Enable sync for a folder in this personal Vault" position="top">
+        <Tooltip content="Manage sync folders in this personal Vault" position="top">
           <Button
             icon="cloud-upload"
             minimal
             small
-            loading={enrollingSync}
-            disabled={enrollingSync || !accessible || Boolean(statusError) || internalDrive === undefined}
+            disabled={!accessible || Boolean(statusError) || internalDrive === undefined}
             onClick={() => { setFailure(""); setSyncSetupOpen(true); }}
             className="vol-inline-btn"
-            aria-label={`Enable Syncthing for a folder in ${driveLabel}`}
+            aria-label={`Manage Syncthing folders in ${driveLabel}`}
           />
         </Tooltip>
         <Tooltip content="Force dismount" position="top">
@@ -202,35 +153,8 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
       </div>
       {!onErrorChange && <VaultOperationNotice message={failure} />}
 
-      <Dialog isOpen={syncSetupOpen} onClose={() => { if (!enrollingSync) setSyncSetupOpen(false); }}
-        title={`Set up sync for ${driveLabel}`} style={{ width: 560 }} canEscapeKeyClose={!enrollingSync}
-        canOutsideClickClose={!enrollingSync} isCloseButtonShown={!enrollingSync}>
-        <DialogBody>
-          <p>Choose one or more separate folders inside this personal Vault. WinCommander will install Syncthing for your Windows account if needed.</p>
-          <p>Each entry is a separate phone-sync folder. They cannot overlap: <strong>Phone\Camera</strong> and <strong>Phone\Documents</strong> are safe; <strong>Phone</strong> and <strong>Phone\Camera</strong> are not.</p>
-          <p>Pausing a folder does not stop Syncthing or pause your other folders. When this Vault is dismounted, its configured folders pause individually and resume after remount.</p>
-          <div className="space-y-2">
-            {syncFolders.map((folder, index) => <div key={index} className="flex gap-2">
-              <div className="min-w-0 flex-1">
-                <label className="sr-only" htmlFor={`sync-folder-${internalDrive}-${index}`}>Sync folder {index + 1} inside the Vault</label>
-                <input id={`sync-folder-${internalDrive}-${index}`} value={folder} maxLength={240}
-                  onChange={event => setSyncFolders(current => current.map((entry, entryIndex) => entryIndex === index ? event.target.value : entry))} disabled={enrollingSync}
-                  className="w-full rounded-md border p-2" placeholder="Phone\Camera" />
-              </div>
-              {syncFolders.length > 1 && <Button minimal disabled={enrollingSync} aria-label={`Remove sync folder ${index + 1}`}
-                onClick={() => setSyncFolders(current => current.filter((_, entryIndex) => entryIndex !== index))}>Remove</Button>}
-            </div>)}
-          </div>
-          <Button minimal disabled={enrollingSync || syncFolders.length >= 32} onClick={() => setSyncFolders(current => [...current, ""])}>Add another folder</Button>
-          {enrollingSync && <p role="status" aria-live="polite">Setting up Syncthing… The first setup may need to download it. Keep this Vault mounted.</p>}
-          <VaultOperationNotice message={failure} />
-        </DialogBody>
-        <DialogFooter actions={<>
-          <Button onClick={() => setSyncSetupOpen(false)} disabled={enrollingSync}>Cancel</Button>
-          <Button intent="primary" onClick={handleEnablePersonalSync} loading={enrollingSync}
-            disabled={enrollingSync || !syncFolders.some(folder => folder.trim())}>Enable sync folders</Button>
-        </>} />
-      </Dialog>
+      {internalDrive !== undefined && <PersonalVaultSyncDialog isOpen={syncSetupOpen}
+        onClose={() => setSyncSetupOpen(false)} internalDrive={internalDrive} driveLabel={driveLabel} />}
 
       <VolumePropertiesDialog
         isOpen={propertiesOpen}

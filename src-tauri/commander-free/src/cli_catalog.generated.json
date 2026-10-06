@@ -11849,6 +11849,16 @@
       ]
     },
     {
+      "id": "tauri:vault_manage_personal_syncthing",
+      "name": "vault_manage_personal_syncthing",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_mount_entry",
       "name": "vault_mount_entry",
       "transport": "tauri",

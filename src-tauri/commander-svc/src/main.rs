@@ -188,6 +188,7 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
                 {
                     if let Some(broker) = VAULT_MOUNT_FOR_STOP.get().cloned() {
                         let session_id = change.notification.session_id;
+                        let cleanup_targets = broker.try_session_cleanup_targets(session_id);
                         // SCM control callbacks must return promptly. Run
                         // the bounded signed broker dismount on a runtime
                         // worker instead of blocking the dispatcher.
@@ -198,7 +199,17 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
                             {
                                 if let Some(store) = VAULT_ACCESS_FOR_STOP.get().cloned() {
                                     runtime.block_on(async move {
-                                        broker.dismount_session(&store, session_id);
+                                        for delay in [0, 1, 2] {
+                                            if delay != 0 {
+                                                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                                            }
+                                            if let Some(targets) = &cleanup_targets {
+                                                broker.dismount_session_targets(&store, targets);
+                                            } else {
+                                                let expired = broker.expired_session_cleanup_targets(session_id);
+                                                broker.dismount_session_targets(&store, &expired);
+                                            }
+                                        }
                                     });
                                 }
                             }
