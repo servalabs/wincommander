@@ -122,6 +122,8 @@ mod startup_elevation;
 mod process_privileges;
 mod startup_maintenance;
 mod startup_trace;
+#[cfg(windows)]
+mod startup_visibility;
 mod startup_window;
 #[cfg(windows)]
 mod startup_renderer;
@@ -1551,6 +1553,10 @@ pub fn run() {
                         &format!("the CLI runtime failed to start: {error}"),
                     ),
                 };
+            }
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                startup_visibility::enforce_hidden_before_setup(&window)?;
             }
             dev_startup_trace("setup entered");
             app.manage(startup_window::StartupWindow::new());

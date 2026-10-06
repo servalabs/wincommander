@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Silent sign-in now enforces the native hidden window state before startup
+  work begins. Opening from the tray still restores a maximized WinCommander
+  window after the interface is ready.
+
 - Personal Vault dismount skips Syncthing when the account's container is confirmed
   unbound. Bound or unresolved sync state still requires a confirmed pause; retained
   mounts and interrupted setup preserve that distinction across service recovery.
