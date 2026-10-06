@@ -74,6 +74,15 @@ test("status failures are truthful, sanitized and never claim a successful dismo
   expect(vaultInventoryFailureMessage("vault_service_personal_status_invalid")).toContain("Update or repair them together");
 });
 
+test("unverified mount identity is not reduced to a generic refresh or permission error", () => {
+  const message = vaultInventoryFailureMessage(new Error("vault_mount_state_unknown C:\\private\\container"));
+  expect(message).toContain("mount identity");
+  expect(message).toContain("original mounting tool");
+  expect(message).toContain("last confirmed check");
+  expect(message).not.toContain("private");
+  expect(message).not.toContain("Windows permissions");
+});
+
 test("an older failure cannot erase a newer confirmed observation", async () => {
   const observed: Array<string[] | null> = [];
   const refresh = createVaultStatusRefresh<string[]>(value => observed.push(value));

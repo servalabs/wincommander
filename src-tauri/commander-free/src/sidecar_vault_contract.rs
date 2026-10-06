@@ -17,7 +17,7 @@ pub(super) fn require_vault_runtime(feature_id: &str, version: Option<u32>) -> R
     ]
     .iter()
     .any(|parts| matches_parts(feature_id, parts));
-    if lifecycle && version.unwrap_or(0) < wincmd_shared::vault_inventory::VAULT_INVENTORY_VERSION {
+    if lifecycle && version.unwrap_or(0) < wincmd_shared::vault_inventory::VAULT_RUNTIME_VERSION {
         return Err("vault_runtime_update_required".into());
     }
     Ok(())
@@ -43,13 +43,13 @@ mod tests {
             "Dismount-EncryptedVolume",
             "Dismount-AllEncryptedVolumes",
         ] {
-            for version in [None, Some(0), Some(1)] {
+            for version in [None, Some(0), Some(1), Some(2)] {
                 assert_eq!(
                     require_vault_runtime(command, version).unwrap_err(),
                     "vault_runtime_update_required"
                 );
             }
-            assert!(require_vault_runtime(command, Some(2)).is_ok());
+            assert!(require_vault_runtime(command, Some(3)).is_ok());
         }
     }
 

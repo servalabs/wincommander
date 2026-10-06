@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 
 pub const VAULT_INVENTORY_VERSION: u32 = 2;
 
+/// Runtime 3 distinguishes machine-wide alias cleanup from interactive-user cleanup.
+pub const VAULT_RUNTIME_VERSION: u32 = 3;
+
 #[path = "vault_inventory_query.rs"]
 mod query;
 pub use query::query_mounts;

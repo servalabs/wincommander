@@ -43,6 +43,7 @@ export function createVaultStatusRefresh<T>(
 export function vaultInventoryFailureMessage(error: unknown): string {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (detail.includes("vault_runtime_update_required") || detail.includes("vault_service_personal_status_invalid")) return vaultOperationError(detail);
+  if (detail.includes("vault_mount_state_unknown")) return `${vaultOperationError(detail, "dismount")} Any listed drives are from the last confirmed check and may have changed.`;
   if (detail.includes("caller_root_unavailable")) return "Windows could not verify this account's mounted drive. This does not prove that the encrypted volume was dismounted. Refresh status before using it.";
   return "Mounted-volume status could not be refreshed. Any listed drives are from the last confirmed check and may have changed. Refresh status before using them.";
 }

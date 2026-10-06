@@ -311,6 +311,7 @@ fn dismount_refuses_reused_slots_legacy_unknown_and_unconfirmed_engine_success()
             broker.load_and_cleanup(&store),
             Err(VaultMountReason::MountStateUnknown)
         );
+        assert!(broker.recovery.lock().unwrap().registry_untrusted);
         assert_eq!(store.read_active_mounts().unwrap(), saved);
         assert!(events.lock().unwrap().dismounted.is_empty());
         assert!(events.lock().unwrap().recovered.is_empty());
