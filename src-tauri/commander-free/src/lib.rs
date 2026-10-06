@@ -123,6 +123,8 @@ mod process_privileges;
 mod startup_maintenance;
 mod startup_trace;
 #[cfg(windows)]
+mod capture_protection;
+#[cfg(windows)]
 mod startup_visibility;
 mod startup_window;
 #[cfg(windows)]
@@ -599,27 +601,12 @@ fn set_capture_protection(
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-        };
         let window = app
             .get_webview_window("main")
             .ok_or_else(|| "main window not found".to_string())?;
         let raw = window.hwnd().map_err(|e| format!("hwnd: {}", e))?;
         let hwnd: HWND = raw.0 as HWND;
-        let affinity = if enabled {
-            WDA_EXCLUDEFROMCAPTURE
-        } else {
-            WDA_NONE
-        };
-        let ok = unsafe { SetWindowDisplayAffinity(hwnd, affinity) };
-        if ok == 0 {
-            return Err("SetWindowDisplayAffinity failed (needs Windows 10 2004+)".into());
-        }
-        let mut observed = 0;
-        if unsafe { GetWindowDisplayAffinity(hwnd, &mut observed) } == 0 || observed != affinity {
-            return Err("Windows did not retain the requested capture-protection state".into());
-        }
+        capture_protection::apply(hwnd, enabled)?;
         Ok(CaptureProtectionStatus {
             enabled,
             scope: "wincommander-main-window",
