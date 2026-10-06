@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage access errors distinguish Windows file permissions from Vault
+  ownership and explain where the authorized owner can review access, including
+  containers moved between PCs.
+
 - Silent sign-in now enforces the native hidden window state before startup
   work begins. Opening from the tray still restores a maximized WinCommander
   window after the interface is ready.

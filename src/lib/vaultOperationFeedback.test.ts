@@ -99,6 +99,46 @@ test("busy letters and Windows access denial have actionable messages", () => {
   expect(vaultOperationError("unknown", "dismount")).toContain("Close files");
 });
 
+test("mounted-root access denial explains where to review permissions without changing container ownership", () => {
+  const message = vaultOperationError("vault_caller_access_denied");
+  expect(message).toContain("files inside the Vault");
+  expect(message).toContain("Its saved permissions were not changed");
+  expect(message).toContain("original PC");
+  expect(message).toContain("account that can mount it");
+  expect(message).toContain("same username on another PC can mean a different Windows account");
+  expect(message).toContain("mounted drive in File Explorer");
+  expect(message).toContain("Properties > Security > Advanced");
+  expect(message).toContain("container file's permissions alone does not change permissions inside it");
+  expect(message).toContain("Do not reformat");
+  expect(message).not.toContain("take ownership");
+  expect(message).not.toContain("password");
+  expect(vaultOperationError(new Error("vault_caller_access_denied"))).toBe(message);
+});
+
+test("registered ownership and Fleet denial give policy recovery rather than filesystem repair", () => {
+  const owner = vaultOperationError("vault_private_owner_required", "dismount");
+  expect(owner).toContain("original mounting session");
+  expect(owner).toContain("dismount it first");
+  expect(owner).toContain("authorized administrator");
+  expect(owner).toContain("Fleet > Vault permissions");
+  const fleet = vaultOperationError("vault_policy_access_denied");
+  expect(fleet).toContain("Fleet > Vault permissions");
+  for (const message of [owner, fleet]) {
+    expect(message).not.toContain("Properties > Security");
+    expect(message).not.toContain("take ownership");
+    expect(message).not.toContain("password");
+  }
+});
+
+test("ambiguous Windows access denial does not invent which filesystem target failed", () => {
+  const message = vaultOperationError("Access is denied: C:\\private\\confidential.hc");
+  expect(message).not.toContain("confidential");
+  expect(message).not.toContain("container");
+  expect(message).toContain("item's owner");
+  expect(message).not.toContain("mounted drive in File Explorer");
+  expect(message).not.toContain("Its saved permissions were not changed");
+});
+
 test("administration, Fleet policy, private ownership and unknown state remain distinct", () => {
   const admin = vaultOperationError("vault_administrator_required", "dismount");
   const fleet = vaultOperationError("vault_policy_access_denied", "dismount");

@@ -57,13 +57,15 @@ export function vaultOperationError(error: unknown, operation: "mount" | "dismou
     const label = vaultMountResultLabel({ entry_id: "", state: "failed", presentation: null, drive_letter: null, reason });
     if (reason === "engine_unlock_failed") return `${label}. Check the password, PIM and keyfiles, then try again.`;
     if (reason === "engine_drive_letter_unavailable") return `${label} or reserved by another Vault. Refresh and select a free letter.`;
-    if (reason === "caller_access_denied") return `${label}. Review its Windows permissions in Secure Storage before retrying.`;
+    if (reason === "caller_access_denied") return "Windows permissions blocked access to files inside the Vault. Its saved permissions were not changed. The same username on another PC can mean a different Windows account. Ask its owner or authorized administrator to mount it on the original PC or with an account that can mount it, then right-click the mounted drive in File Explorer > Properties > Security > Advanced and review your access. Changing the encrypted container file's permissions alone does not change permissions inside it. Do not reformat.";
+    if (reason === "private_owner_required") return `${label}. Use the original mounting session to dismount it. To change its registered owner, dismount it first and have an authorized administrator review Fleet > Vault permissions. Changing Windows file ownership does not change the registered Vault owner.`;
+    if (reason === "policy_access_denied") return `${label} in Fleet > Vault permissions. Changing Windows file ownership does not grant Fleet Vault permission.`;
     return `${label}.`;
   }
   if (detail.includes("vault_policy_managed")) return "This container has saved Vault permissions. Mount it from Saved Fleet Vaults or Fleet → Vault permissions.";
   if (detail.includes("already mounted")) return "This container is already mounted. Open it from the mounted volumes list in Secure Storage.";
   if (detail.includes("letter") && (detail.includes("in use") || detail.includes("reserved") || detail.includes("unavailable"))) return "That drive letter is in use or reserved by another Vault. Refresh and select a free letter.";
-  if (detail.includes("access is denied") || detail.includes("access denied")) return "Windows denied access for this account. Review the container's Windows permissions; administrator approval does not replace Vault ownership.";
+  if (detail.includes("access is denied") || detail.includes("access denied")) return "Windows denied access for this account. Ask the item's owner or authorized administrator to review its Windows permissions. Administrator approval does not replace Vault ownership.";
   if (detail.includes("elevation") || detail.includes("administrator privileges")) return "This operation needs administrator approval. Use an administrator account or approve the Windows permission prompt, then retry.";
   if (operation === "open") return "WinCommander could not open this drive for your Windows account. Refresh its mount status and try again.";
   if (operation === "dismount") return "The Vault could not be dismounted. Close files using the drive, refresh its status, and try again.";
