@@ -151,9 +151,9 @@ describe("Fleet access-control panel contracts", () => {
   test("uses service-derived per-vault capability so an outsider administrator has remove-only controls", () => {
     expect(vault).toContain("entry.can_edit_policy === true");
     expect(vault).toContain("entry.can_remove_policy === true");
-    expect(vault).toContain('disabled={mounted || mountStateUnknown || !canEditEntry}');
-    expect(vault).toContain('disabled={mounted || mountStateUnknown || !canRemoveEntry}');
-    expect(vault).toContain('locked={isMounted || mountStateUnknown || !canEditEntry}');
+    expect(vault).toContain('disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry}');
+    expect(vault).toContain('disabled={mounted || needsCleanup || mountStateUnknown || !canRemoveEntry}');
+    expect(vault).toContain('locked={isMounted || needsCleanup || mountStateUnknown || !canEditEntry}');
     expect(vault).toContain('disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry}');
   });
 
@@ -179,7 +179,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("can_remove_policy = fresh?.can_remove_policy === true");
     expect(vault).toContain("void refresh(false, true)");
     expect(vault).toContain("const mountStateUnknown = wasSaved && statusLoadUnavailable");
-    expect(vault).toContain("locked={isMounted || mountStateUnknown || !canEditEntry}");
+    expect(vault).toContain("locked={isMounted || needsCleanup || mountStateUnknown || !canEditEntry}");
     expect(vault).toContain("Vault mount status could not be confirmed");
   });
 

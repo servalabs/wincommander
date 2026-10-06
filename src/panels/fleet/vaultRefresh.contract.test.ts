@@ -92,8 +92,8 @@ describe("Vault refresh boundaries", () => {
 
     expect(source).toContain("function policyEntryIsMounted");
     expect(source).toContain("Dismount this Vault before removing its policy.");
-    expect(source).toContain("disabled={mounted || mountStateUnknown || !canRemoveEntry}");
-    expect(source).toContain("locked={isMounted || mountStateUnknown || !canEditEntry}");
+    expect(source).toContain("disabled={mounted || needsCleanup || mountStateUnknown || !canRemoveEntry}");
+    expect(source).toContain("locked={isMounted || needsCleanup || mountStateUnknown || !canEditEntry}");
     expect(editor).toContain("Changing it transfers ownership and is available only while the Vault is unmounted.");
     expect(editor).toContain("<fieldset className=\"vault-access-editor\" disabled={locked}>");
   });

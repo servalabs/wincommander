@@ -10,9 +10,17 @@ describe("Fleet Vault quick mount", () => {
   });
   test("uses the caller-filtered service list and opaque entry ids", () => {
     expect(source).toContain("listAuthorizedEntries, mountEntry: mountFleetVaultEntry");
-    expect(source).toContain("const entries = await listAuthorizedEntries()");
+    expect(source).toContain("fleetVaultRefresh(() => listAuthorizedEntries(), background)");
     expect(source).toContain("mountFleetVaultEntry(fleetVaultEntryId, fleetVaultPassword, 'outer')");
     expect(source).toContain("key={entry.entry_id} value={entry.entry_id}");
+  });
+
+  test("refreshes visible status and supersedes older reads after bulk cleanup", () => {
+    expect(source).toContain("createVaultStatusRefresh<FleetQuickMountEntry[]>");
+    expect(source).toContain("window.setInterval(refreshVisible, 20_000)");
+    expect(source).toContain("window.addEventListener('focus', refreshVisible)");
+    expect(source).toContain("Promise.all([refreshVault(true), refreshFleetVaults()])");
+    expect(source).toContain("fleetVaultsUnavailable ?");
   });
 
   test("refreshes its service-filtered list after a saved Fleet Vault changes", async () => {

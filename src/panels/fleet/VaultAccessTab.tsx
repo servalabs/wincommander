@@ -27,7 +27,7 @@ import {
 import { applyVaultAccessPreset, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessEditor from "./VaultAccessEditor";
 import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
-import { patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
+import { observedVaultMountState, patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
 
 function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
@@ -158,9 +158,8 @@ function policyEntryIsMounted(
   authorized: VaultAuthorizedEntry | undefined,
   mountResult: VaultMountEntryResult | undefined,
 ): boolean {
-  if (mountResult) return mountResult.state === "mounted";
-  return status?.entries.find(entry => entry.id === entryId)?.mount_state === "mounted"
-    || authorized?.mount_state === "mounted";
+  return observedVaultMountState(authorized, mountResult,
+    status?.entries.find(entry => entry.id === entryId)?.mount_state) === "mounted";
 }
 
 function mergeObservedPolicyCapabilities(
@@ -1084,7 +1083,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           {authorizedEntries.map(entry => {
             const mountGate = vaultMountGate({ authorized: entry, entryResult: status?.entries.find(item => item.id === entry.entry_id)?.result, draftDirty: false });
             const mountResult = mountResults[entry.entry_id];
-            const isMounted = mountResult?.state === "mounted" || entry.mount_state === "mounted";
+            const observedState = observedVaultMountState(entry, mountResult);
+            const isMounted = observedState === "mounted";
+            const needsCleanup = observedState === "failed";
             return <div className="fleet-vault-lifecycle" key={entry.entry_id}>
               <div>
                 <strong>{entry.label}</strong>
@@ -1092,7 +1093,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 <p className="fleet-field-hint">
                   {mountResult
                     ? vaultMountResultLabel(mountResult)
-                    : entry.drive_letter
+                    : needsCleanup
+                      ? "Mount status needs recovery. Retry cleanup before mounting again."
+                    : isMounted && entry.drive_letter
                       ? `Mounted at ${entry.drive_letter}`
                       : entry.mount_state === "mounted"
                         ? "Mounted for this Windows session"
@@ -1100,9 +1103,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 </p>
               </div>
               {isMounted && entry.drive_letter && <Button variant="outline" size="sm" onClick={() => void openMountedEntry(entry.drive_letter!)}>Open in File Explorer</Button>}
-              {isMounted ? (
+              {isMounted || needsCleanup ? (
                 <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.entry_id} onClick={() => void unmountSelectedEntry(entry.entry_id)}>
-                  {unmountingEntryId === entry.entry_id ? "Unmounting…" : "Unmount"}
+                  {unmountingEntryId === entry.entry_id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Unmount"}
                 </Button>
               ) : (
                 <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.entry_id || !mountGate.canMount} title={mountGate.disabledReason ?? undefined} onClick={() => openMountPrompt(entry)}>
@@ -1159,11 +1162,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 const authorized = authorizedById.get(entry.id);
                 const result = status?.entries.find(item => item.id === entry.id)?.result;
                 const mounted = policyEntryIsMounted(entry.id, status, authorized, mountResults[entry.id]);
+                const needsCleanup = observedVaultMountState(authorized, mountResults[entry.id],
+                  status?.entries.find(item => item.id === entry.id)?.mount_state) === "failed";
                 const wasSaved = draftBaseRef.current?.entries.some(saved => saved.id === entry.id) === true;
                 const canEditEntry = !wasSaved || entry.can_edit_policy === true;
                 const canRemoveEntry = !wasSaved || entry.can_remove_policy === true;
                 const mountStateUnknown = wasSaved && statusLoadUnavailable;
-                const editDisabledReason = mounted
+                const editDisabledReason = mounted || needsCleanup
                   ? "Dismount this Vault before editing."
                   : mountStateUnknown
                     ? "Vault mount status is unavailable. Refresh before changing this policy."
@@ -1174,16 +1179,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   <td data-label="Container path" className="fleet-vault-policy-path" title={vaultCanonicalPathDisplay(entry)}>{vaultCanonicalPathDisplay(entry)}</td>
                   <td data-label="Scope">{entry.mount.presentation === "machine" ? "Shared" : "Personal"}</td>
                   <td data-label="Allowed users / groups" title={entry.grants.map(grant => grant.principal_name).join(", ")}>{entry.grants.map(grant => `${grant.principal_name} (${grant.access === "write" ? "edit" : "view"})`).join(", ")}</td>
-                  <td data-label="Mounted">{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
+                  <td data-label="Mounted">{needsCleanup ? "Needs cleanup" : mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
                   <td data-label="Health" className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
                   <td data-label="Actions"><div className="fleet-vault-policy-actions">
-                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canEditEntry} title={mounted || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
-                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canEditEntry} title={mounted || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
-                    {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
+                    <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
+                    <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
+                    {mounted || needsCleanup ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Dismount"}</Button>
                       : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before mounting." : !canEditEntry ? "This Windows account cannot mount this Vault." : undefined} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
-                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot repair this Vault policy." : undefined} onClick={repairSharedAccess}>Repair shared access</Button>}
-                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot change this Vault policy." : undefined} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
-                    <Button variant="outline" size="sm" disabled={mounted || mountStateUnknown || !canRemoveEntry} title={mounted ? "Dismount this Vault before removing its policy." : mountStateUnknown ? "Vault mount status is unavailable. Refresh before removing this policy." : !canRemoveEntry ? "This Windows account cannot remove this Vault policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot repair this Vault policy." : undefined} onClick={repairSharedAccess}>Repair shared access</Button>}
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot change this Vault policy." : undefined} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
+                    <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canRemoveEntry} title={mounted || needsCleanup ? "Dismount this Vault before removing its policy." : mountStateUnknown ? "Vault mount status is unavailable. Refresh before removing this policy." : !canRemoveEntry ? "This Windows account cannot remove this Vault policy." : undefined} onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
                   </div></td>
                 </tr>;
               })}</tbody>
@@ -1242,6 +1247,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
             const isMounted = policyEntryIsMounted(entry.id, status, authorized, mountResult);
+            const needsCleanup = observedVaultMountState(authorized, mountResult,
+              status?.entries.find(item => item.id === entry.id)?.mount_state) === "failed";
             const wasSaved = draftBaseRef.current?.entries.some(saved => saved.id === entry.id) === true;
             const canEditEntry = !wasSaved || entry.can_edit_policy === true;
             const canRemoveEntry = !wasSaved || entry.can_remove_policy === true;
@@ -1259,7 +1266,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 directory={directory}
                 ownerPrincipals={ownerPrincipals}
                 currentCallerSid={currentCallerSid}
-                locked={isMounted || mountStateUnknown || !canEditEntry}
+                locked={isMounted || needsCleanup || mountStateUnknown || !canEditEntry}
                 ownerDirectoryUnavailable={ownerDirectoryUnavailable}
                 ownerSelectionLocked={wasSaved && !canManagePolicy}
                 otherReservedLetters={policyEntries.filter(other => other.id !== entry.id).flatMap(other => other.mount.preferred_letter ? [other.mount.preferred_letter] : [])}
@@ -1273,7 +1280,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   <p className="fleet-field-hint">
                     {mountResult
                       ? vaultMountResultLabel(mountResult)
-                      : authorized?.drive_letter
+                      : needsCleanup
+                        ? "Mount status needs recovery. Retry cleanup before mounting again."
+                      : isMounted && authorized?.drive_letter
                         ? `Mounted at ${authorized.drive_letter}`
                         : authorized?.mount_state === "mounted"
                           ? "Mounted for this Windows session"
@@ -1281,9 +1290,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   </p>
                 </div>
                 {isMounted && authorized?.drive_letter && <Button variant="outline" size="sm" disabled={mountStateUnknown || !canEditEntry} onClick={() => void openMountedEntry(authorized.drive_letter!)}>Open in File Explorer</Button>}
-                {isMounted ? (
+                {isMounted || needsCleanup ? (
                   <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>
-                    {unmountingEntryId === entry.id ? "Unmounting…" : "Unmount"}
+                    {unmountingEntryId === entry.id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Unmount"}
                   </Button>
                 ) : (
                   <Button
