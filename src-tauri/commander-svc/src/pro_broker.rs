@@ -554,6 +554,7 @@ pub async fn vault_recovery_dismount(
     presentation: wincmd_shared::vault_access::VaultPresentation,
     _target_session_id: u32,
     _caller_sid: &str,
+    owner_logon_ended: bool,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     use wincmd_shared::vault_access::VaultMountReason;
 
@@ -562,7 +563,11 @@ pub async fn vault_recovery_dismount(
         return Err(VaultMountReason::BrokerRejected);
     }
     // SYSTEM can close the driver slot, but cannot attest another logon's local aliases.
-    let local_cleanup_unconfirmed = presentation == wincmd_shared::vault_access::VaultPresentation::PerUser;
+    let local_cleanup_unconfirmed = presentation == wincmd_shared::vault_access::VaultPresentation::PerUser
+        && !owner_logon_ended;
+    if owner_logon_ended && presented_drive_letter.is_some() {
+        return Err(VaultMountReason::BrokerRejected);
+    }
     if let Some(letter) = presented_drive_letter {
         let normalized = letter.trim_end_matches(':');
         if normalized.len() != 1 || !normalized.as_bytes()[0].is_ascii_alphabetic() {
@@ -1436,16 +1441,20 @@ mod tests {
     #[tokio::test]
     async fn recovery_dismount_rejects_out_of_range_slots_before_launching_pro() {
         assert_eq!(
-            vault_recovery_dismount(26, None, wincmd_shared::vault_access::VaultPresentation::Machine, 0, "S-1-5-18").await,
+            vault_recovery_dismount(26, None, wincmd_shared::vault_access::VaultPresentation::Machine, 0, "S-1-5-18", false).await,
             Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         );
         for presentation in [
             wincmd_shared::vault_access::VaultPresentation::Machine,
             wincmd_shared::vault_access::VaultPresentation::PerUser,
         ] {
+            assert_eq!(
+                vault_recovery_dismount(12, Some("V:"), presentation, 0, "S-1-5-18", true).await,
+                Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
+            );
             for letter in ["", "VV:", "V:\\untrusted"] {
                 assert_eq!(
-                    vault_recovery_dismount(12, Some(letter), presentation, 0, "S-1-5-18").await,
+                    vault_recovery_dismount(12, Some(letter), presentation, 0, "S-1-5-18", false).await,
                     Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
                 );
             }

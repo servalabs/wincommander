@@ -166,3 +166,9 @@ tag: string,
  * rejects. `from_str(&inner)` reconstitutes the typed Envelope on demand.
  */
 inner: string, };
+
+export type VaultSyncAction = "list" | "rename" | "remove";
+
+export type VaultSyncFolder = { folder_id: string, relative_path: string, label: string, paused: boolean, recovery_required: boolean, };
+
+export type VaultSyncManagementResult = { managed: boolean, mount_receipt: string | null, gui_url: string | null, folders: Array<VaultSyncFolder>, removed: boolean, };

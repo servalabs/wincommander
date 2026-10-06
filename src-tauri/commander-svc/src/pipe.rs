@@ -688,6 +688,9 @@ async fn dispatch_verb(
         "svc.vault.dismount_personal" => {
             handle_personal_vault_dismount(request_id, vault_access, vault_mount, args, peer)
         }
+        "svc.vault.manage_personal_syncthing" => handle_personal_vault_syncthing_manage(
+            request_id, vault_access, vault_mount, args, peer,
+        ),
         "svc.vault.enroll_personal_syncthing" => handle_personal_vault_syncthing_enroll(
             request_id,
             vault_access,
@@ -2861,6 +2864,7 @@ fn handle_vault_unmount(
         vault_mount.dismount_authorized(
             vault_access,
             crate::vault_mount::AuthorizedDismount {
+                caller_authentication_id: Some(peer.authentication_id()),
                 operation_id: request_id,
                 entry_id: &request.entry_id,
                 caller_token: peer.token(),
@@ -2983,6 +2987,21 @@ fn handle_personal_vault_dismount(
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
 }
 
+fn handle_personal_vault_syncthing_manage(
+    request_id: u64, vault_access: &VaultAccessStore, vault_mount: &VaultMountBroker,
+    args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_sync::VaultSyncManagementRequest = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("vault_validation_failed", "personal sync request is invalid"))?;
+    if !request.valid() { return Err(VerbError::new("vault_validation_failed", "personal sync request is invalid")); }
+    let peer = require_personal_mount_peer(peer)?;
+    let result = vault_mount.manage_personal_syncthing(vault_access, request_id, &request,
+        peer.token(), peer.session_id(), peer.caller_sid()).map_err(|reason| {
+            VerbError::new(VaultMountBroker::personal_mount_failure_code(reason), "personal sync management could not be confirmed")
+        })?;
+    serde_json::to_value(result).map_err(|_| VerbError::new("vault_internal_error", "personal sync result unavailable"))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersonalVaultSyncthingEnrollmentRequest {
@@ -2993,6 +3012,8 @@ struct PersonalVaultSyncthingEnrollmentRequest {
     recovery_action: Option<crate::vault_syncthing_recovery::RecoveryAction>,
     #[serde(default)]
     recovery_token: Option<String>,
+    #[serde(default)]
+    expected_mount_receipt: Option<String>,
 }
 
 fn handle_personal_vault_syncthing_enroll(
@@ -3005,7 +3026,8 @@ fn handle_personal_vault_syncthing_enroll(
     let request: PersonalVaultSyncthingEnrollmentRequest = serde_json::from_value(args).map_err(|_| {
         VerbError::new("vault_validation_failed", "personal sync enrollment request is invalid")
     })?;
-    if !request.personal || request.internal_drive > 25 || request.relative_path.len() > 240 {
+    if !request.personal || request.internal_drive > 25 || request.relative_path.len() > 240
+        || request.expected_mount_receipt.as_deref().is_some_and(|value|value.len()!=64 || !value.bytes().all(|c|c.is_ascii_hexdigit())) {
         return Err(VerbError::new(
             "vault_validation_failed",
             "personal sync enrollment request is invalid",
@@ -3025,6 +3047,7 @@ fn handle_personal_vault_syncthing_enroll(
                 action: request.recovery_action,
                 token: request.recovery_token,
             },
+            request.expected_mount_receipt.as_deref(),
         )
         .map_err(|reason| {
             VerbError::new(
@@ -3034,6 +3057,7 @@ fn handle_personal_vault_syncthing_enroll(
         })?;
     Ok(serde_json::json!({
         "enabled": enrollment.managed,
+        "folder_id": enrollment.folder_id,
         "gui_url": enrollment.gui_url,
         "recovery_required": enrollment.recovery_required,
         "recovery_roots": enrollment.recovery_roots,

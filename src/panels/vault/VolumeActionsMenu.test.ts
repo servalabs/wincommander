@@ -23,11 +23,16 @@ describe("encrypted-volume dismount", () => {
     expect(panel).toContain("disabled={refreshing}");
     expect(panel).toContain("onClick={() => refreshVault(false)}");
   });
-  test("sets up distinct child sync folders and explains that pausing one does not stop Syncthing", () => {
-    expect(source).toContain("validatePersonalVaultSyncFolders(syncFolders)");
-    expect(source).toContain("Add another folder");
-    expect(source).toContain("They cannot overlap");
-    expect(source).toContain("Pausing a folder does not stop Syncthing");
-    expect(source).toContain("for (const relativePath of validated.folders)");
+  test("cloud opens explicit per-Vault management without enrolling during inspection", () => {
+    const dialog = readFileSync("src/components/shared/PersonalVaultSyncDialog.tsx", "utf8");
+    expect(source).toContain("<PersonalVaultSyncDialog");
+    expect(source).toContain("setSyncSetupOpen(true)");
+    expect(source).not.toContain("enablePersonalVaultSync(");
+    expect(dialog).toContain('managePersonalVaultSync(internalDrive, "list")');
+    expect(dialog).toContain("Sync is not enabled for this Vault");
+    expect(dialog).toContain("Other Syncthing folders keep running");
+    expect(dialog).toContain("Enable selected folders");
+    expect(dialog).toContain("Confirm remove sync");
+    expect(dialog).toContain('"remove", folder.relative_path, undefined, folder.folder_id');
   });
 });

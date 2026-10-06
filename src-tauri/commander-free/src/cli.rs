@@ -1291,7 +1291,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 480);
+        assert_eq!(tauri_commands.len(), 492);
         assert!(!tauri_commands
             .iter()
             .any(|entry| entry.name == "apply_admin_config_cmd"));
@@ -1305,6 +1305,8 @@ mod tests {
             "list_search_storage_roots",
             "open_event_log",
             "set_decoy_read_audit_enabled",
+            "vault_enroll_personal_syncthing",
+            "vault_manage_personal_syncthing",
         ] {
             assert!(
                 tauri_commands.iter().any(|entry| entry.name == name),
@@ -1332,7 +1334,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 480 } else { 476 }
+            if cfg!(debug_assertions) { 492 } else { 488 }
         );
     }
 

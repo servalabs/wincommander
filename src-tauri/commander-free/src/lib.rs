@@ -2718,6 +2718,7 @@ pub fn run() {
             vault_access::get_service_diagnostic_summaries,
             vault_access::vault_unmount_entry,
             vault_access::vault_enroll_personal_syncthing,
+            vault_access::vault_manage_personal_syncthing,
             vault_access::vault_release_orphaned_drive_letters,
             vault_access::vault_list_authorized_entries,
             vault_access::get_vault_available_drive_letters,
