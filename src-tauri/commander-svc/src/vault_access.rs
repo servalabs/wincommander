@@ -7107,6 +7107,31 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_picker_ignores_another_accounts_legacy_owner_for_the_same_file() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = store(files.clone());
+        let path = r"D:\Vault\portable-container";
+        let SelectedContainerMountRoute::Unmanaged { mut record } = store
+            .selected_container_mount_route(path, "S-1-test-Original", 3).unwrap()
+        else { panic!("fixture must be unmanaged") };
+        record.scope = VaultPresentation::PerUser;
+        store.state.lock().unwrap().personal.insert(personal_key(path), record.clone());
+        let saved_files = files.lock().unwrap().clone();
+
+        let SelectedContainerMountRoute::Unmanaged { record: selected } = store
+            .selected_container_mount_route(path, "S-1-test-Current", 7).unwrap()
+        else { panic!("legacy ownership must not create a Fleet policy") };
+        assert_eq!(selected.container_identity, record.container_identity);
+        assert_eq!(selected.container_path, record.container_path);
+        assert_eq!(selected.owner_sid, "S-1-test-Current");
+        assert_eq!(selected.created_by_session, 7);
+        assert_eq!(selected.scope, VaultPresentation::Machine);
+        assert_eq!(store.state.lock().unwrap().personal[&personal_key(path)], record);
+        assert_eq!(*files.lock().unwrap(), saved_files);
+        assert!(store.policy().is_none());
+    }
+
+    #[test]
     fn ordinary_picker_uses_policy_only_for_the_current_matching_container() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let store = store(files);
