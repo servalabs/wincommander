@@ -132,8 +132,11 @@ operational risk, or proprietary enforcement logic.
   follows the same container when its drive letter changes. After mounting,
   stopped folders get an automatic rescan; a remaining sync problem opens a
   dialog without dismounting the container. Manually paused folders stay paused.
-  Bound folders pause before dismount and resume after mount; cold startup waits
-  for folder readiness within a bounded deadline. New containers require their
+  One Vault can bind multiple separate, non-overlapping child folders (for
+  example `Phone\Camera`, `Phone\Documents`, and `Phone\WhatsApp`); each
+  pauses independently without stopping Syncthing or the other folders. Bound
+  folders pause before dismount and resume after mount; cold startup waits for
+  folder readiness within a bounded deadline. New containers require their
   own setup; account/container bindings survive owner-only policy changes. Shared Vaults are
   excluded; connecting another device still requires Syncthing device pairing.
 - Removing a bound folder from Syncthing does not block Vault dismount.
