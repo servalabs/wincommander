@@ -49,7 +49,7 @@ const boundedMountError = (error: unknown) => {
     return "That drive letter is already in use. Choose a free drive letter, then try again.";
   }
   if (normalized.includes("vault_caller_access_denied")) {
-    return "Windows denied this account access to the encrypted volume. Its saved permissions were not changed. Check the volume's Windows permissions with its owner or administrator before retrying. Do not reformat the container.";
+    return vaultOperationError(error);
   }
   if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
     return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";

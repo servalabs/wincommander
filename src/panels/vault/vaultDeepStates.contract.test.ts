@@ -55,7 +55,8 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
     expect(vaultSource).toContain("vault_caller_access_denied");
     expect(vaultSource).toContain("VLT.ACL.CALLER_ACCESS_DENIED");
-    expect(vaultSource).toContain("Its saved permissions were not changed");
+    const accessFailure = vaultSource.slice(vaultSource.indexOf('if (normalized.includes("vault_caller_access_denied"))'), vaultSource.indexOf('if (normalized.includes("vault_acl_apply_failed"))'));
+    expect(accessFailure).toContain("return vaultOperationError(error)");
     expect(vaultSource).not.toContain("Make this recovered volume accessible on this PC?");
     expect(vaultSource).not.toContain("repairCurrentAccountAccess");
     expect(backendSource).not.toContain("RepairCurrentAccountAccess");
