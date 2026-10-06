@@ -6,8 +6,8 @@ fn reconcile(
     mut read: impl FnMut() -> Result<u32, String>,
     mut write: impl FnMut(u32) -> Result<(), String>,
 ) -> Result<(), String> {
-    // Even WDA_NONE on an already-unprotected hidden HWND creates a phantom
-    // white surface in RDP. A successful equal read must not touch the compositor.
+    // A successful equal read needs no compositor mutation. This keeps the
+    // silent-start path from issuing a redundant affinity write.
     if read().is_ok_and(|observed| observed == desired) {
         return Ok(());
     }
