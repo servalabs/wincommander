@@ -9201,15 +9201,27 @@ pub async fn search_everything_count(
 // KT: MEASURED — the uncached lookup below walks several filesystem
 // directories, then falls back to `where es.exe` and finally a PowerShell
 // `Get-Command`, all synchronously on the async command task and outside
-// ES_SEARCH_TIMEOUT. Once resolved, es.exe's install path
-// cannot change for the lifetime of this process, so we resolve it once and
-// reuse the answer — one fewer PowerShell spawn (or dir walk) per keystroke.
-static ES_EXE_PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+// ES_SEARCH_TIMEOUT. Cache only a confirmed executable: the dependency repair
+// can install es.exe while WinCommander is still running.
+static ES_EXE_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
-/// Locate es.exe — common install paths first, then %PATH%. Memoised for the
-/// life of the process; see the KT note above.
+/// Locate es.exe — common install paths first, then %PATH%. Successful paths
+/// are cached while they still exist; a missing dependency is always rechecked.
 fn locate_es_exe() -> Option<std::path::PathBuf> {
-    ES_EXE_PATH.get_or_init(locate_es_exe_uncached).clone()
+    locate_es_exe_cached(&ES_EXE_PATH, locate_es_exe_uncached)
+}
+
+fn locate_es_exe_cached(
+    cache: &Mutex<Option<std::path::PathBuf>>,
+    locate: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    let mut cached = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(path) = cached.as_ref().filter(|path| path.is_file()) {
+        return Some(path.clone());
+    }
+    let found = locate().filter(|path| path.is_file());
+    *cached = found.clone();
+    found
 }
 
 /// Uncached implementation of `locate_es_exe` — do not call directly outside
@@ -9244,6 +9256,12 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
                 .join("Microsoft")
                 .join("WinGet")
                 .join("Links")
+                .join("es.exe"),
+        );
+        candidate_paths.push(
+            std::path::PathBuf::from(&local)
+                .join("Microsoft")
+                .join("WindowsApps")
                 .join("es.exe"),
         );
         candidate_paths.push(
@@ -9312,7 +9330,7 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 
     candidate_paths
         .iter()
-        .find(|p| p.exists())
+        .find(|p| p.is_file())
         .cloned()
         .or_else(|| {
             // Last resort: check %PATH% via `where`
@@ -9334,14 +9352,42 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
                 })
         })
         .or_else(resolve_command_via_powershell_es)
+        .filter(|path| path.is_file())
 }
 
 #[cfg(test)]
 mod es_query_tests {
     use super::{
         build_es_count_args, build_es_search_args, parse_es_count, search_scope_drive_root,
-        tokenize_es_query, validate_es_scope_path, validate_es_sort, validate_es_tokens,
+        locate_es_exe_cached, tokenize_es_query, validate_es_scope_path, validate_es_sort,
+        validate_es_tokens,
     };
+
+    #[test]
+    fn missing_es_is_rechecked_after_in_process_install() {
+        let cache = std::sync::Mutex::new(None);
+        let path = std::env::temp_dir().join(format!(
+            "wincmd-es-locator-{}-{}.exe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(locate_es_exe_cached(&cache, || Some(path.clone())), None);
+
+        std::fs::write(&path, b"fixture").unwrap();
+        assert_eq!(
+            locate_es_exe_cached(&cache, || Some(path.clone())),
+            Some(path.clone())
+        );
+        assert_eq!(
+            locate_es_exe_cached(&cache, || panic!("cached path should be reused")),
+            Some(path.clone())
+        );
+        std::fs::remove_file(path).unwrap();
+    }
 
     // ── Tokenizer: one argv entry per term, or es.exe silently returns nothing ──
 
