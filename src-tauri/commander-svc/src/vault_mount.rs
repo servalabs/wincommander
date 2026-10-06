@@ -9,9 +9,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use std::sync::Mutex;
 #[cfg(test)]
 pub(crate) use tests::policy_edit_test_broker;
-use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -22,7 +22,9 @@ mod recovery;
 mod sync_management;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
-use crate::vault_syncthing_recovery::{RecoveryAction, RecoveryOptions, RecoveryRoot, recovery_roots};
+use crate::vault_syncthing_recovery::{
+    recovery_roots, RecoveryAction, RecoveryOptions, RecoveryRoot,
+};
 use wincmd_shared::vault_access::{
     PersonalVaultMountRequest, PersonalVaultMountedVolume, PersonalVaultRecord,
     VaultBrokerVolumeRole, VaultContainerKind, VaultMountMode, VaultMountPlan, VaultMountReason,
@@ -161,12 +163,21 @@ struct SyncthingLifecycleResult {
 fn syncthing_lifecycle_result(value: &serde_json::Value) -> SyncthingLifecycleResult {
     let managed = value.get("managed").and_then(serde_json::Value::as_bool) == Some(true);
     let warning = if managed {
-        value.get("sync_warning").and_then(|value| serde_json::from_value(value.clone()).ok())
+        value
+            .get("sync_warning")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
     } else {
         None
     };
-    let pause_guaranteed = value.get("pause_guaranteed").and_then(serde_json::Value::as_bool) == Some(true);
-    SyncthingLifecycleResult { managed, pause_guaranteed, warning }
+    let pause_guaranteed = value
+        .get("pause_guaranteed")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    SyncthingLifecycleResult {
+        managed,
+        pause_guaranteed,
+        warning,
+    }
 }
 
 fn mounted_syncthing_result(
@@ -192,6 +203,14 @@ fn unresolved_syncthing_resume() -> bool {
 fn requires_syncthing_pause(mount: &ActiveMount) -> bool {
     mount.syncthing_managed
         || (mount.presentation == VaultPresentation::PerUser && mount.syncthing_resume_unresolved)
+}
+
+fn personal_syncthing_lifecycle_allowed(opt_in: Option<bool>) -> bool {
+    opt_in != Some(false)
+}
+
+fn when_syncthing_lifecycle_allowed<T>(allowed: bool, call: impl FnOnce() -> T) -> Option<T> {
+    allowed.then(call)
 }
 
 fn syncthing_pause_confirmed(
@@ -263,8 +282,7 @@ fn syncthing_setup_call(
     hasher.update(normalized_relative_sync_path(relative_path).as_bytes());
     let folder_id = format!(
         "wcv-{}",
-        hasher
-            .finalize()[..12]
+        hasher.finalize()[..12]
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
@@ -315,7 +333,13 @@ fn syncthing_enroll_call(
     recovery: &RecoveryOptions,
 ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
     let value = syncthing_setup_call(
-        "vault.syncthing.enroll", operation_id, entry_id, mount, caller_token, relative_path, recovery,
+        "vault.syncthing.enroll",
+        operation_id,
+        entry_id,
+        mount,
+        caller_token,
+        relative_path,
+        recovery,
     )?;
     syncthing_enrollment_result(&value)
 }
@@ -323,7 +347,9 @@ fn syncthing_enroll_call(
 fn syncthing_enrollment_result(
     value: &serde_json::Value,
 ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
-    let managed = value.get("managed").and_then(serde_json::Value::as_bool)
+    let managed = value
+        .get("managed")
+        .and_then(serde_json::Value::as_bool)
         .ok_or(VaultMountReason::BrokerRejected)?;
     let gui_url = value
         .get("gui_url")
@@ -342,15 +368,28 @@ fn syncthing_enrollment_result(
     };
     if recovery_required == recovery_roots.is_empty()
         || (recovery_required && !managed)
-        || (pairing_required && !managed) {
+        || (pairing_required && !managed)
+    {
         return Err(VaultMountReason::BrokerRejected);
     }
     let folder_id = match value.get("folder_id") {
         None | Some(serde_json::Value::Null) => None,
-        Some(value) => Some(value.as_str().filter(|id| wincmd_shared::vault_sync::valid_sync_folder_id(id))
-            .ok_or(VaultMountReason::BrokerReplyRejected)?.to_string()),
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|id| wincmd_shared::vault_sync::valid_sync_folder_id(id))
+                .ok_or(VaultMountReason::BrokerReplyRejected)?
+                .to_string(),
+        ),
     };
-    Ok(SyncthingEnrollmentResult { managed, folder_id, gui_url, recovery_required, recovery_roots, pairing_required })
+    Ok(SyncthingEnrollmentResult {
+        managed,
+        folder_id,
+        gui_url,
+        recovery_required,
+        recovery_roots,
+        pairing_required,
+    })
 }
 
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
@@ -424,8 +463,7 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
             let _volume_operation =
                 wincmd_volume::VolumeOperationGuard::acquire_slot(request.internal_drive)
                     .map_err(|_| VaultMountReason::DismountFailed)?;
-            tokio::runtime::Handle::current()
-                .block_on(crate::pro_broker::vault_recovery_dismount(
+            tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_recovery_dismount(
                     request.internal_drive,
                     request.presented_drive_letter,
                     request.presentation,
@@ -502,7 +540,10 @@ fn recovery_dismount_request(active: &ActiveMount) -> BrokerDismountRequest<'_> 
         owner_logon_ended: false,
         operation_id: next_internal_operation_id(),
         internal_drive: active.internal_drive,
-        presented_drive_letter: service_presented_drive_letter(active.presentation, &active.drive_letter),
+        presented_drive_letter: service_presented_drive_letter(
+            active.presentation,
+            &active.drive_letter,
+        ),
         presentation: active.presentation,
         target_session_id: active.session_id,
         caller_sid: &active.caller_sid,
@@ -558,6 +599,10 @@ struct InternalMountRequest {
     caller_token: windows_sys::Win32::Foundation::HANDLE,
     caller_authentication_id: (u32, i32),
     mounted_root_acl_sddl: MountedRootAclSddl,
+    /// Service-derived only. When present, the Pro broker asks the native
+    /// engine to add one inheritable ACE for this authenticated local
+    /// administrator while preserving the mounted root's existing ACL.
+    personal_acl_repair_sid: Option<String>,
     password: String,
     hidden_protection_password: Option<String>,
 }
@@ -579,7 +624,7 @@ fn broker_mount_args(
         preferred_letter: request.preferred_letter.clone(),
         read_only: request.read_only,
         personal: request.personal,
-        personal_acl_repair_sid: None,
+        personal_acl_repair_sid: request.personal_acl_repair_sid.take(),
         volume_kind: match request.volume_kind {
             "standard" => VaultContainerKind::Standard,
             "dual" => VaultContainerKind::Dual,
@@ -684,11 +729,10 @@ impl VaultMountBroker {
             VaultMountReason::CallerAclRepairFailed => "vault_caller_acl_repair_failed",
             VaultMountReason::InvalidRequest => "vault_validation_failed",
             VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
-            VaultMountReason::SyncthingProfileUnavailable => {
-                "vault_syncthing_profile_unavailable"
-            }
+            VaultMountReason::SyncthingProfileUnavailable => "vault_syncthing_profile_unavailable",
             VaultMountReason::SyncthingRootConflict => "vault_syncthing_root_conflict",
             VaultMountReason::SyncthingInstallFailed => "vault_syncthing_install_failed",
+            VaultMountReason::SyncthingNotEnabled => "vault_syncthing_not_enabled",
             VaultMountReason::ProNotInstalled => "vault_pro_not_installed",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
             VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",
@@ -723,12 +767,24 @@ impl VaultMountBroker {
             policy_authorizer: crate::vault_access::authorize_mount_for_token,
             engine_snapshot: None,
             owner_logon_probe: {
-                #[cfg(test)] { |_| Ok(false) }
-                #[cfg(not(test))] { recovery::owner_logon_ended }
+                #[cfg(test)]
+                {
+                    |_| Ok(false)
+                }
+                #[cfg(not(test))]
+                {
+                    recovery::owner_logon_ended
+                }
             },
             machine_alias_cleanup: {
-                #[cfg(test)] { |_| Ok(false) }
-                #[cfg(not(test))] { cleanup_machine_alias }
+                #[cfg(test)]
+                {
+                    |_| Ok(false)
+                }
+                #[cfg(not(test))]
+                {
+                    cleanup_machine_alias
+                }
             },
             drive_letter_probe: {
                 #[cfg(test)]
@@ -776,7 +832,12 @@ impl VaultMountBroker {
             .map_err(|_| VaultMountReason::MountStateUnknown)?;
         match snapshot.get(&mount.internal_drive) {
             None => Ok(false),
-            Some(identity) if !mount.driver_slot_absent && mount.engine_mount_identity.as_ref() == Some(identity) => Ok(true),
+            Some(identity)
+                if !mount.driver_slot_absent
+                    && mount.engine_mount_identity.as_ref() == Some(identity) =>
+            {
+                Ok(true)
+            }
             Some(_) => Err(VaultMountReason::MountStateUnknown),
         }
     }
@@ -879,6 +940,7 @@ impl VaultMountBroker {
             caller_sid,
             caller_authentication_id,
             personal_mount_entry_id(record),
+            false,
         )
     }
 
@@ -907,6 +969,38 @@ impl VaultMountBroker {
             caller_sid,
             caller_authentication_id,
             unmanaged_mount_entry_id(record),
+            false,
+        )
+    }
+
+    /// The pipe reaches this path only after authenticating a local
+    /// administrator and rejecting every policy-managed route.  It is the
+    /// sole way a different local administrator may explicitly recover an
+    /// ordinary machine-presented Vault that they can unlock.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mount_unmanaged_recovery_authorized_locked(
+        &self,
+        operation_id: u64,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        request: &mut PersonalVaultMountRequest,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        session_id: u32,
+        caller_sid: &str,
+        caller_authentication_id: (u32, i32),
+        caller_is_local_admin: bool,
+    ) -> Result<(String, u8, bool, Option<VaultSyncWarning>), VaultMountReason> {
+        self.mount_personal_with_entry_id_locked(
+            operation_id,
+            store,
+            record,
+            request,
+            caller_token,
+            session_id,
+            caller_sid,
+            caller_authentication_id,
+            unmanaged_mount_entry_id(record),
+            caller_is_local_admin,
         )
     }
 
@@ -922,18 +1016,27 @@ impl VaultMountBroker {
         caller_sid: &str,
         caller_authentication_id: (u32, i32),
         entry_id: String,
+        caller_is_local_admin: bool,
     ) -> Result<(String, u8, bool, Option<VaultSyncWarning>), VaultMountReason> {
-        if request.repair_current_account_access {
-            request.zeroize_secrets();
-            return Err(VaultMountReason::InvalidRequest);
-        }
-        if record.owner_sid != caller_sid
+        let cross_owner_repair = request.repair_current_account_access
+            && caller_is_local_admin
+            && record.scope == VaultPresentation::Machine
+            && !request.read_only;
+        if (record.owner_sid != caller_sid && !cross_owner_repair)
             || record.scope != request.presentation
             || session_id == 0
             || caller_sid.is_empty()
         {
             request.zeroize_secrets();
             return Err(VaultMountReason::NotAuthorized);
+        }
+        if request.repair_current_account_access
+            && (record.scope != VaultPresentation::Machine
+                || request.read_only
+                || !caller_is_local_admin)
+        {
+            request.zeroize_secrets();
+            return Err(VaultMountReason::InvalidRequest);
         }
         if !self.recovery_allows_entry(&entry_id, store) {
             request.zeroize_secrets();
@@ -966,7 +1069,12 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(&entry_id).cloned())
         {
-            if !same_mount_owner(&existing, session_id, caller_sid, Some(caller_authentication_id)) {
+            if !same_mount_owner(
+                &existing,
+                session_id,
+                caller_sid,
+                Some(caller_authentication_id),
+            ) {
                 request.zeroize_secrets();
                 return Err(VaultMountReason::NotAuthorized);
             }
@@ -1020,6 +1128,9 @@ impl VaultMountBroker {
                 sid: record.owner_sid.clone(),
                 access: wincmd_shared::vault_access::VaultAccess::Write,
             }]),
+            personal_acl_repair_sid: request
+                .repair_current_account_access
+                .then(|| caller_sid.to_owned()),
             password: std::mem::take(&mut request.password),
             hidden_protection_password: std::mem::take(&mut request.hidden_protection_password),
         };
@@ -1119,6 +1230,11 @@ impl VaultMountBroker {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_secs())
             .unwrap_or(0);
+        // Newly created standalone Vault records begin with an explicit
+        // opt-out. Older records have no preference and retain only the
+        // bounded lifecycle discovery needed to recover an existing binding.
+        let sync_eligible = record.scope == VaultPresentation::PerUser
+            && personal_syncthing_lifecycle_allowed(record.syncthing_opt_in);
         let mut active = ActiveMount {
             authentication_id: Some(caller_authentication_id),
             drive_letter: reply.drive_letter.clone(),
@@ -1130,7 +1246,7 @@ impl VaultMountBroker {
             policy_version: 1,
             personal: true,
             syncthing_managed: false,
-            syncthing_resume_unresolved: record.scope == VaultPresentation::PerUser,
+            syncthing_resume_unresolved: sync_eligible,
             container_identity: record.container_identity.clone(),
             access,
             mounted_at,
@@ -1148,8 +1264,10 @@ impl VaultMountBroker {
             if let Ok(mut mounts) = self.active.lock() {
                 mounts.insert(entry_id.clone(), active.clone());
                 if self.persist_active(store, &mounts).is_ok() {
-                    // Persist both confirmed-unbound and unresolved outcomes.
-                    // A helper error must never masquerade as no binding.
+                    let sync_warning = when_syncthing_lifecycle_allowed(sync_eligible, || {
+                        // Persist both confirmed-unbound and unresolved
+                        // outcomes. A helper error must never masquerade as
+                        // no binding.
                     let resumed = syncthing_lifecycle_call(
                         "vault.syncthing.resume",
                         operation_id,
@@ -1157,12 +1275,38 @@ impl VaultMountBroker {
                         &active,
                         Some(caller_token),
                     );
+                        let observed = resumed.as_ref().ok().map(|result| result.managed);
                     let sync = mounted_syncthing_result(&mut active, resumed);
+                        if let Some(managed) = observed {
+                            // A legacy record becomes an explicit durable
+                            // choice only after a confirmed bounded discovery.
+                            // On write failure retain the conservative pause
+                            // obligation rather than claiming no binding.
+                            if store
+                                .set_personal_syncthing_opt_in(
+                                    &record.container_path,
+                                    &record.container_identity,
+                                    &record.owner_sid,
+                                    Some(managed),
+                                )
+                                .is_err()
+                            {
+                                active.syncthing_resume_unresolved = true;
+                            }
+                        }
+                        sync.warning
+                    })
+                    .flatten();
                     mounts.insert(entry_id.clone(), active.clone());
                     if self.persist_active(store, &mounts).is_err() {
                         return Err(VaultMountReason::DismountFailed);
                     }
-                    return Ok((reply.drive_letter, reply.internal_drive, reply.acl_attested, sync.warning));
+                    return Ok((
+                        reply.drive_letter,
+                        reply.internal_drive,
+                        reply.acl_attested,
+                        sync_warning,
+                    ));
                 }
             }
         }
@@ -1259,7 +1403,12 @@ impl VaultMountBroker {
             .and_then(|active| active.get(entry_id).cloned())
         {
             // A repeated click must not dismount a live volume or disrupt open files.
-            if !same_mount_owner(&existing, session_id, &caller_sid, Some(caller_authentication_id)) {
+            if !same_mount_owner(
+                &existing,
+                session_id,
+                &caller_sid,
+                Some(caller_authentication_id),
+            ) {
                 zeroize_mount_secrets(password, hidden_protection_password);
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
@@ -1327,6 +1476,7 @@ impl VaultMountBroker {
             caller_token,
             caller_authentication_id,
             mounted_root_acl_sddl: mounted_root_acl_sddl(&plan.grants),
+            personal_acl_repair_sid: None,
             password: std::mem::take(password),
             hidden_protection_password: std::mem::take(hidden_protection_password),
         };
@@ -1481,7 +1631,10 @@ impl VaultMountBroker {
                 .map(|value| value.as_secs())
                 .unwrap_or(0);
             let sync_eligible = presentation == VaultPresentation::PerUser
-                && store.is_exclusive_per_user_policy_owner(entry_id, &caller_sid);
+                && store.syncthing_lifecycle_allowed_for_exclusive_per_user_policy_owner(
+                    entry_id,
+                    &caller_sid,
+                );
             let mut mount = ActiveMount {
                 authentication_id: Some(caller_authentication_id),
                 drive_letter: reply.drive_letter.clone(),
@@ -1530,7 +1683,7 @@ impl VaultMountBroker {
             // A missing binding is a no-op. Only the owner-only per-user
             // policy shape may resume a binding; a shared policy never gains
             // a local profile simply because it was mounted.
-            if store.is_exclusive_per_user_policy_owner(entry_id, &mount.caller_sid) {
+            if sync_eligible {
                 let resumed = syncthing_lifecycle_call(
                     "vault.syncthing.resume",
                     operation_id,
@@ -1591,8 +1744,13 @@ impl VaultMountBroker {
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
     ) -> VaultMountResult {
         self.dismount_entry_locked_for_client_inner(
-            operation_id, store, entry_id, caller_token,
-            |feature_id, active| syncthing_lifecycle_call(feature_id, operation_id, entry_id, active, caller_token),
+            operation_id,
+            store,
+            entry_id,
+            caller_token,
+            |feature_id, active| {
+                syncthing_lifecycle_call(feature_id, operation_id, entry_id, active, caller_token)
+            },
         )
     }
 
@@ -1602,7 +1760,10 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         entry_id: &str,
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
-        mut sync_call: impl FnMut(&'static str, &ActiveMount) -> Result<SyncthingLifecycleResult, VaultMountReason>,
+        mut sync_call: impl FnMut(
+            &'static str,
+            &ActiveMount,
+        ) -> Result<SyncthingLifecycleResult, VaultMountReason>,
     ) -> VaultMountResult {
         let active = self
             .active
@@ -1627,11 +1788,7 @@ impl VaultMountBroker {
                 if let Ok(mut mounts) = self.active.lock() {
                     mounts.insert(entry_id.to_owned(), active);
                 }
-                return failed(
-                    entry_id,
-                    Some(VaultPresentation::PerUser),
-                    reason,
-                );
+                return failed(entry_id, Some(VaultPresentation::PerUser), reason);
             }
             if let Ok(paused) = paused {
                 active.syncthing_managed |= paused.managed;
@@ -1674,7 +1831,10 @@ impl VaultMountBroker {
             }
             let mut pending = active.clone();
             pending.cleanup_required = true;
-            pending.driver_slot_absent = !live || self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
+            pending.driver_slot_absent = !live
+                || self
+                    .snapshot()
+                    .is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
             let _ = self.retain_cleanup_mount(store, entry_id, pending);
             return failed(
                 entry_id,
@@ -1739,10 +1899,13 @@ impl VaultMountBroker {
                 return failed(entry_id, None, reason);
             }
         };
-        let broker_closed = self.broker
+        let broker_closed = self
+            .broker
             .recover_dismount(self.recovery_request_with_logon_proof(&active, owner_logon_ended))
             .is_ok()
-            && self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
+            && self
+                .snapshot()
+                .is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
         // The fallback is intentionally narrower than broker cleanup: it
         // applies only to an already-absent machine slot and exact missing
         // global alias. It cannot remove a drive name or private-session alias.
@@ -1750,7 +1913,10 @@ impl VaultMountBroker {
         if !broker_closed && !presentation_clean {
             let mut pending = active.clone();
             pending.cleanup_required = true;
-            pending.driver_slot_absent = !live || self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
+            pending.driver_slot_absent = !live
+                || self
+                    .snapshot()
+                    .is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
             let _ = self.retain_cleanup_mount(store, entry_id, pending);
             return failed(
                 entry_id,
@@ -1763,7 +1929,11 @@ impl VaultMountBroker {
             pending.cleanup_required = true;
             pending.driver_slot_absent = true;
             self.retain_cleanup_mount(store, entry_id, pending);
-            return failed(entry_id, Some(active.presentation), VaultMountReason::DismountFailed);
+            return failed(
+                entry_id,
+                Some(active.presentation),
+                VaultMountReason::DismountFailed,
+            );
         }
         if let Ok(mounts) = self.active.lock() {
             if self.persist_active(store, &mounts).is_err() {
@@ -1808,15 +1978,27 @@ impl VaultMountBroker {
         };
         let owner_logon_ended = self.owner_logon_ended(&active);
         let owner_recovery = active.caller_sid == request.caller_sid && owner_logon_ended;
-        if let Err(reason) = self.dismount_permission(store, request.entry_id, &active, request, owner_logon_ended) {
+        if let Err(reason) =
+            self.dismount_permission(store, request.entry_id, &active, request, owner_logon_ended)
+        {
             return denied(request.entry_id, reason);
         }
         if let Err(reason) = self.reconcile_absent_mounts_locked(store) {
             return failed(request.entry_id, None, reason);
         }
-        if self.active.lock().is_ok_and(|mounts| !mounts.contains_key(request.entry_id)) {
-            return VaultMountResult { entry_id: request.entry_id.into(), state: VaultMountState::Unmounted,
-                presentation: Some(active.presentation), drive_letter: None, reason: None, sync_warning: None };
+        if self
+            .active
+            .lock()
+            .is_ok_and(|mounts| !mounts.contains_key(request.entry_id))
+        {
+            return VaultMountResult {
+                entry_id: request.entry_id.into(),
+                state: VaultMountState::Unmounted,
+                presentation: Some(active.presentation),
+                drive_letter: None,
+                reason: None,
+                sync_warning: None,
+            };
         }
         let slots = match self.snapshot() {
             Ok(slots) => slots,
@@ -1824,19 +2006,38 @@ impl VaultMountBroker {
         };
         match slots.get(&active.internal_drive) {
             None => {} // The authenticated cleanup still owns the recorded alias.
-            Some(identity) if !active.driver_slot_absent && active.engine_mount_identity.as_ref() == Some(identity) => {}
+            Some(identity)
+                if !active.driver_slot_absent
+                    && active.engine_mount_identity.as_ref() == Some(identity) => {}
             Some(_) => return failed(request.entry_id, None, VaultMountReason::MountStateUnknown),
         }
-        if let Err(reason) = self.pause_expired_owner_binding(request, &active, owner_logon_ended, |mount| {
-            syncthing_lifecycle_call("vault.syncthing.pause", request.operation_id,
-                request.entry_id, mount, Some(request.caller_token))
-        }) {
+        if let Err(reason) =
+            self.pause_expired_owner_binding(request, &active, owner_logon_ended, |mount| {
+                syncthing_lifecycle_call(
+                    "vault.syncthing.pause",
+                    request.operation_id,
+                    request.entry_id,
+                    mount,
+                    Some(request.caller_token),
+                )
+            })
+        {
             return failed(request.entry_id, Some(active.presentation), reason);
         }
-        if !same_mount_owner(&active, request.caller_session, request.caller_sid, request.caller_authentication_id)
-            || owner_recovery {
+        if !same_mount_owner(
+            &active,
+            request.caller_session,
+            request.caller_sid,
+            request.caller_authentication_id,
+        ) || owner_recovery
+        {
             let sync_paused = !requires_syncthing_pause(&active) || owner_recovery;
-            return self.dismount_entry_locked_for_authorized_member(store, request.entry_id, sync_paused, owner_logon_ended);
+            return self.dismount_entry_locked_for_authorized_member(
+                store,
+                request.entry_id,
+                sync_paused,
+                owner_logon_ended,
+            );
         }
         self.dismount_entry_locked_for_client(
             request.operation_id,
@@ -1860,7 +2061,12 @@ impl VaultMountBroker {
         // An administrator may clean a standalone mount after its owning
         // logon has ended. Fleet-private ownership remains policy scoped.
         if mount.presentation == VaultPresentation::PerUser
-            && !same_mount_owner(mount, caller.caller_session, caller.caller_sid, caller.caller_authentication_id)
+            && !same_mount_owner(
+                mount,
+                caller.caller_session,
+                caller.caller_sid,
+                caller.caller_authentication_id,
+            )
             && !(mount.caller_sid == caller.caller_sid && owner_logon_ended)
             && !(mount.personal && caller.caller_elevated && owner_logon_ended)
         {
@@ -1893,7 +2099,12 @@ impl VaultMountBroker {
             }
         }
         if mount.presentation == VaultPresentation::Machine
-            && !same_mount_owner(mount, caller.caller_session, caller.caller_sid, caller.caller_authentication_id)
+            && !same_mount_owner(
+                mount,
+                caller.caller_session,
+                caller.caller_sid,
+                caller.caller_authentication_id,
+            )
             && !(mount.caller_sid == caller.caller_sid && owner_logon_ended)
             && !caller.caller_elevated
         {
@@ -1968,12 +2179,24 @@ impl VaultMountBroker {
         expected_mount_receipt: Option<&str>,
     ) -> Result<SyncthingEnrollmentResult, VaultMountReason> {
         self.enroll_personal_syncthing_with_prepare(
-            store, operation_id, internal_drive, relative_path, caller_token,
-            caller_session, caller_sid, recovery, expected_mount_receipt,
+            store,
+            operation_id,
+            internal_drive,
+            relative_path,
+            caller_token,
+            caller_session,
+            caller_sid,
+            recovery,
+            expected_mount_receipt,
             |entry_id, mount| {
                 let result = syncthing_setup_call(
-                    "vault.syncthing.prepare", operation_id, entry_id, mount,
-                    caller_token, relative_path, recovery,
+                    "vault.syncthing.prepare",
+                    operation_id,
+                    entry_id,
+                    mount,
+                    caller_token,
+                    relative_path,
+                    recovery,
                 )?;
                 if result == serde_json::json!({ "prepared": true }) {
                     Ok(())
@@ -1991,21 +2214,63 @@ impl VaultMountBroker {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         caller_session: u32,
         caller_sid: &str,
+        require_syncthing_opt_in: bool,
     ) -> Result<(String, ActiveMount), VaultMountReason> {
-        let (entry_id, active) = self.active.lock().ok().and_then(|mounts| {
-            mounts.iter().find(|(_, mount)| mount.internal_drive == internal_drive)
+        let (entry_id, active) = self
+            .active
+            .lock()
+            .ok()
+            .and_then(|mounts| {
+                mounts
+                    .iter()
+                    .find(|(_, mount)| mount.internal_drive == internal_drive)
                 .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
-        }).ok_or(VaultMountReason::MountStateUnknown)?;
-        let eligible_policy_owner = !active.personal
-            && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
+            })
+            .ok_or(VaultMountReason::MountStateUnknown)?;
+        let eligible_policy_owner =
+            !active.personal && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
         if !(active.personal || eligible_policy_owner)
             || active.presentation != VaultPresentation::PerUser
-            || !same_mount_owner(&active, caller_session, caller_sid, authenticated_logon_id(caller_token))
+            || !same_mount_owner(
+                &active,
+                caller_session,
+                caller_sid,
+                authenticated_logon_id(caller_token),
+            )
             || !self.live_mount_matches(&active)?
         {
             return Err(VaultMountReason::NotAuthorized);
         }
+        let syncthing_opted_in =
+            self.syncthing_management_enabled_for_active(store, &entry_id, &active, caller_sid);
+        if require_syncthing_opt_in && !syncthing_opted_in {
+            return Err(VaultMountReason::SyncthingNotEnabled);
+        }
         Ok((entry_id, active))
+    }
+
+    fn syncthing_management_enabled_for_active(
+        &self,
+        store: &VaultAccessStore,
+        entry_id: &str,
+        active: &ActiveMount,
+        caller_sid: &str,
+    ) -> bool {
+        if active.personal {
+            active
+                .canonical_container_path
+                .as_deref()
+                .and_then(|path| {
+                    store
+                        .personal_syncthing_opt_in(path, &active.container_identity, caller_sid)
+                        .ok()
+                })
+                == Some(Some(true))
+        } else {
+            store.syncthing_management_enabled_for_exclusive_per_user_policy_owner(
+                entry_id, caller_sid,
+            )
+        }
     }
 
     fn enroll_personal_syncthing_with_prepare(
@@ -2026,17 +2291,39 @@ impl VaultMountBroker {
             return Err(VaultMountReason::InvalidRequest);
         }
         let (prepared_entry, prepared_mount) = self.with_exclusive_operation(|| {
-            let prepared=self.eligible_syncthing_mount_locked(store, internal_drive, caller_token, caller_session, caller_sid)?;
-            sync_management::require_mount_receipt(expected_mount_receipt,&prepared.0,&prepared.1,recovery.action.is_none())?;
+            let prepared = self.eligible_syncthing_mount_locked(
+                store,
+                internal_drive,
+                caller_token,
+                caller_session,
+                caller_sid,
+                true,
+            )?;
+            sync_management::require_mount_receipt(
+                expected_mount_receipt,
+                &prepared.0,
+                &prepared.1,
+                recovery.action.is_none(),
+            )?;
             Ok(prepared)
         })?;
         // Downloading an account prerequisite must not block any Vault inventory or dismount.
         prepare(&prepared_entry, &prepared_mount)?;
         self.with_exclusive_operation(|| {
             let (entry_id, mut active) = self.eligible_syncthing_mount_locked(
-                store, internal_drive, caller_token, caller_session, caller_sid,
+                store,
+                internal_drive,
+                caller_token,
+                caller_session,
+                caller_sid,
+                true,
             )?;
-            sync_management::require_mount_receipt(expected_mount_receipt,&entry_id,&active,recovery.action.is_none())?;
+            sync_management::require_mount_receipt(
+                expected_mount_receipt,
+                &entry_id,
+                &active,
+                recovery.action.is_none(),
+            )?;
             if entry_id != prepared_entry
                 || active.container_identity != prepared_mount.container_identity
                 || active.engine_mount_identity != prepared_mount.engine_mount_identity
@@ -2045,15 +2332,26 @@ impl VaultMountBroker {
                 return Err(VaultMountReason::MountStateUnknown);
             }
             if recovery.action == Some(RecoveryAction::Inspect) {
-                return syncthing_enroll_call(operation_id, &entry_id, &active, caller_token, relative_path, recovery);
+                return syncthing_enroll_call(
+                    operation_id,
+                    &entry_id,
+                    &active,
+                    caller_token,
+                    relative_path,
+                    recovery,
+                );
             }
             // Enrollment can mutate the folder before its reply is received.
             // Persist uncertainty first so a failed reply cannot skip pause.
             active.syncthing_resume_unresolved = true;
             {
-                let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
+                let mut mounts = self
+                    .active
+                    .lock()
+                    .map_err(|_| VaultMountReason::BrokerRejected)?;
                 mounts.insert(entry_id.clone(), active.clone());
-                self.persist_active(store, &mounts).map_err(|_| VaultMountReason::DismountFailed)?;
+                self.persist_active(store, &mounts)
+                    .map_err(|_| VaultMountReason::DismountFailed)?;
             }
             let enrollment = syncthing_enroll_call(
                 operation_id,
@@ -2082,7 +2380,10 @@ impl VaultMountBroker {
             let mut updated = active;
             updated.syncthing_managed = true;
             updated.syncthing_resume_unresolved = false;
-            let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
+            let mut mounts = self
+                .active
+                .lock()
+                .map_err(|_| VaultMountReason::BrokerRejected)?;
             mounts.insert(entry_id, updated);
             self.persist_active(store, &mounts)
                 .map_err(|_| VaultMountReason::DismountFailed)?;
@@ -2091,7 +2392,9 @@ impl VaultMountBroker {
     }
 
     pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
-        if self.recovery.lock().map_or(true, |state| state.registry_untrusted && !state.recoverable_registry) {
+        if self.recovery.lock().map_or(true, |state| {
+            state.registry_untrusted && !state.recoverable_registry
+        }) {
             return (VaultMountState::Failed, None);
         }
         self.active
@@ -2099,8 +2402,11 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(entry_id).cloned())
             .map(|mount| {
-                let state = if mount.cleanup_required || self.live_mount_matches(&mount) != Ok(true)
-                    || (mount.presentation == VaultPresentation::PerUser && self.owner_logon_ended(&mount)) {
+                let state = if mount.cleanup_required
+                    || self.live_mount_matches(&mount) != Ok(true)
+                    || (mount.presentation == VaultPresentation::PerUser
+                        && self.owner_logon_ended(&mount))
+                {
                     VaultMountState::Failed
                 } else {
                     VaultMountState::Mounted
@@ -2218,11 +2524,9 @@ impl VaultMountBroker {
             return Err(VaultMountReason::NotAuthorized);
         }
         self.reconcile_absent_mounts_locked(store)?;
-        if self
-            .recovery
-            .lock()
-            .map_or(true, |state| state.registry_untrusted && !state.recoverable_registry)
-        {
+        if self.recovery.lock().map_or(true, |state| {
+            state.registry_untrusted && !state.recoverable_registry
+        }) {
             return Err(VaultMountReason::MountStateUnknown);
         }
         let slots = self
@@ -2242,7 +2546,10 @@ impl VaultMountBroker {
         }
         let previous = active.clone();
         let mut changed = false;
-        for mount in active.values_mut().filter(|mount| !slots.contains_key(&mount.internal_drive)) {
+        for mount in active
+            .values_mut()
+            .filter(|mount| !slots.contains_key(&mount.internal_drive))
+        {
             changed |= !mount.cleanup_required || !mount.driver_slot_absent;
             mount.cleanup_required = true;
             mount.driver_slot_absent = true;
@@ -2258,7 +2565,12 @@ impl VaultMountBroker {
             // dismount must not collect another user's unavailable targets.
             if mount.personal
                 && !caller_elevated
-                && !same_mount_owner(mount, session_id, caller_sid, authenticated_logon_id(caller_token))
+                && !same_mount_owner(
+                    mount,
+                    session_id,
+                    caller_sid,
+                    authenticated_logon_id(caller_token),
+                )
                 && !self.owner_may_recover(mount, caller_sid)
             {
                 continue;
@@ -2272,12 +2584,20 @@ impl VaultMountBroker {
                 caller_sid,
                 caller_elevated,
             };
-            let permission = self.dismount_permission(store, entry_id, mount, &request, self.owner_logon_ended(mount));
+            let permission = self.dismount_permission(
+                store,
+                entry_id,
+                mount,
+                &request,
+                self.owner_logon_ended(mount),
+            );
             if matches!(permission, Err(reason) if reason != VaultMountReason::AdministratorRequired)
             {
                 continue;
             }
-            if !mount.driver_slot_absent && mount.engine_mount_identity.as_ref() != slots.get(&mount.internal_drive) {
+            if !mount.driver_slot_absent
+                && mount.engine_mount_identity.as_ref() != slots.get(&mount.internal_drive)
+            {
                 return Err(VaultMountReason::MountStateUnknown);
             }
             if mount.driver_slot_absent && slots.contains_key(&mount.internal_drive) {
@@ -2301,8 +2621,10 @@ impl VaultMountBroker {
                 internal_drive: mount.internal_drive,
                 presentation: mount.presentation,
                 cleanup_required: mount.cleanup_required,
-                browse_allowed: !mount.cleanup_required && !mount.driver_slot_absent
-                    && !(mount.presentation == VaultPresentation::PerUser && self.owner_logon_ended(mount)),
+                browse_allowed: !mount.cleanup_required
+                    && !mount.driver_slot_absent
+                    && !(mount.presentation == VaultPresentation::PerUser
+                        && self.owner_logon_ended(mount)),
                 dismount_allowed: permission.is_ok(),
                 dismount_reason: permission.err(),
                 canonical_container_path: path.and_then(|path| {
@@ -2323,7 +2645,11 @@ impl VaultMountBroker {
     /// on their behalf because an implicit close would let an administrator
     /// bypass the owner's active session.
     pub(crate) fn has_active_mounts_locked(&self) -> bool {
-        if self.recovery.lock().map_or(true, |state| state.registry_untrusted) {
+        if self
+            .recovery
+            .lock()
+            .map_or(true, |state| state.registry_untrusted)
+        {
             return true;
         }
         self.active
@@ -2406,36 +2732,80 @@ impl VaultMountBroker {
     }
 
     pub(crate) fn session_cleanup_targets(&self, session_id: u32) -> SessionCleanupTargets {
-        SessionCleanupTargets { mounts: self.active.lock().map(|active| active.iter()
+        SessionCleanupTargets {
+            mounts: self
+                .active
+                .lock()
+                .map(|active| {
+                    active
+                        .iter()
             .filter(|(_, mount)| mount.session_id == session_id)
-            .map(|(id, mount)| (id.clone(), mount.clone())).collect()).unwrap_or_default(), require_ended_logon: false }
+                        .map(|(id, mount)| (id.clone(), mount.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            require_ended_logon: false,
+        }
     }
 
-    pub(crate) fn try_session_cleanup_targets(&self, session_id: u32) -> Option<SessionCleanupTargets> {
+    pub(crate) fn try_session_cleanup_targets(
+        &self,
+        session_id: u32,
+    ) -> Option<SessionCleanupTargets> {
         let _operation = self.operation.try_lock().ok()?;
-        self.active.try_lock().ok().map(|active| SessionCleanupTargets { mounts: active.iter()
+        self.active
+            .try_lock()
+            .ok()
+            .map(|active| SessionCleanupTargets {
+                mounts: active
+                    .iter()
             .filter(|(_, mount)| mount.session_id == session_id)
-            .map(|(id, mount)| (id.clone(), mount.clone())).collect(), require_ended_logon: false })
+                    .map(|(id, mount)| (id.clone(), mount.clone()))
+                    .collect(),
+                require_ended_logon: false,
+            })
     }
 
     pub(crate) fn expired_session_cleanup_targets(&self, session_id: u32) -> SessionCleanupTargets {
         let mut targets = self.session_cleanup_targets(session_id);
         targets.require_ended_logon = true;
-        targets.mounts.retain(|(_, mount)| self.owner_logon_ended(mount));
+        targets
+            .mounts
+            .retain(|(_, mount)| self.owner_logon_ended(mount));
         targets
     }
 
-    pub(crate) fn dismount_session_targets(&self, store: &VaultAccessStore, targets: &SessionCleanupTargets) {
+    pub(crate) fn dismount_session_targets(
+        &self,
+        store: &VaultAccessStore,
+        targets: &SessionCleanupTargets,
+    ) {
         self.with_exclusive_operation(|| {
             for (entry_id, expected) in &targets.mounts {
-                let current = self.active.lock().ok().and_then(|active| active.get(entry_id).cloned());
-                let Some(mount) = current.filter(|mount| mount.session_id == expected.session_id
-                    && mount.authentication_id == expected.authentication_id && mount.caller_sid == expected.caller_sid
+                let current = self
+                    .active
+                    .lock()
+                    .ok()
+                    .and_then(|active| active.get(entry_id).cloned());
+                let Some(mount) = current.filter(|mount| {
+                    mount.session_id == expected.session_id
+                        && mount.authentication_id == expected.authentication_id
+                        && mount.caller_sid == expected.caller_sid
                     && mount.engine_mount_identity == expected.engine_mount_identity
-                    && mount.container_identity == expected.container_identity && mount.mounted_at == expected.mounted_at) else { continue; };
+                        && mount.container_identity == expected.container_identity
+                        && mount.mounted_at == expected.mounted_at
+                }) else {
+                    continue;
+                };
                 match (self.owner_logon_probe)(&mount) {
-                    Ok(true) => { let _ = self.dismount_entry_locked_for_authorized_member(store, entry_id, false, true); }
-                    Ok(false) if !targets.require_ended_logon => { let _ = self.dismount_entry_locked(store, entry_id); }
+                    Ok(true) => {
+                        let _ = self.dismount_entry_locked_for_authorized_member(
+                            store, entry_id, false, true,
+                        );
+                    }
+                    Ok(false) if !targets.require_ended_logon => {
+                        let _ = self.dismount_entry_locked(store, entry_id);
+                    }
                     Ok(false) | Err(()) => {} // Retry later; unknown ownership cannot select an alias namespace.
                 }
             }
@@ -2474,9 +2844,19 @@ impl VaultMountBroker {
         }
         let mut recovered_identities = HashSet::new();
         let mut pending = HashMap::new();
-        *self.active.lock().map_err(|_| VaultMountReason::DismountFailed)? = registry.mounts.clone();
-        if registry.mounts.values().any(|mount| self.live_mount_matches(mount).is_err()) {
-            let mut recovery = self.recovery.lock().map_err(|_| VaultMountReason::DismountFailed)?;
+        *self
+            .active
+            .lock()
+            .map_err(|_| VaultMountReason::DismountFailed)? = registry.mounts.clone();
+        if registry
+            .mounts
+            .values()
+            .any(|mount| self.live_mount_matches(mount).is_err())
+        {
+            let mut recovery = self
+                .recovery
+                .lock()
+                .map_err(|_| VaultMountReason::DismountFailed)?;
             recovery.registry_untrusted = true;
             recovery.recoverable_registry = true;
             return Err(VaultMountReason::MountStateUnknown);
@@ -2486,12 +2866,19 @@ impl VaultMountBroker {
                 self.mark_registry_untrusted();
                 reason
             })?;
-            let broker_closed = self.broker.recover_dismount(self.recovery_request(&mount)).is_ok()
-                && self.snapshot().is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
+            let broker_closed = self
+                .broker
+                .recover_dismount(self.recovery_request(&mount))
+                .is_ok()
+                && self
+                    .snapshot()
+                    .is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
             let presentation_clean = !live && self.clean_absent_machine_alias(&mount);
             if !broker_closed && !presentation_clean {
                 mount.cleanup_required = true;
-                mount.driver_slot_absent = self.snapshot().is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
+                mount.driver_slot_absent = self
+                    .snapshot()
+                    .is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
                 pending.insert(entry_id, mount);
                 continue;
             }
@@ -2511,7 +2898,10 @@ impl VaultMountBroker {
             self.mark_registry_untrusted();
             return Err(VaultMountReason::DismountFailed);
         }
-        *self.active.lock().map_err(|_| VaultMountReason::DismountFailed)? = pending;
+        *self
+            .active
+            .lock()
+            .map_err(|_| VaultMountReason::DismountFailed)? = pending;
         Ok(recovered_identities)
     }
 
@@ -2581,7 +2971,9 @@ impl VaultMountBroker {
     }
 
     fn recovery_allows_entry(&self, entry_id: &str, store: &VaultAccessStore) -> bool {
-        if self.reconcile_absent_mounts_locked(store).is_err() { return false; }
+        if self.reconcile_absent_mounts_locked(store).is_err() {
+            return false;
+        }
         let blocked = self
             .recovery
             .lock()
@@ -2922,21 +3314,43 @@ fn zeroize_mount_secrets(password: &mut String, hidden_protection_password: &mut
 
 fn authenticated_logon_id(token: windows_sys::Win32::Foundation::HANDLE) -> Option<(u32, i32)> {
     #[cfg(test)]
-    if token.is_null() { return Some((0, 0)); }
+    if token.is_null() {
+        return Some((0, 0));
+    }
     use windows_sys::Win32::Security::{GetTokenInformation, TokenStatistics, TOKEN_STATISTICS};
     let mut statistics: TOKEN_STATISTICS = unsafe { std::mem::zeroed() };
     let mut returned = 0;
     let size = std::mem::size_of_val(&statistics) as u32;
-    if unsafe { GetTokenInformation(token, TokenStatistics,
-        (&mut statistics as *mut TOKEN_STATISTICS).cast(), size, &mut returned) } == 0 || returned != size {
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenStatistics,
+            (&mut statistics as *mut TOKEN_STATISTICS).cast(),
+            size,
+            &mut returned,
+        )
+    } == 0
+        || returned != size
+    {
         return None;
     }
-    Some((statistics.AuthenticationId.LowPart, statistics.AuthenticationId.HighPart))
+    Some((
+        statistics.AuthenticationId.LowPart,
+        statistics.AuthenticationId.HighPart,
+    ))
 }
 
-fn same_mount_owner(active: &ActiveMount, session_id: u32, caller_sid: &str, authentication_id: Option<(u32, i32)>) -> bool {
-    active.session_id == session_id && active.caller_sid == caller_sid
-        && active.authentication_id.map_or(true, |expected| authentication_id == Some(expected))
+fn same_mount_owner(
+    active: &ActiveMount,
+    session_id: u32,
+    caller_sid: &str,
+    authentication_id: Option<(u32, i32)>,
+) -> bool {
+    active.session_id == session_id
+        && active.caller_sid == caller_sid
+        && active
+            .authentication_id
+            .map_or(true, |expected| authentication_id == Some(expected))
 }
 
 fn denied(entry_id: &str, reason: VaultMountReason) -> VaultMountResult {
@@ -2967,15 +3381,63 @@ fn failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unselected_personal_vault_skips_lifecycle_and_has_no_pause_obligation() {
+        let mut calls = 0;
+        let result = when_syncthing_lifecycle_allowed(
+            personal_syncthing_lifecycle_allowed(Some(false)),
+            || {
+                calls += 1;
+                SyncthingLifecycleResult {
+                    managed: true,
+                    pause_guaranteed: false,
+                    warning: None,
+                }
+            },
+        );
+        assert!(result.is_none());
+        assert_eq!(calls, 0, "explicit opt-out must not dispatch to the private adapter");
+
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        mount.syncthing_resume_unresolved = false;
+        assert!(!requires_syncthing_pause(&mount));
+    }
+
+    #[test]
+    fn legacy_personal_sync_discovery_preserves_success_and_failure_state() {
+        assert!(personal_syncthing_lifecycle_allowed(None));
+        assert!(personal_syncthing_lifecycle_allowed(Some(true)));
+        assert!(!personal_syncthing_lifecycle_allowed(Some(false)));
+
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        let unbound = mounted_syncthing_result(&mut mount, Ok(SyncthingLifecycleResult::default()));
+        assert!(!unbound.managed);
+        assert!(!mount.syncthing_resume_unresolved);
+        let failed = mounted_syncthing_result(
+            &mut mount,
+            Err(VaultMountReason::SyncthingProfileUnavailable),
+        );
+        assert_eq!(failed.warning, Some(VaultSyncWarning::Unavailable));
+        assert!(mount.syncthing_resume_unresolved);
+        assert!(requires_syncthing_pause(&mount));
+    }
+
     #[test]
     fn confirmed_mount_reports_resume_failure_but_not_an_unenrolled_vault() {
         let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
         mount.presentation = VaultPresentation::PerUser;
-        let failed = mounted_syncthing_result(&mut mount, Err(VaultMountReason::SyncthingProfileUnavailable));
+        let failed = mounted_syncthing_result(
+            &mut mount,
+            Err(VaultMountReason::SyncthingProfileUnavailable),
+        );
         assert!(!failed.managed);
         assert_eq!(failed.warning, Some(VaultSyncWarning::Unavailable));
         assert!(mount.syncthing_resume_unresolved);
-        let unenrolled = mounted_syncthing_result(&mut mount, Ok(SyncthingLifecycleResult::default()));
+        let unenrolled =
+            mounted_syncthing_result(&mut mount, Ok(SyncthingLifecycleResult::default()));
         assert!(!unenrolled.managed);
         assert_eq!(unenrolled.warning, None);
         assert!(!mount.syncthing_resume_unresolved);
@@ -2986,21 +3448,37 @@ mod tests {
     fn failed_resume_still_requires_a_confirmed_pause_before_dismount() {
         let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
         mount.presentation = VaultPresentation::PerUser;
-        mounted_syncthing_result(&mut mount,
+        mounted_syncthing_result(
+            &mut mount,
             Err(VaultMountReason::SyncthingProfileUnavailable),
         );
         assert!(requires_syncthing_pause(&mount));
         assert!(!syncthing_pause_confirmed(
-            mount.syncthing_managed, &Err(VaultMountReason::SyncthingProfileUnavailable),
+            mount.syncthing_managed,
+            &Err(VaultMountReason::SyncthingProfileUnavailable),
         ));
-        assert!(syncthing_pause_confirmed(false, &Ok(SyncthingLifecycleResult::default())));
-        assert!(!syncthing_pause_confirmed(true, &Ok(SyncthingLifecycleResult::default())));
-        assert!(syncthing_pause_confirmed(true, &Ok(SyncthingLifecycleResult {
-            managed: true, pause_guaranteed: false, warning: None,
-        })));
-        assert!(syncthing_pause_confirmed(true, &Ok(syncthing_lifecycle_result(
+        assert!(syncthing_pause_confirmed(
+            false,
+            &Ok(SyncthingLifecycleResult::default())
+        ));
+        assert!(!syncthing_pause_confirmed(
+            true,
+            &Ok(SyncthingLifecycleResult::default())
+        ));
+        assert!(syncthing_pause_confirmed(
+            true,
+            &Ok(SyncthingLifecycleResult {
+                managed: true,
+                pause_guaranteed: false,
+                warning: None,
+            })
+        ));
+        assert!(syncthing_pause_confirmed(
+            true,
+            &Ok(syncthing_lifecycle_result(
             &serde_json::json!({"managed":false,"pause_guaranteed":true}),
-        ))));
+            ))
+        ));
         mount.presentation = VaultPresentation::Machine;
         assert!(!requires_syncthing_pause(&mount));
     }
@@ -3021,7 +3499,8 @@ mod tests {
         assert!(mounts["personal"].syncthing_managed);
         assert!(mounts["personal"].syncthing_resume_unresolved);
         assert!(requires_syncthing_pause(&mounts["personal"]));
-        sync_management::commit_removal_receipt(&mut mounts,"personal",false,|_| Ok(())).unwrap();
+        sync_management::commit_removal_receipt(&mut mounts, "personal", false, |_| Ok(()))
+            .unwrap();
         assert!(!requires_syncthing_pause(&mounts["personal"]));
     }
 
@@ -3032,7 +3511,10 @@ mod tests {
         let mut value = serde_json::to_value(&mount).unwrap();
         let known: ActiveMount = serde_json::from_value(value.clone()).unwrap();
         assert!(!requires_syncthing_pause(&known));
-        value.as_object_mut().unwrap().remove("syncthing_resume_unresolved");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("syncthing_resume_unresolved");
         let recovered: ActiveMount = serde_json::from_value(value).unwrap();
         assert!(recovered.syncthing_resume_unresolved);
         assert!(requires_syncthing_pause(&recovered));
@@ -3046,7 +3528,8 @@ mod tests {
     fn unavailable_syncthing_blocks_only_bound_or_unresolved_user_dismounts() {
         for (managed, unresolved) in [(false, false), (true, false), (false, true)] {
             let store = mount_store(
-                Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(AtomicBool::new(false)),
             );
             let events = Arc::new(Mutex::new(BrokerEvents::default()));
             let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
@@ -3054,10 +3537,18 @@ mod tests {
             mount.presentation = VaultPresentation::PerUser;
             mount.syncthing_managed = managed;
             mount.syncthing_resume_unresolved = unresolved;
-            broker.active.lock().unwrap().insert("personal".into(), mount);
+            broker
+                .active
+                .lock()
+                .unwrap()
+                .insert("personal".into(), mount);
             let mut pause_calls = 0;
             let result = broker.dismount_entry_locked_for_client_inner(
-                42, &store, "personal", Some(std::ptr::null_mut()), |feature, _| {
+                42,
+                &store,
+                "personal",
+                Some(std::ptr::null_mut()),
+                |feature, _| {
                     assert_eq!(feature, "vault.syncthing.pause");
                     pause_calls += 1;
                     Err(VaultMountReason::BrokerUnavailable)
@@ -3230,19 +3721,40 @@ mod tests {
         fn dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
             let mut events = self.0.lock().unwrap();
             events.dismounted.push(request.internal_drive);
-            events.cleanup_contexts.push((request.internal_drive, request.presented_drive_letter.map(str::to_owned),
-                request.presentation, request.target_session_id, request.caller_sid.to_owned()));
-            if events.cleanup_fails { Err(VaultMountReason::DismountFailed) } else { Ok(()) }
+            events.cleanup_contexts.push((
+                request.internal_drive,
+                request.presented_drive_letter.map(str::to_owned),
+                request.presentation,
+                request.target_session_id,
+                request.caller_sid.to_owned(),
+            ));
+            if events.cleanup_fails {
+                Err(VaultMountReason::DismountFailed)
+            } else {
+                Ok(())
+            }
         }
         fn cleanup_orphans(&self) -> Result<(), VaultMountReason> {
             Ok(())
         }
-        fn recover_dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
+        fn recover_dismount(
+            &self,
+            request: BrokerDismountRequest<'_>,
+        ) -> Result<(), VaultMountReason> {
             let mut events = self.0.lock().unwrap();
             events.recovered.push(request.internal_drive);
-            events.cleanup_contexts.push((request.internal_drive, request.presented_drive_letter.map(str::to_owned),
-                request.presentation, request.target_session_id, request.caller_sid.to_owned()));
-            if events.cleanup_fails { Err(VaultMountReason::DismountFailed) } else { Ok(()) }
+            events.cleanup_contexts.push((
+                request.internal_drive,
+                request.presented_drive_letter.map(str::to_owned),
+                request.presentation,
+                request.target_session_id,
+                request.caller_sid.to_owned(),
+            ));
+            if events.cleanup_fails {
+                Err(VaultMountReason::DismountFailed)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -3342,6 +3854,7 @@ mod tests {
             owner_sid: "S-1-5-21-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 7,
+            syncthing_opt_in: Some(false),
         }
     }
 
@@ -3385,7 +3898,10 @@ mod tests {
             elapsed
         });
         holding_thread.join().unwrap();
-        assert!(elapsed < std::time::Duration::from_secs(1), "service timer starved for {elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "service timer starved for {elapsed:?}"
+        );
     }
 
     fn personal_request() -> PersonalVaultMountRequest {
@@ -3434,77 +3950,184 @@ mod tests {
     fn sync_preparation_releases_vault_lock_and_rejects_a_removed_or_replaced_mount() {
         for change in ["removed", "replaced", "remounted"] {
             let store = mount_store(
-                Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(AtomicBool::new(false)),
             );
-            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(
-                Arc::new(Mutex::new(BrokerEvents::default())),
-            )));
+            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(
+                Mutex::new(BrokerEvents::default()),
+            ))));
             let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
             mount.personal = true;
             mount.presentation = VaultPresentation::PerUser;
-            let receipt=sync_management::mount_receipt("personal",&mount);
-            broker.active.lock().unwrap().insert("personal".into(), mount);
+            mount.canonical_container_path = Some("C:\\vaults\\prepared.hc".into());
+            store.insert_personal_record_for_test(PersonalVaultRecord {
+                container_path: "C:\\vaults\\prepared.hc".into(),
+                container_identity: mount.container_identity.clone(),
+                owner_sid: mount.caller_sid.clone(),
+                scope: VaultPresentation::PerUser,
+                created_by_session: 7,
+                syncthing_opt_in: Some(true),
+            });
+            let receipt = sync_management::mount_receipt("personal", &mount);
+            broker
+                .active
+                .lock()
+                .unwrap()
+                .insert("personal".into(), mount);
             let result = broker.enroll_personal_syncthing_with_prepare(
-                &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-owner",
-                &RecoveryOptions::default(), Some(&receipt),
+                &store,
+                42,
+                12,
+                "Sync",
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                &RecoveryOptions::default(),
+                Some(&receipt),
                 |_, _| {
-                    let _other_operation = broker.operation.try_lock()
+                    let _other_operation = broker
+                        .operation
+                        .try_lock()
                         .expect("downloading must allow another Vault operation");
                     let mut active = broker.active.lock().unwrap();
                     match change {
-                        "removed" => { active.remove("personal"); }
-                        "replaced" => {
-                            active.get_mut("personal").unwrap().container_identity = "different".into();
+                        "removed" => {
+                            active.remove("personal");
                         }
-                        _ => { active.get_mut("personal").unwrap().mounted_at += 1; }
+                        "replaced" => {
+                            active.get_mut("personal").unwrap().container_identity =
+                                "different".into();
+                        }
+                        _ => {
+                            active.get_mut("personal").unwrap().mounted_at += 1;
+                        }
                     }
                     Ok(())
                 },
             );
-            assert_eq!(result, Err(VaultMountReason::MountStateUnknown), "{change}");
+            let expected = if change == "replaced" {
+                // The changed identity no longer matches the durable consent
+                // record, so it is rejected before any prepare callback.
+                VaultMountReason::SyncthingNotEnabled
+            } else {
+                VaultMountReason::MountStateUnknown
+            };
+            assert_eq!(result, Err(expected), "{change}");
         }
     }
 
     #[test]
     fn stale_sync_mount_receipt_cannot_enable_replacement_container_in_same_slot() {
-        let store=mount_store(Arc::new(Mutex::new(HashMap::new())),Arc::new(AtomicBool::new(false)));
-        let broker=VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
-        let mut mount=active_mount_for_owner(7,"S-1-5-21-owner");
-        mount.personal=true; mount.presentation=VaultPresentation::PerUser;
-        let receipt=sync_management::mount_receipt("personal",&mount);
-        mount.syncthing_managed=true;
-        assert_eq!(receipt,sync_management::mount_receipt("personal",&mount));
-        mount.container_identity="replacement-container".into();
-        broker.active.lock().unwrap().insert("personal".into(),mount);
-        let missing=broker.enroll_personal_syncthing_with_prepare(
-            &store,42,12,"Sync",std::ptr::null_mut(),7,"S-1-5-21-owner",
-            &RecoveryOptions::default(),None,
-            |_,_|panic!("ordinary enrollment must require the mount receipt before preparation"),
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
         );
-        assert_eq!(missing,Err(VaultMountReason::MountStateUnknown));
-        let result=broker.enroll_personal_syncthing_with_prepare(
-            &store,42,12,"Sync",std::ptr::null_mut(),7,"S-1-5-21-owner",
-            &RecoveryOptions::default(),Some(&receipt),
-            |_,_|panic!("stale dialog must not install or enroll before its mount receipt matches"),
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.personal = true;
+        mount.presentation = VaultPresentation::PerUser;
+        let receipt = sync_management::mount_receipt("personal", &mount);
+        mount.container_identity = "replacement-container".into();
+        mount.canonical_container_path = Some("C:\\vaults\\replacement.hc".into());
+        let replacement_receipt = sync_management::mount_receipt("personal", &mount);
+        store.insert_personal_record_for_test(PersonalVaultRecord {
+            container_path: "C:\\vaults\\replacement.hc".into(),
+            container_identity: "replacement-container".into(),
+            owner_sid: "S-1-5-21-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 7,
+            syncthing_opt_in: Some(false),
+        });
+        broker
+            .active
+            .lock()
+            .unwrap()
+            .insert("personal".into(), mount);
+        let stale = broker.manage_personal_syncthing(
+            &store,
+            42,
+            &wincmd_shared::vault_sync::VaultSyncManagementRequest {
+                personal: true,
+                internal_drive: 12,
+                action: wincmd_shared::vault_sync::VaultSyncAction::Enable,
+                relative_path: None,
+                folder_label: None,
+                folder_id: None,
+                expected_mount_receipt: Some(receipt),
+            },
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
         );
-        assert_eq!(result,Err(VaultMountReason::MountStateUnknown));
+        assert!(matches!(stale, Err(VaultMountReason::MountStateUnknown)));
+        assert_eq!(
+            store
+                .personal_syncthing_opt_in(
+                    "C:\\vaults\\replacement.hc",
+                    "replacement-container",
+                    "S-1-5-21-owner",
+                )
+                .unwrap(),
+            Some(false),
+        );
+        let enabled = broker.manage_personal_syncthing(
+            &store,
+            42,
+            &wincmd_shared::vault_sync::VaultSyncManagementRequest {
+                personal: true,
+                internal_drive: 12,
+                action: wincmd_shared::vault_sync::VaultSyncAction::Enable,
+                relative_path: None,
+                folder_label: None,
+                folder_id: None,
+                expected_mount_receipt: Some(replacement_receipt),
+            },
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-owner",
+        ).expect("matching receipt records consent without calling Pro");
+        assert!(enabled.syncthing_enabled);
+        assert_eq!(
+            store
+                .personal_syncthing_opt_in(
+                    "C:\\vaults\\replacement.hc",
+                    "replacement-container",
+                    "S-1-5-21-owner",
+                )
+                .unwrap(),
+            Some(true),
+        );
     }
 
     #[test]
     fn sync_preparation_never_installs_for_another_mount_owner() {
         let store = mount_store(
-            Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
         );
-        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(
-            Arc::new(Mutex::new(BrokerEvents::default())),
-        )));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
         let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
         mount.personal = true;
         mount.presentation = VaultPresentation::PerUser;
-        broker.active.lock().unwrap().insert("personal".into(), mount);
+        broker
+            .active
+            .lock()
+            .unwrap()
+            .insert("personal".into(), mount);
         let result = broker.enroll_personal_syncthing_with_prepare(
-            &store, 42, 12, "Sync", std::ptr::null_mut(), 7, "S-1-5-21-other",
-            &RecoveryOptions::default(), None,
+            &store,
+            42,
+            12,
+            "Sync",
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-other",
+            &RecoveryOptions::default(),
+            None,
             |_, _| panic!("unauthorized caller must not start prerequisite installation"),
         );
         assert_eq!(result, Err(VaultMountReason::NotAuthorized));
@@ -3599,7 +4222,14 @@ mod tests {
                 "vault_syncthing_profile_unavailable",
             ),
             (VaultMountReason::BrokerRejected, "vault_broker_rejected"),
-            (VaultMountReason::SyncthingInstallFailed, "vault_syncthing_install_failed"),
+            (
+                VaultMountReason::SyncthingInstallFailed,
+                "vault_syncthing_install_failed",
+            ),
+            (
+                VaultMountReason::SyncthingNotEnabled,
+                "vault_syncthing_not_enabled",
+            ),
             (VaultMountReason::DismountFailed, "vault_cleanup_failed"),
         ] {
             assert_eq!(
@@ -3814,7 +4444,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_account_repair_is_rejected_without_starting_a_mount() {
+    fn account_repair_requires_the_pipe_local_admin_gate() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -3846,6 +4476,42 @@ mod tests {
         assert_eq!(events.lock().unwrap().mounted, 0);
         assert!(events.lock().unwrap().personal_acl_repair_sids.is_empty());
         assert!(request.password.is_empty());
+    }
+
+    #[test]
+    fn local_admin_recovery_allows_an_unmanaged_machine_vault_from_another_account() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(MountBroker(events.clone())),
+            caller_can_list_root,
+        );
+        let mut record = personal_record();
+        record.scope = VaultPresentation::Machine;
+        record.owner_sid = "S-1-5-21-prior-owner".into();
+        let mut request = personal_request();
+        request.presentation = VaultPresentation::Machine;
+        request.repair_current_account_access = true;
+
+        let result = broker.mount_unmanaged_recovery_authorized_locked(
+            41,
+            &store,
+            &record,
+            &mut request,
+            std::ptr::null_mut(),
+            7,
+            "S-1-5-21-101-202-303-404",
+            (0, 0),
+            true,
+        );
+
+        assert_eq!(result, Ok(("P:".into(), 12, true, None)));
+        assert_eq!(events.lock().unwrap().personal_acl_repair_sids,
+            vec![Some("S-1-5-21-101-202-303-404".into())],
+            "the recovery ACE must be for the authenticated caller, never the prior owner");
     }
 
     #[test]
@@ -3911,7 +4577,10 @@ mod tests {
         assert!(events.lock().unwrap().dismounted.is_empty());
         let active = broker.active.lock().unwrap();
         let mounted = active.get(&unmanaged_mount_entry_id(&record)).unwrap();
-        assert_eq!(mounted.access, wincmd_shared::vault_access::VaultAccess::Write);
+        assert_eq!(
+            mounted.access,
+            wincmd_shared::vault_access::VaultAccess::Write
+        );
         assert_eq!(
             broker.attest_existing_mount(mounted, std::ptr::null_mut()),
             Ok(())
@@ -4478,17 +5147,31 @@ mod tests {
 
     #[test]
     fn outsider_administrator_cannot_dismount_group_mount_or_clear_policy_mount_guard() {
-        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
         let events = Arc::new(Mutex::new(BrokerEvents::default()));
         let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
         let entry_id = "fleet-shared";
-        assert!(broker.retain_cleanup_mount(&store, entry_id, active_mount_for_owner(7, "S-1-5-21-owner")));
+        assert!(broker.retain_cleanup_mount(
+            &store,
+            entry_id,
+            active_mount_for_owner(7, "S-1-5-21-owner")
+        ));
         assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
-        let result = broker.dismount_authorized(&store, AuthorizedDismount {
+        let result = broker.dismount_authorized(
+            &store,
+            AuthorizedDismount {
                     caller_authentication_id: None,
-            operation_id: 43, entry_id, caller_token: std::ptr::null_mut(), caller_session: 11,
-            caller_sid: "S-1-5-21-outsider-admin", caller_elevated: true,
-        });
+                operation_id: 43,
+                entry_id,
+                caller_token: std::ptr::null_mut(),
+                caller_session: 11,
+                caller_sid: "S-1-5-21-outsider-admin",
+                caller_elevated: true,
+            },
+        );
         assert_eq!(result.state, VaultMountState::Denied);
         assert_eq!(result.reason, Some(VaultMountReason::PolicyAccessDenied));
         assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
@@ -4498,7 +5181,9 @@ mod tests {
 
     #[test]
     fn unknown_mount_registry_blocks_policy_edits_and_deletions() {
-        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
         assert!(!broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
         broker.recovery.lock().unwrap().registry_untrusted = true;
         assert!(broker.with_exclusive_operation(|| broker.has_active_mounts_locked()));
@@ -4808,6 +5493,7 @@ mod tests {
                 caller_token: std::ptr::null_mut(),
                 caller_authentication_id: (0, 0),
                 mounted_root_acl_sddl: MountedRootAclSddl("D:P".into()),
+                personal_acl_repair_sid: None,
                 password: "outer-secret".into(),
                 hidden_protection_password: hidden_protection_password.map(str::to_owned),
             };

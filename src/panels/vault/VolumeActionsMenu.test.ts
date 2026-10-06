@@ -29,9 +29,10 @@ describe("encrypted-volume dismount", () => {
     expect(source).toContain("setSyncSetupOpen(true)");
     expect(source).not.toContain("enablePersonalVaultSync(");
     expect(dialog).toContain('managePersonalVaultSync(internalDrive, "list")');
-    expect(dialog).toContain("Sync is not enabled for this Vault");
+    expect(dialog).toContain("Sync is off for this Vault");
     expect(dialog).toContain("Other Syncthing folders keep running");
-    expect(dialog).toContain("Enable selected folders");
+    expect(dialog).toContain("Enable sync for this Vault");
+    expect(dialog).toContain("Open Vault access, edit this Vault, turn on Syncthing, and save.");
     expect(dialog).toContain("Confirm remove sync");
     expect(dialog).toContain('"remove", folder.relative_path, undefined, folder.folder_id');
   });

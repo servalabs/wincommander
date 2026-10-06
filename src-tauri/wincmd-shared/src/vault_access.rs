@@ -46,6 +46,11 @@ pub struct VaultAccessEntry {
     /// actual mount/grant policy. Authorization always derives from grants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_pattern: Option<VaultAccessPattern>,
+    /// Explicit per-Vault consent for the owner-session Syncthing adapter.
+    /// `None` is retained only for policies written before this control was
+    /// introduced, so an existing configured binding can be discovered once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syncthing_opt_in: Option<bool>,
     pub grants: Vec<VaultGrantInput>,
     pub mount: VaultMountPolicy,
 }
@@ -298,7 +303,9 @@ pub struct PersonalVaultMountRequest {
     pub hidden_pim: Option<u32>,
     #[serde(default)]
     pub removable: bool,
-    /// Retained for wire compatibility; the service rejects `true` before mounting.
+    /// An explicit request to recover access to an ordinary personal Vault on
+    /// this PC. The service accepts it only for an authenticated local
+    /// administrator after it has excluded Fleet-managed containers.
     #[serde(default)]
     pub repair_current_account_access: bool,
 }
@@ -381,7 +388,8 @@ pub struct VaultMountPlan {
     /// Absence defaults to `false` so older plans remain fail-closed.
     #[serde(default)]
     pub personal: bool,
-    /// Retired wire field. Current services omit it and brokers reject any value.
+    /// Service-derived recovery principal for a local administrator's ordinary
+    /// personal Vault. This is never accepted from a renderer request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_acl_repair_sid: Option<String>,
     pub volume_kind: VaultContainerKind,
@@ -442,6 +450,7 @@ impl VaultMountPlan {
         if self.personal_acl_repair_sid.as_deref().is_some_and(|sid| {
             !self.personal
                 || self.presentation != VaultPresentation::Machine
+                || self.read_only
                 || !is_valid_windows_sid(sid)
         }) {
             return Err("vault_mount_plan_invalid");
@@ -570,6 +579,11 @@ pub struct PersonalVaultRecord {
     pub owner_sid: String,
     pub scope: VaultPresentation,
     pub created_by_session: u32,
+    /// Explicit consent for the owner-session Syncthing integration. Missing
+    /// means a record was saved before this control existed and may only be
+    /// checked during bounded lifecycle recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syncthing_opt_in: Option<bool>,
 }
 
 impl std::fmt::Debug for VaultMountRequest {
@@ -628,6 +642,7 @@ pub enum VaultMountReason {
     SyncthingProfileUnavailable,
     SyncthingInstallFailed,
     SyncthingRootConflict,
+    SyncthingNotEnabled,
     BrokerRejected,
     BrokerIdentityRejected,
     BrokerHandshakeRejected,
@@ -647,7 +662,7 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -660,6 +675,7 @@ impl VaultMountReason {
         Self::SyncthingProfileUnavailable,
         Self::SyncthingInstallFailed,
         Self::SyncthingRootConflict,
+        Self::SyncthingNotEnabled,
         Self::BrokerRejected,
         Self::BrokerIdentityRejected,
         Self::BrokerHandshakeRejected,
@@ -678,7 +694,7 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 28] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 29] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -691,6 +707,7 @@ impl VaultMountReason {
         "syncthing_profile_unavailable",
         "syncthing_install_failed",
         "syncthing_root_conflict",
+        "syncthing_not_enabled",
         "broker_rejected",
         "broker_identity_rejected",
         "broker_handshake_rejected",
@@ -723,6 +740,7 @@ impl VaultMountReason {
             Self::SyncthingProfileUnavailable => "syncthing_profile_unavailable",
             Self::SyncthingInstallFailed => "syncthing_install_failed",
             Self::SyncthingRootConflict => "syncthing_root_conflict",
+            Self::SyncthingNotEnabled => "syncthing_not_enabled",
             Self::BrokerRejected => "broker_rejected",
             Self::BrokerIdentityRejected => "broker_identity_rejected",
             Self::BrokerHandshakeRejected => "broker_handshake_rejected",
@@ -756,6 +774,7 @@ impl VaultMountReason {
             "syncthing_profile_unavailable" => Some(Self::SyncthingProfileUnavailable),
             "syncthing_install_failed" => Some(Self::SyncthingInstallFailed),
             "syncthing_root_conflict" => Some(Self::SyncthingRootConflict),
+            "syncthing_not_enabled" => Some(Self::SyncthingNotEnabled),
             "broker_rejected" => Some(Self::BrokerRejected),
             "broker_identity_rejected" => Some(Self::BrokerIdentityRejected),
             "broker_handshake_rejected" => Some(Self::BrokerHandshakeRejected),
@@ -957,7 +976,10 @@ mod tests {
             let result: VaultMountResult = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(result.state, VaultMountState::Mounted);
             assert_eq!(result.reason, None);
-            assert_eq!(serde_json::to_value(result).unwrap()["sync_warning"], warning);
+            assert_eq!(
+                serde_json::to_value(result).unwrap()["sync_warning"],
+                warning
+            );
         }
         value["sync_warning"] = serde_json::json!("raw private error");
         assert!(serde_json::from_value::<VaultMountResult>(value).is_err());
@@ -972,6 +994,14 @@ mod tests {
         });
         let legacy: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(legacy.access_pattern, None);
+        assert_eq!(legacy.syncthing_opt_in, None);
+        wire["syncthing_opt_in"] = serde_json::json!(false);
+        let opted_out: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(opted_out.syncthing_opt_in, Some(false));
+        wire["syncthing_opt_in"] = serde_json::json!(true);
+        let opted_in: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(opted_in.syncthing_opt_in, Some(true));
+        wire.as_object_mut().unwrap().remove("syncthing_opt_in");
         for (label, pattern) in [
             ("private", VaultAccessPattern::Private),
             ("shared-read", VaultAccessPattern::SharedRead),
@@ -1019,6 +1049,7 @@ mod tests {
                 primary_owner_sid: None,
                 owner_account: "Administrator".into(),
                 access_pattern: None,
+                syncthing_opt_in: None,
                 grants: vec![VaultGrantInput {
                     principal_name: "Partner".into(),
                     access: VaultAccess::Write,
@@ -1166,6 +1197,9 @@ mod tests {
         assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
         plan.presentation = VaultPresentation::Machine;
         plan.personal_acl_repair_sid = Some("S-1--forged".into());
+        assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
+        plan.personal_acl_repair_sid = Some("S-1-5-21-123-456".into());
+        plan.read_only = true;
         assert_eq!(plan.validate(), Err("vault_mount_plan_invalid"));
     }
 

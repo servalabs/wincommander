@@ -219,6 +219,19 @@ describe("Vault path display", () => {
     expect(unavailable).toContain('value="Path unavailable"');
     expect(unavailable).not.toContain('value="???"');
   });
+
+  test("makes Syncthing an explicit, editable choice for personal Vaults only", () => {
+    const personal = renderEditor({
+      ...entry,
+      primary_owner_sid: "S-1-5-21-example",
+      grants: [{ principal_name: entry.owner_account, access: "write" }],
+      mount: { presentation: "per-user" },
+      syncthing_opt_in: false,
+    });
+    expect(personal).toContain('aria-label="Enable Syncthing for Vault 1"');
+    expect(personal).toContain("Save this Vault policy before using its cloud button.");
+    expect(renderEditor()).not.toContain('aria-label="Enable Syncthing for Vault 1"');
+  });
 });
 
 test("gets owner choices from the native service adapter, never browser storage", () => {

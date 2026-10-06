@@ -167,8 +167,8 @@ tag: string,
  */
 inner: string, };
 
-export type VaultSyncAction = "list" | "rename" | "remove";
+export type VaultSyncAction = "enable" | "list" | "rename" | "remove";
 
 export type VaultSyncFolder = { folder_id: string, relative_path: string, label: string, paused: boolean, recovery_required: boolean, };
 
-export type VaultSyncManagementResult = { managed: boolean, mount_receipt: string | null, gui_url: string | null, folders: Array<VaultSyncFolder>, removed: boolean, };
+export type VaultSyncManagementResult = { managed: boolean, mount_receipt: string | null, gui_url: string | null, folders: Array<VaultSyncFolder>, removed: boolean, syncthing_enabled: boolean, can_enable_syncthing: boolean, };

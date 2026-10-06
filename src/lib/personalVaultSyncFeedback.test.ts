@@ -28,6 +28,7 @@ test("a responding helper's rejected folder is not reported as unreachable", () 
 });
 
 test("failed installation, retained configuration and unknown completion need different next steps", () => {
+  expect(personalVaultSyncError("vault_syncthing_not_enabled")).toContain("turn on Syncthing");
   expect(personalVaultSyncError("vault_syncthing_install_failed")).toContain("download could not be verified");
   expect(personalVaultSyncError("vault_syncthing_profile_unavailable")).toContain("identity has been preserved");
   expect(personalVaultSyncError("vault_request_timeout")).toContain("before submitting another request");

@@ -97,23 +97,18 @@ test("generic engine failures never diagnose an incorrect password or expose tra
 
 test("busy letters and Windows access denial have actionable messages", () => {
   expect(vaultOperationError("vault_engine_drive_letter_unavailable")).toContain("reserved");
-  expect(vaultOperationError("vault_caller_access_denied")).toContain("Windows permissions");
+  expect(vaultOperationError("vault_caller_access_denied")).toContain("Recover this account’s access");
   expect(vaultOperationError("unknown", "dismount")).toContain("Close files");
 });
 
-test("mounted-root access denial explains where to review permissions without changing container ownership", () => {
+test("mounted-root access denial offers only the explicit ordinary-Vault recovery path", () => {
   const message = vaultOperationError("vault_caller_access_denied");
-  expect(message).toContain("files inside the Vault");
-  expect(message).toContain("Its saved permissions were not changed");
-  expect(message).toContain("original PC");
-  expect(message).toContain("account that can mount it");
-  expect(message).toContain("same username on another PC can mean a different Windows account");
-  expect(message).toContain("mounted drive in File Explorer");
-  expect(message).toContain("Properties > Security > Advanced");
-  expect(message).toContain("container file's permissions alone does not change permissions inside it");
-  expect(message).toContain("Do not reformat");
+  expect(message).toContain("inside the mounted Vault");
+  expect(message).toContain("Recover this account’s access");
+  expect(message).toContain("Fleet Vault permissions are not changed");
+  expect(message).toContain("local administrator");
+  expect(message).toContain("password");
   expect(message).not.toContain("take ownership");
-  expect(message).not.toContain("password");
   expect(vaultOperationError(new Error("vault_caller_access_denied"))).toBe(message);
 });
 

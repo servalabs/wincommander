@@ -451,14 +451,28 @@ fn policy_entry_plan_unchanged(
     plan: &VaultAclPlan,
 ) -> bool {
     active.is_some_and(|active| {
-        active.policy.entries.iter().any(|old| policy.entries.iter().any(|incoming|
-            incoming == old && incoming.id == entry.id))
-            && active.resolved.iter().any(|old| old.id == entry.id
+        active.policy.entries.iter().any(|old| {
+            policy
+                .entries
+                .iter()
+                .any(|incoming| incoming == old && incoming.id == entry.id)
+        }) && active.resolved.iter().any(|old| {
+            old.id == entry.id
                 && Some(old.identity.as_str()) == entry.container_identity.as_deref()
-                && old.grants.iter().map(|grant| (&grant.sid, grant.access))
+                && old
+                    .grants
+                    .iter()
+                    .map(|grant| (&grant.sid, grant.access))
                     .eq(plan.grants.iter().map(|grant| (&grant.sid, grant.access)))
-                && old.authorization_grants.iter().map(|grant| (&grant.sid, grant.access))
-                    .eq(plan.authorization_grants.iter().map(|grant| (&grant.sid, grant.access))))
+                && old
+                    .authorization_grants
+                    .iter()
+                    .map(|grant| (&grant.sid, grant.access))
+                    .eq(plan
+                        .authorization_grants
+                        .iter()
+                        .map(|grant| (&grant.sid, grant.access)))
+        })
     })
 }
 
@@ -557,7 +571,12 @@ fn fleet_group_member_sids<'a>(
         return None;
     }
     let groups = std::iter::once(entry.owner_account.as_str())
-        .chain(entry.grants.iter().map(|grant| grant.principal_name.as_str()))
+        .chain(
+            entry
+                .grants
+                .iter()
+                .map(|grant| grant.principal_name.as_str()),
+        )
         .filter_map(|name| access_directory_group_members(directory, name))
         .collect::<Vec<_>>();
     (!groups.is_empty()).then(|| groups.into_iter().flatten().map(String::as_str).collect())
@@ -1339,6 +1358,7 @@ impl VaultAccessStore {
             owner_sid: pending.owner_sid.clone(),
             scope: VaultPresentation::PerUser,
             created_by_session: pending.created_by_session,
+            syncthing_opt_in: Some(false),
         };
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
@@ -1426,6 +1446,7 @@ impl VaultAccessStore {
             owner_sid: pending.owner_sid.clone(),
             scope: VaultPresentation::PerUser,
             created_by_session: pending.created_by_session,
+            syncthing_opt_in: Some(false),
         };
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
@@ -1556,6 +1577,83 @@ impl VaultAccessStore {
         })
     }
 
+    /// Reads consent only for the exact registered container identity owned by
+    /// the caller. A missing value belongs to a record created before consent
+    /// was introduced and is lifecycle-recovery-only.
+    pub(crate) fn personal_syncthing_opt_in(
+        &self,
+        container_path: &str,
+        container_identity: &str,
+        owner_sid: &str,
+    ) -> Result<Option<bool>, VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        let record = state
+            .personal
+            .values()
+            .find(|record| record.container_path == container_path)
+            .ok_or(VaultError::Forbidden)?;
+        if record.container_identity != container_identity || record.owner_sid != owner_sid {
+            return Err(VaultError::Forbidden);
+        }
+        Ok(record.syncthing_opt_in)
+    }
+
+    /// Makes standalone Syncthing consent durable before any private helper
+    /// work. The caller facts come from the active service-owned mount, never
+    /// from the renderer.
+    pub(crate) fn set_personal_syncthing_opt_in(
+        &self,
+        container_path: &str,
+        container_identity: &str,
+        owner_sid: &str,
+        opt_in: Option<bool>,
+    ) -> Result<(), VaultError> {
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        let key = state
+            .personal
+            .iter()
+            .find_map(|(key, record)| (record.container_path == container_path).then(|| key.clone()))
+            .ok_or(VaultError::Forbidden)?;
+        let original = state
+            .personal
+            .get(&key)
+            .cloned()
+            .ok_or(VaultError::Persistence)?;
+        if original.container_identity != container_identity || original.owner_sid != owner_sid {
+            return Err(VaultError::Forbidden);
+        }
+        let mut updated = original.clone();
+        updated.syncthing_opt_in = opt_in;
+        state.personal.insert(key.clone(), updated);
+        if self
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
+            .is_err()
+        {
+            state.personal.insert(key, original);
+            return Err(VaultError::Persistence);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_personal_record_for_test(&self, record: PersonalVaultRecord) {
+        self.state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(personal_key(&record.container_path), record);
+    }
+
     /// Classify an ordinary picker selection before any personal ownership
     /// lookup. Native VeraCrypt partition paths are always unmanaged device
     /// targets because Fleet Vault permissions apply only to filesystem
@@ -1593,6 +1691,7 @@ impl VaultAccessStore {
                     owner_sid: caller_sid.to_owned(),
                     scope: VaultPresentation::Machine,
                     created_by_session: caller_session,
+                    syncthing_opt_in: Some(false),
                 },
             });
         }
@@ -1645,6 +1744,7 @@ impl VaultAccessStore {
                 owner_sid: caller_sid.to_owned(),
                 scope: VaultPresentation::Machine,
                 created_by_session: caller_session,
+                syncthing_opt_in: Some(false),
             },
         })
     }
@@ -1700,6 +1800,7 @@ impl VaultAccessStore {
                 owner_sid: caller_sid.to_owned(),
                 scope: VaultPresentation::PerUser,
                 created_by_session: caller_session,
+                syncthing_opt_in: None,
             },
             acl,
         };
@@ -1991,20 +2092,32 @@ impl VaultAccessStore {
         if !valid_windows_sid(caller_sid) {
             return empty_status();
         }
-        let Ok(state) = self.state.lock() else { return empty_status(); };
+        let Ok(state) = self.state.lock() else {
+            return empty_status();
+        };
         let mut status = state.status.clone();
         if caller_privileged {
             return status;
         }
-        if !state.access_directory_healthy || status.validation_state != VaultValidationState::Current {
+        if !state.access_directory_healthy
+            || status.validation_state != VaultValidationState::Current
+        {
             return empty_status();
         }
-        let owned = state.active.iter().flat_map(|active| &active.policy.entries)
-            .filter(|entry| entry.primary_owner_sid.as_deref() == Some(caller_sid)
+        let owned = state
+            .active
+            .iter()
+            .flat_map(|active| &active.policy.entries)
+            .filter(|entry| {
+                entry.primary_owner_sid.as_deref() == Some(caller_sid)
                 && fleet_group_member_sids(entry, &state.access_directory)
-                    .is_none_or(|members| members.contains(caller_sid)))
-            .map(|entry| entry.id.as_str()).collect::<HashSet<_>>();
-        status.entries.retain(|entry| owned.contains(entry.id.as_str()));
+                        .is_none_or(|members| members.contains(caller_sid))
+            })
+            .map(|entry| entry.id.as_str())
+            .collect::<HashSet<_>>();
+        status
+            .entries
+            .retain(|entry| owned.contains(entry.id.as_str()));
         status
     }
 
@@ -2021,7 +2134,11 @@ impl VaultAccessStore {
     /// Syncthing binding. Shared policies deliberately fail this check: two
     /// local profiles must never independently control one folder's sync
     /// state.
-    pub(crate) fn is_exclusive_per_user_policy_owner(&self, entry_id: &str, owner_sid: &str) -> bool {
+    pub(crate) fn is_exclusive_per_user_policy_owner(
+        &self,
+        entry_id: &str,
+        owner_sid: &str,
+    ) -> bool {
         if !valid_windows_sid(owner_sid) {
             return false;
         }
@@ -2036,13 +2153,104 @@ impl VaultAccessStore {
         let Some(active) = state.active.as_ref() else {
             return false;
         };
-        let Some(entry) = active.policy.entries.iter().find(|entry| entry.id == entry_id) else {
+        let Some(entry) = active
+            .policy
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+        else {
             return false;
         };
-        let Some(resolved) = active.resolved.iter().find(|resolved| resolved.id == entry_id) else {
+        let Some(resolved) = active
+            .resolved
+            .iter()
+            .find(|resolved| resolved.id == entry_id)
+        else {
             return false;
         };
         exclusive_per_user_policy_owner(entry, resolved, owner_sid)
+    }
+
+    /// An explicit `false` prevents all owner-session Syncthing lifecycle
+    /// work. Missing is a policy written before the opt-in control; it keeps
+    /// legacy binding discovery available during mount and dismount only.
+    pub(crate) fn syncthing_lifecycle_allowed_for_exclusive_per_user_policy_owner(
+        &self,
+        entry_id: &str,
+        owner_sid: &str,
+    ) -> bool {
+        if !valid_windows_sid(owner_sid) {
+            return false;
+        }
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        if !state.access_directory_healthy
+            || state.status.validation_state != VaultValidationState::Current
+        {
+            return false;
+        }
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
+        let Some(entry) = active
+            .policy
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+        else {
+            return false;
+        };
+        let Some(resolved) = active
+            .resolved
+            .iter()
+            .find(|resolved| resolved.id == entry_id)
+        else {
+            return false;
+        };
+        exclusive_per_user_policy_owner(entry, resolved, owner_sid)
+            && syncthing_lifecycle_allowed(entry.syncthing_opt_in)
+    }
+
+    /// Opening or modifying sync is new consent. Unlike lifecycle recovery,
+    /// an older missing preference is not consent and must be saved as `true`
+    /// through the Vault policy editor before this path can call the adapter.
+    pub(crate) fn syncthing_management_enabled_for_exclusive_per_user_policy_owner(
+        &self,
+        entry_id: &str,
+        owner_sid: &str,
+    ) -> bool {
+        if !valid_windows_sid(owner_sid) {
+            return false;
+        }
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        if !state.access_directory_healthy
+            || state.status.validation_state != VaultValidationState::Current
+        {
+            return false;
+        }
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
+        let Some(entry) = active
+            .policy
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+        else {
+            return false;
+        };
+        let Some(resolved) = active
+            .resolved
+            .iter()
+            .find(|resolved| resolved.id == entry_id)
+        else {
+            return false;
+        };
+        exclusive_per_user_policy_owner(entry, resolved, owner_sid)
+            && syncthing_management_enabled(entry.syncthing_opt_in)
     }
 
     /// A caller-scoped policy view.  The service never projects another
@@ -2181,7 +2389,9 @@ impl VaultAccessStore {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let active = state.active.as_ref()?;
-        if state.status.validation_state != VaultValidationState::Current || !state.access_directory_healthy {
+        if state.status.validation_state != VaultValidationState::Current
+            || !state.access_directory_healthy
+        {
             return None;
         }
         let entry = active
@@ -2201,7 +2411,11 @@ impl VaultAccessStore {
         let mounted_root_grants = resolved
             .authorization_grants
             .iter()
-            .filter(|grant| group_members.as_ref().is_none_or(|members| members.contains(grant.sid.as_str())))
+            .filter(|grant| {
+                group_members
+                    .as_ref()
+                    .is_none_or(|members| members.contains(grant.sid.as_str()))
+            })
             .map(|grant| ResolvedGrant {
                 sid: grant.sid.clone(),
                 access: grant.access,
@@ -2268,10 +2482,18 @@ impl VaultAccessStore {
         container_identity: &str,
     ) -> bool {
         let requested = preferred_letter.trim().trim_end_matches(':');
-        let Ok(state) = self.state.lock() else { return true; };
-        let Some(active) = state.active.as_ref() else { return false; };
+        let Ok(state) = self.state.lock() else {
+            return true;
+        };
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
         active.policy.entries.iter().any(|entry| {
-            entry.mount.preferred_letter.as_deref().is_some_and(|letter| {
+            entry
+                .mount
+                .preferred_letter
+                .as_deref()
+                .is_some_and(|letter| {
                 letter.eq_ignore_ascii_case(requested)
                     && !active.resolved.iter().any(|resolved| {
                         resolved.id == entry.id
@@ -2380,21 +2602,45 @@ impl VaultAccessStore {
         requested: &VaultAccessPolicy,
         protected_removals: &HashSet<String>,
     ) -> Result<(), VaultError> {
-        if protected_removals.is_empty() { return Ok(()); }
+        if protected_removals.is_empty() {
+            return Ok(());
+        }
         let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        let Some(active) = state.active.as_ref() else { return Ok(()); };
+        let Some(active) = state.active.as_ref() else {
+            return Ok(());
+        };
         let mut protected_identities = HashSet::new();
-        for entry in active.policy.entries.iter().filter(|entry| protected_removals.contains(&entry.id)) {
-            if let Some(resolved) = active.resolved.iter().find(|resolved| resolved.id == entry.id) {
+        for entry in active
+            .policy
+            .entries
+            .iter()
+            .filter(|entry| protected_removals.contains(&entry.id))
+        {
+            if let Some(resolved) = active
+                .resolved
+                .iter()
+                .find(|resolved| resolved.id == entry.id)
+            {
                 protected_identities.insert(resolved.identity.clone());
             }
-            if let Ok(identity) = self.fs.stable_file_identity(Path::new(&entry.container_path)) {
+            if let Ok(identity) = self
+                .fs
+                .stable_file_identity(Path::new(&entry.container_path))
+            {
                 protected_identities.insert(identity);
             }
         }
-        for entry in requested.entries.iter().filter(|entry| active.policy.entries.iter().all(|old| old.id != entry.id)) {
-            let identity = self.fs.stable_file_identity(Path::new(&entry.container_path))?;
-            if protected_identities.contains(&identity) { return Err(VaultError::Forbidden); }
+        for entry in requested
+            .entries
+            .iter()
+            .filter(|entry| active.policy.entries.iter().all(|old| old.id != entry.id))
+        {
+            let identity = self
+                .fs
+                .stable_file_identity(Path::new(&entry.container_path))?;
+            if protected_identities.contains(&identity) {
+                return Err(VaultError::Forbidden);
+            }
         }
         Ok(())
     }
@@ -2405,10 +2651,22 @@ impl VaultAccessStore {
     ) -> Result<(HashSet<String>, HashSet<String>), VaultError> {
         let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let active = state.active.as_ref().ok_or(VaultError::Validation)?;
-        let entry = active.policy.entries.iter().find(|entry| entry.id == entry_id).ok_or(VaultError::Validation)?;
-        let mut identities = active.resolved.iter().filter(|entry| entry.id == entry_id)
-            .map(|entry| entry.identity.clone()).collect::<HashSet<_>>();
-        if let Ok(identity) = self.fs.stable_file_identity(Path::new(&entry.container_path)) {
+        let entry = active
+            .policy
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+            .ok_or(VaultError::Validation)?;
+        let mut identities = active
+            .resolved
+            .iter()
+            .filter(|entry| entry.id == entry_id)
+            .map(|entry| entry.identity.clone())
+            .collect::<HashSet<_>>();
+        if let Ok(identity) = self
+            .fs
+            .stable_file_identity(Path::new(&entry.container_path))
+        {
             identities.insert(identity);
         }
         Ok((HashSet::from([entry_id.to_owned()]), identities))
@@ -2420,16 +2678,26 @@ impl VaultAccessStore {
     ) -> Result<(HashSet<String>, HashSet<String>), VaultError> {
         let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let previous = state.active.as_ref();
-        let resolved = if requested.entries.is_empty() { Vec::new() } else {
+        let resolved = if requested.entries.is_empty() {
+            Vec::new()
+        } else {
             self.resolve_and_plan_with_access_directory(requested, &state.access_directory)?
         };
         let mut ids = HashSet::new();
         let mut identities = HashSet::new();
-        for old in previous.into_iter().flat_map(|active| &active.policy.entries) {
-            if resolved.iter().any(|(entry, plan)| entry.id == old.id
-                && policy_entry_plan_unchanged(previous, requested, entry, plan)) { continue; }
+        for old in previous
+            .into_iter()
+            .flat_map(|active| &active.policy.entries)
+        {
+            if resolved.iter().any(|(entry, plan)| {
+                entry.id == old.id && policy_entry_plan_unchanged(previous, requested, entry, plan)
+            }) {
+                continue;
+            }
             ids.insert(old.id.clone());
-            if let Some(resolved) = previous.and_then(|active| active.resolved.iter().find(|entry| entry.id == old.id)) {
+            if let Some(resolved) =
+                previous.and_then(|active| active.resolved.iter().find(|entry| entry.id == old.id))
+            {
                 identities.insert(resolved.identity.clone());
             }
             if let Ok(identity) = self.fs.stable_file_identity(Path::new(&old.container_path)) {
@@ -2437,10 +2705,17 @@ impl VaultAccessStore {
             }
         }
         for (entry, plan) in &resolved {
-            if policy_entry_plan_unchanged(previous, requested, entry, plan) { continue; }
+            if policy_entry_plan_unchanged(previous, requested, entry, plan) {
+                continue;
+            }
             ids.insert(entry.id.clone());
             // A renderer-supplied identity is never used to authorize an edit.
-            identities.insert(entry.container_identity.clone().ok_or(VaultError::ContainerIdentity)?);
+            identities.insert(
+                entry
+                    .container_identity
+                    .clone()
+                    .ok_or(VaultError::ContainerIdentity)?,
+            );
         }
         Ok((ids, identities))
     }
@@ -2461,9 +2736,13 @@ impl VaultAccessStore {
         validate_policy(&policy)?;
         let access_directory = state.access_directory.clone();
         let resolved = self.resolve_and_plan_with_access_directory(&policy, &access_directory)?;
-        let changed_ids = resolved.iter().filter(|(entry, plan)| {
+        let changed_ids = resolved
+            .iter()
+            .filter(|(entry, plan)| {
             !policy_entry_plan_unchanged(state.active.as_ref(), &policy, entry, plan)
-        }).map(|(entry, _)| entry.id.clone()).collect::<HashSet<_>>();
+            })
+            .map(|(entry, _)| entry.id.clone())
+            .collect::<HashSet<_>>();
         let removed = state
             .active
             .as_ref()
@@ -2471,7 +2750,10 @@ impl VaultAccessStore {
             .transpose()?
             .unwrap_or_default();
         let mut snapshots = Vec::new();
-        for (_, plan) in resolved.iter().filter(|(entry, _)| changed_ids.contains(&entry.id)) {
+        for (_, plan) in resolved
+            .iter()
+            .filter(|(entry, _)| changed_ids.contains(&entry.id))
+        {
             snapshots.extend(self.acls.snapshot(plan)?);
         }
         let group_plans = resolved
@@ -2479,7 +2761,10 @@ impl VaultAccessStore {
             .filter(|(entry, _)| changed_ids.contains(&entry.id))
             .flat_map(|(_, plan)| plan.managed_groups.clone())
             .collect::<Vec<_>>();
-        let retained_groups = resolved.iter().flat_map(|(_, plan)| &plan.managed_groups).collect::<Vec<_>>();
+        let retained_groups = resolved
+            .iter()
+            .flat_map(|(_, plan)| &plan.managed_groups)
+            .collect::<Vec<_>>();
         let retained_group_names = retained_groups
             .iter()
             .map(|group| group.group.as_str())
@@ -2505,7 +2790,10 @@ impl VaultAccessStore {
                 return Err(error);
             }
         }
-        for (_, plan) in resolved.iter().filter(|(entry, _)| changed_ids.contains(&entry.id)) {
+        for (_, plan) in resolved
+            .iter()
+            .filter(|(entry, _)| changed_ids.contains(&entry.id))
+        {
             if let Err(error) = self.acls.apply_and_verify(plan) {
                 // JSON replacement has not happened.  Restore every target
                 // already touched before returning the bounded failure.
@@ -2802,8 +3090,9 @@ impl VaultAccessStore {
             return denied(VaultMountDenial::NotAuthorized);
         };
         if !state.access_directory_healthy
-            || fleet_group_member_sids(entry, &state.access_directory)
-                .is_some_and(|members| !caller_sids.iter().any(|sid| members.contains(sid.as_str())))
+            || fleet_group_member_sids(entry, &state.access_directory).is_some_and(|members| {
+                !caller_sids.iter().any(|sid| members.contains(sid.as_str()))
+            })
         {
             return denied(VaultMountDenial::NotAuthorized);
         }
@@ -3204,11 +3493,7 @@ impl VaultAccessStore {
         groups
             .iter()
             .map(|group| {
-                self.reconcile_one_access_group(
-                    group,
-                    &mut checked_for_change,
-                    &mut before_change,
-                )
+                self.reconcile_one_access_group(group, &mut checked_for_change, &mut before_change)
             })
             .collect()
     }
@@ -3337,6 +3622,16 @@ fn exclusive_per_user_policy_owner(
         && entry.primary_owner_sid.as_deref() == Some(owner_sid)
         && resolved.authorization_grants.len() == 1
         && resolved.authorization_grants[0].sid == owner_sid
+}
+
+fn syncthing_lifecycle_allowed(opt_in: Option<bool>) -> bool {
+    // Policies written before the consent control retain bounded lifecycle
+    // discovery only; they never gain access to management actions.
+    opt_in != Some(false)
+}
+
+fn syncthing_management_enabled(opt_in: Option<bool>) -> bool {
+    opt_in == Some(true)
 }
 
 #[cfg(windows)]
@@ -3635,7 +3930,11 @@ pub fn local_administrator_principals() -> Result<Vec<VaultKnownPrincipal>, Vaul
     let group = lookup_account_by_sid(BUILTIN_ADMINISTRATORS_SID)
         .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
     // NetLocalGroupGetMembers needs the local alias, not DOMAIN\alias.
-    let group_name = group.display_name.rsplit('\\').next().unwrap_or(&group.display_name);
+    let group_name = group
+        .display_name
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&group.display_name);
     let members = local_group_members(group_name)?
         .ok_or_else(|| VaultError::PrincipalResolution("local administrators".to_owned()))?;
     let mut principals = members
@@ -4854,15 +5153,17 @@ fn status_for(
 /// of sending an administrator down the wrong repair path.
 fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
     match error {
-        VaultError::Validation | VaultError::Forbidden | VaultError::Mounted | VaultError::GroupInUse | VaultError::GroupNameConflict | VaultError::PolicyPathReserved | VaultError::VersionConflict => {
-            VaultEntryResult::ValidationFailed
-        }
+        VaultError::Validation
+        | VaultError::Forbidden
+        | VaultError::Mounted
+        | VaultError::GroupInUse
+        | VaultError::GroupNameConflict
+        | VaultError::PolicyPathReserved
+        | VaultError::VersionConflict => VaultEntryResult::ValidationFailed,
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
         VaultError::AclApply => VaultEntryResult::AclApplyFailed,
-        VaultError::AclReadback | VaultError::Persistence => {
-            VaultEntryResult::AclReadbackFailed
-        }
+        VaultError::AclReadback | VaultError::Persistence => VaultEntryResult::AclReadbackFailed,
     }
 }
 fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
@@ -4884,7 +5185,10 @@ mod tests {
     fn windows_administrator_directory_resolves_real_user_accounts() {
         let principals = super::local_administrator_principals()
             .expect("the built-in administrator group must be enumerable by its local alias");
-        assert!(!principals.is_empty(), "Windows must retain an administrator user");
+        assert!(
+            !principals.is_empty(),
+            "Windows must retain an administrator user"
+        );
         for principal in principals {
             assert!(principal.is_local_administrator);
             assert!(super::valid_windows_sid(&principal.sid));
@@ -5229,6 +5533,7 @@ mod tests {
                 primary_owner_sid: None,
                 owner_account: "Admin".into(),
                 access_pattern: None,
+                syncthing_opt_in: None,
                 grants: vec![
                     wincmd_shared::vault_access::VaultGrantInput {
                         principal_name: "Admin".into(),
@@ -5538,13 +5843,17 @@ mod tests {
                 access: VaultAccess::Write,
             }],
         };
-        assert!(exclusive_per_user_policy_owner(&entry, &resolved, owner_sid));
+        assert!(exclusive_per_user_policy_owner(
+            &entry, &resolved, owner_sid
+        ));
 
         resolved.authorization_grants.push(ResolvedGrantRecord {
             sid: "S-1-5-21-other".into(),
             access: VaultAccess::Write,
         });
-        assert!(!exclusive_per_user_policy_owner(&entry, &resolved, owner_sid));
+        assert!(!exclusive_per_user_policy_owner(
+            &entry, &resolved, owner_sid
+        ));
     }
 
     #[test]
@@ -6060,6 +6369,7 @@ mod tests {
             owner_sid: "S-1-5-21-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 1,
+            syncthing_opt_in: None,
         };
         store
             .state
@@ -6586,6 +6896,7 @@ mod tests {
             owner_sid: "S-1-5-21-former-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
+            syncthing_opt_in: None,
         };
         store
             .state
@@ -6634,6 +6945,7 @@ mod tests {
             owner_sid: "S-1-5-21-former-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
+            syncthing_opt_in: None,
         };
         let key = personal_key(&path.to_string_lossy());
         store
@@ -6670,6 +6982,7 @@ mod tests {
             owner_sid: "S-1-5-21-former-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
+            syncthing_opt_in: None,
         };
         let key = personal_key(path);
         store
@@ -6705,6 +7018,7 @@ mod tests {
             owner_sid: "S-1-5-21-former-owner".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
+            syncthing_opt_in: None,
         };
         let key = personal_key(path);
         let alias = personal_key_alias(&key);
@@ -7045,6 +7359,7 @@ mod tests {
             owner_sid: "S-1-test-caller".into(),
             scope: VaultPresentation::Machine,
             created_by_session: 1,
+            syncthing_opt_in: None,
         };
         let mut request: wincmd_shared::vault_access::PersonalVaultMountRequest = serde_json::from_value(serde_json::json!({
             "container_path":record.container_path, "password":"fixture", "volume_kind":"standard", "volume_role":"outer", "keyfiles":[keyfile.to_string_lossy()], "read_only":false
@@ -7112,21 +7427,35 @@ mod tests {
         let store = store(files.clone());
         let path = r"D:\Vault\portable-container";
         let SelectedContainerMountRoute::Unmanaged { mut record } = store
-            .selected_container_mount_route(path, "S-1-test-Original", 3).unwrap()
-        else { panic!("fixture must be unmanaged") };
+            .selected_container_mount_route(path, "S-1-test-Original", 3)
+            .unwrap()
+        else {
+            panic!("fixture must be unmanaged")
+        };
         record.scope = VaultPresentation::PerUser;
-        store.state.lock().unwrap().personal.insert(personal_key(path), record.clone());
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(personal_key(path), record.clone());
         let saved_files = files.lock().unwrap().clone();
 
         let SelectedContainerMountRoute::Unmanaged { record: selected } = store
-            .selected_container_mount_route(path, "S-1-test-Current", 7).unwrap()
-        else { panic!("legacy ownership must not create a Fleet policy") };
+            .selected_container_mount_route(path, "S-1-test-Current", 7)
+            .unwrap()
+        else {
+            panic!("legacy ownership must not create a Fleet policy")
+        };
         assert_eq!(selected.container_identity, record.container_identity);
         assert_eq!(selected.container_path, record.container_path);
         assert_eq!(selected.owner_sid, "S-1-test-Current");
         assert_eq!(selected.created_by_session, 7);
         assert_eq!(selected.scope, VaultPresentation::Machine);
-        assert_eq!(store.state.lock().unwrap().personal[&personal_key(path)], record);
+        assert_eq!(
+            store.state.lock().unwrap().personal[&personal_key(path)],
+            record
+        );
         assert_eq!(*files.lock().unwrap(), saved_files);
         assert!(store.policy().is_none());
     }
@@ -7156,6 +7485,7 @@ mod tests {
             owner_sid: "S-1-test-Other".into(),
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
+            syncthing_opt_in: None,
         };
         store
             .state
@@ -7509,7 +7839,9 @@ mod tests {
             first_unreserved_letter(&HashSet::new(), &HashSet::new()),
             Some("Z".to_owned())
         );
-        let all = (b'D'..=b'Z').map(|letter| (letter as char).to_string()).collect();
+        let all = (b'D'..=b'Z')
+            .map(|letter| (letter as char).to_string())
+            .collect();
         assert_eq!(first_unreserved_letter(&all, &HashSet::new()), None);
     }
 
@@ -7543,7 +7875,9 @@ mod tests {
             second.grants[0].principal_name = "OtherAdmin".into();
             second.mount.presentation = presentation;
             second.mount.preferred_letter = Some("v".into());
-            if presentation == VaultPresentation::PerUser { second.grants.truncate(1); }
+            if presentation == VaultPresentation::PerUser {
+                second.grants.truncate(1);
+            }
             requested.entries.push(second);
             assert_eq!(validate_policy(&requested), Err(VaultError::Validation));
             requested.entries[1].mount.preferred_letter = Some("W".into());
@@ -8033,7 +8367,9 @@ mod tests {
         let store = store_with_groups(files.clone(), groups);
         let mut requested = access_directory();
         requested.groups[0].member_sids.clear();
-        let (saved, _) = store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())).unwrap();
+        let (saved, _) = store
+            .save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(()))
+            .unwrap();
         assert_eq!(saved.groups[0].member_sids, ["S-1-5-21-202"]);
         assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-202"]);
         let restarted = store_with_groups(files, Groups(membership));
@@ -8056,10 +8392,17 @@ mod tests {
                 2 => requested.groups.clear(),
                 _ => requested.groups[0].id = "new-id".into(),
             }
-            requested.users.push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
-                sid: "S-1-5-21-202".into(), username: "Other".into(), display_name: None,
+            requested
+                .users
+                .push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
+                    sid: "S-1-5-21-202".into(),
+                    username: "Other".into(),
+                    display_name: None,
             });
-            assert_eq!(store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())), Err(VaultError::Forbidden));
+            assert_eq!(
+                store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())),
+                Err(VaultError::Forbidden)
+            );
             assert_eq!(store.access_directory().unwrap(), original);
             assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-101"]);
         }
@@ -8073,7 +8416,9 @@ mod tests {
         let original = access_directory();
         store.save_access_directory(original.clone()).unwrap();
         membership.lock().unwrap().insert("WC_Sales".into(), vec![]);
-        let (saved, results) = store.save_access_directory_for_caller(original.clone(), "S-1-5-21-202", || Ok(())).unwrap();
+        let (saved, results) = store
+            .save_access_directory_for_caller(original.clone(), "S-1-5-21-202", || Ok(()))
+            .unwrap();
         assert_eq!(saved, original);
         assert!(results.is_empty());
         assert!(membership.lock().unwrap()["WC_Sales"].is_empty());
@@ -8083,9 +8428,15 @@ mod tests {
     fn new_group_cannot_take_over_an_existing_windows_group() {
         let groups = Groups::default();
         let membership = Arc::clone(&groups.0);
-        membership.lock().unwrap().insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
+        membership
+            .lock()
+            .unwrap()
+            .insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
         let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
-        assert_eq!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())), Err(VaultError::GroupNameConflict));
+        assert_eq!(
+            store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())),
+            Err(VaultError::GroupNameConflict)
+        );
         assert!(store.access_directory().unwrap().groups.is_empty());
         assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-999"]);
     }
@@ -8095,7 +8446,12 @@ mod tests {
         let groups = Groups::default();
         let membership = Arc::clone(&groups.0);
         let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
-        assert_eq!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Err(VaultError::Mounted)), Err(VaultError::Mounted));
+        assert_eq!(
+            store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Err(
+                VaultError::Mounted
+            )),
+            Err(VaultError::Mounted)
+        );
         assert!(store.access_directory().unwrap().groups.is_empty());
         assert!(membership.lock().unwrap().is_empty());
     }
@@ -8103,10 +8459,14 @@ mod tests {
     #[test]
     fn creator_not_inserted_twice_and_existing_member_can_edit_unmounted_group() {
         let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
-        let (mut saved, _) = store.save_access_directory_for_caller(access_directory(), "s-1-5-21-101", || Ok(())).unwrap();
+        let (mut saved, _) = store
+            .save_access_directory_for_caller(access_directory(), "s-1-5-21-101", || Ok(()))
+            .unwrap();
         assert_eq!(saved.groups[0].member_sids.len(), 1);
         saved.groups[0].name = "Renamed label".into();
-        let (updated, _) = store.save_access_directory_for_caller(saved.clone(), "S-1-5-21-101", || Ok(())).unwrap();
+        let (updated, _) = store
+            .save_access_directory_for_caller(saved.clone(), "S-1-5-21-101", || Ok(()))
+            .unwrap();
         assert_eq!(updated, saved);
     }
 
@@ -8116,14 +8476,24 @@ mod tests {
         let directory = access_directory();
         store.save_access_directory(directory.clone()).unwrap();
         let mut requested = policy(1, 0);
-        requested.entries[0].grants.push(wincmd_shared::vault_access::VaultGrantInput {
-            principal_name: "WC_Sales".into(), access: VaultAccess::Write,
+        requested.entries[0]
+            .grants
+            .push(wincmd_shared::vault_access::VaultGrantInput {
+                principal_name: "WC_Sales".into(),
+                access: VaultAccess::Write,
         });
         store.apply(requested, 7).unwrap();
         for remove in [true, false] {
             let mut next = directory.clone();
-            if remove { next.groups.clear(); } else { next.groups[0].local_group = "WC_Renamed".into(); }
-            assert_eq!(store.save_access_directory_for_caller(next, "S-1-5-21-101", || Ok(())), Err(VaultError::GroupInUse));
+            if remove {
+                next.groups.clear();
+            } else {
+                next.groups[0].local_group = "WC_Renamed".into();
+            }
+            assert_eq!(
+                store.save_access_directory_for_caller(next, "S-1-5-21-101", || Ok(())),
+                Err(VaultError::GroupInUse)
+            );
             assert_eq!(store.access_directory().unwrap(), directory);
         }
     }
@@ -8132,31 +8502,59 @@ mod tests {
     fn group_creation_requires_independent_membership_readback() {
         struct UnverifiedGroups(Groups);
         impl LocalGroupReconciler for UnverifiedGroups {
-            fn reconcile_exact_members(&self, _: &str, _: &[String]) -> Result<(), VaultError> { Ok(()) }
-            fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError> { self.0.snapshot(plans) }
-            fn delete_service_owned_group(&self, name: &str) -> Result<(), VaultError> { self.0.delete_service_owned_group(name) }
-            fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> { self.0.restore(snapshots) }
+            fn reconcile_exact_members(&self, _: &str, _: &[String]) -> Result<(), VaultError> {
+                Ok(())
+            }
+            fn snapshot(
+                &self,
+                plans: &[GroupMembershipPlan],
+            ) -> Result<Vec<GroupMembershipSnapshot>, VaultError> {
+                self.0.snapshot(plans)
+            }
+            fn delete_service_owned_group(&self, name: &str) -> Result<(), VaultError> {
+                self.0.delete_service_owned_group(name)
+            }
+            fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
+                self.0.restore(snapshots)
+            }
         }
         let store = VaultAccessStore::open_with_groups(
-            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))), Box::new(Resolver), Box::new(Acl),
-            Box::new(UnverifiedGroups(Groups::default())), PathBuf::from("/policy"),
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+            Box::new(Resolver),
+            Box::new(Acl),
+            Box::new(UnverifiedGroups(Groups::default())),
+            PathBuf::from("/policy"),
         );
-        assert!(matches!(store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())), Err(VaultError::PrincipalResolution(_))));
+        assert!(matches!(
+            store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || Ok(())),
+            Err(VaultError::PrincipalResolution(_))
+        ));
         assert!(store.access_directory().unwrap().groups.is_empty());
     }
 
     #[test]
     fn new_or_renamed_group_cannot_capture_an_existing_vault_principal() {
-        for (principal, group_name, rename) in [("Admin", "ADMIN", false), ("DOMAIN\\WC_Sales", "WC_Sales", false), ("DOMAIN\\Partner", "Partner", true)] {
+        for (principal, group_name, rename) in [
+            ("Admin", "ADMIN", false),
+            ("DOMAIN\\WC_Sales", "WC_Sales", false),
+            ("DOMAIN\\Partner", "Partner", true),
+        ] {
             let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
             let mut directory = access_directory();
-            if rename { store.save_access_directory(directory.clone()).unwrap(); }
+            if rename {
+                store.save_access_directory(directory.clone()).unwrap();
+            }
             let mut requested = policy(1, 0);
-            if principal != "Admin" { requested.entries[0].grants[1].principal_name = principal.into(); }
+            if principal != "Admin" {
+                requested.entries[0].grants[1].principal_name = principal.into();
+            }
             store.apply(requested, 7).unwrap();
             let original = store.access_directory().unwrap();
             directory.groups[0].local_group = group_name.into();
-            assert_eq!(store.save_access_directory_for_caller(directory, "S-1-5-21-101", || Ok(())), Err(VaultError::GroupInUse));
+            assert_eq!(
+                store.save_access_directory_for_caller(directory, "S-1-5-21-101", || Ok(())),
+                Err(VaultError::GroupInUse)
+            );
             assert_eq!(store.access_directory().unwrap(), original);
         }
     }
@@ -8166,8 +8564,12 @@ mod tests {
         let groups = Groups::default();
         let membership = Arc::clone(&groups.0);
         let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
-        let result = store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || {
-            membership.lock().unwrap().insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
+        let result =
+            store.save_access_directory_for_caller(access_directory(), "S-1-5-21-101", || {
+                membership
+                    .lock()
+                    .unwrap()
+                    .insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
             Ok(())
         });
         assert_eq!(result, Err(VaultError::GroupNameConflict));
@@ -8224,20 +8626,54 @@ mod tests {
         ];
         store.apply(requested, 7).unwrap();
 
-        assert!(!store.authorize_mount("shared", &["S-1-test-Admin".into()]).allowed,
-            "the primary owner cannot bypass the assigned Fleet group");
-        assert_eq!(store.fleet_group_access(&store.policy().unwrap().entries[0], "S-1-test-Admin").unwrap(), Some(false));
-        assert_eq!(store.fleet_group_access(&store.policy().unwrap().entries[0], &alex).unwrap(), Some(true));
+        assert!(
+            !store
+                .authorize_mount("shared", &["S-1-test-Admin".into()])
+                .allowed,
+            "the primary owner cannot bypass the assigned Fleet group"
+        );
+        assert_eq!(
+            store
+                .fleet_group_access(&store.policy().unwrap().entries[0], "S-1-test-Admin")
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            store
+                .fleet_group_access(&store.policy().unwrap().entries[0], &alex)
+                .unwrap(),
+            Some(true)
+        );
 
         // Existing releases persisted an independent owner grant; read-back
         // must enforce current scope without requiring an owner to re-save.
-        store.state.lock().unwrap().active.as_mut().unwrap().resolved[0]
-            .authorization_grants.push(ResolvedGrantRecord { sid: "S-1-test-Admin".into(), access: VaultAccess::Write });
-        assert!(!store.authorize_mount("shared", &["S-1-test-Admin".into()]).allowed);
+        store
+            .state
+            .lock()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .resolved[0]
+            .authorization_grants
+            .push(ResolvedGrantRecord {
+                sid: "S-1-test-Admin".into(),
+                access: VaultAccess::Write,
+            });
+        assert!(
+            !store
+                .authorize_mount("shared", &["S-1-test-Admin".into()])
+                .allowed
+        );
 
         let (before, ..) = store.mount_plan("shared").unwrap();
-        assert!(before.grants.iter().all(|grant| grant.sid != "S-1-test-Admin"),
-            "the mounted-root ACL must not reintroduce the outsider owner");
+        assert!(
+            before
+                .grants
+                .iter()
+                .all(|grant| grant.sid != "S-1-test-Admin"),
+            "the mounted-root ACL must not reintroduce the outsider owner"
+        );
         assert!(before.grants.iter().any(|grant| grant.sid == alex));
         assert!(before.grants.iter().any(|grant| grant.sid == removed));
         assert!(

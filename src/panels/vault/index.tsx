@@ -177,6 +177,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountPim, setMountPim] = useState("");
   const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
+  const [mountRepairCurrentAccountAccess, setMountRepairCurrentAccountAccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
   const { letters: availableLetters, loading: mountLettersLoading, unavailable: mountLettersUnavailable,
@@ -184,6 +185,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
+  const [partitionDiscoveryError, setPartitionDiscoveryError] = useState("");
   const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
   const [mountFailure, setMountFailure] = useState("");
@@ -215,7 +217,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     && validPim(mountPim)
     && availableLetters.includes(mountLetter)
     && !mountLettersLoading && !mountLettersUnavailable
-    && (mountType === "file" || !mountDetailsLoading)
+    && (mountType === "file" || (!mountDetailsLoading && !partitionDiscoveryError))
     && !existingMountedVolume
     && !mounting
   );
@@ -228,8 +230,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     setMountPim("");
     setMountReadOnly(false);
     setMountRemovable(false);
+    setMountRepairCurrentAccountAccess(false);
     setMountLetter(availableLetters.includes("Y") ? "Y" : availableLetters[0] ?? "");
     setMountType('file');
+    setPartitionDiscoveryError("");
   }, [availableLetters]);
 
   const releaseOrphanedMountLetters = useCallback(async () => {
@@ -256,14 +260,15 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     }
   }, [availableLetters, mountLettersLoading, mountLettersUnavailable]);
 
-  // Letter choices are preloaded at app startup; only partitions are discovered here.
-  const openMountDialog = useCallback(async () => {
+  // Letter choices are preloaded at app startup; only physical partitions are
+  // discovered here. A discovery failure must not masquerade as an empty list
+  // or block file-container mounting.
+  const loadMountPartitions = useCallback(async () => {
     const revision = ++mountDialogRevision.current;
     const operationId = newDiagnosticOperationId("vault");
-    resetMountForm();
-    setMountDialogOpen(true);
     setMountDetailsLoading(true);
     setPartitions([]);
+    setPartitionDiscoveryError("");
     try {
       const partitionRes = await waitForMountOptions(getEncryptionPartitions());
       if (revision !== mountDialogRevision.current) return;
@@ -277,12 +282,12 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         }
       } else if (partitionRes && !partitionRes.success && partitionRes.error?.includes("No module found")) {
         // KT: This specifically catches when the Rust binary hasn't been restarted after command registration
-        showError("Backend update required: Please restart the application to enable partition mounting.");
+        setPartitionDiscoveryError("Partition mounting is unavailable until WinCommander is restarted. File containers can still be mounted.");
         recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
           lifecycle: "verified", outcome: "failed", errorCode: "VLT.PARTITION.UNAVAILABLE", severity: "warn",
           retryability: "manual", suggestedNextAction: "restart_application", privacyClass: "local_sensitive" });
       } else if (partitionRes && !partitionRes.success) {
-        showError(partitionRes.error || "Failed to fetch partitions.");
+        setPartitionDiscoveryError("Physical partitions could not be checked. File containers can still be mounted; retry the check to mount a partition.");
         recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
           lifecycle: "verified", outcome: "failed", errorCode: "VLT.PARTITION.LIST_FAILED", severity: "warn",
           retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
@@ -293,11 +298,17 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
         lifecycle: "verified", outcome: "failed", errorCode: "VLT.MOUNT_OPTIONS.READ_FAILED", severity: "warn",
         retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      setMountFailure("Mountable partitions could not be checked. File-container mounting remains available after the drive list is checked.");
+      setPartitionDiscoveryError("Physical partitions could not be checked. File containers can still be mounted; retry the check to mount a partition.");
     } finally {
       if (revision === mountDialogRevision.current) setMountDetailsLoading(false);
     }
-  }, [resetMountForm, getEncryptionPartitions]);
+  }, [getEncryptionPartitions]);
+
+  const openMountDialog = useCallback(() => {
+    resetMountForm();
+    setMountDialogOpen(true);
+    void loadMountPartitions();
+  }, [loadMountPartitions, resetMountForm]);
 
   const closeMountDialog = useCallback(() => {
     if (mountInFlight.current) return;
@@ -370,6 +381,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         // explicit, per-mount choice and is never remembered.
         readOnly: mountReadOnly,
         removable: mountRemovable,
+        // A locally administered, password-unlocked ordinary container can
+        // recover this account's root access. The service excludes Fleet
+        // policy containers and read-only mounts before any ACL change.
+        repairCurrentAccountAccess: !mountReadOnly && mountRepairCurrentAccountAccess,
         protectHidden: false,
         hiddenKeyfiles: [],
         scope: "machine",
@@ -421,7 +436,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       setMountPassword("");
       setMounting(false);
     }
-  }, [refreshMountLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [refreshMountLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountRepairCurrentAccountAccess, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -697,6 +712,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               <div className="partition-list" role="listbox" id="partition-select" aria-label="Select partition">
                 {mountDetailsLoading ? (
                   <div className="partition-list-empty" role="status" aria-busy="true">Discovering partitions…</div>
+                ) : partitionDiscoveryError ? (
+                  <div className="partition-list-empty" role="alert">
+                    <p>{partitionDiscoveryError}</p>
+                    <Button small icon="refresh" text="Retry partition check" onClick={() => void loadMountPartitions()} />
+                  </div>
                 ) : partitions.length === 0 ? (
                   <div className="partition-list-empty">No mountable partitions found.</div>
                 ) : (
@@ -823,6 +843,16 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               />
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
+            </label>
+            <label className="quick-toggle">
+              <CheckboxControl
+                checked={mountRepairCurrentAccountAccess}
+                disabled={mountReadOnly}
+                ariaLabel="Recover this Windows account's access when needed"
+                onChange={event => setMountRepairCurrentAccountAccess(event.currentTarget.checked)}
+              />
+              <span>Recover this account's access</span>
+              <span className="quick-desc">For an ordinary Vault only: if you are a local administrator and unlock it, repair this PC account's access. Fleet Vault rules are never changed.</span>
             </label>
             <div className="quick-toggle quick-toggle--locked" aria-label="Machine-wide drive mapping enabled">
               <Icon icon="lock" size={14} />

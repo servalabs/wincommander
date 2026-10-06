@@ -594,6 +594,8 @@ export interface MountVolumeParams {
   scope?: "machine" | "per-user";
   /** Retain strict service validation. Unmanaged mounts preserve existing file ACLs. */
   hardenAcl?: boolean;
+  /** Allow a local administrator with the Vault credentials to recover this PC account's access to an unmanaged Vault. */
+  repairCurrentAccountAccess?: boolean;
 }
 
 export interface MountVolumeResult {
@@ -625,6 +627,7 @@ export const buildMountVolumeRequest = (params: MountVolumeParams) => ({
   ...(params.hiddenPim ? { HiddenPim: params.hiddenPim } : {}),
   Scope: params.scope ?? "machine",
   HardenAcl: params.hardenAcl ?? true,
+  ...(params.repairCurrentAccountAccess ? { RepairCurrentAccountAccess: true } : {}),
 });
 
 export interface CreateStegoMp4Params {
