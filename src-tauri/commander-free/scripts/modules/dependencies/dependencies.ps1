@@ -528,6 +528,7 @@ function Find-EverythingSearchCli {
         "$env:ProgramFiles\Everything\es.exe",
         "${env:ProgramFiles(x86)}\Everything\es.exe",
         "$env:ProgramData\WinCommander\bin\es.exe",
+        "$env:LOCALAPPDATA\Microsoft\WindowsApps\es.exe",
         "C:\Tools\es.exe",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links\es.exe",
         "$env:ProgramFiles\WinGet\Links\es.exe",
@@ -1088,7 +1089,6 @@ function Install-VCRedist {
 }
 
 function Install-InstantSearch {
-    Assert-IsAdmin
     $status = Test-InstantSearchInstalled
     if ($status.installed) { return @{ success = $true; message = "Instant Search Engine already installed." } }
 
@@ -1809,7 +1809,10 @@ function Install-Dependency {
         }
     }
 
-    Assert-IsAdmin
+    # Everything's signed installer requests UAC itself. Keeping this one
+    # dependency callable from a standard session lets that supported prompt
+    # run; all other machine installers retain the existing up-front guard.
+    if ($Id -ne 'instantSearch') { Assert-IsAdmin }
 
     # Bust in-memory cache so next Get-DependencyStatus reflects post-install state.
     Remove-Variable -Scope script -Name _depStatusCache -ErrorAction SilentlyContinue

@@ -95,11 +95,14 @@ function Split-ListParam {
 
 # Everything's Winget package installs the GUI/service only.  The search UI
 # talks to the publisher's separate ES command-line executable, which has no
-# Winget package.  Keep it in WinCommander's shared binary folder rather than
-# pretending `Voidtools.Everything.Cli` exists.
+# Winget package. Keep an elevated copy in WinCommander's shared binary folder
+# or use the publisher-recommended per-user command location.
 function Install-EverythingSearchCli {
-    $existing = Join-Path $env:ProgramData 'WinCommander\bin\es.exe'
-    if (Test-Path -LiteralPath $existing -PathType Leaf) { return $existing }
+    $machineTarget = Join-Path $env:ProgramData 'WinCommander\bin\es.exe'
+    $userTarget = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\es.exe'
+    foreach ($existing in @($machineTarget, $userTarget)) {
+        if (Test-Path -LiteralPath $existing -PathType Leaf) { return $existing }
+    }
 
     $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
         'Arm64' { 'ARM64' }
@@ -110,7 +113,11 @@ function Install-EverythingSearchCli {
     $uri = "https://www.voidtools.com/ES-$version.$arch.zip"
     $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "WinCommander-ES-$PID-$([Guid]::NewGuid().ToString('N'))"
     $archive = "$scratch.zip"
-    $targetDir = Split-Path -Parent $existing
+    # The publisher recommends the current user's WindowsApps directory. Keep
+    # elevated installs shared, while a standard parent can finish after the
+    # Everything installer handles its own UAC prompt.
+    $target = if (Test-IsAdmin) { $machineTarget } else { $userTarget }
+    $targetDir = Split-Path -Parent $target
 
     try {
         New-Item -ItemType Directory -Path $targetDir -Force -ErrorAction Stop | Out-Null
@@ -118,9 +125,14 @@ function Install-EverythingSearchCli {
         Expand-Archive -LiteralPath $archive -DestinationPath $scratch -Force -ErrorAction Stop
         $cli = Get-ChildItem -LiteralPath $scratch -Filter 'es.exe' -File -Recurse -ErrorAction Stop | Select-Object -First 1
         if (-not $cli) { throw 'The official Everything CLI archive did not contain es.exe.' }
-        Copy-Item -LiteralPath $cli.FullName -Destination $existing -Force -ErrorAction Stop
-        if (-not (Test-Path -LiteralPath $existing -PathType Leaf)) { throw 'Everything CLI installation did not complete.' }
-        return $existing
+        $signature = Get-AuthenticodeSignature -FilePath $cli.FullName -ErrorAction Stop
+        $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+        if ($signature.Status -ne 'Valid' -or $signer -notmatch '(?:^|,\s*)CN=voidtools PTY LTD(?:,|$)') {
+            throw 'The Everything CLI does not have a valid voidtools signature.'
+        }
+        Copy-Item -LiteralPath $cli.FullName -Destination $target -Force -ErrorAction Stop
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw 'Everything CLI installation did not complete.' }
+        return $target
     }
     finally {
         Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
