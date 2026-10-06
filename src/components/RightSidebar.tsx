@@ -28,6 +28,8 @@ import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
 import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "../hooks/useVaultAccess";
+import { createVaultStatusRefresh } from "../lib/vaultStatusRefresh";
+import { canOpenQuickMountDrive } from "../lib/quickMountObservation";
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import './RightSidebar.css';
 
@@ -115,6 +117,8 @@ function ActionBtn({ icon, className, intent, loading, disabled, onClick, ariaLa
 export default function RightSidebar() {
     const {
         refreshVault,
+        encryptionStatus,
+        vaultStatusError,
         appSettings,
         patchAppSettings,
         systemInfo,
@@ -212,7 +216,8 @@ export default function RightSidebar() {
     const [fleetVaultEntryId, setFleetVaultEntryId] = useState('');
     const [fleetVaultPassword, setFleetVaultPassword] = useState('');
     const [fleetVaultMounting, setFleetVaultMounting] = useState(false);
-    const { listAuthorizedEntries, mountEntry: mountFleetVaultEntry } = useVaultAccess<unknown, unknown>();
+    const { listAuthorizedEntries, mountEntry: mountFleetVaultEntry, unmountEntry: unmountFleetVaultEntry } = useVaultAccess<unknown, unknown>();
+    const fleetVaultNeedsCleanup = fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'failed';
     type QmSlot = QuickMountSlot;
     // useMemo so the array identity is stable across renders — otherwise the
     // `?? []` fallback minted a fresh [] every render, churning the deps of
@@ -222,28 +227,42 @@ export default function RightSidebar() {
         [appSettings?.app?.vault?.quickMountSlots],
     );
 
-    const refreshFleetVaults = useCallback(async () => {
-        setFleetVaultsLoading(true);
-        try {
-            const entries = await listAuthorizedEntries();
+    const [fleetVaultsUnavailable, setFleetVaultsUnavailable] = useState(false);
+    const fleetVaultRefresh = useMemo(() => createVaultStatusRefresh<FleetQuickMountEntry[]>(
+        value => {
+            const entries = value ?? [];
             setFleetVaults(entries);
             setFleetVaultEntryId(current => entries.some(entry => entry.entry_id === current) ? current : (entries[0]?.entry_id ?? ''));
-            return entries;
-        } catch {
-            // The normal Quick Mount shortcuts remain usable if the secure
-            // Fleet service is briefly unavailable. Never substitute cached
-            // policy/path data for this caller-filtered list.
-            setFleetVaults([]);
-            setFleetVaultEntryId('');
-            return null;
-        } finally {
-            setFleetVaultsLoading(false);
-        }
-    }, [listAuthorizedEntries]);
+        },
+        setFleetVaultsLoading,
+        error => {
+            setFleetVaultsUnavailable(error !== null);
+            if (error !== null) { setFleetVaults([]); setFleetVaultEntryId(''); }
+        },
+    ), []);
+    const refreshFleetVaults = useCallback((background = false) =>
+        fleetVaultRefresh(() => listAuthorizedEntries(), background),
+    [fleetVaultRefresh, listAuthorizedEntries]);
 
     useEffect(() => {
-        if (qmOpen) void refreshFleetVaults();
-    }, [qmOpen, refreshFleetVaults]);
+        if (!qmOpen) return;
+        void refreshFleetVaults();
+        void refreshVault(true);
+        const refreshVisible = () => {
+            if (document.visibilityState === 'visible') {
+                void refreshFleetVaults(true);
+                void refreshVault(true, true);
+            }
+        };
+        const timer = window.setInterval(refreshVisible, 20_000);
+        window.addEventListener('focus', refreshVisible);
+        document.addEventListener('visibilitychange', refreshVisible);
+        return () => {
+            window.clearInterval(timer);
+            window.removeEventListener('focus', refreshVisible);
+            document.removeEventListener('visibilitychange', refreshVisible);
+        };
+    }, [qmOpen, refreshFleetVaults, refreshVault]);
 
     const refreshQmLetters = useCallback(async () => {
         const letters = await refreshDriveLetters();
@@ -265,13 +284,16 @@ export default function RightSidebar() {
     };
 
     useEffect(() => {
-        const refreshAfterFleetVaultSave = () => { void refreshFleetVaults(); };
+        const refreshAfterFleetVaultSave = () => {
+            setQmMountedDrive(null);
+            void refreshFleetVaults();
+        };
         window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave);
         return () => window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave);
     }, [refreshFleetVaults]);
 
     const handleFleetVaultMount = useCallback(async () => {
-        if (!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting) return;
+        if (!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting || fleetVaultNeedsCleanup) return;
         setFleetVaultMounting(true);
         setQmFeedback('');
         setQmMountedDrive(null);
@@ -300,7 +322,22 @@ export default function RightSidebar() {
             setFleetVaultPassword('');
             setFleetVaultMounting(false);
         }
-    }, [fleetVaultEntryId, fleetVaultMounting, fleetVaultPassword, mountFleetVaultEntry, refreshFleetVaults]);
+    }, [fleetVaultEntryId, fleetVaultMounting, fleetVaultNeedsCleanup, fleetVaultPassword, mountFleetVaultEntry, refreshFleetVaults]);
+
+    const handleFleetVaultCleanup = useCallback(async () => {
+        if (!fleetVaultEntryId || fleetVaultMounting) return;
+        setFleetVaultMounting(true);
+        setQmMountedDrive(null);
+        try {
+            const result = await unmountFleetVaultEntry(fleetVaultEntryId);
+            setQmFeedback(vaultMountResultLabel(result), result.state === 'unmounted' ? 'success' : 'error');
+        } catch (error) {
+            setQmFeedback(vaultOperationError(error, 'dismount'));
+        } finally {
+            await Promise.all([refreshFleetVaults(), refreshVault(true)]);
+            setFleetVaultMounting(false);
+        }
+    }, [fleetVaultEntryId, fleetVaultMounting, unmountFleetVaultEntry, refreshFleetVaults, refreshVault, setQmFeedback]);
 
     const nextFreeLetter = useCallback((excludeIdx?: number) => {
         const taken = new Set(
@@ -833,7 +870,7 @@ export default function RightSidebar() {
         try {
             const receipt = await handler();
             if (action === "dismount") {
-                const observed = await refreshVault(true);
+                const [observed] = await Promise.all([refreshVault(true), refreshFleetVaults()]);
                 showSuccess(confirmedBulkDismountMessage(receipt, observed));
                 return;
             }
@@ -843,7 +880,7 @@ export default function RightSidebar() {
                 const message = vaultOperationError(err, 'dismount');
                 setDismountFailure(message);
                 showError(message);
-                await refreshVault(true);
+                await Promise.all([refreshVault(true), refreshFleetVaults()]);
                 return;
             }
             const msg = err instanceof Error ? err.message : String(err);
@@ -851,7 +888,7 @@ export default function RightSidebar() {
         } finally {
             setLoadingAction(null);
         }
-    }, [refreshVault]);
+    }, [refreshVault, refreshFleetVaults]);
 
     const handleDismountClick = useCallback(() => {
         if (!canUse("paid")) {
@@ -1123,7 +1160,7 @@ export default function RightSidebar() {
                     onClick={(e) => { if (e.target === e.currentTarget) { setQmOpen(false); setQmEditing(null); } }}>
                     <div className="qm-dialog">
                         <VaultOperationNotice message={qmFeedback} tone={qmFeedbackTone} />
-                        {qmMountedDrive && <button type="button" className="qm-btn qm-btn--primary" onClick={() => void openVaultDrive(qmMountedDrive)}>Open {qmMountedDrive} in File Explorer</button>}
+                        {qmMountedDrive && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedDrive, quickMountSlots[qmSelectedIdx]?.filePath) && <button type="button" className="qm-btn qm-btn--primary" onClick={() => void openVaultDrive(qmMountedDrive)}>Open {qmMountedDrive} in File Explorer</button>}
                         {qmEditing ? (
                             /* ── Slot editor ── */
                             <>
@@ -1244,6 +1281,8 @@ export default function RightSidebar() {
                                     </div>
                                     {fleetVaultsLoading ? (
                                         <div className="qm-empty">Loading your saved Fleet Vaults…</div>
+                                    ) : fleetVaultsUnavailable ? (
+                                        <div className="qm-empty" role="status">Vault status could not be checked. Reopen Quick Mount or refresh after the service is available.</div>
                                     ) : fleetVaults.length === 0 ? (
                                         <div className="qm-empty">No Fleet Vault is assigned to this Windows account.</div>
                                     ) : (
@@ -1269,6 +1308,9 @@ export default function RightSidebar() {
                                                     if (drive) void openVaultDrive(drive);
                                                 }}>Open in File Explorer</button>}
                                             </div>}
+                                            {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'failed' && <div role="status" className="qm-hint">
+                                                This Vault needs cleanup or a fresh status check. Choose Retry cleanup to recover this Vault.
+                                            </div>}
                                             <div className="qm-field">
                                                 <label className="qm-label" htmlFor="fleet-vault-mount-password">Password</label>
                                                 <input
@@ -1277,15 +1319,16 @@ export default function RightSidebar() {
                                                     type="password"
                                                     placeholder="Enter password"
                                                     value={fleetVaultPassword}
+                                                    disabled={fleetVaultNeedsCleanup}
                                                     onChange={(event) => setFleetVaultPassword(event.target.value)}
                                                     onKeyDown={(event) => { if (event.key === 'Enter') void handleFleetVaultMount(); }}
                                                 />
                                             </div>
                                             <div className="qm-actions">
                                                 <button type="button" className="qm-btn qm-btn--primary"
-                                                    disabled={!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting}
-                                                    onClick={() => void handleFleetVaultMount()}>
-                                                    {fleetVaultMounting ? <Spinner size={14} /> : 'Mount inside'}
+                                                    disabled={!fleetVaultEntryId || (!fleetVaultNeedsCleanup && !fleetVaultPassword) || fleetVaultMounting}
+                                                    onClick={() => { void (fleetVaultNeedsCleanup ? handleFleetVaultCleanup() : handleFleetVaultMount()); }}>
+                                                    {fleetVaultMounting ? <Spinner size={14} /> : fleetVaultNeedsCleanup ? 'Retry cleanup' : 'Mount inside'}
                                                 </button>
                                             </div>
                                         </>

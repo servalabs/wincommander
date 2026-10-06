@@ -1,6 +1,15 @@
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import { vaultEntryResultLabel } from "./vaultAccessPresentation";
-import type { VaultAuthorizedEntry, VaultEntryResult, VaultMountEntryResult } from "./vaultAccessTypes";
+import type { VaultAuthorizedEntry, VaultEntryResult, VaultMountEntryResult, VaultMountState } from "./vaultAccessTypes";
+
+/** An older mounted row must not override a newer failed or unmounted receipt. */
+export function observedVaultMountState(
+  authorized: Pick<VaultAuthorizedEntry, "mount_state"> | undefined,
+  result?: Pick<VaultMountEntryResult, "state">,
+  policyState?: VaultMountState,
+): VaultMountState {
+  return result?.state ?? authorized?.mount_state ?? policyState ?? "unmounted";
+}
 
 /**
  * The mount broker returns the authoritative lifecycle result for one entry.

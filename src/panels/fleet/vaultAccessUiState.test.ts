@@ -3,11 +3,20 @@ import type { FleetAccessDirectory } from "./accessControlTypes";
 import type { VaultAuthorizedEntry } from "./vaultAccessTypes";
 import {
   patchAuthorizedEntriesFromMountResult,
+  observedVaultMountState,
   resolveVaultPrincipalOption,
   vaultMountGate,
   vaultPrincipalDirectoryOptions,
   vaultPrincipalSelectOptions,
 } from "./vaultAccessUiState";
+
+test("current cleanup and dismount observations supersede old mounted projections", () => {
+  expect(observedVaultMountState({ mount_state: "mounted" }, { state: "failed" }, "mounted")).toBe("failed");
+  expect(observedVaultMountState({ mount_state: "mounted" }, { state: "unmounted" }, "mounted")).toBe("unmounted");
+  expect(observedVaultMountState({ mount_state: "failed" }, undefined, "mounted")).toBe("failed");
+  expect(observedVaultMountState({ mount_state: "unmounted" }, undefined, "mounted")).toBe("unmounted");
+  expect(observedVaultMountState({ mount_state: "mounted" })).toBe("mounted");
+});
 
 const entries = [
   {
