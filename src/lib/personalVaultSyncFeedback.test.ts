@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test";
-import { personalVaultSyncError, personalVaultSyncSetupMessage } from "./personalVaultSyncFeedback";
+import { personalVaultSyncError, personalVaultSyncSetupMessage, validatePersonalVaultSyncFolders } from "./personalVaultSyncFeedback";
 
 test("confirmed new sync setup explains the remaining device connection step", () => {
   expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("Connect your other device");
+  expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("does not stop Syncthing");
+});
+
+test("sync setup accepts separate child folders but refuses duplicate or nested folders", () => {
+  expect(validatePersonalVaultSyncFolders(["Phone/Camera", "Phone\\Documents"])).toEqual({ ok: true, folders: ["Phone\\Camera", "Phone\\Documents"] });
+  expect(validatePersonalVaultSyncFolders(["Phone", "Phone/Camera"]).ok).toBe(false);
+  expect(validatePersonalVaultSyncFolders(["Phone/Camera", "phone\\camera"]).ok).toBe(false);
+  expect(validatePersonalVaultSyncFolders(["../Camera"]).ok).toBe(false);
 });
 
 test("reopening recreated sync preserves phone sharing and existing-file guidance", () => {

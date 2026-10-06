@@ -13,6 +13,7 @@ export interface PersonalVaultSyncEnrollment {
   pairing_required?: boolean;
 }
 export interface VaultSyncRecoveryChoice { internalDrive: number; roots: VaultSyncRecoveryRoot[] }
+export type VaultSyncRecoveryAction = "inspect" | "recreate" | "keep_paused";
 
 const REASONS: VaultSyncRecoveryReason[] = ["configuration_missing", "root_missing", "marker_missing", "confirmation_required"];
 

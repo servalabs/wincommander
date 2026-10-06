@@ -8,7 +8,7 @@ import { showSuccess, showError } from "../../utils/toast";
 import { notifyVaultSyncRecovery } from "@/lib/vaultSyncWarning";
 import { isSyncthingSetupUrl } from "@/lib/vaultSyncRecovery";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
-import { personalVaultSyncError, personalVaultSyncSetupMessage } from "@/lib/personalVaultSyncFeedback";
+import { personalVaultSyncError, personalVaultSyncSetupMessage, validatePersonalVaultSyncFolders } from "@/lib/personalVaultSyncFeedback";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import './VolumeActionsMenu.css';
 
@@ -31,7 +31,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
   const [dismounting, setDismounting] = useState(false);
   const [enrollingSync, setEnrollingSync] = useState(false);
   const [syncSetupOpen, setSyncSetupOpen] = useState(false);
-  const [syncFolder, setSyncFolder] = useState("Sync");
+  const [syncFolders, setSyncFolders] = useState(["Phone\\Camera"]);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [failure, setFailureMessage] = useState("");
   const setFailure = (message: string) => { setFailureMessage(message); onErrorChange?.(message ? `${driveLabel} ${message}` : ""); };
@@ -104,25 +104,37 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
 
   const handleEnablePersonalSync = async () => {
     if (internalDrive === undefined) return;
-    const relativePath = syncFolder.trim();
-    if (!relativePath || enrollingSync) return;
+    const validated = validatePersonalVaultSyncFolders(syncFolders);
+    if (enrollingSync) return;
+    if (!validated.ok) {
+      setFailure(validated.message);
+      return;
+    }
     setEnrollingSync(true);
     setFailure("");
     try {
-      const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
-      setSyncSetupOpen(false);
-      if (enrollment.recovery_required) {
-        window.setTimeout(() => notifyVaultSyncRecovery(driveLabel, internalDrive, enrollment), 350);
-        return;
+      let guiUrl = "";
+      let pairingRequired = false;
+      for (const relativePath of validated.folders) {
+        const enrollment = await enablePersonalVaultSync(internalDrive, relativePath);
+        if (enrollment.recovery_required) {
+          setSyncSetupOpen(false);
+          window.setTimeout(() => notifyVaultSyncRecovery(driveLabel, internalDrive, enrollment), 350);
+          return;
+        }
+        if (!enrollment.enabled) throw new Error("vault_broker_rejected");
+        pairingRequired ||= enrollment.pairing_required === true;
+        if (isSyncthingSetupUrl(enrollment.gui_url)) guiUrl = enrollment.gui_url;
       }
-      if (!enrollment.enabled) throw new Error("vault_broker_rejected");
-      const message = personalVaultSyncSetupMessage(`${driveLabel}\\${relativePath}`, enrollment.pairing_required === true);
+      setSyncSetupOpen(false);
+      const configured = validated.folders.map(relativePath => `${driveLabel}\\${relativePath}`).join(", ");
+      const message = personalVaultSyncSetupMessage(configured, pairingRequired);
       showSuccess(message);
       try {
-        if (!isSyncthingSetupUrl(enrollment.gui_url)) throw new Error("invalid_gui_url");
-        await open(enrollment.gui_url);
+        if (!guiUrl) throw new Error("invalid_gui_url");
+        await open(guiUrl);
       } catch {
-        showError(`Sync is configured, but its setup page could not open. Open ${enrollment.gui_url} in your browser.`, undefined, { kind: "notification" });
+        showError("Sync is configured, but its setup page could not open. Use Open Syncthing from this Vault after setup.", undefined, { kind: "notification" });
       }
     } catch (error) {
       const message = personalVaultSyncError(error);
@@ -194,18 +206,29 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
         title={`Set up sync for ${driveLabel}`} style={{ width: 560 }} canEscapeKeyClose={!enrollingSync}
         canOutsideClickClose={!enrollingSync} isCloseButtonShown={!enrollingSync}>
         <DialogBody>
-          <p>Choose a folder inside this personal Vault. WinCommander will install Syncthing for your Windows account if needed.</p>
-          <label htmlFor={`sync-folder-${internalDrive}`}>Folder inside the Vault</label>
-          <input id={`sync-folder-${internalDrive}`} value={syncFolder} maxLength={240}
-            onChange={event => setSyncFolder(event.target.value)} disabled={enrollingSync}
-            className="w-full rounded-md border p-2" />
+          <p>Choose one or more separate folders inside this personal Vault. WinCommander will install Syncthing for your Windows account if needed.</p>
+          <p>Each entry is a separate phone-sync folder. They cannot overlap: <strong>Phone\Camera</strong> and <strong>Phone\Documents</strong> are safe; <strong>Phone</strong> and <strong>Phone\Camera</strong> are not.</p>
+          <p>Pausing a folder does not stop Syncthing or pause your other folders. When this Vault is dismounted, its configured folders pause individually and resume after remount.</p>
+          <div className="space-y-2">
+            {syncFolders.map((folder, index) => <div key={index} className="flex gap-2">
+              <div className="min-w-0 flex-1">
+                <label className="sr-only" htmlFor={`sync-folder-${internalDrive}-${index}`}>Sync folder {index + 1} inside the Vault</label>
+                <input id={`sync-folder-${internalDrive}-${index}`} value={folder} maxLength={240}
+                  onChange={event => setSyncFolders(current => current.map((entry, entryIndex) => entryIndex === index ? event.target.value : entry))} disabled={enrollingSync}
+                  className="w-full rounded-md border p-2" placeholder="Phone\Camera" />
+              </div>
+              {syncFolders.length > 1 && <Button minimal disabled={enrollingSync} aria-label={`Remove sync folder ${index + 1}`}
+                onClick={() => setSyncFolders(current => current.filter((_, entryIndex) => entryIndex !== index))}>Remove</Button>}
+            </div>)}
+          </div>
+          <Button minimal disabled={enrollingSync || syncFolders.length >= 32} onClick={() => setSyncFolders(current => [...current, ""])}>Add another folder</Button>
           {enrollingSync && <p role="status" aria-live="polite">Setting up Syncthing… The first setup may need to download it. Keep this Vault mounted.</p>}
           <VaultOperationNotice message={failure} />
         </DialogBody>
         <DialogFooter actions={<>
           <Button onClick={() => setSyncSetupOpen(false)} disabled={enrollingSync}>Cancel</Button>
           <Button intent="primary" onClick={handleEnablePersonalSync} loading={enrollingSync}
-            disabled={enrollingSync || !syncFolder.trim()}>Enable sync</Button>
+            disabled={enrollingSync || !syncFolders.some(folder => folder.trim())}>Enable sync folders</Button>
         </>} />
       </Dialog>
 
