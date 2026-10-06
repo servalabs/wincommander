@@ -9,6 +9,8 @@ Public release notes are published with each versioned
   This prevents completed dismounts from leaving cleanup records that block
   later mounts. Matching Pro and service components are required; changed mount
   identities remain protected from stale recovery records.
+- Vault components verify compatibility in both update orders before mounting,
+  preventing a newer component from starting work an older component cannot clean up.
 - Secure Storage preserves the specific mount-identity error when its drive
   list cannot be verified, instead of showing only a generic refresh failure.
 

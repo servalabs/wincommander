@@ -400,7 +400,7 @@ pub fn hello_from_free(session_token: impl Into<String>) -> Hello {
         binary_hash: None,
         free_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         pro_version: None,
-        vault_runtime_version: None,
+        vault_runtime_version: Some(vault_inventory::VAULT_RUNTIME_VERSION),
     }
 }
 
@@ -625,6 +625,12 @@ mod tests {
         let s = serde_json::to_string(&h).unwrap();
         assert!(s.contains("\"kind\":\"hello\""));
         assert!(s.contains("\"session_token\":\"token-abc\""));
+    }
+
+    #[test]
+    fn vault_peers_advertise_scope_aware_cleanup_runtime() {
+        assert_eq!(hello_from_free("free").vault_runtime_version, Some(3));
+        assert_eq!(svc::hello_from_ui("svc-ack").vault_runtime_version, Some(3));
     }
 
     /// Round-trip a Hello + Request + Response over an in-memory duplex
