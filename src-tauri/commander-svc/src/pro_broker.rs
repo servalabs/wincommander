@@ -109,6 +109,16 @@ fn accepted_hash_matches(expected: &Option<String>, actual: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn require_vault_runtime_version(
+    version: Option<u32>,
+) -> Result<(), wincmd_shared::vault_access::VaultMountReason> {
+    if version.is_some_and(|value| value >= wincmd_shared::vault_inventory::VAULT_RUNTIME_VERSION) {
+        Ok(())
+    } else {
+        Err(wincmd_shared::vault_access::VaultMountReason::BrokerHandshakeRejected)
+    }
+}
+
 // The vault engine is intentionally reached only through a service-created,
 // one-shot Envelope pipe.  There is no public `--vault-broker-stdin` mode.
 #[cfg(windows)]
@@ -362,6 +372,7 @@ async fn vault_call_until(
             protocol_version,
             session_token: echoed,
             binary_hash: Some(hash),
+            vault_runtime_version,
             ..
         }) = ack
         else {
@@ -374,6 +385,7 @@ async fn vault_call_until(
             eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash.eq_ignore_ascii_case(&connected_hash));
             return Err(VaultMountReason::BrokerHandshakeRejected);
         }
+        require_vault_runtime_version(vault_runtime_version)?;
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
             request_id,
@@ -551,14 +563,15 @@ pub async fn vault_recovery_dismount(
     }
     // SYSTEM can close the driver slot, but cannot attest another logon's local aliases.
     let local_cleanup_unconfirmed = presentation == wincmd_shared::vault_access::VaultPresentation::PerUser;
-    let mut args = serde_json::json!({ "internal_drive": internal_drive });
     if let Some(letter) = presented_drive_letter {
         let normalized = letter.trim_end_matches(':');
         if normalized.len() != 1 || !normalized.as_bytes()[0].is_ascii_alphabetic() {
             return Err(VaultMountReason::BrokerRejected);
         }
-        args["presented_drive_letter"] = format!("{}:", normalized.to_ascii_uppercase()).into();
     }
+    let args = crate::vault_mount::broker_dismount_args(
+        internal_drive, presented_drive_letter, presentation,
+    );
     let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let result = vault_call(VaultCall {
         request_id,
@@ -1070,6 +1083,17 @@ fn session_token_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<St
 #[cfg(test)]
 mod tests {
     #[test]
+    fn vault_broker_requires_scoped_cleanup_runtime_before_dispatch() {
+        use wincmd_shared::vault_access::VaultMountReason;
+        for version in [None, Some(0), Some(1), Some(2)] {
+            assert_eq!(super::require_vault_runtime_version(version),
+                Err(VaultMountReason::BrokerHandshakeRejected));
+        }
+        assert_eq!(super::require_vault_runtime_version(Some(3)), Ok(()));
+        assert_eq!(super::require_vault_runtime_version(Some(4)), Ok(()));
+    }
+
+    #[test]
     fn native_mount_diagnostic_accepts_only_closed_receipt_categories() {
         assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_14"), Some("VLT.NATIVE.DRIVER_UNAVAILABLE"));
         assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_34"), Some("VLT.NATIVE.ACL_FAILED"));
@@ -1415,6 +1439,17 @@ mod tests {
             vault_recovery_dismount(26, None, wincmd_shared::vault_access::VaultPresentation::Machine, 0, "S-1-5-18").await,
             Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         );
+        for presentation in [
+            wincmd_shared::vault_access::VaultPresentation::Machine,
+            wincmd_shared::vault_access::VaultPresentation::PerUser,
+        ] {
+            for letter in ["", "VV:", "V:\\untrusted"] {
+                assert_eq!(
+                    vault_recovery_dismount(12, Some(letter), presentation, 0, "S-1-5-18").await,
+                    Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
+                );
+            }
+        }
     }
 
     #[test]

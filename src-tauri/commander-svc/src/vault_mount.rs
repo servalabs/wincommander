@@ -384,6 +384,7 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
                     args: broker_dismount_args(
                         request.internal_drive,
                         request.presented_drive_letter,
+                        request.presentation,
                     ),
                 },
             ))
@@ -429,15 +430,17 @@ fn confirmed_broker_dismount(
     }
 }
 
-fn broker_dismount_args(
+pub(crate) fn broker_dismount_args(
     internal_drive: u8,
     presented_drive_letter: Option<&str>,
+    presentation: VaultPresentation,
 ) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     args.insert(
         "internal_drive".into(),
         serde_json::Value::from(internal_drive),
     );
+    args.insert("presentation".into(), serde_json::json!(presentation));
     if let Some(letter) = presented_drive_letter.filter(|letter| valid_drive_letter(letter)) {
         let mut letter = letter.to_ascii_uppercase();
         if !letter.ends_with(':') {
@@ -4465,20 +4468,24 @@ mod tests {
     #[test]
     fn broker_dismount_carries_only_the_service_owned_presented_letter() {
         assert_eq!(
-            broker_dismount_args(12, Some("v:")),
-            serde_json::json!({"internal_drive": 12, "presented_drive_letter": "V:"})
+            broker_dismount_args(12, Some("v:"), VaultPresentation::Machine),
+            serde_json::json!({"internal_drive": 12, "presented_drive_letter": "V:", "presentation": "machine"})
         );
         assert_eq!(
-            broker_dismount_args(12, Some("v")),
-            serde_json::json!({"internal_drive": 12, "presented_drive_letter": "V:"})
+            broker_dismount_args(12, Some("v"), VaultPresentation::Machine),
+            serde_json::json!({"internal_drive": 12, "presented_drive_letter": "V:", "presentation": "machine"})
         );
         assert_eq!(
-            broker_dismount_args(12, None),
-            serde_json::json!({"internal_drive": 12})
+            broker_dismount_args(12, None, VaultPresentation::PerUser),
+            serde_json::json!({"internal_drive": 12, "presentation": "per-user"})
         );
         assert_eq!(
-            broker_dismount_args(12, Some("V:\\untrusted")),
-            serde_json::json!({"internal_drive": 12})
+            broker_dismount_args(12, Some("V:\\untrusted"), VaultPresentation::Machine),
+            serde_json::json!({"internal_drive": 12, "presentation": "machine"})
+        );
+        assert_eq!(
+            broker_dismount_args(12, Some("v:"), VaultPresentation::PerUser),
+            serde_json::json!({"internal_drive": 12, "presented_drive_letter": "V:", "presentation": "per-user"})
         );
         assert_eq!(
             service_presented_drive_letter(VaultPresentation::PerUser, "V:"),

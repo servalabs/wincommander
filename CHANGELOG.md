@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Machine-wide Vault cleanup no longer requires an interactive Explorer session.
+  This prevents completed dismounts from leaving cleanup records that block
+  later mounts. Matching Pro and service components are required; changed mount
+  identities remain protected from stale recovery records.
+- Secure Storage preserves the specific mount-identity error when its drive
+  list cannot be verified, instead of showing only a generic refresh failure.
+
 - Secure Storage access errors distinguish Windows file permissions from Vault
   ownership and explain where the authorized owner can review access, including
   containers moved between PCs.
