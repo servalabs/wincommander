@@ -22,6 +22,34 @@ function Assert-IsAdmin {
     }
 }
 
+# Windows releases do not expose one stable WMI field for the *active* Kernel
+# DMA Protection state.  Some expose KernelDMAProtection (2 means active),
+# while others only expose capability information.  Keep "not reported" as
+# unknown instead of turning it into a false "off" result that Fix All can
+# never repair from Windows.
+function Get-KernelDMAProtectionObservation {
+    try {
+        $deviceGuard = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction Stop
+        if ($null -eq $deviceGuard) {
+            return @{ actuallyActive = $null; observable = $false; firmwareCapable = $null }
+        }
+        $activeProperty = $deviceGuard.PSObject.Properties['KernelDMAProtection']
+        $firmwareCapable = $null
+        if ($deviceGuard.PSObject.Properties['AvailableSecurityProperties']) {
+            $available = @($deviceGuard.AvailableSecurityProperties)
+            # Win32_DeviceGuard documents 3 as DMA protection availability.
+            $firmwareCapable = [bool]($available -contains 3)
+        }
+        if ($null -eq $activeProperty -or $null -eq $activeProperty.Value) {
+            return @{ actuallyActive = $null; observable = $false; firmwareCapable = $firmwareCapable }
+        }
+        return @{ actuallyActive = [bool]($activeProperty.Value -eq 2); observable = $true; firmwareCapable = $firmwareCapable }
+    }
+    catch {
+        return @{ actuallyActive = $null; observable = $false; firmwareCapable = $null }
+    }
+}
+
 $script:SystemMaintenanceTaskPath = '\System Maintenance\'
 $script:SystemMaintenanceTaskFolderPath = '\System Maintenance'
 

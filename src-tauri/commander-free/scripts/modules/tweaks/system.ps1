@@ -408,6 +408,11 @@ function Get-HardeningStatus {
     catch { $ntfsOptimizations = $false }
 
     $activity = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name 'PublishUserActivities' -ErrorAction SilentlyContinue
+    $kernelDmaObservation = Get-KernelDMAProtectionObservation
+    # Firmware without DMA-remapping support cannot be enabled by a Windows
+    # registry policy.  Keep it unknown so Fix All does not promise a repair
+    # that needs a firmware setting or different hardware.
+    $kernelDmaProtect = if ($kernelDmaObservation.firmwareCapable -eq $false) { $null } else { $kernelDmaObservation.actuallyActive }
     # KT: Delegate to the canonical probe in privacy/telemetry.ps1 (same file
     # that owns Disable/Enable-LocationTracking) so the two can never disagree.
     # A single ConsentStore key isn't enough — AppPrivacy force-deny, the
@@ -580,7 +585,10 @@ function Get-HardeningStatus {
             ((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowClipboardHistory -ErrorAction SilentlyContinue).AllowClipboardHistory -eq 0)
         )
         requirePwOnResume = [bool]((Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name ScreenSaverIsSecure -ErrorAction SilentlyContinue).ScreenSaverIsSecure -eq "1")
-        kernelDmaProtect  = [bool]((Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue).KernelDMAProtection -eq 2)
+        # A provider without KernelDMAProtection cannot prove it is off.  Keep
+        # that state unknown so Dashboard Fix All does not repeatedly attempt a
+        # firmware-owned feature that Windows cannot observe.
+        kernelDmaProtect  = $kernelDmaProtect
         acquisitionDriverBlocklist = [bool]$acqBlocklist
         forensicToolBlock          = [bool]$forensicToolBlock
         depEnabled                 = [bool]$depEnabled

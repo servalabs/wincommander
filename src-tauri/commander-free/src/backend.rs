@@ -2946,6 +2946,26 @@ fn get_settings_sync_patch(
             return None;
         }
     }
+    if matches!(command, "Set-DesktopShellPriority" | "Reset-DesktopShellPriority") {
+        // A blocked Fix All response is still a JSON response, so do not let
+        // the generic command-to-settings table turn it into a fake applied
+        // Desktop Shell state.  Machine-wide receipts are annotated as
+        // `applied` and retain the script result in `operationStatus`.
+        let result = result?;
+        let expected_operation = if command == "Set-DesktopShellPriority" { "enabled" } else { "disabled" };
+        let operation = result
+            .get("operationStatus")
+            .or_else(|| result.get("status"))
+            .and_then(serde_json::Value::as_str);
+        let status = result.get("status").and_then(serde_json::Value::as_str);
+        if result.get("error").and_then(serde_json::Value::as_bool) == Some(true)
+            || result.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+            || operation != Some(expected_operation)
+            || !matches!(status, Some("enabled" | "disabled" | "applied"))
+        {
+            return None;
+        }
+    }
     if matches_parts(command, &["Disable~-", "Windows~", "Defender~"]) {
         return Some(json!({"tweaks":{"security":{"defenderDisabled": true}}}));
     }
@@ -3763,6 +3783,31 @@ mod settings_sync_patch_tests {
     }
 
     #[test]
+    fn desktop_shell_priority_never_saves_a_blocked_or_mismatched_fix_all_reply() {
+        let params = HashMap::new();
+        for (command, operation, expected) in [
+            ("Set-DesktopShellPriority", "enabled", true),
+            ("Reset-DesktopShellPriority", "disabled", false),
+        ] {
+            for result in [
+                serde_json::json!({"status":"blocked", "error":true}),
+                serde_json::json!({"status":"failed", "operationStatus":operation}),
+                serde_json::json!({"status":"applied", "operationStatus":"wrong"}),
+            ] {
+                assert!(get_settings_sync_patch(command, &params, Some(&result)).is_none());
+            }
+            for result in [
+                serde_json::json!({"status":operation}),
+                with_machine_wide_status(command, serde_json::json!({"status":operation})),
+            ] {
+                let patch = get_settings_sync_patch(command, &params, Some(&result))
+                    .expect("a matching Desktop Shell receipt must update settings");
+                assert_eq!(patch.pointer("/tweaks/os/desktopShellPriorityEnabled"), Some(&serde_json::json!(expected)));
+            }
+        }
+    }
+
+    #[test]
     fn enthusiast_mode_syncs_to_its_performance_setting_path() {
         for (command, expected) in [
             ("Enable-EnthusiastMode", true),
@@ -4244,6 +4289,10 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Enable-DiagnosticEventTracing",
     "Disable-TailoredExperiences",
     "Enable-TailoredExperiences",
+    "Enable-KernelDMAProtection",
+    "Disable-KernelDMAProtection",
+    "Set-DesktopShellPriority",
+    "Reset-DesktopShellPriority",
     "Set-AppCapabilityAccess",
     "Add-BlocklistToHosts",
     "Remove-BlocklistFromHosts",
@@ -4314,6 +4363,8 @@ mod param_env_tests {
             "Enable-DiagnosticEventTracing",
             "Disable-InternetCommunication",
             "Disable-OfficeLogging",
+            "Enable-KernelDMAProtection",
+            "Set-DesktopShellPriority",
         ] {
             let blocked = local_admin_preflight(command, false).unwrap();
             assert_eq!(blocked["code"], "administrator_required");

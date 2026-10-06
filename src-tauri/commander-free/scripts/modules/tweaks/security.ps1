@@ -1776,13 +1776,17 @@ function Enable-KernelDMAProtection {
         if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
         Set-ItemProperty -Path $path -Name "DeviceEnumerationPolicy" -Value 0 -Type DWord -Force
 
-        # Read actual hardware status — the only authoritative source
-        $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
-        $actuallyEnabled = ($dg -and ($dg.KernelDMAProtection -eq 2))
+        # Firmware owns whether DMA protection is active.  A Windows policy
+        # preference is useful only on supported hardware; never claim that it
+        # enabled firmware protection when this Windows build cannot observe it.
+        $observation = Get-KernelDMAProtectionObservation
+        $actuallyEnabled = $observation.actuallyActive
         @{
-            status         = if ($actuallyEnabled) { "enabled" } else { "preference_set_reboot_needed" }
+            status         = if ($actuallyEnabled -eq $true) { "enabled" } elseif ($observation.firmwareCapable -eq $false) { "unsupported" } elseif ($observation.observable) { "preference_set_reboot_needed" } else { "hardware_status_unavailable" }
             actuallyActive = $actuallyEnabled
-            note           = "Kernel DMA Protection requires firmware IOMMU. Policy preference set; reboot required on supported hardware."
+            observable     = $observation.observable
+            firmwareCapable = $observation.firmwareCapable
+            note           = if ($actuallyEnabled -eq $true) { "Kernel DMA Protection is active." } elseif ($observation.firmwareCapable -eq $false) { "This PC does not report firmware/IOMMU support for Kernel DMA Protection. Enable IOMMU/VT-d/AMD-Vi in firmware if the hardware supports it; Windows cannot enable it from the dashboard." } elseif ($observation.observable) { "The Windows policy preference was set. Restart on firmware/IOMMU-supported hardware, then check again." } else { "This Windows build cannot report whether Kernel DMA Protection is active. Firmware/IOMMU controls it; the dashboard will not report it as off." }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -1792,18 +1796,17 @@ function Disable-KernelDMAProtection {
     Assert-IsAdmin
     try {
         Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Kernel DMA Protection" -Name "DeviceEnumerationPolicy" -ErrorAction SilentlyContinue
-        $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
-        $actuallyEnabled = ($dg -and ($dg.KernelDMAProtection -eq 2))
-        @{ status = "preference_cleared"; actuallyActive = $actuallyEnabled }
+        $observation = Get-KernelDMAProtectionObservation
+        @{ status = "preference_cleared"; actuallyActive = $observation.actuallyActive; observable = $observation.observable; firmwareCapable = $observation.firmwareCapable }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
 function Get-KernelDMAProtectionStatus {
     try {
-        $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
-        $active = ($dg -and ($dg.KernelDMAProtection -eq 2))
-        @{ enabled = $active; firmwareIommuRequired = $true }
+        $observation = Get-KernelDMAProtectionObservation
+        $active = if ($observation.firmwareCapable -eq $false) { $null } else { $observation.actuallyActive }
+        @{ enabled = $active; observable = $observation.observable; firmwareCapable = $observation.firmwareCapable; firmwareIommuRequired = $true }
     }
     catch { @{ enabled = $false; firmwareIommuRequired = $true } }
 }
