@@ -602,7 +602,14 @@ function Get-EncryptionPartitions {
     $systemDrive = ($env:SystemDrive -replace ':', '').ToUpper()
     
     $partitionList = @()
-    $rawPartitions = Get-Partition -ErrorAction SilentlyContinue 
+    # A Storage-provider failure is not an empty list.  Returning an empty
+    # result would falsely imply that physical targets were checked.
+    try {
+        $rawPartitions = @(Get-Partition -ErrorAction Stop)
+    }
+    catch {
+        throw 'vault_partition_list_unavailable'
+    }
     
     if ($null -ne $rawPartitions) {
         foreach ($part in $rawPartitions) {

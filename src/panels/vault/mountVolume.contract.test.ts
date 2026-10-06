@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { buildMountVolumeRequest } from "../../hooks/useBackend";
 
 test("Secure Storage defaults to machine-wide write and retains explicit read-only", () => {
@@ -6,6 +7,7 @@ test("Secure Storage defaults to machine-wide write and retains explicit read-on
   expect(buildMountVolumeRequest(params)).toMatchObject({ Scope: "machine", ReadOnly: false });
   expect(buildMountVolumeRequest(params)).not.toHaveProperty("RepairCurrentAccountAccess");
   expect(buildMountVolumeRequest({ ...params, readOnly: true })).toMatchObject({ Scope: "machine", ReadOnly: true });
+  expect(buildMountVolumeRequest({ ...params, repairCurrentAccountAccess: true })).toMatchObject({ RepairCurrentAccountAccess: true });
 });
 
 test("outer-decoy mount sends distinct non-default PIM values and its exact role", () => {
@@ -67,4 +69,15 @@ test("hidden-volume mount sends the hidden role through the primary credentials"
     Scope: "per-user",
     HardenAcl: true,
   });
+});
+
+test("partition discovery failure offers retry instead of claiming no partitions", () => {
+  const panel = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
+  const errorBranch = panel.slice(
+    panel.indexOf(") : partitionDiscoveryError ?"),
+    panel.indexOf(") : partitions.length === 0 ?"),
+  );
+
+  expect(errorBranch).toContain('text="Retry partition check"');
+  expect(errorBranch).not.toContain("No mountable partitions found");
 });

@@ -19,9 +19,73 @@ impl VaultMountBroker {
             return Err(VaultMountReason::InvalidRequest);
         }
         self.with_exclusive_operation(|| {
+            if request.action == VaultSyncAction::Enable {
+                let (entry_id, active) = self.eligible_syncthing_mount_locked(
+                    store,
+                    request.internal_drive,
+                    caller_token,
+                    caller_session,
+                    caller_sid,
+                    false,
+                )?;
+                require_mount_receipt(
+                    request.expected_mount_receipt.as_deref(),
+                    &entry_id,
+                    &active,
+                    true,
+                )?;
+                // A Fleet-private Vault is enabled only by its saved policy.
+                // A standalone Vault's cloud button is the explicit consent;
+                // write that consent before any private Syncthing call.
+                if !active.personal {
+                    return Err(VaultMountReason::SyncthingNotEnabled);
+                }
+                let path = active
+                    .canonical_container_path
+                    .as_deref()
+                    .ok_or(VaultMountReason::SyncthingNotEnabled)?;
+                store
+                    .set_personal_syncthing_opt_in(
+                        path,
+                        &active.container_identity,
+                        caller_sid,
+                        Some(true),
+                    )
+                    .map_err(|_| VaultMountReason::SyncthingNotEnabled)?;
+                return Ok(VaultSyncManagementResult {
+                    managed: false,
+                    mount_receipt: Some(mount_receipt(&entry_id, &active)),
+                    gui_url: None,
+                    folders: vec![],
+                    removed: false,
+                    syncthing_enabled: true,
+                    can_enable_syncthing: false,
+                });
+            }
             let (entry_id, mut active) = self.eligible_syncthing_mount_locked(
-                store, request.internal_drive, caller_token, caller_session, caller_sid,
+                store,
+                request.internal_drive,
+                caller_token,
+                caller_session,
+                caller_sid,
+                false,
             )?;
+            let syncthing_enabled =
+                self.syncthing_management_enabled_for_active(store, &entry_id, &active, caller_sid);
+            if !syncthing_enabled {
+                if request.action == VaultSyncAction::List {
+                    return Ok(VaultSyncManagementResult {
+                        managed: false,
+                        mount_receipt: Some(mount_receipt(&entry_id, &active)),
+                        gui_url: None,
+                        folders: vec![],
+                        removed: false,
+                        syncthing_enabled: false,
+                        can_enable_syncthing: active.personal,
+                    });
+                }
+                return Err(VaultMountReason::SyncthingNotEnabled);
+            }
             if request.action != VaultSyncAction::List {
                 require_mount_receipt(request.expected_mount_receipt.as_deref(), &entry_id, &active, true)?;
             }
@@ -48,6 +112,8 @@ impl VaultMountBroker {
             })?;
             let mut result = parse_management_result(value, request.action)?;
             result.mount_receipt = Some(mount_receipt(&entry_id, &active));
+            result.syncthing_enabled = true;
+            result.can_enable_syncthing = false;
             if request.action == VaultSyncAction::Remove {
                 let mut mounts = self.active.lock().map_err(|_| VaultMountReason::BrokerRejected)?;
                 commit_removal_receipt(&mut mounts, &entry_id, result.managed, |candidate| {
@@ -144,6 +210,49 @@ fn parse_management_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mounted_personal(identity: &str) -> ActiveMount {
+        ActiveMount {
+            drive_letter: "V".into(),
+            internal_drive: 21,
+            presentation: VaultPresentation::PerUser,
+            session_id: 7,
+            authentication_id: Some((11, 12)),
+            caller_sid: "S-1-5-21-owner".into(),
+            policy_id: "personal".into(),
+            policy_version: 1,
+            personal: true,
+            syncthing_managed: false,
+            syncthing_resume_unresolved: false,
+            container_identity: identity.into(),
+            access: wincmd_shared::vault_access::VaultAccess::Write,
+            mounted_at: 99,
+            cleanup_required: false,
+            driver_slot_absent: false,
+            engine_mount_identity: Some("driver-a".into()),
+            canonical_container_path: Some("C:\\Vaults\\personal.hc".into()),
+        }
+    }
+
+    #[test]
+    fn standalone_enable_rejects_a_receipt_from_a_reused_drive_slot() {
+        let original = mounted_personal("volume-a");
+        let replacement = mounted_personal("volume-b");
+        let receipt = mount_receipt("personal:original", &original);
+        assert!(require_mount_receipt(
+            Some(&receipt),
+            "personal:original",
+            &original,
+            true,
+        )
+        .is_ok());
+        assert_eq!(
+            require_mount_receipt(Some(&receipt), "personal:replacement", &replacement, true),
+            Err(VaultMountReason::MountStateUnknown),
+            "the enable path checks this receipt before it writes durable consent or calls Pro"
+        );
+    }
+
     #[test]
     fn management_receipt_rejects_unverified_remove_and_remote_urls() {
         let empty =

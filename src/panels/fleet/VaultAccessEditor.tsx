@@ -140,6 +140,19 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
 
     <VaultAccessPatternPicker value={accessPreset} disabled={locked} onChange={onPresetChange} />
 
+    {accessPreset === "private" && <Field label="Syncthing" help="When turned on, this Vault can manage only the sync folders you add from its cloud button. Turning it off keeps Syncthing and this Vault separate.">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          aria-label={`Enable Syncthing for Vault ${vaultNumber}`}
+          checked={entry.syncthing_opt_in === true}
+          onChange={event => onEntryChange({ syncthing_opt_in: event.target.checked })}
+        />
+        <span>Enable Syncthing for this personal Vault</span>
+      </label>
+      <small>Save this Vault policy before using its cloud button. You can turn it off later; existing synced files are not deleted.</small>
+    </Field>}
+
     <div className="fleet-vault-grants">
       <strong>Who can access this vault</strong>
       {accessPreset === "private" ? <div className="fleet-vault-grant-row" role="group" aria-label="Owner permission">

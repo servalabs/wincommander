@@ -11,6 +11,7 @@ describe("Vault access presets", () => {
     expect(personal.mount.presentation).toBe("per-user");
     expect(personal.grants).toEqual([{ principal_name: "PC\\Owner", access: "write" }]);
     expect(vaultAccessPreset(personal)).toBe("private");
+    expect(personal.syncthing_opt_in).toBe(false);
   });
 
   test("keeps the owner writable while making every other shared-read grant read-only", () => {
@@ -31,6 +32,7 @@ describe("Vault access presets", () => {
     expect(vaultAccessPreset(readOnly)).toBe("shared-read");
     expect(editable.grants.map(grant => grant.principal_name)).toEqual(readOnly.grants.map(grant => grant.principal_name));
     expect(vaultAccessPreset(editable)).toBe("shared-write");
+    expect(editable.syncthing_opt_in).toBe(false);
   });
 
   test("keeps the chosen shared pattern distinct when the owner is the only grant", () => {

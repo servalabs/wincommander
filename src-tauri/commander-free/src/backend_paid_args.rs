@@ -23,14 +23,18 @@ pub(super) fn paid_command_args(
             args.insert("ReplaceExisting".into(), Value::Bool(confirmed));
         }
     }
-    // Old clients cannot reactivate permission repair through the string transport.
+    // Preserve the explicit recovery consent as a boolean. The service still
+    // derives the actual SID and only allows it for a local administrator on
+    // an unmanaged machine mount.
     if matches_parts(command, &["Mount-~", "Encryption~", "Volume~"]) {
         const REPAIR_PARAM: &str = "RepairCurrentAccountAccess";
         if let Some(raw) = params.get(REPAIR_PARAM) {
-            if raw != "false" {
-                return Err("Recovered-volume permission repair is not available in this build".into());
-            }
-            args.remove(REPAIR_PARAM);
+            let consent = match raw.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err("RepairCurrentAccountAccess must be true or false".into()),
+            };
+            args.insert(REPAIR_PARAM.into(), Value::Bool(consent));
         }
     }
     Ok(Value::Object(args))
@@ -45,7 +49,11 @@ mod tests {
 
     #[test]
     fn stego_replacement_confirmation_survives_the_string_transport() {
-        for command in ["Attach-StegoContainer", "Restore-StegoContainer", "Refresh-StegoContainer"] {
+        for command in [
+            "Attach-StegoContainer",
+            "Restore-StegoContainer",
+            "Refresh-StegoContainer",
+        ] {
             for consent in [false, true] {
                 let params = HashMap::from([
                     ("ReplaceExisting".into(), consent.to_string()),
@@ -57,28 +65,47 @@ mod tests {
                 assert_eq!(args["Password"].as_str(), Some("true"));
                 assert_eq!(args["ContainerPath"].as_str(), Some("false"));
             }
-            assert!(paid_command_args(command, &HashMap::new()).unwrap().get("ReplaceExisting").is_none());
+            assert!(paid_command_args(command, &HashMap::new())
+                .unwrap()
+                .get("ReplaceExisting")
+                .is_none());
         }
     }
 
     #[test]
     fn stego_replacement_rejects_malformed_confirmation_without_coercing_other_commands() {
-        for command in ["Attach-StegoContainer", "Restore-StegoContainer", "Refresh-StegoContainer"] {
+        for command in [
+            "Attach-StegoContainer",
+            "Restore-StegoContainer",
+            "Refresh-StegoContainer",
+        ] {
             for invalid in ["", "1", "yes", "True", " true ", "null", "{}"] {
                 let params = HashMap::from([("ReplaceExisting".into(), invalid.into())]);
-                assert!(paid_command_args(command, &params).is_err(), "{command}: {invalid}");
+                assert!(
+                    paid_command_args(command, &params).is_err(),
+                    "{command}: {invalid}"
+                );
             }
         }
         let params = HashMap::from([("ReplaceExisting".into(), "true".into())]);
-        assert_eq!(paid_command_args("Get-EncryptionStatus", &params).unwrap()["ReplaceExisting"].as_str(), Some("true"));
+        assert_eq!(
+            paid_command_args("Get-EncryptionStatus", &params).unwrap()["ReplaceExisting"].as_str(),
+            Some("true")
+        );
     }
 
     #[test]
-    fn mount_rejects_old_repair_requests_and_omits_false() {
+    fn mount_preserves_explicit_repair_consent_as_a_boolean() {
         let params = HashMap::from([(REPAIR_PARAM.to_string(), "true".to_string())]);
-        assert!(paid_command_args(MOUNT_COMMAND, &params).is_err());
+        assert_eq!(
+            paid_command_args(MOUNT_COMMAND, &params).unwrap()[REPAIR_PARAM],
+            Value::Bool(true)
+        );
         let params = HashMap::from([(REPAIR_PARAM.to_string(), "false".to_string())]);
-        assert!(paid_command_args(MOUNT_COMMAND, &params).unwrap().get(REPAIR_PARAM).is_none());
+        assert_eq!(
+            paid_command_args(MOUNT_COMMAND, &params).unwrap()[REPAIR_PARAM],
+            Value::Bool(false)
+        );
     }
 
     #[test]

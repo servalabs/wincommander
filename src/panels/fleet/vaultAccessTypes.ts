@@ -47,6 +47,7 @@ export const VAULT_MOUNT_REASONS = [
   "syncthing_profile_unavailable",
   "syncthing_install_failed",
   "syncthing_root_conflict",
+  "syncthing_not_enabled",
   "engine_unlock_failed",
   "engine_drive_letter_unavailable",
   "engine_mount_failed",
@@ -79,6 +80,7 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   syncthing_profile_unavailable: "Syncthing did not become ready for this Windows account. Keep the personal Vault mounted, then retry. If it persists, verify the Syncthing installation",
   syncthing_install_failed: "Syncthing could not be installed for this Windows account. Check your internet connection and Windows installation restrictions, then retry",
   syncthing_root_conflict: "The saved Syncthing folder location conflicts with this Vault or another sync folder. Review the existing folder settings before retrying",
+  syncthing_not_enabled: "Sync is not enabled for this personal Vault. In Vault access, edit this Vault, turn on Syncthing, save the Vault policy, then try again",
   engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
   engine_drive_letter_unavailable: "The requested drive letter is already in use",
   engine_mount_failed: "The encrypted-volume engine could not mount this Vault",
@@ -113,6 +115,9 @@ export interface VaultAccessEntry {
   /** Preserves the exact selector choice when a one-owner shared policy has
    * grants that would otherwise be indistinguishable. */
   access_pattern?: VaultAccessPattern | null;
+  /** Explicit consent for Syncthing to manage this personal Vault. Missing is
+   * a pre-control policy and is discovered safely once by the service. */
+  syncthing_opt_in?: boolean | null;
   /** Service-derived UI capability only. It is stripped from every write. */
   can_edit_policy?: boolean;
   /** An outsider administrator may remove an unmounted policy without gaining edit access. */
@@ -308,6 +313,7 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
     // A shared presentation changes only where Windows exposes the mounted
     // drive. It must not silently grant a generic local account write access.
     access_pattern: shared ? "shared-write" : "private",
+    syncthing_opt_in: false,
     grants: [{ principal_name: "", access: "write" }],
     mount: { presentation: shared ? "machine" : "per-user" },
   };

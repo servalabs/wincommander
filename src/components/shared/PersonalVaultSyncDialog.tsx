@@ -19,13 +19,16 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
   const inFlight = useRef(false);
   const mountReceipt = useRef("");
   const [folders, setFolders] = useState<VaultSyncFolder[]>([]);
-  const [drafts, setDrafts] = useState<VaultSyncDraft[]>([{ path: "Phone\\Camera", label: DEFAULT_VAULT_SYNC_LABEL }]);
+  const [drafts, setDrafts] = useState<VaultSyncDraft[]>([{ path: "Sync", label: DEFAULT_VAULT_SYNC_LABEL }]);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [removeId, setRemoveId] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [gui, setGui] = useState("");
+  const [showInfo, setShowInfo] = useState(false);
+  const [syncDisabled, setSyncDisabled] = useState(false);
+  const [canEnableSync, setCanEnableSync] = useState(false);
   const refresh = async (epoch = generation.current) => {
     const result = await latest.current.managePersonalVaultSync(internalDrive, "list");
     if (epoch !== generation.current) return;
@@ -35,6 +38,8 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     }
     mountReceipt.current = result.mount_receipt;
     setFolders(result.folders);
+    setSyncDisabled(!result.syncthing_enabled);
+    setCanEnableSync(result.can_enable_syncthing);
     setLabels(Object.fromEntries(result.folders.map(folder => [folder.folder_id, folder.label])));
     setGui(isSyncthingSetupUrl(result.gui_url) ? result.gui_url : "");
     setLoaded(true);
@@ -43,10 +48,17 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     const epoch = ++generation.current;
     if (isOpen) {
       mountReceipt.current = "";
-      setLoaded(false); setError(""); setFolders([]); setGui(""); setRemoveId(""); setBusy(true);
+      setLoaded(false); setError(""); setFolders([]); setGui(""); setRemoveId(""); setSyncDisabled(false); setCanEnableSync(false); setBusy(true);
       inFlight.current = true;
-      setDrafts([{ path: "Phone\\Camera", label: DEFAULT_VAULT_SYNC_LABEL }]);
-      void refresh(epoch).catch(failure => { if (epoch === generation.current) setError(personalVaultSyncError(failure)); })
+      setDrafts([{ path: "Sync", label: DEFAULT_VAULT_SYNC_LABEL }]);
+      setShowInfo(false);
+      void refresh(epoch).catch(failure => {
+        if (epoch !== generation.current) return;
+        const detail = failure instanceof Error ? failure.message.toLowerCase() : String(failure).toLowerCase();
+        setSyncDisabled(detail.includes("vault_syncthing_not_enabled"));
+        setCanEnableSync(false);
+        setError(personalVaultSyncError(failure));
+      })
         .finally(() => { if (epoch === generation.current) { inFlight.current = false; setBusy(false); } });
     }
     return () => { generation.current++; };
@@ -94,6 +106,11 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
       }
     });
   };
+  const enableSyncForVault = () => void perform(async () => {
+    await latest.current.managePersonalVaultSync(internalDrive, "enable", undefined, undefined, undefined, mountReceipt.current);
+    setSyncDisabled(false);
+    await refresh();
+  });
   const recover = (folder: VaultSyncFolder) => void perform(async () => {
     const result = await latest.current.enablePersonalVaultSync(internalDrive, folder.relative_path, "inspect", undefined, mountReceipt.current);
     if (result.recovery_required) {
@@ -104,9 +121,16 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
   return <Dialog isOpen={isOpen} onClose={() => { if (!busy) onClose(); }} title={`Sync folders in ${driveLabel}`}
     style={{ width: 620 }} canEscapeKeyClose={!busy} canOutsideClickClose={!busy} isCloseButtonShown={!busy}>
     <DialogBody>
-      <p>Sync is your choice for this Vault. Mounting other personal or Fleet-created Vaults does not enable sync for them.</p>
-      <p>These folders pause when this Vault is dismounted and resume when it is mounted. Other Syncthing folders keep running.</p>
-      {loaded && folders.length === 0 && <p role="status">Sync is not enabled for this Vault. Add a folder below to enable it.</p>}
+      <div className="flex items-center justify-between gap-3">
+        <p>Choose one folder in this Vault to sync.</p>
+        <Button minimal icon="info-sign" aria-label="About Vault sync" onClick={() => setShowInfo(current => !current)}>{showInfo ? "Hide help" : "How it works"}</Button>
+      </div>
+      {showInfo && <div className="my-3 rounded-md border p-3 text-sm space-y-2">
+        <p>Only this Vault’s selected folders pause when it is dismounted and resume when it is mounted. Other Syncthing folders keep running.</p>
+        <p>A Syncthing name is a label; it does not move or rename your files. Share the configured folder with your phone from Syncthing after setup.</p>
+      </div>}
+      {syncDisabled && <p role="status">{canEnableSync ? "Sync is off for this Vault. Enable it before choosing its folder." : "Sync is off for this Vault. Open Vault access, edit this Vault, turn on Syncthing, and save."}</p>}
+      {loaded && folders.length === 0 && <p role="status">No sync folder is configured yet.</p>}
       {folders.map(folder => <div key={folder.folder_id} className="my-3 rounded-md border p-3 space-y-2">
         <p className="break-words">{driveLabel}\{folder.relative_path} — {folder.recovery_required ? "Needs recovery" : folder.paused ? "Paused" : "Enabled"}</p>
         <label className="block">Name shown in Syncthing
@@ -128,20 +152,17 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
           <Button disabled={busy} onClick={() => setRemoveId("")}>Keep syncing</Button>
         </div>}
       </div>)}
-      <p>Choose separate folders, for example Phone\Camera and Phone\Documents. A name in Syncthing is a label; it does not rename or move files.</p>
       {drafts.map((draft, index) => <div key={index} className="my-3 rounded-md border p-3 space-y-2">
         <label className="block">Folder inside the Vault
-          <input value={draft.path} maxLength={240} disabled={busy} className="w-full rounded-md border p-2" placeholder="Phone\Camera"
+          <input value={draft.path} maxLength={240} disabled={busy} className="w-full rounded-md border p-2" placeholder="Sync"
             onChange={event => setDrafts(current => current.map((item, i) => i === index ? { ...item, path: event.target.value } : item))} />
         </label>
         <label className="block">Name shown in Syncthing
           <input value={draft.label} maxLength={128} disabled={busy} className="w-full rounded-md border p-2"
             onChange={event => setDrafts(current => current.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} />
         </label>
-        <Button minimal disabled={busy} onClick={() => setDrafts(current => current.filter((_, i) => i !== index))}>Remove from setup</Button>
       </div>)}
-      <Button disabled={busy || folders.length + drafts.length >= 32} onClick={() => setDrafts(current => [...current, { path: "", label: DEFAULT_VAULT_SYNC_LABEL }])}>Add another folder</Button>
-      <p>After enabling, open Syncthing, connect your phone, and share each folder. To change a folder’s location, remove its sync configuration and add the new location; files are never moved automatically.</p>
+      {drafts.length === 0 && <Button disabled={busy || folders.length >= 32} onClick={() => setDrafts([{ path: "Sync", label: DEFAULT_VAULT_SYNC_LABEL }])}>Add sync folder</Button>}
       {busy && <p role="status">Checking sync… Keep this Vault mounted.</p>}
       <VaultOperationNotice message={error} />
     </DialogBody>
@@ -149,7 +170,9 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
       <Button disabled={busy} onClick={() => void perform(() => refresh())}>Refresh</Button>
       {gui && <Button disabled={busy} onClick={() => void perform(() => open(gui))}>Open Syncthing</Button>}
       <Button disabled={busy} onClick={onClose}>Close</Button>
-      <Button intent="primary" disabled={busy || !loaded || drafts.length === 0} onClick={enable}>Enable selected folders</Button>
+      {syncDisabled && canEnableSync
+        ? <Button intent="primary" disabled={busy} onClick={enableSyncForVault}>Enable sync for this Vault</Button>
+        : !syncDisabled && <Button intent="primary" disabled={busy || !loaded || drafts.length === 0} onClick={enable}>Enable sync</Button>}
     </>} />
   </Dialog>;
 }

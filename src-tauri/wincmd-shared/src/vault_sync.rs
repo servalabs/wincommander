@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
 #[serde(rename_all = "snake_case")]
 pub enum VaultSyncAction {
+    Enable,
     List,
     Rename,
     Remove,
@@ -29,6 +30,15 @@ impl VaultSyncManagementRequest {
         self.personal
             && self.internal_drive <= 25
             && match self.action {
+                VaultSyncAction::Enable => {
+                    self.relative_path.is_none()
+                        && self.folder_label.is_none()
+                        && self.folder_id.is_none()
+                        && self
+                            .expected_mount_receipt
+                            .as_deref()
+                            .is_some_and(valid_sync_mount_receipt)
+                }
                 VaultSyncAction::List => {
                     self.relative_path.is_none()
                         && self.folder_label.is_none()
@@ -112,6 +122,12 @@ pub struct VaultSyncManagementResult {
     pub gui_url: Option<String>,
     pub folders: Vec<VaultSyncFolder>,
     pub removed: bool,
+    /// The service reports consent without contacting the private adapter.
+    #[serde(default)]
+    pub syncthing_enabled: bool,
+    /// Only a standalone personal Vault can be enabled by its cloud action.
+    #[serde(default)]
+    pub can_enable_syncthing: bool,
 }
 
 impl VaultSyncManagementResult {
@@ -166,10 +182,18 @@ mod tests {
             expected_mount_receipt: None,
         };
         assert!(request.valid());
+        request.action = VaultSyncAction::Enable;
+        assert!(!request.valid());
+        request.expected_mount_receipt = Some("a".repeat(64));
+        assert!(request.valid());
         request.relative_path = Some("Phone\\Camera".into());
         assert!(!request.valid());
+        request.action = VaultSyncAction::List;
+        request.relative_path = None;
+        request.expected_mount_receipt = None;
         request.action = VaultSyncAction::Rename;
         assert!(!request.valid());
+        request.relative_path = Some("Phone\\Camera".into());
         request.folder_label = Some("Phone photos".into());
         request.folder_id = Some("wcv-test".into());
         request.expected_mount_receipt = Some("a".repeat(64));

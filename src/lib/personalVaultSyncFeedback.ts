@@ -46,6 +46,7 @@ export function personalVaultSyncError(error: unknown): string {
   const detail = error instanceof Error ? error.message.toLowerCase() : typeof error === "string" ? error.toLowerCase() : "";
   if (detail.includes("vault_sync_mount_changed")) return "The Vault in this drive slot has changed. Close this dialog, refresh Secure Storage, and open sync settings for the intended Vault again.";
   if (detail.includes("vault_sync_label_update_failed")) return "The folder was enabled, but its name update could not be confirmed. Refresh the list and use Save name on that folder; you do not need to enable it again.";
+  if (detail.includes("vault_syncthing_not_enabled")) return "Sync is off for this personal Vault. In Vault access, edit this Vault, turn on Syncthing, save the policy, then try again.";
   if (detail.includes("vault_not_authorized")) return "Sync is available only for a personal Vault owned and mounted by this Windows account. Shared Vaults cannot use it.";
   if (detail.includes("vault_mount_state_unknown")) return "WinCommander could not confirm that this Vault is still mounted for your account. Refresh Secure Storage, then try again.";
   if (detail.includes("vault_syncthing_install_failed")) return "Syncthing could not be installed or its download could not be verified. Check your Internet connection and available disk space, then enable sync again.";

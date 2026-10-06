@@ -80,5 +80,6 @@ export function applyVaultAccessPreset(
     access_pattern: preset,
     grants,
     mount: { ...entry.mount, presentation: "machine" },
+    syncthing_opt_in: false,
   };
 }

@@ -724,6 +724,12 @@ fn reason_fields(
             true,
             "check_syncthing_installation",
         ),
+        Some(VaultMountReason::SyncthingNotEnabled) => (
+            "VLT.SYNCTHING.NOT_ENABLED",
+            DiagnosticSeverity::Info,
+            false,
+            "enable_syncthing_in_vault_policy",
+        ),
         Some(VaultMountReason::ProNotInstalled) => (
             "VLT.PRO.NOT_INSTALLED",
             DiagnosticSeverity::Error,
