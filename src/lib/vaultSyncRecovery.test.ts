@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isSyncthingSetupUrl, vaultSyncRecoveryChoice, vaultSyncRecoveryReason } from "./vaultSyncRecovery";
+import { isSyncthingSetupUrl, vaultSyncRecoveryChoice, vaultSyncRecoveryReason, type VaultSyncRecoveryAction } from "./vaultSyncRecovery";
 import { notifyVaultSyncRecovery, VAULT_SYNC_WARNING_EVENT } from "./vaultSyncWarning";
 
 const roots = [{ relative_path: "Phone/Photos", reason: "root_missing", token: "a".repeat(64) }];
@@ -31,6 +31,10 @@ describe("Vault sync recovery choices", () => {
     expect(vaultSyncRecoveryReason("marker_missing")).toContain("safety marker");
     expect(vaultSyncRecoveryReason("configuration_missing")).toContain("configuration");
     expect(vaultSyncRecoveryReason("confirmation_required")).toContain("decision");
+  });
+  it("exposes an explicit paused recovery action without treating it as a stopped service", () => {
+    const action: VaultSyncRecoveryAction = "keep_paused";
+    expect(action).toBe("keep_paused");
   });
   it("opens only the verified loopback Syncthing setup location", () => {
     expect(isSyncthingSetupUrl("http://127.0.0.1:51995")).toBe(true);

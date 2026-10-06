@@ -1,8 +1,44 @@
 export const RECOVERED_SYNC_SHARING_GUIDANCE = "Share this new folder with your phone in Syncthing and accept it there. If the phone says the folder location is already in use, remove its old Syncthing folder entry while keeping the files, then accept the new share.";
 
+export type VaultSyncFolderValidation =
+  | { ok: true; folders: string[] }
+  | { ok: false; message: string };
+
+/**
+ * Normalise a short, Vault-relative folder name before it crosses the IPC
+ * boundary. The service remains authoritative; this gives the person a clear
+ * explanation before a batch can create partly configured folders.
+ */
+export function validatePersonalVaultSyncFolders(values: readonly string[]): VaultSyncFolderValidation {
+  if (!Array.isArray(values) || values.length === 0 || values.length > 32) {
+    return { ok: false, message: "Add between one and 32 separate folders inside this Vault." };
+  }
+  const folders: string[] = [];
+  for (const value of values) {
+    const folder = value.trim().replaceAll("/", "\\");
+    const parts = folder.split("\\");
+    if (!folder || folder.length > 240 || parts.some((part: string) => !part || part === "." || part === ".." || /[:\x00-\x1f]/.test(part))) {
+      return { ok: false, message: "Use a folder inside the Vault, such as Phone\\Camera. Do not use a drive letter, the Vault root, or .." };
+    }
+    folders.push(folder);
+  }
+  const keys = folders.map(folder => folder.toLocaleLowerCase());
+  if (new Set(keys).size !== keys.length) {
+    return { ok: false, message: "Each sync folder must be listed only once." };
+  }
+  for (let index = 0; index < keys.length; index += 1) {
+    for (let other = index + 1; other < keys.length; other += 1) {
+      if (keys[index].startsWith(`${keys[other]}\\`) || keys[other].startsWith(`${keys[index]}\\`)) {
+        return { ok: false, message: "Sync folders cannot overlap. For example, use Phone\\Camera and Phone\\Documents, not Phone and Phone\\Camera." };
+      }
+    }
+  }
+  return { ok: true, folders };
+}
+
 export function personalVaultSyncSetupMessage(path: string, pairingRequired = false): string {
   if (pairingRequired) return `Sync setup for ${path} is ready. ${RECOVERED_SYNC_SHARING_GUIDANCE}`;
-  return `Sync is configured for ${path}. Syncthing keeps it available while this personal Vault is mounted. Connect your other device in Syncthing to exchange files.`;
+  return `Sync is configured for ${path}. Its folder pauses when this personal Vault is dismounted and resumes after it is mounted again; that does not stop Syncthing or other sync folders. Connect your other device in Syncthing to exchange files.`;
 }
 
 /** Translate bounded service outcomes without exposing private helper diagnostics. */

@@ -23,4 +23,11 @@ describe("encrypted-volume dismount", () => {
     expect(panel).toContain("disabled={refreshing}");
     expect(panel).toContain("onClick={() => refreshVault(false)}");
   });
+  test("sets up distinct child sync folders and explains that pausing one does not stop Syncthing", () => {
+    expect(source).toContain("validatePersonalVaultSyncFolders(syncFolders)");
+    expect(source).toContain("Add another folder");
+    expect(source).toContain("They cannot overlap");
+    expect(source).toContain("Pausing a folder does not stop Syncthing");
+    expect(source).toContain("for (const relativePath of validated.folders)");
+  });
 });

@@ -84,17 +84,38 @@ export default function VaultSyncRecoveryPanel({ notice, onBusyChange }: Props) 
     }
   };
 
+  const keepPaused = async (token: string) => {
+    if (!choice || inFlight.current) return;
+    const root = choice.roots.find(item => item.token === token);
+    if (!root) return;
+    inFlight.current = true; setBusy(true); onBusyChange(true); setError("");
+    try {
+      const result = await latest.current.enablePersonalVaultSync(choice.internalDrive, root.relative_path, "keep_paused", root.token);
+      if (!active.current) return;
+      const message = `${root.relative_path}: kept paused. This does not stop Syncthing or pause this Vault’s other sync folders.`;
+      setMessages(current => [...current, message]);
+      setChoice(current => current ? { ...current, roots: current.roots.filter(item => item.token !== token) } : null);
+      if (isSyncthingSetupUrl(result.gui_url)) setSetupUrl(result.gui_url);
+      showSuccess(message, undefined, { kind: "notification" });
+    } catch (failure) {
+      if (active.current) {
+        setChoice(null); setChecked(false);
+        setError(`${personalVaultSyncError(failure)} Check again to refresh the recovery choices before retrying.`);
+      }
+    } finally {
+      inFlight.current = false;
+      if (active.current) { setBusy(false); onBusyChange(false); }
+    }
+  };
+
   return <div className="space-y-3 text-sm">
-    <p>Recreating makes a new sync setup for the selected folder. Existing files stay in place; deleted files are not restored. You must share the new folder with your phone and accept it there again. Your paired devices stay saved.</p>
+    <p>Recreating makes a new sync setup for the selected folder. Existing files stay in place; deleted files are not restored. You must share the new folder with your phone and accept it there again. Your paired devices stay saved. Keeping it paused leaves only this folder paused; it does not stop Syncthing, block the mounted Vault, or pause other folders.</p>
     {busy && <p role="status">Checking or updating this Vault’s sync setup…</p>}
     {choice?.roots.map(root => <div key={root.token} className="rounded-md border p-3 space-y-2">
       <p className="font-medium break-words">{notice.drive}\{root.relative_path}</p>
       <p>{vaultSyncRecoveryReason(root.reason)}</p>
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" disabled={busy} onClick={() => {
-          setChoice(current => current ? { ...current, roots: current.roots.filter(item => item.token !== root.token) } : null);
-          setMessages(current => [...current, `${root.relative_path}: kept paused. You can revisit this choice from the Vault’s sync button.`]);
-        }}>Keep paused</Button>
+        <Button variant="outline" disabled={busy} onClick={() => void keepPaused(root.token)}>Keep paused</Button>
         <Button disabled={busy} onClick={() => void recreate(root.token)}>Recreate sync setup</Button>
       </div>
     </div>)}

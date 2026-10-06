@@ -7,7 +7,7 @@ import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
-import type { PersonalVaultSyncEnrollment } from "../lib/vaultSyncRecovery";
+import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1867,7 +1867,7 @@ export function useBackend() {
       })),
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
-    enablePersonalVaultSync: (internalDrive: number, relativePath: string, recoveryAction?: "inspect" | "recreate", recoveryToken?: string) =>
+    enablePersonalVaultSync: (internalDrive: number, relativePath: string, recoveryAction?: VaultSyncRecoveryAction, recoveryToken?: string) =>
       invoke<PersonalVaultSyncEnrollment>("vault_enroll_personal_syncthing", { internalDrive, relativePath,
         ...(recoveryAction ? { recoveryAction } : {}), ...(recoveryToken ? { recoveryToken } : {}) }),
     dismountAllVolumes: (force = false) => afterVaultMutation(() => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force })),
