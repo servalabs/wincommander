@@ -357,7 +357,7 @@ async fn vault_call_until(
             binary_hash: None,
             free_version: None,
             pro_version: None,
-            vault_runtime_version: None,
+            vault_runtime_version: Some(wincmd_shared::vault_inventory::VAULT_RUNTIME_VERSION),
         });
         timeout_at(deadline, write_envelope(&mut pipe, &hello))
             .await

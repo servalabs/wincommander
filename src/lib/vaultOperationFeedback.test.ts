@@ -42,8 +42,10 @@ test("failed mount rollback reports uncertain cleanup without claiming dismount 
 
 test("runtime incompatibility distinguishes preflight denial from unverified post-operation status", () => {
   const preflight = vaultOperationError("vault_runtime_update_required");
-  expect(preflight).toContain("matching Pro update from License / Pro");
-  expect(preflight).toContain("reinstalling the older Pro will not fix it");
+  expect(preflight).toContain("app, Pro component and Vault service");
+  expect(preflight).toContain("Update or repair them together");
+  expect(preflight).toContain("matching installer and Pro release");
+  expect(preflight).toContain("Reinstalling an older component will not fix this");
   expect(preflight).toContain("No mount or dismount was started");
   const status = vaultOperationError("vault_service_personal_status_invalid", "dismount");
   expect(status).toContain("app, Pro component and Vault service");
