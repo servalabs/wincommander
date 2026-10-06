@@ -506,10 +506,11 @@ pub async fn vault_enroll_personal_syncthing(
     if internal_drive > 25 || relative_path.len() > 240 {
         return Err("personal sync enrollment request is invalid".to_string());
     }
-    match (recovery_action.as_deref(), recovery_token.as_deref()) {
-        (None | Some("inspect"), None) => {},
-        (Some("recreate"), Some(token)) if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) => {},
-        _ => return Err("personal sync recovery request is invalid".into()),
+    if !valid_personal_sync_recovery_request(
+        recovery_action.as_deref(),
+        recovery_token.as_deref(),
+    ) {
+        return Err("personal sync recovery request is invalid".into());
     }
     crate::svc_client::call(
         ENROLL_PERSONAL_SYNCTHING,
@@ -522,6 +523,16 @@ pub async fn vault_enroll_personal_syncthing(
         }),
     )
     .await
+}
+
+fn valid_personal_sync_recovery_request(action: Option<&str>, token: Option<&str>) -> bool {
+    match (action, token) {
+        (None | Some("inspect"), None) => true,
+        (Some("recreate" | "keep_paused"), Some(token)) => {
+            token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }
+        _ => false,
+    }
 }
 
 /// Checks the caller's Explorer namespace and releases only inaccessible
@@ -673,6 +684,24 @@ mod tests {
         assert_eq!(GET_ACCESS_DIRECTORY, "svc.vault.get_access_directory");
         assert_eq!(SAVE_ACCESS_DIRECTORY, "svc.vault.save_access_directory");
         assert_eq!(QUERY_SERVICE_DIAGNOSTICS, "svc.diagnostics.query");
+    }
+
+    #[test]
+    fn personal_sync_recovery_actions_require_the_owner_recovery_token() {
+        let token = "a".repeat(64);
+        assert!(valid_personal_sync_recovery_request(None, None));
+        assert!(valid_personal_sync_recovery_request(Some("inspect"), None));
+        for action in ["recreate", "keep_paused"] {
+            assert!(valid_personal_sync_recovery_request(Some(action), Some(&token)));
+        }
+        for request in [
+            (Some("keep_paused"), None),
+            (Some("keep_paused"), Some("abc")),
+            (Some("unexpected"), Some(&token)),
+            (Some("inspect"), Some(&token)),
+        ] {
+            assert!(!valid_personal_sync_recovery_request(request.0, request.1));
+        }
     }
 
     #[test]
