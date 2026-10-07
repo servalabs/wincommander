@@ -147,7 +147,9 @@ fn success_message(success: &ContextScrubSuccess) -> String {
     for file in &success.files {
         message.push_str(&format!("{}\r\n", file.name));
         if file.removed_kinds.is_empty() {
-            message.push_str("  • No removable metadata was detected (normal file structure was retained).\r\n");
+            message.push_str(
+                "  • No removable metadata was detected (normal file structure was retained).\r\n",
+            );
         } else {
             for kind in &file.removed_kinds {
                 message.push_str(&format!("  • {kind}\r\n"));
@@ -165,11 +167,7 @@ pub(crate) fn show_result(result: Result<ContextScrubSuccess, String>) {
     match result {
         Ok(success) => {
             crate::log_message_src("info", "core", "[ContextScrub] completed clean output");
-            show_message(
-                "WinCommander Scrub",
-                &success_message(&success),
-                false,
-            );
+            show_message("WinCommander Scrub", &success_message(&success), false);
         }
         Err(error) => {
             crate::log_message_src(

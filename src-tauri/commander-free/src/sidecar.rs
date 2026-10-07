@@ -1,7 +1,7 @@
-#[path = "sidecar_vault_contract.rs"]
-mod vault_contract;
 #[path = "sidecar_deadlines.rs"]
 mod deadlines;
+#[path = "sidecar_vault_contract.rs"]
+mod vault_contract;
 use deadlines::DispatchFailure;
 
 // src-tauri/src/sidecar.rs (commander-free crate)
@@ -1070,9 +1070,12 @@ async fn spawn_pro_session() -> Result<ProSession, String> {
 }
 
 async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, String> {
-    deadlines::while_open(shutdown_signal().subscribe(), spawn_pro_session_with_role_open(role))
-        .await
-        .unwrap_or_else(|| Err("Pro session is closing".to_string()))
+    deadlines::while_open(
+        shutdown_signal().subscribe(),
+        spawn_pro_session_with_role_open(role),
+    )
+    .await
+    .unwrap_or_else(|| Err("Pro session is closing".to_string()))
 }
 
 async fn spawn_pro_session_with_role_open(role: SessionRole) -> Result<ProSession, String> {
@@ -1096,8 +1099,8 @@ async fn spawn_pro_session_with_role_open(role: SessionRole) -> Result<ProSessio
     // when Windows' native loader immediately rejects the child, so this is
     // the only point where concurrent callers can be coalesced before the OS
     // presents duplicate loader dialogs.
-    let _spawn_guard = deadlines::admit(pro_spawn_gate().lock(), ADMISSION_TIMEOUT, "launch")
-        .await?;
+    let _spawn_guard =
+        deadlines::admit(pro_spawn_gate().lock(), ADMISSION_TIMEOUT, "launch").await?;
     if let Some(error) = current_pro_spawn_cooldown_error() {
         return Err(error);
     }
@@ -1417,9 +1420,16 @@ async fn dispatch_request(
     session: &mut ProSession,
     req: Request,
 ) -> Result<serde_json::Value, DispatchFailure> {
-    deadlines::while_open(shutdown_signal().subscribe(), dispatch_request_open(session, req))
-        .await
-        .unwrap_or_else(|| Err(DispatchFailure::OutcomeUnknown("Pro session is closing".to_string())))
+    deadlines::while_open(
+        shutdown_signal().subscribe(),
+        dispatch_request_open(session, req),
+    )
+    .await
+    .unwrap_or_else(|| {
+        Err(DispatchFailure::OutcomeUnknown(
+            "Pro session is closing".to_string(),
+        ))
+    })
 }
 
 async fn dispatch_request_open(
@@ -1448,7 +1458,9 @@ async fn dispatch_request_open(
             Ok(response) => response,
             Err(_) => {
                 session.inflight.lock().await.remove(&request_id);
-                return Err(DispatchFailure::OutcomeUnknown("Pro response timeout".to_string()));
+                return Err(DispatchFailure::OutcomeUnknown(
+                    "Pro response timeout".to_string(),
+                ));
             }
         },
         None => rx.await,
@@ -1670,10 +1682,11 @@ async fn try_dispatch_via_agent(
     feature_id: &str,
     args: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, String>> {
-    let mut slot = match deadlines::admit(agent_session_slot().lock(), ADMISSION_TIMEOUT, "agent").await {
-        Ok(slot) => slot,
-        Err(error) => return Some(Err(error)),
-    };
+    let mut slot =
+        match deadlines::admit(agent_session_slot().lock(), ADMISSION_TIMEOUT, "agent").await {
+            Ok(slot) => slot,
+            Err(error) => return Some(Err(error)),
+        };
     if *shutdown_signal().borrow() {
         return Some(Err("Pro session is closing".to_string()));
     }
@@ -1888,7 +1901,9 @@ pub async fn dispatch_paid_command(
 
     // Retry only before writing starts; a lost reply cannot prove no mutation occurred.
     for attempt in 0..2 {
-        if let Err(error) = vault_contract::require_vault_runtime(feature_id, session.vault_runtime_version) {
+        if let Err(error) =
+            vault_contract::require_vault_runtime(feature_id, session.vault_runtime_version)
+        {
             return_pro_session_to_pool(session).await;
             return Err(error);
         }
@@ -1969,7 +1984,8 @@ pub async fn dispatch_paid_command(
                     "vault_request_timeout"
                 } else {
                     "vault_operation_unconfirmed"
-                }.to_string());
+                }
+                .to_string());
             }
             Err(transport_err) if !transport_err.may_retry() => {
                 return Err(format!(
@@ -2054,7 +2070,10 @@ pub(crate) async fn drain_pro_sessions_for_update(
 }
 
 async fn drain_pro_sessions_bounded() {
-    if timeout(Duration::from_secs(10), close_pro_session_inner()).await.is_err() {
+    if timeout(Duration::from_secs(10), close_pro_session_inner())
+        .await
+        .is_err()
+    {
         crate::log_message("warn", "[Sidecar] shutdown deadline reached");
     }
 }
@@ -2106,7 +2125,8 @@ mod tests {
                 drain_pro_sessions_for_update(&maintenance).await;
                 assert!(!*shutdown_signal().borrow(), "an update is not an app quit");
                 assert!(
-                    crate::pro_install::update_guard::operation_lease(Some(&target), &marker).is_err()
+                    crate::pro_install::update_guard::operation_lease(Some(&target), &marker)
+                        .is_err()
                 );
                 // Inject the installer's post-drain failure/commit boundary.
                 // Separate replacement tests exercise the real atomic swap.
@@ -2183,9 +2203,12 @@ mod tests {
     #[test]
     fn vault_mount_mutations_have_a_bounded_wait_and_cannot_be_replayed() {
         for command in [
-            "Mount-EncryptionVolume", "Mount-EncryptedVolume",
-            "Dismount-EncryptionVolume", "Dismount-EncryptedVolume",
-            "Dismount-AllEncryptionVolumes", "Dismount-AllEncryptedVolumes",
+            "Mount-EncryptionVolume",
+            "Mount-EncryptedVolume",
+            "Dismount-EncryptionVolume",
+            "Dismount-EncryptedVolume",
+            "Dismount-AllEncryptionVolumes",
+            "Dismount-AllEncryptedVolumes",
         ] {
             assert!(is_vault_mount_mutation(command));
             assert_eq!(request_timeout_for(command), Some(Duration::from_secs(180)));

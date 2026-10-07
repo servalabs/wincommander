@@ -27,6 +27,8 @@ pub mod autonomous_agent_test;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_test;
 mod canary_tokens;
+#[cfg(windows)]
+mod capture_protection;
 mod context_menu_scrub;
 mod context_menu_shred;
 mod datastore;
@@ -87,6 +89,7 @@ mod payments;
 mod port_monitor;
 mod print_log;
 mod pro_install;
+mod process_privileges;
 mod ransomware_monitor;
 #[cfg(windows)]
 mod rdp_session_watch;
@@ -119,16 +122,13 @@ mod sidecar;
 mod sidecar_process_auth;
 mod startup_auth;
 mod startup_elevation;
-mod process_privileges;
 mod startup_maintenance;
-mod startup_trace;
 #[cfg(windows)]
-mod capture_protection;
+mod startup_renderer;
+mod startup_trace;
 #[cfg(windows)]
 mod startup_visibility;
 mod startup_window;
-#[cfg(windows)]
-mod startup_renderer;
 mod storage_probe;
 mod svc_client;
 mod trust_store_audit;

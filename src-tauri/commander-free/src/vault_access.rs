@@ -95,13 +95,29 @@ fn vault_failure_code(
 ) -> (&'static str, DiagnosticRetryability, &'static str) {
     let lower = error.to_ascii_lowercase();
     if lower.contains("administrator_required") {
-        ("VLT.AUTH.ADMINISTRATOR_REQUIRED", DiagnosticRetryability::Manual, "request_administrator_approval")
+        (
+            "VLT.AUTH.ADMINISTRATOR_REQUIRED",
+            DiagnosticRetryability::Manual,
+            "request_administrator_approval",
+        )
     } else if lower.contains("policy_access_denied") {
-        ("VLT.AUTH.POLICY_ACCESS_DENIED", DiagnosticRetryability::Never, "request_authorization")
+        (
+            "VLT.AUTH.POLICY_ACCESS_DENIED",
+            DiagnosticRetryability::Never,
+            "request_authorization",
+        )
     } else if lower.contains("private_owner_required") {
-        ("VLT.AUTH.PRIVATE_OWNER_REQUIRED", DiagnosticRetryability::Never, "ask_primary_owner")
+        (
+            "VLT.AUTH.PRIVATE_OWNER_REQUIRED",
+            DiagnosticRetryability::Never,
+            "ask_primary_owner",
+        )
     } else if lower.contains("mount_state_unknown") {
-        ("VLT.MOUNT.STATE_UNKNOWN", DiagnosticRetryability::Manual, "refresh_status")
+        (
+            "VLT.MOUNT.STATE_UNKNOWN",
+            DiagnosticRetryability::Manual,
+            "refresh_status",
+        )
     } else if lower.contains("pro_not_installed") {
         (
             "VLT.PRO.NOT_INSTALLED",
@@ -504,14 +520,16 @@ pub async fn vault_enroll_personal_syncthing(
     recovery_token: Option<String>,
     expected_mount_receipt: Option<String>,
 ) -> Result<Value, String> {
-    if internal_drive > 25 || relative_path.len() > 240
-        || expected_mount_receipt.as_deref().is_some_and(|value|value.len()!=64 || !value.bytes().all(|c|c.is_ascii_hexdigit())) {
+    if internal_drive > 25
+        || relative_path.len() > 240
+        || expected_mount_receipt
+            .as_deref()
+            .is_some_and(|value| value.len() != 64 || !value.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
         return Err("personal sync enrollment request is invalid".to_string());
     }
-    if !valid_personal_sync_recovery_request(
-        recovery_action.as_deref(),
-        recovery_token.as_deref(),
-    ) {
+    if !valid_personal_sync_recovery_request(recovery_action.as_deref(), recovery_token.as_deref())
+    {
         return Err("personal sync recovery request is invalid".into());
     }
     crate::svc_client::call(
@@ -530,20 +548,35 @@ pub async fn vault_enroll_personal_syncthing(
 
 #[tauri::command]
 pub async fn vault_manage_personal_syncthing(
-    internal_drive: u8, action: wincmd_shared::vault_sync::VaultSyncAction,
-    relative_path: Option<String>, folder_label: Option<String>,
+    internal_drive: u8,
+    action: wincmd_shared::vault_sync::VaultSyncAction,
+    relative_path: Option<String>,
+    folder_label: Option<String>,
     folder_id: Option<String>,
     expected_mount_receipt: Option<String>,
 ) -> Result<wincmd_shared::vault_sync::VaultSyncManagementResult, String> {
     let request = wincmd_shared::vault_sync::VaultSyncManagementRequest {
-        personal:true, internal_drive, action, relative_path, folder_label, folder_id, expected_mount_receipt,
+        personal: true,
+        internal_drive,
+        action,
+        relative_path,
+        folder_label,
+        folder_id,
+        expected_mount_receipt,
     };
-    if !request.valid() { return Err("personal sync management request is invalid".into()); }
-    let value = crate::svc_client::call("svc.vault.manage_personal_syncthing", serde_json::to_value(request)
-        .map_err(|_| "personal sync request could not be encoded")?).await?;
-    let result: wincmd_shared::vault_sync::VaultSyncManagementResult = serde_json::from_value(value)
-        .map_err(|_| "personal sync management result is invalid")?;
-    if !result.valid() { return Err("personal sync management result is invalid".into()); }
+    if !request.valid() {
+        return Err("personal sync management request is invalid".into());
+    }
+    let value = crate::svc_client::call(
+        "svc.vault.manage_personal_syncthing",
+        serde_json::to_value(request).map_err(|_| "personal sync request could not be encoded")?,
+    )
+    .await?;
+    let result: wincmd_shared::vault_sync::VaultSyncManagementResult =
+        serde_json::from_value(value).map_err(|_| "personal sync management result is invalid")?;
+    if !result.valid() {
+        return Err("personal sync management result is invalid".into());
+    }
     Ok(result)
 }
 
@@ -698,7 +731,10 @@ mod tests {
         );
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
-        assert_eq!(ENROLL_PERSONAL_SYNCTHING, "svc.vault.enroll_personal_syncthing");
+        assert_eq!(
+            ENROLL_PERSONAL_SYNCTHING,
+            "svc.vault.enroll_personal_syncthing"
+        );
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
         assert_eq!(DRIVE_LETTERS, "svc.vault.drive_letters");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
@@ -714,7 +750,10 @@ mod tests {
         assert!(valid_personal_sync_recovery_request(None, None));
         assert!(valid_personal_sync_recovery_request(Some("inspect"), None));
         for action in ["recreate", "keep_paused"] {
-            assert!(valid_personal_sync_recovery_request(Some(action), Some(&token)));
+            assert!(valid_personal_sync_recovery_request(
+                Some(action),
+                Some(&token)
+            ));
         }
         for request in [
             (Some("keep_paused"), None),
@@ -821,9 +860,18 @@ mod tests {
     #[test]
     fn vault_transport_failures_map_to_safe_stable_codes() {
         for (error, expected) in [
-            ("vault_administrator_required", "VLT.AUTH.ADMINISTRATOR_REQUIRED"),
-            ("vault_policy_access_denied", "VLT.AUTH.POLICY_ACCESS_DENIED"),
-            ("vault_private_owner_required", "VLT.AUTH.PRIVATE_OWNER_REQUIRED"),
+            (
+                "vault_administrator_required",
+                "VLT.AUTH.ADMINISTRATOR_REQUIRED",
+            ),
+            (
+                "vault_policy_access_denied",
+                "VLT.AUTH.POLICY_ACCESS_DENIED",
+            ),
+            (
+                "vault_private_owner_required",
+                "VLT.AUTH.PRIVATE_OWNER_REQUIRED",
+            ),
             ("vault_mount_state_unknown", "VLT.MOUNT.STATE_UNKNOWN"),
             ("vault_pro_not_installed", "VLT.PRO.NOT_INSTALLED"),
             ("PRO_NOT_INSTALLED:missing module", "VLT.PRO.NOT_INSTALLED"),

@@ -305,13 +305,14 @@ async fn vault_call_until(
         }
     }
 
-    let mut root_acl_phase = match root_acl::RootAclPhase::capture(feature_id, request_id, presentation, &args) {
-        Ok(phase) => phase,
-        Err(reason) => {
-            zeroize_json(&mut args);
-            return Err(reason);
-        }
-    };
+    let mut root_acl_phase =
+        match root_acl::RootAclPhase::capture(feature_id, request_id, presentation, &args) {
+            Ok(phase) => phase,
+            Err(reason) => {
+                zeroize_json(&mut args);
+                return Err(reason);
+            }
+        };
 
     let pipe_name = random_pipe_name();
     let session_token = random_session_token();
@@ -563,7 +564,8 @@ pub async fn vault_recovery_dismount(
         return Err(VaultMountReason::BrokerRejected);
     }
     // SYSTEM can close the driver slot, but cannot attest another logon's local aliases.
-    let local_cleanup_unconfirmed = presentation == wincmd_shared::vault_access::VaultPresentation::PerUser
+    let local_cleanup_unconfirmed = presentation
+        == wincmd_shared::vault_access::VaultPresentation::PerUser
         && !owner_logon_ended;
     if owner_logon_ended && presented_drive_letter.is_some() {
         return Err(VaultMountReason::BrokerRejected);
@@ -575,7 +577,9 @@ pub async fn vault_recovery_dismount(
         }
     }
     let args = crate::vault_mount::broker_dismount_args(
-        internal_drive, presented_drive_letter, presentation,
+        internal_drive,
+        presented_drive_letter,
+        presentation,
     );
     let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let result = vault_call(VaultCall {
@@ -631,8 +635,12 @@ fn process_broker_reply(
         Envelope::Error(error) if error.request_id == request_id => {
             if let Some(code) = native_mount_diagnostic(&error.message) {
                 crate::diagnostics::record_vault_failure(
-                    &format!("VLT-{request_id}"), "mount", code,
-                    "review_native_mount_diagnostics", false, std::time::Instant::now(),
+                    &format!("VLT-{request_id}"),
+                    "mount",
+                    code,
+                    "review_native_mount_diagnostics",
+                    false,
+                    std::time::Instant::now(),
                 );
             }
             let reason = VaultMountReason::from_wire(&error.kind).unwrap_or_else(|| {
@@ -735,7 +743,8 @@ fn pro_payload_observation(observation: std::io::Result<bool>) -> Result<(), &'s
 }
 
 #[cfg(windows)]
-pub(crate) fn vault_payload_readiness() -> Result<(), wincmd_shared::vault_access::VaultMountReason> {
+pub(crate) fn vault_payload_readiness() -> Result<(), wincmd_shared::vault_access::VaultMountReason>
+{
     pro_payload_observation(std::fs::metadata(fixed_pro_path()).map(|metadata| metadata.is_file()))
         .map_err(broker_transport_reason)
 }
@@ -1091,8 +1100,10 @@ mod tests {
     fn vault_broker_requires_scoped_cleanup_runtime_before_dispatch() {
         use wincmd_shared::vault_access::VaultMountReason;
         for version in [None, Some(0), Some(1), Some(2)] {
-            assert_eq!(super::require_vault_runtime_version(version),
-                Err(VaultMountReason::BrokerHandshakeRejected));
+            assert_eq!(
+                super::require_vault_runtime_version(version),
+                Err(VaultMountReason::BrokerHandshakeRejected)
+            );
         }
         assert_eq!(super::require_vault_runtime_version(Some(3)), Ok(()));
         assert_eq!(super::require_vault_runtime_version(Some(4)), Ok(()));
@@ -1100,10 +1111,24 @@ mod tests {
 
     #[test]
     fn native_mount_diagnostic_accepts_only_closed_receipt_categories() {
-        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_14"), Some("VLT.NATIVE.DRIVER_UNAVAILABLE"));
-        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_34"), Some("VLT.NATIVE.ACL_FAILED"));
-        assert_eq!(super::native_mount_diagnostic("VLT.NATIVE.EXIT_33"), Some("VLT.NATIVE.DRIVE_LINK_FAILED"));
-        for value in ["private path", "VLT.NATIVE.EXIT_014", "VLT.NATIVE.EXIT_14\nsecret", "VLT.NATIVE.EXIT_999"] {
+        assert_eq!(
+            super::native_mount_diagnostic("VLT.NATIVE.EXIT_14"),
+            Some("VLT.NATIVE.DRIVER_UNAVAILABLE")
+        );
+        assert_eq!(
+            super::native_mount_diagnostic("VLT.NATIVE.EXIT_34"),
+            Some("VLT.NATIVE.ACL_FAILED")
+        );
+        assert_eq!(
+            super::native_mount_diagnostic("VLT.NATIVE.EXIT_33"),
+            Some("VLT.NATIVE.DRIVE_LINK_FAILED")
+        );
+        for value in [
+            "private path",
+            "VLT.NATIVE.EXIT_014",
+            "VLT.NATIVE.EXIT_14\nsecret",
+            "VLT.NATIVE.EXIT_999",
+        ] {
             assert!(super::native_mount_diagnostic(value).is_none());
         }
     }
@@ -1441,7 +1466,15 @@ mod tests {
     #[tokio::test]
     async fn recovery_dismount_rejects_out_of_range_slots_before_launching_pro() {
         assert_eq!(
-            vault_recovery_dismount(26, None, wincmd_shared::vault_access::VaultPresentation::Machine, 0, "S-1-5-18", false).await,
+            vault_recovery_dismount(
+                26,
+                None,
+                wincmd_shared::vault_access::VaultPresentation::Machine,
+                0,
+                "S-1-5-18",
+                false
+            )
+            .await,
             Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         );
         for presentation in [
@@ -1454,7 +1487,8 @@ mod tests {
             );
             for letter in ["", "VV:", "V:\\untrusted"] {
                 assert_eq!(
-                    vault_recovery_dismount(12, Some(letter), presentation, 0, "S-1-5-18", false).await,
+                    vault_recovery_dismount(12, Some(letter), presentation, 0, "S-1-5-18", false)
+                        .await,
                     Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
                 );
             }

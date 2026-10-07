@@ -2928,31 +2928,53 @@ fn get_settings_sync_patch(
     result: Option<&serde_json::Value>,
 ) -> Option<serde_json::Value> {
     use serde_json::json;
-    if matches!(command,
-        "Disable-RecallSnapshots" | "Enable-RecallSnapshots"
-        | "Disable-OfficeLogging" | "Enable-OfficeLogging"
-        | "Disable-InternetCommunication" | "Enable-InternetCommunication"
-        | "Disable-BitLockerAutoEncrypt" | "Enable-BitLockerAutoEncrypt"
+    if matches!(
+        command,
+        "Disable-RecallSnapshots"
+            | "Enable-RecallSnapshots"
+            | "Disable-OfficeLogging"
+            | "Enable-OfficeLogging"
+            | "Disable-InternetCommunication"
+            | "Enable-InternetCommunication"
+            | "Disable-BitLockerAutoEncrypt"
+            | "Enable-BitLockerAutoEncrypt"
     ) {
         let result = result?;
-        let expected_status = if command.starts_with("Disable-") { "disabled" } else { "enabled" };
-        let observed_status = result.get("operationStatus").or_else(|| result.get("status")).and_then(serde_json::Value::as_str);
+        let expected_status = if command.starts_with("Disable-") {
+            "disabled"
+        } else {
+            "enabled"
+        };
+        let observed_status = result
+            .get("operationStatus")
+            .or_else(|| result.get("status"))
+            .and_then(serde_json::Value::as_str);
         if result.get("verified").and_then(serde_json::Value::as_bool) != Some(true)
             || result.get("error").and_then(serde_json::Value::as_bool) == Some(true)
             || result.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
-            || !matches!(result.get("status").and_then(serde_json::Value::as_str), Some("disabled" | "enabled" | "applied"))
+            || !matches!(
+                result.get("status").and_then(serde_json::Value::as_str),
+                Some("disabled" | "enabled" | "applied")
+            )
             || observed_status != Some(expected_status)
         {
             return None;
         }
     }
-    if matches!(command, "Set-DesktopShellPriority" | "Reset-DesktopShellPriority") {
+    if matches!(
+        command,
+        "Set-DesktopShellPriority" | "Reset-DesktopShellPriority"
+    ) {
         // A blocked Fix All response is still a JSON response, so do not let
         // the generic command-to-settings table turn it into a fake applied
         // Desktop Shell state.  Machine-wide receipts are annotated as
         // `applied` and retain the script result in `operationStatus`.
         let result = result?;
-        let expected_operation = if command == "Set-DesktopShellPriority" { "enabled" } else { "disabled" };
+        let expected_operation = if command == "Set-DesktopShellPriority" {
+            "enabled"
+        } else {
+            "disabled"
+        };
         let operation = result
             .get("operationStatus")
             .or_else(|| result.get("status"))
@@ -3756,7 +3778,12 @@ mod settings_sync_patch_tests {
 
     #[test]
     fn dashboard_privacy_fixes_require_verified_matching_receipts_before_sync() {
-        for suffix in ["RecallSnapshots", "OfficeLogging", "InternetCommunication", "BitLockerAutoEncrypt"] {
+        for suffix in [
+            "RecallSnapshots",
+            "OfficeLogging",
+            "InternetCommunication",
+            "BitLockerAutoEncrypt",
+        ] {
             for (verb, status) in [("Disable", "disabled"), ("Enable", "enabled")] {
                 let command = format!("{verb}-{suffix}");
                 let params = HashMap::new();
@@ -3770,11 +3797,17 @@ mod settings_sync_patch_tests {
                     serde_json::json!({"status": "partial", "verified": true}),
                     serde_json::json!({"status": if status == "disabled" {"enabled"} else {"disabled"}, "verified": true}),
                 ] {
-                    assert!(get_settings_sync_patch(&command, &params, Some(&result)).is_none(), "{command} cannot invent a saved success");
+                    assert!(
+                        get_settings_sync_patch(&command, &params, Some(&result)).is_none(),
+                        "{command} cannot invent a saved success"
+                    );
                 }
                 for result in [
                     serde_json::json!({"status": status, "verified": true}),
-                    with_machine_wide_status(&command, serde_json::json!({"status": status, "verified": true})),
+                    with_machine_wide_status(
+                        &command,
+                        serde_json::json!({"status": status, "verified": true}),
+                    ),
                 ] {
                     assert!(get_settings_sync_patch(&command, &params, Some(&result)).is_some());
                 }
@@ -3802,7 +3835,10 @@ mod settings_sync_patch_tests {
             ] {
                 let patch = get_settings_sync_patch(command, &params, Some(&result))
                     .expect("a matching Desktop Shell receipt must update settings");
-                assert_eq!(patch.pointer("/tweaks/os/desktopShellPriorityEnabled"), Some(&serde_json::json!(expected)));
+                assert_eq!(
+                    patch.pointer("/tweaks/os/desktopShellPriorityEnabled"),
+                    Some(&serde_json::json!(expected))
+                );
             }
         }
     }
@@ -4437,7 +4473,10 @@ mod param_env_tests {
     fn machine_wide_scope_allowlist_excludes_user_profile_commands() {
         assert!(is_machine_wide_fix_command("Disable-ActivityHistory"));
         assert!(is_machine_wide_fix_command("Set-AppCapabilityAccess"));
-        for command in ["Disable-BitLockerAutoEncrypt", "Enable-BitLockerAutoEncrypt"] {
+        for command in [
+            "Disable-BitLockerAutoEncrypt",
+            "Enable-BitLockerAutoEncrypt",
+        ] {
             assert_eq!(
                 fix_scope::resolve(command, is_machine_wide_fix_command(command)),
                 Some(fix_scope::Scope::Machine)
@@ -5172,13 +5211,21 @@ pub(crate) async fn run_backend_script_with_timeout(
     }
     if command == "Open-EncryptionVolume" {
         return vault_inventory::open(
-            params.get("DriveLetter").map(String::as_str).unwrap_or_default(),
-        ).await;
+            params
+                .get("DriveLetter")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        )
+        .await;
     }
     if command == "Get-VolumeInfo" {
         let root = vault_inventory::authorized_root(
-            params.get("DriveLetter").map(String::as_str).unwrap_or_default(),
-        ).await?;
+            params
+                .get("DriveLetter")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        )
+        .await?;
         params.clear();
         params.insert("DriveLetter".into(), root[..2].to_owned());
     }
@@ -9266,7 +9313,9 @@ fn locate_es_exe_cached(
     cache: &Mutex<Option<std::path::PathBuf>>,
     locate: impl FnOnce() -> Option<std::path::PathBuf>,
 ) -> Option<std::path::PathBuf> {
-    let mut cached = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cached = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(path) = cached.as_ref().filter(|path| path.is_file()) {
         return Some(path.clone());
     }
@@ -9409,8 +9458,8 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod es_query_tests {
     use super::{
-        build_es_count_args, build_es_search_args, parse_es_count, search_scope_drive_root,
-        locate_es_exe_cached, tokenize_es_query, validate_es_scope_path, validate_es_sort,
+        build_es_count_args, build_es_search_args, locate_es_exe_cached, parse_es_count,
+        search_scope_drive_root, tokenize_es_query, validate_es_scope_path, validate_es_sort,
         validate_es_tokens,
     };
 

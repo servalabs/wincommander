@@ -87,7 +87,13 @@ pub async fn trust_store_audit() -> Result<TrustStoreAudit, String> {
 #[cfg(windows)]
 fn scan_trust_stores() -> Result<TrustStoreAudit, String> {
     let output = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", INVENTORY_SCRIPT])
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            INVENTORY_SCRIPT,
+        ])
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
@@ -116,8 +122,7 @@ fn scan_trust_stores() -> Result<TrustStoreAudit, String> {
 
     for cert in &mut certificates {
         if cert.store == "Root" {
-            cert.in_windows_auth_root =
-                auth_roots.contains(&cert.thumbprint.to_ascii_uppercase());
+            cert.in_windows_auth_root = auth_roots.contains(&cert.thumbprint.to_ascii_uppercase());
         }
     }
 

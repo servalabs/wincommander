@@ -938,9 +938,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         mark_personal_secrets_key_in_use(directory.path()).unwrap();
         for current_user_install in [false, true] {
-            let error = load_or_create_user_material(directory.path(), current_user_install, |_, _| {
-                panic!("service ciphertext must forbid replacement key creation")
-            }).unwrap_err();
+            let error =
+                load_or_create_user_material(directory.path(), current_user_install, |_, _| {
+                    panic!("service ciphertext must forbid replacement key creation")
+                })
+                .unwrap_err();
             assert!(error.starts_with("Settings key is missing but encrypted data exists;"));
         }
         assert!(!directory.path().join(USER_MATERIAL_FILENAME).exists());
@@ -953,7 +955,8 @@ mod tests {
         let material = load_or_create_user_material(directory.path(), false, |path, _| {
             assert_eq!(path, directory.path().join(USER_MATERIAL_FILENAME));
             Ok([17; 32])
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(material, [17; 32]);
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
     }

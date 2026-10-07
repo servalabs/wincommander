@@ -35,10 +35,10 @@ enum SettingsScope {
 #[path = "settings_scope.rs"]
 mod settings_scope;
 
-#[path = "personal_settings.rs"]
-mod personal_settings;
 #[path = "settings_legacy_migration.rs"]
 mod legacy_migration;
+#[path = "personal_settings.rs"]
+mod personal_settings;
 #[path = "settings_startup_scope.rs"]
 mod startup_scope;
 
@@ -2814,8 +2814,9 @@ pub fn read_settings() -> Result<AppSettings, String> {
             }
         }
         settings.snapshot_revision = Some(Uuid::new_v4());
-        *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
-            Some(settings.clone());
+        *SETTINGS_CACHE
+            .lock()
+            .map_err(|_| "Settings cache lock poisoned".to_string())? = Some(settings.clone());
         window_policy::publish(&settings);
         crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
 
@@ -2886,11 +2887,7 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
             &format!("[Settings] write_settings_internal failed: {}", e),
         );
     }
-    legacy_migration::after_persistence(
-        res.is_ok() && service_backed,
-        &machine,
-        &user,
-    );
+    legacy_migration::after_persistence(res.is_ok() && service_backed, &machine, &user);
     res
 }
 
@@ -2944,8 +2941,9 @@ fn write_settings_with(
     }
     let mut committed = settings.clone();
     committed.snapshot_revision = Some(Uuid::new_v4());
-    *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
-        Some(committed);
+    *SETTINGS_CACHE
+        .lock()
+        .map_err(|_| "Settings cache lock poisoned".to_string())? = Some(committed);
     window_policy::publish(settings);
     crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
     Ok(())
@@ -3034,8 +3032,9 @@ fn mutate_settings_with(
         return Err(error);
     }
     updated.snapshot_revision = Some(Uuid::new_v4());
-    *SETTINGS_CACHE.lock().map_err(|_| "Settings cache lock poisoned".to_string())? =
-        Some(updated.clone());
+    *SETTINGS_CACHE
+        .lock()
+        .map_err(|_| "Settings cache lock poisoned".to_string())? = Some(updated.clone());
     window_policy::publish(&updated);
     crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
     drop(transaction);
@@ -3143,7 +3142,8 @@ fn get_settings_sync_with_refresh(recheck_locked: bool) -> Result<serde_json::Va
         }
     }
     let settings = read_settings()?;
-    let mut v = serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
+    let mut v =
+        serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
     v["personalSettingsStatus"] = serde_json::to_value(personal_settings::status())
         .map_err(|_| "Could not encode personal settings status".to_string())?;
     Ok(v)
