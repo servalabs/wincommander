@@ -177,7 +177,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountPim, setMountPim] = useState("");
   const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
-  const [mountRepairCurrentAccountAccess, setMountRepairCurrentAccountAccess] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
   const { letters: availableLetters, loading: mountLettersLoading, unavailable: mountLettersUnavailable,
@@ -230,7 +229,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     setMountPim("");
     setMountReadOnly(false);
     setMountRemovable(false);
-    setMountRepairCurrentAccountAccess(false);
     setMountLetter(availableLetters.includes("Y") ? "Y" : availableLetters[0] ?? "");
     setMountType('file');
     setPartitionDiscoveryError("");
@@ -381,10 +379,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         // explicit, per-mount choice and is never remembered.
         readOnly: mountReadOnly,
         removable: mountRemovable,
-        // A locally administered, password-unlocked ordinary container can
-        // recover this account's root access. The service excludes Fleet
-        // policy containers and read-only mounts before any ACL change.
-        repairCurrentAccountAccess: !mountReadOnly && mountRepairCurrentAccountAccess,
+        // The service automatically repairs root access for an elevated local
+        // administrator only after confirming this is not Fleet-managed.
         protectHidden: false,
         hiddenKeyfiles: [],
         scope: "machine",
@@ -436,7 +432,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       setMountPassword("");
       setMounting(false);
     }
-  }, [refreshMountLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountRepairCurrentAccountAccess, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [refreshMountLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -843,16 +839,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               />
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
-            </label>
-            <label className="quick-toggle">
-              <CheckboxControl
-                checked={mountRepairCurrentAccountAccess}
-                disabled={mountReadOnly}
-                ariaLabel="Recover this Windows account's access when needed"
-                onChange={event => setMountRepairCurrentAccountAccess(event.currentTarget.checked)}
-              />
-              <span>Recover this account's access</span>
-              <span className="quick-desc">For an ordinary Vault only: if you are a local administrator and unlock it, repair this PC account's access. Fleet Vault rules are never changed.</span>
             </label>
             <div className="quick-toggle quick-toggle--locked" aria-label="Machine-wide drive mapping enabled">
               <Icon icon="lock" size={14} />

@@ -2452,6 +2452,10 @@ async fn handle_personal_vault_mount(
             ));
         }
     };
+    // An elevated local administrator who unlocked an ordinary writable machine
+    // Vault may always access it. This flag is set only after policy routing:
+    // a Fleet-managed file returned above and never reaches this branch.
+    enable_unmanaged_local_admin_access_recovery(&mut request, caller_privileged);
     // Legacy clients omit presentation and retain their per-user scope.
     record.scope = request.presentation;
     if let Err(reason) = crate::pro_broker::vault_payload_readiness() {
@@ -2534,6 +2538,18 @@ async fn handle_personal_vault_mount(
 
 fn zeroize_personal_mount(request: &mut wincmd_shared::vault_access::PersonalVaultMountRequest) {
     request.zeroize_secrets();
+}
+
+fn enable_unmanaged_local_admin_access_recovery(
+    request: &mut wincmd_shared::vault_access::PersonalVaultMountRequest,
+    caller_privileged: bool,
+) {
+    if caller_privileged
+        && !request.read_only
+        && request.presentation == wincmd_shared::vault_access::VaultPresentation::Machine
+    {
+        request.repair_current_account_access = true;
+    }
 }
 
 fn parse_personal_mount_request(
@@ -5273,6 +5289,32 @@ mod tests {
                 request.zeroize_secrets();
             }
         }
+
+    #[test]
+    fn elevated_admin_automatically_repairs_only_ordinary_writable_machine_mounts() {
+        let mut base = serde_json::json!({
+            "container_path": "C:\\vaults\\ordinary.hc",
+            "password": "test-only-password",
+            "volume_kind": "standard",
+            "volume_role": "outer",
+            "presentation": "machine"
+        });
+        let mut ordinary = parse_personal_mount_request(&mut base.clone()).unwrap();
+        enable_unmanaged_local_admin_access_recovery(&mut ordinary, true);
+        assert!(ordinary.repair_current_account_access);
+        ordinary.zeroize_secrets();
+
+        let mut read_only = parse_personal_mount_request(&mut base.clone()).unwrap();
+        read_only.read_only = true;
+        enable_unmanaged_local_admin_access_recovery(&mut read_only, true);
+        assert!(!read_only.repair_current_account_access);
+        read_only.zeroize_secrets();
+
+        let mut standard_user = parse_personal_mount_request(&mut base).unwrap();
+        enable_unmanaged_local_admin_access_recovery(&mut standard_user, false);
+        assert!(!standard_user.repair_current_account_access);
+        standard_user.zeroize_secrets();
+    }
 
     #[test]
     fn personal_mount_preflight_failures_are_distinct_from_native_engine_failure() {

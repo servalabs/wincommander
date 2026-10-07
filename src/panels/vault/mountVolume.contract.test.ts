@@ -81,3 +81,10 @@ test("partition discovery failure offers retry instead of claiming no partitions
   expect(errorBranch).toContain('text="Retry partition check"');
   expect(errorBranch).not.toContain("No mountable partitions found");
 });
+test("Secure Storage delegates elevated ordinary-Vault recovery to the service", () => {
+  const panel = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
+
+  expect(panel).toContain("service automatically repairs root access");
+  expect(panel).not.toContain("repairCurrentAccountAccess:");
+  expect(panel).not.toContain("Recover this account's access");
+});
