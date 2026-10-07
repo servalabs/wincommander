@@ -3074,6 +3074,14 @@ fn handle_personal_vault_list(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
+    if vault_inventory_contract::parse_query(args)
+        == Some(vault_inventory_contract::InventoryVersion::VerifyCleanup)
+        && vault_mount.has_untracked_mounts().map_err(|_| {
+            VerbError::new("vault_mount_state_unknown", "cleanup status unavailable")
+        })?
+    {
+        return Err(VerbError::new("vault_untracked_mounts", "untracked driver mounts remain"));
+    }
     let mounts = vault_mount
         .personal_mounts_for_caller(
             vault_access,

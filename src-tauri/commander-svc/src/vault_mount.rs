@@ -2550,14 +2550,8 @@ impl VaultMountBroker {
             .active
             .lock()
             .map_err(|_| VaultMountReason::MountStateUnknown)?;
-        // An unregistered native slot has unknown scope and ownership. Never
-        // invent a public row or report an incomplete inventory as all-clear.
-        if slots
-            .keys()
-            .any(|slot| !active.values().any(|mount| mount.internal_drive == *slot))
-        {
-            return Err(VaultMountReason::MountStateUnknown);
-        }
+        // This is the caller-authorized inventory, not a global driver list.
+        // Untracked slots confer no authority and must not block unrelated users.
         let previous = active.clone();
         let mut changed = false;
         for mount in active
@@ -2652,6 +2646,14 @@ impl VaultMountBroker {
 
     pub fn dismount_all(&self, store: &VaultAccessStore) -> Result<(), VaultMountReason> {
         self.with_exclusive_operation(|| self.dismount_all_locked(store))
+    }
+
+    pub(crate) fn has_untracked_mounts(&self) -> Result<bool, VaultMountReason> {
+        self.with_exclusive_operation(|| {
+            let slots = self.snapshot().map_err(|_| VaultMountReason::MountStateUnknown)?;
+            let active = self.active.lock().map_err(|_| VaultMountReason::MountStateUnknown)?;
+            Ok(slots.keys().any(|slot| !active.values().any(|mount| mount.internal_drive == *slot)))
+        })
     }
 
     /// Policy ownership is deliberately immutable while a container is live.

@@ -31,6 +31,7 @@ export function confirmedBulkDismountMessage(receipt: unknown, observed: Encrypt
 export function vaultOperationError(error: unknown, operation: "mount" | "dismount" | "open" = "mount"): string {
   const detail = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
   const cleanupWarning = "Mounting failed and cleanup could not be confirmed. The drive may still be mounted; check Secure Storage before retrying or removing storage.";
+  if (detail.includes("vault_untracked_mounts")) return "Windows still has an encrypted volume whose WinCommander ownership record is missing. Dismount it with the app that mounted it, or save your work in every signed-in account and restart Windows to release the leftover mount. Signing out or restarting WinCommander alone will not clear it.";
   if (detail.includes("vault_cleanup_failed")) return cleanupWarning;
   if (detail.includes("vault_mount_options_timeout")) return "The Vault service did not finish checking the drive list. No mount was started. Wait for any current operation to finish, then refresh the free letters.";
   if (detail.includes("vault_request_timeout") || detail.includes("pro response timeout")) return "The Vault service did not return an operation result in time. The operation may still be running. Do not submit it again; refresh Secure Storage to check the drive's status first.";
