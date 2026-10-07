@@ -693,6 +693,8 @@ pub struct VaultMountBroker {
     engine_snapshot: Option<fn() -> Result<HashMap<u8, String>, String>>,
     owner_logon_probe: fn(&ActiveMount) -> Result<bool, ()>,
     machine_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
+    private_alias_absent: fn(&ActiveMount) -> Result<bool, ()>,
+    private_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     policy_authorizer: fn(
         &VaultAccessStore,
         &str,
@@ -777,6 +779,26 @@ impl VaultMountBroker {
                 #[cfg(not(test))]
                 {
                     recovery::owner_logon_ended
+                }
+            },
+            private_alias_absent: {
+                #[cfg(test)]
+                {
+                    |_| Ok(true)
+                }
+                #[cfg(not(test))]
+                {
+                    recovery::private_alias_absent
+                }
+            },
+            private_alias_cleanup: {
+                #[cfg(test)]
+                {
+                    |_| Ok(true)
+                }
+                #[cfg(not(test))]
+                {
+                    recovery::cleanup_private_alias
                 }
             },
             machine_alias_cleanup: {
@@ -1910,11 +1932,14 @@ impl VaultMountBroker {
             && self
                 .snapshot()
                 .is_ok_and(|slots| !slots.contains_key(&active.internal_drive));
-        // The fallback is intentionally narrower than broker cleanup: it
-        // applies only to an already-absent machine slot and exact missing
-        // global alias. It cannot remove a drive name or private-session alias.
-        let presentation_clean = !live && self.clean_absent_machine_alias(&active);
-        if !broker_closed && !presentation_clean {
+        // Driver closure alone does not release aliases retained by old tokens.
+        // Retire only after the exact presentation has also been verified.
+        let ended_private = active.presentation == VaultPresentation::PerUser && owner_logon_ended;
+        let private_alias_clean = ended_private
+            && self.snapshot().is_ok_and(|slots| !slots.contains_key(&active.internal_drive))
+            && (self.private_alias_cleanup)(&active) == Ok(true);
+        let presentation_clean = (!live && self.clean_absent_machine_alias(&active)) || private_alias_clean;
+        if (!broker_closed && !presentation_clean) || (ended_private && !private_alias_clean) {
             let mut pending = active.clone();
             pending.cleanup_required = true;
             pending.driver_slot_absent = !live
@@ -2882,15 +2907,20 @@ impl VaultMountBroker {
                 self.mark_registry_untrusted();
                 reason
             })?;
+            let owner_logon_ended = self.owner_logon_ended(&mount);
             let broker_closed = self
                 .broker
-                .recover_dismount(self.recovery_request(&mount))
+                .recover_dismount(self.recovery_request_with_logon_proof(&mount, owner_logon_ended))
                 .is_ok()
                 && self
                     .snapshot()
                     .is_ok_and(|slots| !slots.contains_key(&mount.internal_drive));
-            let presentation_clean = !live && self.clean_absent_machine_alias(&mount);
-            if !broker_closed && !presentation_clean {
+            let ended_private = mount.presentation == VaultPresentation::PerUser && owner_logon_ended;
+            let private_alias_clean = ended_private
+                && self.snapshot().is_ok_and(|slots| !slots.contains_key(&mount.internal_drive))
+                && (self.private_alias_cleanup)(&mount) == Ok(true);
+            let presentation_clean = (!live && self.clean_absent_machine_alias(&mount)) || private_alias_clean;
+            if (!broker_closed && !presentation_clean) || (ended_private && !private_alias_clean) {
                 mount.cleanup_required = true;
                 mount.driver_slot_absent = self
                     .snapshot()
@@ -3607,6 +3637,7 @@ mod tests {
     }
 
     include!("vault_dismount_tests.rs");
+    include!("vault_mount_logoff_alias_tests.rs");
     include!("vault_mount_recovery_tests.rs");
     include!("vault_admin_recovery_tests.rs");
     include!("vault_syncthing_dismount_tests.rs");

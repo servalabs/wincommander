@@ -714,7 +714,7 @@ async fn dispatch_verb(
             peer,
         ),
         "svc.vault.release_orphaned_drive_letters" => {
-            handle_release_orphaned_vault_drive_letters(request_id, args, peer)
+            handle_release_orphaned_vault_drive_letters(vault_mount, args, peer)
         }
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
@@ -3262,12 +3262,8 @@ fn handle_personal_vault_syncthing_enroll(
     }))
 }
 
-/// Releases only inaccessible VeraCrypt/TrueCrypt links in the authenticated
-/// caller's Explorer namespace.  The service never accepts a selected letter:
-/// Pro rechecks each target and leaves normal, foreign, and usable mappings
-/// alone before removing an exact stale encrypted-volume link.
 fn handle_release_orphaned_vault_drive_letters(
-    request_id: u64,
+    vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
@@ -3278,49 +3274,22 @@ fn handle_release_orphaned_vault_drive_letters(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
-    // A crashed service can leave a machine-wide encrypted-volume name in
-    // GLOBAL??.  Clear only a dead, exact VeraCrypt/TrueCrypt mapping before
-    // asking Pro to repair the caller's separate Explorer namespace.
-    let released_global = crate::vault_drive_letters::release_orphaned_global_encrypted_links()
-        .map_err(|_| {
-            VerbError::new(
-                "vault_drive_letter_cleanup_failed",
-                "Unavailable Vault drive letters could not be checked.",
-            )
-        })?;
-    let reply = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
-            crate::pro_broker::VaultCall {
-                request_id,
-                target_session_id: peer.session_id(),
-                caller_sid: peer.caller_sid(),
-                caller_token: Some(peer.token()),
-                caller_authentication_id: Some(peer.authentication_id()),
-                presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
-                feature_id: "vault.broker.release_orphaned_encrypted_links",
-                args: serde_json::json!({ "target_session_id": peer.session_id() }),
-            },
-        ))
-    })
-    .map_err(|_| {
-        VerbError::new(
+    // The namespace comes from the authenticated token, never a selected user or letter.
+    vault_mount.with_exclusive_operation(|| {
+        let cleanup_error = |_| VerbError::new(
             "vault_drive_letter_cleanup_failed",
             "Unavailable Vault drive letters could not be checked.",
-        )
-    })?;
-    let released = reply
-        .get("released")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|count| *count <= 26)
-        .ok_or_else(|| {
-            VerbError::new(
-                "vault_drive_letter_cleanup_failed",
-                "Unavailable Vault drive letters could not be checked.",
-            )
-        })?;
-    Ok(serde_json::json!({ "released": released + released_global as u64 }))
+        );
+        let released_old = crate::vault_drive_letters::release_orphaned_logon_encrypted_links()
+            .map_err(cleanup_error)?;
+        let released_global = crate::vault_drive_letters::release_orphaned_global_encrypted_links()
+            .map_err(cleanup_error)?;
+        let released_caller = crate::vault_drive_letters::release_orphaned_caller_encrypted_links(
+            peer.authentication_id(),
+        ).map_err(cleanup_error)?;
+        Ok(serde_json::json!({ "released": released_old + released_global + released_caller }))
+    })
 }
-
 fn handle_vault_list_authorized(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,

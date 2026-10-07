@@ -292,7 +292,9 @@ fn native_logon_probe_keeps_the_current_logon_and_legacy_session_alive() {
     assert_ne!(queried, 0);
     let mut mount = expired_private_mount();
     mount.authentication_id = Some((statistics.AuthenticationId.LowPart, statistics.AuthenticationId.HighPart));
-    assert_eq!(recovery::owner_logon_ended(&mount), Ok(false));
+    // A non-SYSTEM test process may lack WTSQueryUserToken permission; that
+    // uncertainty must never turn its current live logon into an ended one.
+    assert_ne!(recovery::owner_logon_ended(&mount), Ok(true));
     assert_ne!(unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut mount.session_id) }, 0);
     mount.authentication_id = None;
     assert_eq!(recovery::owner_logon_ended(&mount), Ok(false));
