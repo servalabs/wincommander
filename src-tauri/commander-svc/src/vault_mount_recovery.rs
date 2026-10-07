@@ -35,6 +35,69 @@ pub(super) fn owner_logon_ended(mount: &ActiveMount) -> Result<bool, ()> {
 }
 
 impl VaultMountBroker {
+    pub(super) fn confirm_unmounted_policy_entry(
+        &self,
+        store: &VaultAccessStore,
+        request: &AuthorizedDismount<'_>,
+    ) -> VaultMountResult {
+        let uncertain = || denied(request.entry_id, VaultMountReason::MountStateUnknown);
+        if request.caller_sid.is_empty() || request.caller_session == 0 {
+            return uncertain();
+        }
+        let authorization = (self.policy_authorizer)(store, request.entry_id, request.caller_token);
+        let Some(entry) = store.policy().and_then(|policy| {
+            policy.entries.into_iter().find(|entry| entry.id == request.entry_id)
+        }) else {
+            return uncertain();
+        };
+        if !authorization.allowed || authorization.presentation != Some(entry.mount.presentation) {
+            return uncertain();
+        }
+        if entry.mount.presentation == VaultPresentation::PerUser
+            && entry.primary_owner_sid.as_deref() != Some(request.caller_sid)
+        {
+            return uncertain();
+        }
+        if entry.mount.presentation == VaultPresentation::Machine && !request.caller_elevated {
+            return denied(request.entry_id, VaultMountReason::AdministratorRequired);
+        }
+        if self.recovery.lock().map_or(true, |state| {
+            state.registry_untrusted || state.recoverable_registry
+                || !state.persistence_pending.is_empty() || !state.removal_pending.is_empty()
+        }) {
+            return uncertain();
+        }
+        let Ok(slots) = self.snapshot() else {
+            return uncertain();
+        };
+        let Ok(active) = self.active.lock() else {
+            return uncertain();
+        };
+        if active.contains_key(request.entry_id) || slots.iter().any(|(slot, identity)| {
+            let mut matches = active.values().filter(|mount| mount.internal_drive == *slot);
+            match (matches.next(), matches.next()) {
+                (Some(mount), None) => mount.driver_slot_absent
+                    || mount.engine_mount_identity.as_ref() != Some(identity),
+                _ => true,
+            }
+        }) {
+            return uncertain();
+        }
+        if self.snapshot().ok().as_ref() != Some(&slots) {
+            return uncertain();
+        }
+        // A retry can arrive after startup already completed the cleanup.
+        // Only a fully accounted-for native snapshot proves this is idempotent.
+        VaultMountResult {
+            entry_id: request.entry_id.into(),
+            state: VaultMountState::Unmounted,
+            presentation: Some(entry.mount.presentation),
+            drive_letter: None,
+            reason: None,
+            sync_warning: None,
+        }
+    }
+
     pub(super) fn pause_expired_owner_binding(
         &self,
         request: &AuthorizedDismount<'_>,

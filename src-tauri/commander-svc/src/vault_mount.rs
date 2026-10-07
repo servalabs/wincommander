@@ -2003,7 +2003,7 @@ impl VaultMountBroker {
             .ok()
             .and_then(|active| active.get(request.entry_id).cloned());
         let Some(active) = active else {
-            return denied(request.entry_id, VaultMountReason::MountStateUnknown);
+            return self.confirm_unmounted_policy_entry(store, request);
         };
         let owner_logon_ended = self.owner_logon_ended(&active);
         let owner_recovery = active.caller_sid == request.caller_sid && owner_logon_ended;
@@ -3638,6 +3638,7 @@ mod tests {
 
     include!("vault_dismount_tests.rs");
     include!("vault_mount_logoff_alias_tests.rs");
+    include!("vault_mount_idempotent_cleanup_tests.rs");
     include!("vault_mount_recovery_tests.rs");
     include!("vault_admin_recovery_tests.rs");
     include!("vault_syncthing_dismount_tests.rs");
