@@ -17,7 +17,7 @@ describe("encrypted-volume dismount", () => {
     const panel = readFileSync("src/panels/vault/index.tsx", "utf8");
     expect(source).toContain("onErrorChange?.(");
     expect(source).toContain("aria-description={permissionHint}");
-    expect(panel).toContain('className="vault-volume-feedback-row"><td colSpan={4}>');
+    expect(panel).toMatch(/className="vault-volume-feedback-row"[^>]*><td colSpan=\{4\}[^>]*>/);
     expect(panel).toContain("onErrorChange={setVolumeActionFailure}");
     expect(panel).toContain("loading={refreshing}");
     expect(panel).toContain("disabled={refreshing}");

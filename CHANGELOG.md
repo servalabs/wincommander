@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage wraps long Vault paths and errors within the card. Narrow cards
+  place paths and actions on separate rows, keeping controls reachable without
+  horizontal scrolling.
 - Silent startup avoids a redundant Windows capture-setting call while retaining
   verified capture-protection changes in either direction.
 - Machine-wide Vault cleanup no longer requires an interactive Explorer session.

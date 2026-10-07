@@ -48,7 +48,15 @@
           color: var(--color-text-muted);
         }
 
-        .props-error { color: var(--color-danger); }
+        .props-error {
+          color: var(--color-danger);
+          align-items: flex-start;
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
+        .props-error > svg { flex-shrink: 0; }
+        .props-error > span { min-width: 0; }
 
         .props-table {
           display: flex;

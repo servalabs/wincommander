@@ -1,0 +1,98 @@
+.vault-volumes-card {
+  container: vault-volumes / inline-size;
+  min-width: 0;
+}
+
+.vault-volumes-card .section-header-row,
+.vault-volume-header-actions {
+  flex-wrap: wrap;
+}
+
+.vault-volumes-card .section-header-left,
+.vault-volumes-card .section-header-right,
+.vault-volumes-card .section-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vault-volume-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.vault-volumes-card .vault-sys-enc-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  white-space: normal;
+}
+
+.encrypted-volumes-table {
+  table-layout: fixed;
+}
+
+.encrypted-volumes-table th:first-child { width: 64px; }
+.encrypted-volumes-table th:nth-child(2) { width: 112px; }
+.encrypted-volumes-table th:last-child { width: 128px; }
+
+.encrypted-volumes-table .path-cell {
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.encrypted-volumes-table .truncate-path {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.vault-volumes-card .vault-card-status-line,
+.vault-volumes-card .vault-volume-unavailable {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Cards can be narrow on a wide desktop when both sidebars are open. */
+@container vault-volumes (max-width: 560px) {
+  .encrypted-volumes-table,
+  .encrypted-volumes-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .encrypted-volumes-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .encrypted-volumes-table tbody tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .encrypted-volumes-table td {
+    min-width: 0;
+    border-bottom: 0;
+  }
+
+  .encrypted-volumes-table .path-cell,
+  .encrypted-volumes-table .actions-cell,
+  .encrypted-volumes-table .vault-volume-feedback-row td {
+    grid-column: 1 / -1;
+  }
+
+  .encrypted-volumes-table .actions-cell {
+    width: auto;
+    padding-bottom: 8px !important;
+  }
+}

@@ -22,6 +22,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 import './index.css';
+import './VaultVolumeLayout.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
@@ -481,9 +482,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
     <>
       <SectionCard
         title="Encrypted Volumes"
+        className="vault-volumes-card"
         icon="lock"
         headerRight={
-          <div className="flex items-center gap-2">
+          <div className="vault-volume-header-actions">
             {accessibleVolumes.length > 0 && (
               <span className="vault-status-badge vault-status-badge--mounted">
                 <i />{accessibleVolumes.length} mounted
@@ -550,13 +552,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
           ) : statusUnavailable ? (
             <VaultOperationNotice message={statusError ? "" : "Mounted-volume status could not be checked. Refresh Secure Storage before relying on this list."} />
           ) : volumes.length > 0 ? (
-            <table className="volumes-table wc-table wc-table--striped">
-              <thead>
-                <tr>
-                  <th>DRIVE</th>
-                  <th>TYPE</th>
-                  <th>PATH</th>
-                  <th></th>
+            <table className="volumes-table encrypted-volumes-table wc-table wc-table--striped" role="table" aria-label="Encrypted volumes">
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th scope="col" role="columnheader">DRIVE</th>
+                  <th scope="col" role="columnheader">TYPE</th>
+                  <th scope="col" role="columnheader">PATH</th>
+                  <th scope="col" role="columnheader"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               {/* AnimatePresence lets newly-mounted volumes fade in with a
@@ -565,10 +567,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
                   staggerDelay caps per-row delay so long lists never animate
                   over seconds. motion.tr uses opacity only — no width/height
                   reflow. MotionConfig in App.tsx handles reduced-motion. */}
-              <tbody>
+              <tbody role="rowgroup">
                 <AnimatePresence initial={false}>
                   {volumes.map((vol: any, idx: number) => (
                     <motion.tr
+                      role="row"
                       key={vol.letter}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
@@ -579,21 +582,21 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
                         ease: EASE.enter,
                       }}
                     >
-                      <td className="mono-cell">
+                      <td className="mono-cell" role="cell">
                         {/* Active-mount indicator — pulsing green dot makes
                             live volumes obvious at a glance, matching the
                             status-badge styling above. */}
                         <span className={`vault-active-dot${vol.accessible === false ? " vault-active-dot--unavailable" : ""}`} aria-hidden />
                         <strong>{vol.letter}</strong>
                       </td>
-                      <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
-                      <td className="path-cell">
+                      <td role="cell"><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
+                      <td className="path-cell" role="cell">
                         <span className="truncate-path" title={vol.path || undefined}>{vol.path || "Path unavailable"}</span>
                         {vol.accessible === false && <span className="vault-volume-unavailable">{vol.dismountAllowed === true
                           ? "This drive is not available in this sign-in. Choose Dismount to clean up its verified mount state, then mount it again."
                           : "This mounted drive is not accessible to this account. Check its status and Windows permissions."}</span>}
                       </td>
-                      <td className="actions-cell">
+                      <td className="actions-cell" role="cell">
                         <VolumeActionsMenu
                           letter={vol.letter}
                           path={vol.path}
@@ -610,7 +613,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
                     </motion.tr>
                   ))}
                 </AnimatePresence>
-                {volumeActionFailure && <tr className="vault-volume-feedback-row"><td colSpan={4}><VaultOperationNotice message={volumeActionFailure} /></td></tr>}
+                {volumeActionFailure && <tr className="vault-volume-feedback-row" role="row"><td colSpan={4} role="cell"><VaultOperationNotice message={volumeActionFailure} /></td></tr>}
               </tbody>
             </table>
           ) : (
