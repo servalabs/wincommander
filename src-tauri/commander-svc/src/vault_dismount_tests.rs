@@ -452,3 +452,47 @@ fn broker_success_requires_exact_slot_and_verified_presentation_cleanup() {
     }
     assert!(confirmed_broker_dismount(&serde_json::json!({"status":"dismounted","internalDrive":12,"presentationCleanup":true}), 12).is_ok());
 }
+
+#[test]
+fn ended_private_policy_owner_can_retry_cleanup_from_a_new_logon() {
+    let store = mount_store(
+        Arc::new(Mutex::new(HashMap::new())),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    // This models an old Test2 logon whose K: presentation disappeared while
+    // its exact encrypted-driver slot is still live. A current policy grant is
+    // deliberately unavailable: the recovery must close the stale recorded
+    // mount, but it must not make the account eligible for a fresh mount.
+    broker.owner_logon_probe = |_| Ok(true);
+    broker.policy_authorizer = |_, _, _| wincmd_shared::vault_access::VaultAuthorizeMountResponse {
+        allowed: false,
+        launch_ready: false,
+        denial_reason: Some(wincmd_shared::vault_access::VaultMountDenial::NotAuthorized),
+        mode: None,
+        presentation: None,
+        preferred_letter: None,
+    };
+    let mut mount = active_mount_for_owner(9, "S-1-5-21-owner");
+    mount.personal = false;
+    mount.presentation = VaultPresentation::PerUser;
+    assert!(broker.retain_cleanup_mount(&store, "private-policy", mount));
+
+    let result = broker.dismount_authorized(
+        &store,
+        AuthorizedDismount {
+            caller_authentication_id: Some((99, 1)),
+            operation_id: 42,
+            entry_id: "private-policy",
+            caller_token: std::ptr::null_mut(),
+            caller_session: 10,
+            caller_sid: "S-1-5-21-owner",
+            caller_elevated: false,
+        },
+    );
+
+    assert_eq!(result.state, VaultMountState::Unmounted);
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+    assert!(broker.active.lock().unwrap().is_empty());
+}
