@@ -223,7 +223,46 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+fn original_file_attributes(path: &Path) -> Result<u32, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
+
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let attributes = unsafe { GetFileAttributesW(wide_path.as_ptr()) };
+    if attributes == u32::MAX {
+        return Err(format!(
+            "cannot inspect file attributes: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(attributes)
+}
+
+#[cfg(windows)]
+fn set_file_attributes(path: &Path, attributes: u32) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
+
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    if unsafe { SetFileAttributesW(wide_path.as_ptr(), attributes) } == 0 {
+        return Err(format!(
+            "cannot update file attributes: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -291,6 +330,27 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+
+    // Windows refuses a writable handle to a read-only file even when its
+    // owner explicitly chose Secure Delete. Clear only that transient DOS
+    // attribute; if secure erase cannot complete, restore the exact original
+    // attributes so a failed operation does not silently change the file.
+    let original_attributes = original_file_attributes(path)?;
+    let was_readonly = original_attributes & FILE_ATTRIBUTE_READONLY != 0;
+    if was_readonly {
+        set_file_attributes(path, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
+    }
+
+    let result = overwrite_and_delete_file_inner(path);
+    if result.is_err() && was_readonly {
+        let _ = set_file_attributes(path, original_attributes);
+    }
+    result
 }
 
 fn secure_erase_directory(root: &Path) -> Result<(), String> {
@@ -463,5 +523,19 @@ mod tests {
             .contains("missing Explorer target"));
         let oversized = vec!["C:\\does-not-matter".to_string(); MAX_CONTEXT_TARGETS + 1];
         assert!(execute_cli(oversized).unwrap_err().contains("larger than"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn securely_erases_a_readonly_file_selected_from_explorer() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("readonly.txt");
+        fs::write(&file, b"sensitive").unwrap();
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&file, permissions).unwrap();
+
+        execute_cli(vec![file.to_string_lossy().into_owned()]).unwrap();
+        assert!(!file.exists());
     }
 }
