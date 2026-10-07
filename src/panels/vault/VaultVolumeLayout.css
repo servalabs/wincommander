@@ -29,6 +29,7 @@
 }
 
 .encrypted-volumes-table {
+  width: 100%;
   table-layout: fixed;
 }
 
@@ -55,44 +56,29 @@
   overflow-wrap: anywhere;
 }
 
-/* Cards can be narrow on a wide desktop when both sidebars are open. */
-@container vault-volumes (max-width: 560px) {
-  .encrypted-volumes-table,
-  .encrypted-volumes-table tbody {
-    display: block;
-    width: 100%;
-  }
+/*
+ * Keep mounted volumes in a table at every card width.  The old narrow-card
+ * breakpoint replaced table rows with a grid and hid the column headings. A
+ * Secure Storage row is easier to scan when DRIVE, TYPE, PATH, and actions
+ * remain aligned, even when the sidebars make the card narrow.
+ */
+.encrypted-volumes-table td {
+  min-width: 0;
+}
 
-  .encrypted-volumes-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
+.encrypted-volumes-table .actions-cell > .vol-actions-group > div {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 
-  .encrypted-volumes-table tbody tr {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    border-bottom: 1px solid var(--color-border);
-  }
+@container vault-volumes (max-width: 420px) {
+  .encrypted-volumes-table th:first-child { width: 52px; }
+  .encrypted-volumes-table th:nth-child(2) { width: 88px; }
+  .encrypted-volumes-table th:last-child { width: 112px; }
 
+  .encrypted-volumes-table th,
   .encrypted-volumes-table td {
-    min-width: 0;
-    border-bottom: 0;
-  }
-
-  .encrypted-volumes-table .path-cell,
-  .encrypted-volumes-table .actions-cell,
-  .encrypted-volumes-table .vault-volume-feedback-row td {
-    grid-column: 1 / -1;
-  }
-
-  .encrypted-volumes-table .actions-cell {
-    width: auto;
-    padding-bottom: 8px !important;
+    padding-left: 6px;
+    padding-right: 6px;
   }
 }
