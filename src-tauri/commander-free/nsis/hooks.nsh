@@ -456,7 +456,35 @@ ${Using:StrFunc} UnStrStr
     Rename "$R5\WinCommander\license_cache.json" "$PLUGINSDIR\wincommander-license_cache.json"
     IfErrors wc_preserve_license_failed
   wc_remove_machine_data:
-    RMDir /r "$R5\WinCommander"
+    ; Keep the cleanup journal if service shutdown could not close a driver slot.
+    ; Permission policies are removed below; the journal grants no new mount access.
+    FindFirst $R0 $R1 "$R5\WinCommander\*"
+    wc_remove_machine_data_next:
+      StrCmp $R1 "" wc_remove_machine_data_end
+      StrCmp $R1 "." wc_remove_machine_data_skip
+      StrCmp $R1 ".." wc_remove_machine_data_skip
+      StrCmp $R1 "policy" wc_remove_machine_data_skip
+      RMDir /r "$R5\WinCommander\$R1"
+      Delete "$R5\WinCommander\$R1"
+    wc_remove_machine_data_skip:
+      FindNext $R0 $R1
+      Goto wc_remove_machine_data_next
+    wc_remove_machine_data_end:
+      FindClose $R0
+    FindFirst $R0 $R1 "$R5\WinCommander\policy\*"
+    wc_remove_policy_data_next:
+      StrCmp $R1 "" wc_remove_policy_data_end
+      StrCmp $R1 "." wc_remove_policy_data_skip
+      StrCmp $R1 ".." wc_remove_policy_data_skip
+      StrCmp $R1 "vault-active-mounts-v1.json" wc_remove_policy_data_skip
+      RMDir /r "$R5\WinCommander\policy\$R1"
+      Delete "$R5\WinCommander\policy\$R1"
+    wc_remove_policy_data_skip:
+      FindNext $R0 $R1
+      Goto wc_remove_policy_data_next
+    wc_remove_policy_data_end:
+      FindClose $R0
+    RMDir "$R5\WinCommander\policy"
     CreateDirectory "$R5\WinCommander"
     ; Restore the device-data ACL before putting the retained entitlement back.
     ; Standard users may read it but cannot replace the shared token or state.
@@ -485,8 +513,7 @@ ${Using:StrFunc} UnStrStr
     ClearErrors
     Delete "$R5\WinCommander\policy\vault-access-v1.json"
     IfErrors wc_remove_vault_policy_failed
-    Delete "$R5\WinCommander\policy\vault-active-mounts-v1.json"
-    IfErrors wc_remove_vault_policy_failed
+    ; Retain the active cleanup journal even if licence preservation failed.
     Delete "$R5\WinCommander\policy\vault-personal-v1.json"
     IfErrors wc_remove_vault_policy_failed
     Goto wc_remove_legacy_current_user
