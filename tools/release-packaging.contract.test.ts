@@ -221,20 +221,22 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("--release-license-seat");
     expect(uninstallHook).toContain("!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
     expect(hooks).toContain('ReadEnvStr $R5 "ProgramData"');
-    expect(hooks).toContain('RMDir /r "$R5\\WinCommander"');
+    expect(hooks).not.toContain('RMDir /r "$R5\\WinCommander"');
     expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(
-      hooks.indexOf('RMDir /r "$R5\\WinCommander"'),
+      hooks.indexOf('wc_remove_machine_data_next:'),
     );
     expect(hooks).toContain('license_cache.json');
     expect(hooks).toContain('icacls.exe "$R5\\WinCommander" /inheritance:r');
     // Even if retaining the licence prevents removal of the parent directory,
-    // an explicit uninstall must still clear every machine-owned Vault journal.
+    // an explicit uninstall clears permission policies but retains cleanup authority.
     const preserveFailure = uninstallHook.slice(
       uninstallHook.indexOf("wc_preserve_license_failed:"),
       uninstallHook.indexOf("wc_restore_license_failed:"),
     );
     expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-access-v1.json"');
-    expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-active-mounts-v1.json"');
+    expect(uninstallHook).not.toContain('Delete "$R5\\WinCommander\\policy\\vault-active-mounts-v1.json"');
+    expect(uninstallHook).toContain('StrCmp $R1 "vault-active-mounts-v1.json" wc_remove_policy_data_skip');
+    expect(uninstallHook).toContain('StrCmp $R1 "policy" wc_remove_machine_data_skip');
     expect(preserveFailure).toContain('Delete "$R5\\WinCommander\\policy\\vault-personal-v1.json"');
     expect(preserveFailure).toContain('uninstall-remove-vault-policy');
     expect(hooks).not.toContain('IfFileExists "$PROGRAMDATA\\');
