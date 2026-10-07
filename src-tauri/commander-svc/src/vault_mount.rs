@@ -206,7 +206,10 @@ fn requires_syncthing_pause(mount: &ActiveMount) -> bool {
 }
 
 fn personal_syncthing_lifecycle_allowed(opt_in: Option<bool>) -> bool {
-    opt_in != Some(false)
+    // Sync is opt-in.  A Vault that predates this field must not contact the
+    // private adapter or create a Syncthing folder merely because it is
+    // mounted; the owner must use its cloud button first.
+    opt_in == Some(true)
 }
 
 fn when_syncthing_lifecycle_allowed<T>(allowed: bool, call: impl FnOnce() -> T) -> Option<T> {
@@ -3416,8 +3419,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_personal_sync_discovery_preserves_success_and_failure_state() {
-        assert!(personal_syncthing_lifecycle_allowed(None));
+    fn only_explicit_personal_sync_consent_allows_lifecycle_work() {
+        assert!(!personal_syncthing_lifecycle_allowed(None));
         assert!(personal_syncthing_lifecycle_allowed(Some(true)));
         assert!(!personal_syncthing_lifecycle_allowed(Some(false)));
 

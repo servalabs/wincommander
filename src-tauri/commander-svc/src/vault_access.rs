@@ -2171,9 +2171,10 @@ impl VaultAccessStore {
         exclusive_per_user_policy_owner(entry, resolved, owner_sid)
     }
 
-    /// An explicit `false` prevents all owner-session Syncthing lifecycle
-    /// work. Missing is a policy written before the opt-in control; it keeps
-    /// legacy binding discovery available during mount and dismount only.
+    /// Only explicit consent permits owner-session Syncthing lifecycle work.
+    /// A policy from before the opt-in control is inert until its owner uses
+    /// the cloud button, so mounting an older personal Vault cannot create a
+    /// private Syncthing folder or group.
     pub(crate) fn syncthing_lifecycle_allowed_for_exclusive_per_user_policy_owner(
         &self,
         entry_id: &str,
@@ -3625,9 +3626,9 @@ fn exclusive_per_user_policy_owner(
 }
 
 fn syncthing_lifecycle_allowed(opt_in: Option<bool>) -> bool {
-    // Policies written before the consent control retain bounded lifecycle
-    // discovery only; they never gain access to management actions.
-    opt_in != Some(false)
+    // Missing is not consent.  The cloud button must write `Some(true)`
+    // before the service can contact Syncthing for this Vault.
+    opt_in == Some(true)
 }
 
 fn syncthing_management_enabled(opt_in: Option<bool>) -> bool {
@@ -8967,6 +8968,13 @@ mod tests {
             "group must not be deleted"
         );
         assert_eq!(locked.get("WC_Existing").unwrap(), &Vec::<String>::new());
+    }
+
+    #[test]
+    fn syncthing_lifecycle_requires_explicit_owner_consent() {
+        assert!(!syncthing_lifecycle_allowed(None));
+        assert!(!syncthing_lifecycle_allowed(Some(false)));
+        assert!(syncthing_lifecycle_allowed(Some(true)));
     }
 }
 
