@@ -528,6 +528,9 @@ function Find-EverythingSearchCli {
         "$env:ProgramFiles\Everything\es.exe",
         "${env:ProgramFiles(x86)}\Everything\es.exe",
         "$env:ProgramData\WinCommander\bin\es.exe",
+        "$env:LOCALAPPDATA\WinCommander\bin\es.exe",
+        # Compatibility readback for builds that used WindowsApps before the
+        # durable per-user WinCommander location was introduced.
         "$env:LOCALAPPDATA\Microsoft\WindowsApps\es.exe",
         "C:\Tools\es.exe",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links\es.exe",

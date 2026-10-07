@@ -9,13 +9,14 @@ $script:hasCli = $true
 $script:hasDaemon = $false
 $script:cliInstalls = 0
 $script:wingetInstalls = 0
+$script:cliPath = "$env:ProgramData\WinCommander\bin\es.exe"
 function Test-IsAdmin { $false }
 function Assert-IsAdmin { throw 'fixture is not elevated' }
 function Get-EverythingExePath { if ($script:hasDaemon) { 'C:\Fixture\Everything.exe' } }
 function Test-Path {
     param([string]$Path, [string]$LiteralPath, [string]$PathType, $ErrorAction)
     $candidate = if ($LiteralPath) { $LiteralPath } else { $Path }
-    return ($script:hasCli -and $candidate -eq "$env:ProgramData\WinCommander\bin\es.exe")
+    return ($script:hasCli -and $candidate -eq $script:cliPath)
 }
 function Get-Item { param($Path) [pscustomobject]@{ VersionInfo = @{ ProductVersion = '1.1.0.37' } } }
 function Get-Command { param($Name, $ErrorAction) return $null }
@@ -30,6 +31,11 @@ if ((Test-InstantSearchInstalled).installed) { throw 'The search CLI alone must 
 $script:hasCli = $false
 $script:hasDaemon = $true
 if ((Test-InstantSearchInstalled).installed) { throw 'Everything alone must not count as a complete engine.' }
+$script:hasCli = $true
+$script:cliPath = "$env:LOCALAPPDATA\WinCommander\bin\es.exe"
+if (-not (Test-InstantSearchInstalled).installed) { throw 'The durable per-user CLI location was not detected.' }
+$script:hasCli = $false
+$script:cliPath = "$env:ProgramData\WinCommander\bin\es.exe"
 $result = Install-InstantSearch
 if (-not $result.success -or $script:cliInstalls -ne 1 -or $script:wingetInstalls -ne 0) {
     throw 'Repairing the missing CLI must reuse the existing Everything installation.'
@@ -80,8 +86,8 @@ if (-not $result.error -or $script:lastCachedStatus -ne $false) { throw 'Post-in
     function Copy-Item { param($LiteralPath, $Destination, [switch]$Force, $ErrorAction) $global:everythingFixtureCopiedTo = $Destination }
     function Remove-Item { param($LiteralPath, [switch]$Force, [switch]$Recurse, $ErrorAction) }
     $installedCli = Install-EverythingSearchCli
-    $expected = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\es.exe'
-    if ($installedCli -ne $expected -or $global:everythingFixtureCopiedTo -ne $expected) { throw 'A standard session did not use the publisher-recommended per-user CLI location.' }
+    $expected = Join-Path $env:LOCALAPPDATA 'WinCommander\bin\es.exe'
+    if ($installedCli -ne $expected -or $global:everythingFixtureCopiedTo -ne $expected) { throw 'A standard session did not use the durable per-user CLI location.' }
     $global:everythingFixtureCopiedTo = $null
     function Get-AuthenticodeSignature { param($FilePath, $ErrorAction) [pscustomobject]@{ Status = 'HashMismatch'; SignerCertificate = $null } }
     $rejected = $false

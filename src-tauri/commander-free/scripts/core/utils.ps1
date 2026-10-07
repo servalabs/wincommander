@@ -127,8 +127,11 @@ function Split-ListParam {
 # or use the publisher-recommended per-user command location.
 function Install-EverythingSearchCli {
     $machineTarget = Join-Path $env:ProgramData 'WinCommander\bin\es.exe'
-    $userTarget = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\es.exe'
-    foreach ($existing in @($machineTarget, $userTarget)) {
+    # WindowsApps is managed by Windows App Execution Aliases. A copied binary
+    # there can vanish or be shadowed after an app update, so it is not durable.
+    $userTarget = Join-Path $env:LOCALAPPDATA 'WinCommander\bin\es.exe'
+    $legacyUserTarget = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\es.exe'
+    foreach ($existing in @($machineTarget, $userTarget, $legacyUserTarget)) {
         if (Test-Path -LiteralPath $existing -PathType Leaf) { return $existing }
     }
 
@@ -141,9 +144,8 @@ function Install-EverythingSearchCli {
     $uri = "https://www.voidtools.com/ES-$version.$arch.zip"
     $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "WinCommander-ES-$PID-$([Guid]::NewGuid().ToString('N'))"
     $archive = "$scratch.zip"
-    # The publisher recommends the current user's WindowsApps directory. Keep
-    # elevated installs shared, while a standard parent can finish after the
-    # Everything installer handles its own UAC prompt.
+    # Keep elevated installs shared. A standard parent uses its own durable
+    # WinCommander data directory, which survives WindowsApps alias refreshes.
     $target = if (Test-IsAdmin) { $machineTarget } else { $userTarget }
     $targetDir = Split-Path -Parent $target
 

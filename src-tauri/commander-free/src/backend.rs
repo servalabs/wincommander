@@ -9350,6 +9350,12 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
         }
     }
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        candidate_paths.push(
+            std::path::PathBuf::from(&local)
+                .join("WinCommander")
+                .join("bin")
+                .join("es.exe"),
+        );
         // User-scope WinGet install (most common on modern Windows)
         candidate_paths.push(
             std::path::PathBuf::from(&local)
