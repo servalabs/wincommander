@@ -763,6 +763,27 @@ function Get-DesktopShellPriorityStatus {
        helperConfigured = $helperConfigured }
 }
 
+function Wait-DesktopShellPriorityStatus {
+    <#
+    Task Scheduler does not always return a newly registered SYSTEM task on
+    the first query.  Treating that short propagation delay as a failed write
+    used to call Reset-DesktopShellPriority and remove a configuration that
+    Windows had accepted.  Wait for a bounded readback before deciding whether
+    a rollback is necessary.
+    #>
+    param(
+        [int]$Attempts = 10,
+        [int]$DelayMilliseconds = 500
+    )
+
+    $status = Get-DesktopShellPriorityStatus
+    for ($attempt = 1; -not $status.enabled -and $attempt -lt $Attempts; $attempt++) {
+        Start-Sleep -Milliseconds $DelayMilliseconds
+        $status = Get-DesktopShellPriorityStatus
+    }
+    return $status
+}
+
 function Save-ShellPriorityValue {
     param([Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Name)
 
@@ -831,7 +852,10 @@ function Set-DesktopShellPriority {
             Unregister-ScheduledTask -TaskPath '\' -TaskName $script:LegacyShellPriorityTaskName -Confirm:$false -ErrorAction Stop
         }
 
-        $status = Get-DesktopShellPriorityStatus
+        # Register-ScheduledTask can be eventually consistent, especially
+        # when this runs through the elevated broker.  A short bounded retry
+        # prevents a valid all-user logon task from being immediately removed.
+        $status = Wait-DesktopShellPriorityStatus
         if (-not $status.enabled) { throw 'Windows did not retain the desktop-shell priority configuration.' }
 
         & $script:ShellPriorityScriptPath

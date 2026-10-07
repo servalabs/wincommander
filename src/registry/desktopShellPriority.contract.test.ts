@@ -17,13 +17,16 @@ describe("desktop shell priority", () => {
     });
   });
 
-  test("verifies the full configuration and removes the owned legacy task", async () => {
+  test("waits for the scheduler readback before rolling back a persistent configuration", async () => {
     const system = await Bun.file("src-tauri/commander-free/scripts/modules/tweaks/system.ps1").text();
 
     expect(system).toContain("function Get-DesktopShellPriorityStatus");
+    expect(system).toContain("function Wait-DesktopShellPriorityStatus");
     expect(system).toContain("function Test-ShellPriorityTaskOwned");
     expect(system).toContain("function Test-ShellPriorityPathSecure");
     expect(system).toContain("$script:LegacyShellPriorityTaskName = 'WinCommanderShellPriorityLogon'");
+    expect(system).toContain("$status = Wait-DesktopShellPriorityStatus");
+    expect(system).toContain("Task Scheduler does not always return a newly registered SYSTEM task");
     expect(system).toContain("if (-not $status.enabled) { throw 'Windows did not retain the desktop-shell priority configuration.' }");
     expect(system).toContain("verified = $true");
   });
