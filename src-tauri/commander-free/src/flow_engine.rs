@@ -1454,7 +1454,10 @@ fn start_all_listeners(app: &AppHandle) {
 /// Read flows from settings.json → app.flows[]
 pub(crate) fn get_flows_from_settings() -> Vec<Flow> {
     match settings::read_settings() {
-        Ok(s) => available_flows(s.app.flows, settings::personal_settings_automation_available()),
+        Ok(s) => available_flows(
+            s.app.flows,
+            settings::personal_settings_automation_available(),
+        ),
         Err(err) => {
             flow_engine_log(
                 "warn",

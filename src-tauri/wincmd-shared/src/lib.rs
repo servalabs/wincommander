@@ -895,11 +895,11 @@ pub mod diagnostics;
 /// compiling without modification.
 pub use fleet_proto as fleet;
 
+pub mod personal_settings;
 /// UI ↔ SYSTEM-service RPC namespace (`svc.*`). Defines the pipe name,
 /// protocol version, capability-class enum, and `classify_verb` — the shared
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
-pub mod personal_settings;
 pub mod vault_access;
 pub mod vault_display_path;
 pub mod vault_inventory;

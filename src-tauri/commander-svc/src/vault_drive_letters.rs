@@ -258,9 +258,7 @@ fn release_orphaned_global_encrypted_links_with(
 }
 
 pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
-    release_orphaned_global_encrypted_links_with(
-        cleanup_global_encrypted_link,
-    )
+    release_orphaned_global_encrypted_links_with(cleanup_global_encrypted_link)
 }
 
 #[cfg(test)]
@@ -314,7 +312,8 @@ mod tests {
             'A' => Ok(GlobalEncryptedLinkCleanup::Retained),
             'B' => Ok(GlobalEncryptedLinkCleanup::Removed),
             _ => Ok(GlobalEncryptedLinkCleanup::Retained),
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(released, 1);
     }
 

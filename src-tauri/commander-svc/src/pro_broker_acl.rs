@@ -51,8 +51,14 @@ impl RootAclPhase {
         {
             return Err(denied());
         }
-        let container_path = args.get("container_path").and_then(Value::as_str).ok_or_else(denied)?;
-        let sddl = args.get("mounted_root_acl_sddl").and_then(Value::as_str).ok_or_else(denied)?;
+        let container_path = args
+            .get("container_path")
+            .and_then(Value::as_str)
+            .ok_or_else(denied)?;
+        let sddl = args
+            .get("mounted_root_acl_sddl")
+            .and_then(Value::as_str)
+            .ok_or_else(denied)?;
         if container_path.is_empty() || sddl.is_empty() {
             return Err(denied());
         }
@@ -65,22 +71,29 @@ impl RootAclPhase {
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         // The file owns this handle throughout the synchronous query and phase.
         if unsafe { GetFileInformationByHandle(container.as_raw_handle(), &mut info) } == 0
-            || info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            || info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+                != 0
         {
             return Err(denied());
         }
         Ok(Some(Self {
             operation_id,
             container_path: container_path.to_owned(),
-            container_identity: format!("v:{}:i:{}", info.dwVolumeSerialNumber,
-                ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64),
+            container_identity: format!(
+                "v:{}:i:{}",
+                info.dwVolumeSerialNumber,
+                ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64
+            ),
             mounted_root_acl_sddl: sddl.to_owned(),
             _container: container,
             consumed: false,
         }))
     }
 
-    pub(super) fn take_ready(&mut self, payload: Value) -> Result<(Ready, Value), VaultMountReason> {
+    pub(super) fn take_ready(
+        &mut self,
+        payload: Value,
+    ) -> Result<(Ready, Value), VaultMountReason> {
         let ready = validate_ready(payload, self.operation_id, &mut self.consumed)?;
         let args = json!({
             "operation_id": self.operation_id,
@@ -94,11 +107,16 @@ impl RootAclPhase {
     }
 }
 
-fn validate_ready(payload: Value, operation_id: u64, consumed: &mut bool) -> Result<Ready, VaultMountReason> {
+fn validate_ready(
+    payload: Value,
+    operation_id: u64,
+    consumed: &mut bool,
+) -> Result<Ready, VaultMountReason> {
     if std::mem::replace(consumed, true) {
         return Err(VaultMountReason::BrokerReplyRejected);
     }
-    let ready: Ready = serde_json::from_value(payload).map_err(|_| VaultMountReason::BrokerReplyRejected)?;
+    let ready: Ready =
+        serde_json::from_value(payload).map_err(|_| VaultMountReason::BrokerReplyRejected)?;
     if ready.operation_id != operation_id || ready.internal_drive > 25 {
         return Err(VaultMountReason::BrokerReplyRejected);
     }
@@ -115,7 +133,9 @@ pub(super) fn acknowledgement(ready: &Ready, result: &Result<Value, VaultMountRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn payload() -> Value { json!({"operation_id":41,"internal_drive":4,"mount_instance_id":12}) }
+    fn payload() -> Value {
+        json!({"operation_id":41,"internal_drive":4,"mount_instance_id":12})
+    }
     #[test]
     fn only_one_exact_bound_phase_is_accepted() {
         let mut used = false;
@@ -124,26 +144,47 @@ mod tests {
     }
     #[test]
     fn rejects_wrong_operation_slot_and_injected_authority() {
-        for value in [json!({"operation_id":42,"internal_drive":4,"mount_instance_id":12}),
+        for value in [
+            json!({"operation_id":42,"internal_drive":4,"mount_instance_id":12}),
             json!({"operation_id":41,"internal_drive":26,"mount_instance_id":12}),
             json!({"operation_id":41,"internal_drive":4,"mount_instance_id":12,"container_path":"other"}),
-            json!({"operation_id":41,"internal_drive":4})] {
+            json!({"operation_id":41,"internal_drive":4}),
+        ] {
             assert!(validate_ready(value, 41, &mut false).is_err());
         }
     }
     #[test]
     fn helper_must_confirm_the_exact_mount_instance() {
         let ready = validate_ready(payload(), 41, &mut false).unwrap();
-        let expected = json!({"phase":"root_acl","internal_drive":4,"mount_instance_id":12,"applied":true});
+        let expected =
+            json!({"phase":"root_acl","internal_drive":4,"mount_instance_id":12,"applied":true});
         assert_eq!(acknowledgement(&ready, &Ok(expected))["applied"], true);
-        assert_eq!(acknowledgement(&ready, &Ok(json!({"applied":true})))["applied"], false);
-        assert_eq!(acknowledgement(&ready, &Err(VaultMountReason::BrokerUnavailable))["applied"], false);
+        assert_eq!(
+            acknowledgement(&ready, &Ok(json!({"applied":true})))["applied"],
+            false
+        );
+        assert_eq!(
+            acknowledgement(&ready, &Err(VaultMountReason::BrokerUnavailable))["applied"],
+            false
+        );
     }
     #[test]
     fn ordinary_and_machine_mounts_have_no_privileged_phase() {
-        assert!(RootAclPhase::capture("vault.broker.mount",41,VaultPresentation::PerUser,
-            &json!({"personal":true})).unwrap().is_none());
-        assert!(RootAclPhase::capture("vault.broker.mount",41,VaultPresentation::Machine,
-            &json!({"personal":false})).unwrap().is_none());
+        assert!(RootAclPhase::capture(
+            "vault.broker.mount",
+            41,
+            VaultPresentation::PerUser,
+            &json!({"personal":true})
+        )
+        .unwrap()
+        .is_none());
+        assert!(RootAclPhase::capture(
+            "vault.broker.mount",
+            41,
+            VaultPresentation::Machine,
+            &json!({"personal":false})
+        )
+        .unwrap()
+        .is_none());
     }
 }

@@ -234,7 +234,8 @@ fn retries_service_startup_handshake(feature_id: &str) -> bool {
     // request to repeat.
     matches!(
         feature_id,
-        "svc.vault.list_authorized" | "svc.vault.capabilities"
+        "svc.vault.list_authorized"
+            | "svc.vault.capabilities"
             | wincmd_shared::personal_settings::READ_PERSONAL_SETTINGS_VERB
     )
 }
@@ -243,7 +244,14 @@ fn retries_service_startup_handshake(feature_id: &str) -> bool {
 async fn open_authenticated_service_session(
     pipe_name: &str,
     feature_id: &str,
-) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String, Option<wincmd_service_auth::VerifiedServicePeer>), String> {
+) -> Result<
+    (
+        tokio::net::windows::named_pipe::NamedPipeClient,
+        String,
+        Option<wincmd_service_auth::VerifiedServicePeer>,
+    ),
+    String,
+> {
     let retry = retries_service_startup_handshake(feature_id);
     for (attempt, delay) in SERVICE_PROBE_HANDSHAKE_RETRY_DELAYS.iter().enumerate() {
         match open_authenticated_service_session_once(pipe_name).await {
@@ -266,7 +274,14 @@ async fn open_authenticated_service_session(
 #[cfg(windows)]
 async fn open_authenticated_service_session_once(
     pipe_name: &str,
-) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String, Option<wincmd_service_auth::VerifiedServicePeer>), String> {
+) -> Result<
+    (
+        tokio::net::windows::named_pipe::NamedPipeClient,
+        String,
+        Option<wincmd_service_auth::VerifiedServicePeer>,
+    ),
+    String,
+> {
     use tokio::time::timeout;
     use uuid::Uuid;
 
@@ -439,7 +454,9 @@ mod tests {
         assert!(may_still_be_completing("svc.vault.apply_policy"));
         assert!(may_still_be_completing("svc.vault.unmount"));
         assert!(may_still_be_completing("svc.vault.dismount_personal"));
-        assert!(may_still_be_completing("svc.vault.enroll_personal_syncthing"));
+        assert!(may_still_be_completing(
+            "svc.vault.enroll_personal_syncthing"
+        ));
         assert!(may_still_be_completing(
             "svc.vault.release_orphaned_drive_letters"
         ));

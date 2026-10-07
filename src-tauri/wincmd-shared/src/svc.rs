@@ -460,7 +460,11 @@ mod tests {
 
     #[test]
     fn vault_owner_operations_are_caller_bound_in_handlers_not_wts_state() {
-        for verb in ["svc.vault.get_policy", "svc.vault.get_status", "svc.vault.apply_owner_fragment"] {
+        for verb in [
+            "svc.vault.get_policy",
+            "svc.vault.get_status",
+            "svc.vault.apply_owner_fragment",
+        ] {
             assert_eq!(
                 classify_verb(verb),
                 CapabilityClass::ReadOnly,

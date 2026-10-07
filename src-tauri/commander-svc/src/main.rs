@@ -63,9 +63,9 @@ mod vault_mount;
 mod vault_syncthing_recovery;
 
 #[cfg(windows)]
-mod vault_drive_letters;
-#[cfg(windows)]
 mod ramdisk_reconcile;
+#[cfg(windows)]
+mod vault_drive_letters;
 
 #[cfg(windows)]
 mod pipe;
@@ -201,12 +201,16 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
                                     runtime.block_on(async move {
                                         for delay in [0, 1, 2] {
                                             if delay != 0 {
-                                                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                                                tokio::time::sleep(std::time::Duration::from_secs(
+                                                    delay,
+                                                ))
+                                                .await;
                                             }
                                             if let Some(targets) = &cleanup_targets {
                                                 broker.dismount_session_targets(&store, targets);
                                             } else {
-                                                let expired = broker.expired_session_cleanup_targets(session_id);
+                                                let expired = broker
+                                                    .expired_session_cleanup_targets(session_id);
                                                 broker.dismount_session_targets(&store, &expired);
                                             }
                                         }
