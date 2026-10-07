@@ -716,8 +716,20 @@ function Test-ShellPriorityPathSecure {
 
     if (!(Test-Path -LiteralPath $Path)) { return $false }
     try {
-        foreach ($rule in (Get-Acl -LiteralPath $Path -ErrorAction Stop).Access) {
-            try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        # `Get-Acl` lives in Microsoft.PowerShell.Security.  That optional
+        # module may not load in the no-window PowerShell host used by the
+        # desktop backend, even though the exact same command works in an
+        # interactive console.  Use the .NET security APIs directly so the
+        # writer and the hidden validator see the same ACL.
+        $acl = if ([IO.Directory]::Exists($Path)) {
+            [IO.Directory]::GetAccessControl($Path)
+        }
+        else {
+            [IO.File]::GetAccessControl($Path)
+        }
+        $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+        foreach ($rule in $rules) {
+            $sid = $rule.IdentityReference.Value
             # A SYSTEM task must never execute a helper writable by normal users.
             if ($sid -notin @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545') -or
                 $rule.AccessControlType -ne 'Allow') { continue }
@@ -815,6 +827,7 @@ function Restore-ShellPriorityValue {
 
 function Set-DesktopShellPriority {
     Assert-IsAdmin
+    $configurationConfirmed = $false
     try {
         if (!(Test-Path $script:ShellPriorityDirectory)) {
             New-Item -Path $script:ShellPriorityDirectory -ItemType Directory -Force | Out-Null
@@ -857,14 +870,25 @@ function Set-DesktopShellPriority {
         # prevents a valid all-user logon task from being immediately removed.
         $status = Wait-DesktopShellPriorityStatus
         if (-not $status.enabled) { throw 'Windows did not retain the desktop-shell priority configuration.' }
+        $configurationConfirmed = $true
 
-        & $script:ShellPriorityScriptPath
-        @{ status = 'enabled'; verified = $true; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
+        # Raising priorities for already-running shell processes is best-effort.
+        # It must never remove the verified, persistent all-user configuration:
+        # Windows will run the same helper at the next sign-in.
+        $liveApplyWarning = $null
+        try { & $script:ShellPriorityScriptPath }
+        catch { $liveApplyWarning = $_.Exception.Message }
+
+        $result = @{ status = 'enabled'; verified = $true; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
+        if ($liveApplyWarning) { $result.liveApplyWarning = 'The saved priority policy will apply at the next sign-in.' }
+        $result
     }
     catch {
         $message = $_.Exception.Message
-        Reset-DesktopShellPriority | Out-Null
-        @{ error = $true; message = $message }
+        # Once readback has confirmed the task, helper, and registry values,
+        # never tear them down because a later non-persistence operation failed.
+        if (-not $configurationConfirmed) { Reset-DesktopShellPriority | Out-Null }
+        @{ error = $true; message = $message; configurationRetained = $configurationConfirmed }
     }
 }
 

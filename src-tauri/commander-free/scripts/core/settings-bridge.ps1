@@ -691,8 +691,14 @@ function Get-WCSystemProbe {
             $shellPriorityTask.Principal.UserId -in @('SYSTEM', 'S-1-5-18') -and $shellPriorityTask.State -ne 'Disabled')
         $usersCanWriteShellPriorityHelper = $false
         if (Test-Path -LiteralPath $shellPriorityHelper) {
-            foreach ($rule in (Get-Acl -LiteralPath $shellPriorityHelper).Access) {
-                try { $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+            # The backend's hidden Windows PowerShell session may not load the
+            # Microsoft.PowerShell.Security module that provides Get-Acl.
+            # Read the ACL through .NET so this observation agrees with the
+            # configuration writer and can stop Auto Heal once verified.
+            $shellPriorityAcl = [IO.File]::GetAccessControl($shellPriorityHelper)
+            $shellPriorityRules = $shellPriorityAcl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+            foreach ($rule in $shellPriorityRules) {
+                $ruleSid = $rule.IdentityReference.Value
                 if ($ruleSid -eq 'S-1-5-32-545' -and $rule.AccessControlType -eq 'Allow' -and
                     ($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Write) -ne 0) {
                     $usersCanWriteShellPriorityHelper = $true
