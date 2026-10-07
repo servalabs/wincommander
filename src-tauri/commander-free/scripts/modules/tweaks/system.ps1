@@ -662,6 +662,7 @@ function Reset-Win32PrioritySeparation {
 # ============================================================================
 
 $script:ShellPriorityTaskName = 'SM-SP'
+$script:LegacyShellPriorityTaskName = 'WinCommanderShellPriorityLogon'
 $script:ShellPriorityDirectory = Join-Path $env:ProgramData 'WinCommander\ShellPriority'
 $script:ShellPriorityScriptPath = Join-Path $script:ShellPriorityDirectory 'Apply-ShellPriority.ps1'
 $script:ShellPriorityBackupPath = 'HKLM:\SOFTWARE\WinCommander\ShellPriorityBackup'
@@ -709,6 +710,58 @@ foreach ($process in @(Get-Process -ErrorAction SilentlyContinue | Where-Object 
     catch {}
 }
 '@
+
+function Test-ShellPriorityPathSecure {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (!(Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        foreach ($rule in (Get-Acl -LiteralPath $Path -ErrorAction Stop).Access) {
+            try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+            # A SYSTEM task must never execute a helper writable by normal users.
+            if ($sid -notin @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545') -or
+                $rule.AccessControlType -ne 'Allow') { continue }
+            if (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Write) -ne 0) {
+                return $false
+            }
+        }
+        return $true
+    }
+    catch { return $false }
+}
+
+function Test-ShellPriorityTaskOwned {
+    param([Parameter(Mandatory = $true)]$Task)
+
+    $hasExpectedAction = @($Task.Actions | Where-Object {
+        ([IO.Path]::GetFileName([string]$_.Execute) -in @('powershell.exe', 'pwsh.exe')) -and
+        ([string]$_.Arguments -like '*Apply-ShellPriority.ps1*')
+    }).Count -gt 0
+    $hasLogonTrigger = @($Task.Triggers | Where-Object {
+        $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled -ne $false
+    }).Count -gt 0
+    return [bool]($hasExpectedAction -and $hasLogonTrigger -and
+        $Task.Principal.UserId -in @('SYSTEM', 'S-1-5-18') -and
+        $Task.Principal.LogonType -eq 'ServiceAccount' -and
+        $Task.State -ne 'Disabled')
+}
+
+function Get-DesktopShellPriorityStatus {
+    $targetsConfigured = [bool](($script:ShellPriorityTargets | Where-Object {
+        $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$_\PerfOptions"
+        $options = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+        $options -and $options.CpuPriorityClass -eq 3 -and $options.IoPriority -eq 3
+    } | Measure-Object).Count -eq $script:ShellPriorityTargets.Count)
+
+    $task = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:ShellPriorityTaskName -ErrorAction SilentlyContinue
+    $taskConfigured = [bool]($task -and (Test-ShellPriorityTaskOwned -Task $task))
+    $helperConfigured = (Test-ShellPriorityPathSecure -Path $script:ShellPriorityDirectory) -and
+        (Test-ShellPriorityPathSecure -Path $script:ShellPriorityScriptPath)
+    @{ enabled = [bool]($targetsConfigured -and $taskConfigured -and $helperConfigured)
+       registryConfigured = $targetsConfigured
+       taskConfigured = $taskConfigured
+       helperConfigured = $helperConfigured }
+}
 
 function Save-ShellPriorityValue {
     param([Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Name)
@@ -770,8 +823,19 @@ function Set-DesktopShellPriority {
         Initialize-SystemMaintenanceTaskFolder
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:ShellPriorityTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
+        # Older versions installed the same helper at the scheduler root.  It
+        # can survive an upgrade and reapply the setting after a user turns it
+        # off, so remove it only when it is recognisably our helper.
+        $legacyTask = Get-ScheduledTask -TaskPath '\' -TaskName $script:LegacyShellPriorityTaskName -ErrorAction SilentlyContinue
+        if ($legacyTask -and (Test-ShellPriorityTaskOwned -Task $legacyTask)) {
+            Unregister-ScheduledTask -TaskPath '\' -TaskName $script:LegacyShellPriorityTaskName -Confirm:$false -ErrorAction Stop
+        }
+
+        $status = Get-DesktopShellPriorityStatus
+        if (-not $status.enabled) { throw 'Windows did not retain the desktop-shell priority configuration.' }
+
         & $script:ShellPriorityScriptPath
-        @{ status = 'enabled'; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
+        @{ status = 'enabled'; verified = $true; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
     }
     catch {
         $message = $_.Exception.Message
@@ -784,13 +848,21 @@ function Reset-DesktopShellPriority {
     Assert-IsAdmin
     try {
         Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $script:ShellPriorityTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        $legacyTask = Get-ScheduledTask -TaskPath '\' -TaskName $script:LegacyShellPriorityTaskName -ErrorAction SilentlyContinue
+        if ($legacyTask -and (Test-ShellPriorityTaskOwned -Task $legacyTask)) {
+            Unregister-ScheduledTask -TaskPath '\' -TaskName $script:LegacyShellPriorityTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
         foreach ($target in $script:ShellPriorityTargets) {
             Restore-ShellPriorityValue -Target $target -Name 'CpuPriorityClass'
             Restore-ShellPriorityValue -Target $target -Name 'IoPriority'
         }
         Remove-Item -Path $script:ShellPriorityBackupPath -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $script:ShellPriorityScriptPath -Force -ErrorAction SilentlyContinue
-        @{ status = 'disabled'; scope = 'windows-managed' }
+        $status = Get-DesktopShellPriorityStatus
+        if ($status.registryConfigured -or $status.taskConfigured -or $status.helperConfigured) {
+            throw 'Windows still reports the desktop-shell priority configuration as active.'
+        }
+        @{ status = 'disabled'; verified = $true; scope = 'windows-managed' }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
