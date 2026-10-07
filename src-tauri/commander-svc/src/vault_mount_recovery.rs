@@ -2,9 +2,6 @@
 use super::*;
 
 pub(super) fn owner_logon_ended(mount: &ActiveMount) -> Result<bool, ()> {
-    use windows_sys::Win32::Security::Authentication::Identity::{
-        LsaEnumerateLogonSessions, LsaFreeReturnBuffer,
-    };
     use windows_sys::Win32::System::RemoteDesktop::{
         WTSEnumerateSessionsW, WTSFreeMemory, WTS_CURRENT_SERVER_HANDLE,
     };
@@ -12,19 +9,7 @@ pub(super) fn owner_logon_ended(mount: &ActiveMount) -> Result<bool, ()> {
     // null pointers before borrowing; finish each borrow before LSA/WTS frees it.
     unsafe {
         if let Some(expected) = mount.authentication_id {
-            let mut count = 0;
-            let mut sessions = std::ptr::null_mut();
-            if LsaEnumerateLogonSessions(&mut count, &mut sessions) != 0 { return Err(()); }
-            let result = if count > 65_536 || (count > 0 && sessions.is_null()) {
-                Err(())
-            } else if count == 0 {
-                Ok(true)
-            } else {
-                Ok(!std::slice::from_raw_parts(sessions, count as usize).iter()
-                    .any(|id| (id.LowPart, id.HighPart) == expected))
-            };
-            if !sessions.is_null() { LsaFreeReturnBuffer(sessions.cast()); }
-            return result;
+            return crate::vault_drive_letters::logon_ended(expected);
         }
         // Legacy journals have no logon LUID. A disconnected or reused session
         // number is still present and cannot prove its old namespace disappeared.
@@ -38,10 +23,13 @@ pub(super) fn owner_logon_ended(mount: &ActiveMount) -> Result<bool, ()> {
         } else if count == 0 {
             Ok(true)
         } else {
-            Ok(!std::slice::from_raw_parts(sessions, count as usize).iter()
+            Ok(!std::slice::from_raw_parts(sessions, count as usize)
+                .iter()
                 .any(|session| session.SessionId == mount.session_id))
         };
-        if !sessions.is_null() { WTSFreeMemory(sessions.cast()); }
+        if !sessions.is_null() {
+            WTSFreeMemory(sessions.cast());
+        }
         result
     }
 }
@@ -72,10 +60,6 @@ impl VaultMountBroker {
         mount.caller_sid == caller_sid && self.owner_logon_ended(mount)
     }
 
-    pub(super) fn recovery_request<'a>(&self, mount: &'a ActiveMount) -> BrokerDismountRequest<'a> {
-        self.recovery_request_with_logon_proof(mount, self.owner_logon_ended(mount))
-    }
-
     pub(super) fn recovery_request_with_logon_proof<'a>(&self, mount: &'a ActiveMount, owner_logon_ended: bool) -> BrokerDismountRequest<'a> {
         let mut request = recovery_dismount_request(mount);
         if mount.presentation == VaultPresentation::PerUser && owner_logon_ended {
@@ -103,11 +87,11 @@ impl VaultMountBroker {
             // A missing driver slot alone does not prove a DOS alias is gone.
             // In particular a Machine presentation can retain its global
             // alias, and a live per-user logon can retain its private alias.
-            // Retire without broker cleanup only after the original per-user
-            // namespace is proven ended; Sync-bound records stay durable
-            // until their pause obligation has been confirmed by the owner.
+            // Tokens may retain the old namespace after logoff. Never discard
+            // cleanup authority until the exact private alias is also absent.
             if mount.presentation == VaultPresentation::PerUser
                 && self.owner_logon_ended(mount)
+                && (self.private_alias_absent)(mount) == Ok(true)
                 && !requires_syncthing_pause(mount) {
                 changed = true;
                 return false;
@@ -134,4 +118,35 @@ impl VaultMountBroker {
         }
         Ok(())
     }
+}
+
+fn private_alias_operation(mount: &ActiveMount, cleanup: bool) -> Result<bool, ()> {
+    let authentication_id = mount.authentication_id.ok_or(())?;
+    let letter = mount.drive_letter.strip_suffix(':').unwrap_or(&mount.drive_letter);
+    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(());
+    }
+    let letter = letter.as_bytes()[0].to_ascii_uppercase() as char;
+    if !cleanup {
+        return crate::vault_drive_letters::ended_logon_encrypted_link_absent(
+            authentication_id, letter, mount.internal_drive,
+            &mount.caller_sid, mount.session_id,
+        );
+    }
+    use crate::vault_drive_letters::GlobalEncryptedLinkCleanup;
+    Ok(matches!(
+        crate::vault_drive_letters::cleanup_ended_logon_encrypted_link(
+            authentication_id, letter, mount.internal_drive,
+            &mount.caller_sid, mount.session_id,
+        )?,
+        GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed
+    ))
+}
+
+pub(super) fn private_alias_absent(mount: &ActiveMount) -> Result<bool, ()> {
+    private_alias_operation(mount, false)
+}
+
+pub(super) fn cleanup_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
+    private_alias_operation(mount, true)
 }

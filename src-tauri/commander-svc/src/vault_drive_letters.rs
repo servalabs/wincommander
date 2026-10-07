@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Bounded inventory of machine and every logon's DOS drive names.
 
+#[path = "vault_logon_links.rs"]
+mod logon_links;
+pub(crate) use logon_links::{
+    cleanup_ended_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
+    release_orphaned_caller_encrypted_links, release_orphaned_logon_encrypted_links,
+};
+
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, UNICODE_STRING},
-    Storage::FileSystem::{
-        DefineDosDeviceW, QueryDosDeviceW, DDD_EXACT_MATCH_ON_REMOVE, DDD_RAW_TARGET_PATH,
-        DDD_REMOVE_DEFINITION,
-    },
+    Storage::FileSystem::QueryDosDeviceW,
     System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
 };
 
@@ -177,10 +181,6 @@ pub(crate) fn occupied_letters() -> Result<HashSet<String>, ()> {
     Ok(letters)
 }
 
-fn encrypted_volume_device_target(target: &str) -> bool {
-    target.starts_with(r"\Device\VeraCryptVolume") || target.starts_with(r"\Device\TrueCryptVolume")
-}
-
 fn global_dos_name(letter: char) -> Vec<u16> {
     format!("Global\\{letter}:")
         .encode_utf16()
@@ -213,57 +213,6 @@ fn global_dos_device_target(letter: char) -> Result<Option<String>, ()> {
     String::from_utf16(&target[..end]).map(Some).map_err(|_| ())
 }
 
-/// Ask a disposable child to read an encrypted root. A dead driver can block
-/// a filesystem call indefinitely, so a Vault repair must never perform that
-/// call in the long-lived SYSTEM service. `Ok(true)` preserves a usable drive;
-/// `Ok(false)` is a failed root read and is eligible for exact-match removal;
-/// `Err(())` is inconclusive and leaves the mapping untouched.
-fn bounded_global_root_probe(letter: char) -> Result<bool, ()> {
-    use std::{
-        process::Command,
-        thread,
-        time::{Duration, Instant},
-    };
-
-    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let cmd = std::path::PathBuf::from(system_root)
-        .join("System32")
-        .join("cmd.exe");
-    let root = format!("{letter}:\\");
-    let mut child = Command::new(cmd)
-        .args(["/d", "/c", "dir", "/a", &root])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|_| ())?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Some(status) = child.try_wait().map_err(|_| ())? {
-            return Ok(status.success());
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(());
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn remove_global_dos_device(letter: char, target: &str) -> Result<(), ()> {
-    let name = global_dos_name(letter);
-    let target = target.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
-    let removed = unsafe {
-        DefineDosDeviceW(
-            DDD_REMOVE_DEFINITION | DDD_RAW_TARGET_PATH | DDD_EXACT_MATCH_ON_REMOVE,
-            name.as_ptr(),
-            target.as_ptr(),
-        )
-    };
-    (removed != 0).then_some(()).ok_or(())
-}
-
 /// Result of checking one explicit global encrypted-volume drive name.  This
 /// never inspects or changes a per-user namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,44 +235,22 @@ pub(crate) fn global_drive_letter_absent(letter: char) -> Result<bool, ()> {
 
 /// Confirm that one global encrypted-volume letter is absent, removing it
 /// only when Windows still reports the exact dead VeraCrypt/TrueCrypt target.
-/// A live/foreign mapping is deliberately retained. An uncertain root probe
-/// is also retained so a bulk scan can continue with other drive letters.
-pub(crate) fn cleanup_global_encrypted_link(
-    letter: char,
-) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    let Some(target) = global_dos_device_target(letter)? else {
-        return Ok(GlobalEncryptedLinkCleanup::Absent);
-    };
-    if !encrypted_volume_device_target(&target) {
-        return Ok(GlobalEncryptedLinkCleanup::Retained);
-    }
-    match bounded_global_root_probe(letter) {
-        Ok(true) => Ok(GlobalEncryptedLinkCleanup::Retained),
-        Ok(false) => {
-            remove_global_dos_device(letter, &target)?;
-            Ok(GlobalEncryptedLinkCleanup::Removed)
-        }
-        // An inaccessible root is inconclusive. Preserve the exact mapping
-        // and let the bulk scan continue with later letters.
-        Err(()) => Ok(GlobalEncryptedLinkCleanup::Retained),
-    }
+/// A live/foreign mapping or an uncertain native-device check is retained.
+pub(crate) fn cleanup_global_encrypted_link(letter: char) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    logon_links::cleanup_global_link(letter)
 }
 
-/// Remove only a dead global VeraCrypt/TrueCrypt drive name. This is the
-/// SYSTEM counterpart to Pro's current-Explorer cleanup: it never touches a
-/// per-user mapping, a normal drive target, or a mapping whose root can still
-/// be read. The exact target is supplied back to Windows on removal so a
-/// concurrently replaced mapping cannot be deleted.
+/// Remove only dead global VeraCrypt/TrueCrypt drive names.
+/// Names are pinned until removal and the encrypted device must be absent.
+/// Filesystem access failures are never treated as evidence that a drive is dead.
 fn release_orphaned_global_encrypted_links_with(
     mut cleanup: impl FnMut(char) -> Result<GlobalEncryptedLinkCleanup, ()>,
 ) -> Result<usize, ()> {
     let mut released: usize = 0;
     for byte in b'A'..=b'Z' {
         let letter = char::from(byte);
-        // `Retained` includes an inconclusive root probe, so a single dead
-        // drive cannot prevent later safe cleanups. Query/remove errors still
-        // abort: they are not evidence that this exact mapping is harmless.
-        if cleanup(letter)? == GlobalEncryptedLinkCleanup::Removed {
+        // An unreadable mapping stays blocked without preventing later repairs.
+        if cleanup(letter) == Ok(GlobalEncryptedLinkCleanup::Removed) {
             released = released.saturating_add(1);
         }
     }
@@ -362,14 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn only_encrypted_volume_device_targets_are_cleanup_candidates() {
-        assert!(encrypted_volume_device_target(r"\Device\VeraCryptVolume4"));
-        assert!(encrypted_volume_device_target(r"\Device\TrueCryptVolume7"));
-        assert!(!encrypted_volume_device_target(r"\Device\HarddiskVolume4"));
-        assert!(!encrypted_volume_device_target(r"\??\C:"));
-    }
-
-    #[test]
     fn global_dos_names_are_explicit_and_nul_terminated() {
         assert_eq!(
             String::from_utf16(&global_dos_name('Y')[..global_dos_name('Y').len() - 1]).unwrap(),
@@ -400,11 +319,14 @@ mod tests {
     }
 
     #[test]
-    fn bulk_cleanup_propagates_exact_query_or_remove_failure() {
-        assert_eq!(
-            release_orphaned_global_encrypted_links_with(|_| Err(())),
-            Err(())
-        );
+    fn bulk_cleanup_preserves_failed_aliases_and_continues_with_later_letters() {
+        let mut seen = Vec::new();
+        let result = release_orphaned_global_encrypted_links_with(|letter| {
+            seen.push(letter);
+            if letter == 'K' { Ok(GlobalEncryptedLinkCleanup::Removed) } else { Err(()) }
+        });
+        assert_eq!(result, Ok(1));
+        assert_eq!(seen, ('A'..='Z').collect::<Vec<_>>());
     }
 
     #[test]

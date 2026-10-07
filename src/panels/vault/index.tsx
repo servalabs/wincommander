@@ -245,8 +245,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       await refreshMountLetters();
       showSuccess(
         result.data.released === 0
-          ? "No unavailable Vault drive letters were found."
-          : `Freed ${result.data.released} unavailable Vault drive letter${result.data.released === 1 ? "" : "s"}.`,
+          ? "No stale Vault drive mappings could be safely removed."
+          : `Cleared ${result.data.released} stale Vault drive mapping${result.data.released === 1 ? "" : "s"}.`,
       );
     } finally {
       setReleasingOrphanedLetters(false);
