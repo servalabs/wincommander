@@ -57,7 +57,7 @@ export function vaultOperationError(error: unknown, operation: "mount" | "dismou
     const label = vaultMountResultLabel({ entry_id: "", state: "failed", presentation: null, drive_letter: null, reason });
     if (reason === "engine_unlock_failed") return `${label}. Check the password, PIM and keyfiles, then try again.`;
     if (reason === "engine_drive_letter_unavailable") return `${label} or reserved by another Vault. Refresh and select a free letter.`;
-    if (reason === "caller_access_denied") return "This Windows account cannot open files inside the mounted Vault. For an ordinary personal Vault, a local administrator who has its password can select ‘Recover this account’s access’ and mount again. Fleet Vault permissions are not changed by that option.";
+    if (reason === "caller_access_denied") return "Windows denied this account access inside the mounted Vault. An elevated local administrator automatically repairs an ordinary writable Vault after unlocking it. A Fleet-managed Vault is identified before mounting and must be opened from Fleet > Vault permissions.";
     if (reason === "private_owner_required") return `${label}. Use the original mounting session to dismount it. To change its registered owner, dismount it first and have an authorized administrator review Fleet > Vault permissions. Changing Windows file ownership does not change the registered Vault owner.`;
     if (reason === "policy_access_denied") return `${label} in Fleet > Vault permissions. Changing Windows file ownership does not grant Fleet Vault permission.`;
     return `${label}.`;
