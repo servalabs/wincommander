@@ -950,6 +950,7 @@ impl VaultMountBroker {
     /// Mount an ordinary, unmanaged file without creating a durable owner
     /// record. The identity-only key prevents different local accounts from
     /// concurrently mounting the same writable container.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mount_unmanaged_authorized_locked(
         &self,
