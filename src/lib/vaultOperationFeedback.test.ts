@@ -166,3 +166,9 @@ test("partial bulk dismount preserves safe counts and its exact authorization ca
   expect(message).not.toContain("password");
   expect(vaultOperationError("vault_bulk_dismount_partial:secret-user:2:1", "dismount")).not.toContain("secret-user");
 });
+test("untracked driver cleanup explains the recovery action without exposing raw details", () => {
+  const message = vaultOperationError("vault_untracked_mounts C:\\private\\container", "dismount");
+  expect(message).toContain("restart Windows");
+  expect(message).toContain("every signed-in account");
+  expect(message).not.toContain("C:\\private");
+});

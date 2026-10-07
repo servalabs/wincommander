@@ -616,7 +616,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
           ) : (
             <div className="empty-state">
               <Icon icon="clean" className="empty-icon" size={32} />
-              <p>{statusError ? "The last confirmed check found no mounted volumes. Current status is unavailable." : "No encrypted volumes mounted"}</p>
+              <p>{statusError ? "The last confirmed check found no mounted volumes for this account. Current status is unavailable." : "No WinCommander volumes mounted for this account"}</p>
             </div>
           )}
         </div>

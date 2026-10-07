@@ -8,6 +8,7 @@ use wincmd_shared::vault_inventory::VAULT_INVENTORY_VERSION;
 pub(super) enum InventoryVersion {
     Legacy,
     Current,
+    VerifyCleanup,
 }
 
 pub(super) fn parse_query(args: &Value) -> Option<InventoryVersion> {
@@ -17,6 +18,13 @@ pub(super) fn parse_query(args: &Value) -> Option<InventoryVersion> {
     }
     if object.len() == 1 {
         return Some(InventoryVersion::Legacy);
+    }
+    if object.len() == 3
+        && object.get("inventory_version").and_then(Value::as_u64)
+            == Some(u64::from(VAULT_INVENTORY_VERSION))
+        && object.get("verify_cleanup") == Some(&Value::Bool(true))
+    {
+        return Some(InventoryVersion::VerifyCleanup);
     }
     (object.len() == 2
         && object.get("inventory_version").and_then(Value::as_u64)
@@ -30,7 +38,7 @@ pub(super) fn reply(
     mounts: &[PersonalVaultMountedVolume],
 ) -> Result<Value, serde_json::Error> {
     match version {
-        InventoryVersion::Current => serde_json::to_value(mounts),
+        InventoryVersion::Current | InventoryVersion::VerifyCleanup => serde_json::to_value(mounts),
         InventoryVersion::Legacy => Ok(Value::Array(
             mounts
                 .iter()
@@ -106,8 +114,18 @@ mod tests {
             json!({"personal":true,"inventory_version":2,"caller_sid":"forged"}),
             json!({"personal":true,"caller_sid":"forged"}),
             json!({"inventory_version":2}),
+            json!({"personal":true,"inventory_version":2,"verify_cleanup":false}),
+            json!({"personal":true,"inventory_version":2,"verify_cleanup":true,"caller_sid":"forged"}),
         ] {
             assert!(parse_query(&invalid).is_none());
         }
+    }
+
+    #[test]
+    fn cleanup_verification_is_explicit_and_keeps_the_authorized_row_contract() {
+        let query = json!({"personal":true,"inventory_version":2,"verify_cleanup":true});
+        let version = parse_query(&query).unwrap();
+        assert_eq!(version, InventoryVersion::VerifyCleanup);
+        assert_eq!(reply(version, &[]).unwrap(), json!([]));
     }
 }

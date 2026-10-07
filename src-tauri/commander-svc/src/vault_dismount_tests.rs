@@ -4,8 +4,14 @@
 #[ignore = "read-only installed registry and driver comparison; no live operations"]
 fn live_registry_projection_diagnostic_reads_only() {
     let path = crate::policy_store::default_policy_dir().join("vault-active-mounts-v1.json");
-    let registry: DurableMountRegistry =
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let registry: DurableMountRegistry = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!("installed_registry=absent");
+            DurableMountRegistry { mounts: HashMap::new() }
+        }
+        Err(error) => panic!("installed registry read failed: {error}"),
+    };
     let slots = wincmd_volume::mounted_slot_identities().expect("physical observer failed");
     let matching = registry
         .mounts
@@ -40,6 +46,7 @@ fn live_registry_projection_diagnostic_reads_only() {
     )))));
     broker.engine_snapshot = Some(wincmd_volume::mounted_slot_identities);
     *broker.active.lock().unwrap() = registry.mounts;
+    println!("untracked_cleanup_required={:?}", broker.has_untracked_mounts());
     match broker.personal_mounts_for_caller(
         &store,
         std::ptr::null_mut(),
@@ -387,10 +394,49 @@ fn inventory_retains_absent_slot_cleanup_authority_without_reporting_a_mounted_d
     let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
     assert!(saved.mounts["mount"].driver_slot_absent);
     broker.engine_snapshot = Some(|| Ok(HashMap::from([(2, "unknown-volume".into())])));
-    assert_eq!(
-        broker.personal_mounts_for_caller(&store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true),
-        Err(VaultMountReason::MountStateUnknown)
+    let rows = broker.personal_mounts_for_caller(
+        &store, std::ptr::null_mut(), 7, "S-1-5-21-owner", true,
+    ).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].cleanup_required);
+    assert!(!rows[0].browse_allowed);
+}
+
+#[test]
+fn untracked_driver_mount_does_not_block_or_authorize_caller_inventory() {
+    let store = mount_store(
+        Arc::new(Mutex::new(HashMap::new())),
+        Arc::new(AtomicBool::new(false)),
     );
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.engine_snapshot = Some(|| Ok(HashMap::from([
+        (12, "test-mount:12".into()), (13, "untracked-mount".into()),
+    ])));
+    assert_eq!(broker.has_untracked_mounts(), Ok(true));
+    for elevated in [false, true] {
+        assert!(broker.personal_mounts_for_caller(
+            &store, std::ptr::null_mut(), 7, "S-1-5-21-owner", elevated,
+        ).unwrap().is_empty());
+    }
+    let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+    mount.personal = true;
+    broker.active.lock().unwrap().insert("owned".into(), mount);
+    let rows = broker.personal_mounts_for_caller(
+        &store, std::ptr::null_mut(), 7, "S-1-5-21-owner", false,
+    ).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].internal_drive, 12);
+    let result = broker.dismount_personal_for_caller(
+        &store, 1, 13, std::ptr::null_mut(), 7, "S-1-5-21-owner", true,
+    );
+    assert_ne!(result.state, VaultMountState::Unmounted);
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    broker.engine_snapshot = Some(|| Err("query unavailable".into()));
+    assert_eq!(broker.has_untracked_mounts(), Err(VaultMountReason::MountStateUnknown));
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    assert_eq!(broker.has_untracked_mounts(), Ok(false));
 }
 
 #[test]

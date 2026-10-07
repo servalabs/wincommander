@@ -52,14 +52,20 @@ pub(super) async fn status() -> Result<Value, String> {
 }
 
 pub(super) async fn dismount_authorized() -> Result<Value, String> {
-    dismount_snapshot(mounts().await?, |slot| async move {
+    let result = dismount_snapshot(mounts().await?, |slot| async move {
         crate::svc_client::call(
             "svc.vault.dismount_personal",
             json!({"personal":true,"internal_drive":slot}),
         )
         .await
     })
-    .await
+    .await?;
+    let verified = crate::svc_client::call(
+        "svc.vault.list_authorized",
+        json!({"personal":true,"inventory_version":2,"verify_cleanup":true}),
+    ).await?;
+    wincmd_shared::vault_inventory::parse_mounts(verified)?;
+    Ok(result)
 }
 
 async fn dismount_snapshot<F, Fut>(
