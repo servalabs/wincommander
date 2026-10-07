@@ -2058,6 +2058,16 @@ impl VaultMountBroker {
         if caller.caller_sid.is_empty() || caller.caller_session == 0 {
             return Err(VaultMountReason::MountStateUnknown);
         }
+        // A private per-user Vault can outlive the owner's Windows logon in
+        // the encrypted-volume driver even though the old session's drive
+        // letter has disappeared. The recorded owner may close that exact
+        // stale mount from a new logon without being re-authorized for data
+        // access. This is cleanup-only: the later slot/identity checks still
+        // reject a reused driver slot, and a fresh mount still requires the
+        // current Fleet policy grant.
+        let recorded_owner_recovery = mount.presentation == VaultPresentation::PerUser
+            && mount.caller_sid == caller.caller_sid
+            && owner_logon_ended;
         // An administrator may clean a standalone mount after its owning
         // logon has ended. Fleet-private ownership remains policy scoped.
         if mount.presentation == VaultPresentation::PerUser
@@ -2072,7 +2082,7 @@ impl VaultMountBroker {
         {
             return Err(VaultMountReason::MountStateUnknown);
         }
-        if !mount.personal {
+        if !mount.personal && !recorded_owner_recovery {
             let authorization = (self.policy_authorizer)(store, entry_id, caller.caller_token);
             if !authorization.allowed || authorization.presentation != Some(mount.presentation) {
                 return Err(if mount.presentation == VaultPresentation::PerUser {
