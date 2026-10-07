@@ -6,7 +6,7 @@ use std::{
     fs,
     fs::OpenOptions,
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     thread,
     time::Duration,
 };
@@ -103,6 +103,51 @@ fn has_reparse_point(path: &Path) -> Result<bool, String> {
     }
 }
 
+fn has_navigation_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+}
+
+fn ensure_no_reparse_point_in_ancestors(path: &Path) -> Result<(), String> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if has_reparse_point(candidate)? {
+            return Err("refused linked or reparse-point Explorer target".into());
+        }
+        current = candidate.parent();
+    }
+    Ok(())
+}
+
+fn resolve_existing_target_with<F>(raw: &Path, canonicalize: F) -> Result<PathBuf, String>
+where
+    F: FnOnce(&Path) -> io::Result<PathBuf>,
+{
+    match canonicalize(raw) {
+        Ok(target) => Ok(target),
+        Err(error) => {
+            // VeraCrypt volumes can service normal file I/O while rejecting the
+            // final-path query used by std::fs::canonicalize with ERROR_FILE_NOT_FOUND.
+            // Keep the same traversal protection without excluding that mounted volume.
+            if error.raw_os_error() != Some(2) {
+                return Err(format!("cannot resolve Explorer target: {error}"));
+            }
+            if has_navigation_component(raw) {
+                return Err("refused Explorer target containing path navigation".into());
+            }
+            ensure_no_reparse_point_in_ancestors(raw)?;
+            fs::metadata(raw).map_err(|metadata_error| {
+                format!("cannot resolve Explorer target: {metadata_error}")
+            })?;
+            Ok(raw.to_path_buf())
+        }
+    }
+}
+
+fn resolve_existing_target(raw: &Path) -> Result<PathBuf, String> {
+    resolve_existing_target_with(raw, |path| fs::canonicalize(path))
+}
+
 fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     if raw_path.is_empty() || raw_path.starts_with('-') {
         return Err("refused missing or malformed Explorer target".into());
@@ -114,8 +159,7 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     if has_reparse_point(&raw)? {
         return Err("refused linked or reparse-point Explorer target".into());
     }
-    let target = fs::canonicalize(&raw)
-        .map_err(|error| format!("cannot resolve Explorer target: {error}"))?;
+    let target = resolve_existing_target(&raw)?;
     let metadata = fs::metadata(&target)
         .map_err(|error| format!("cannot inspect Explorer target: {error}"))?;
     if !metadata.is_file() && !metadata.is_dir() {
@@ -497,6 +541,37 @@ mod tests {
 
         assert!(!file.exists());
         assert!(!folder.exists());
+    }
+
+    #[test]
+    fn accepts_existing_target_when_final_path_resolution_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("mounted-volume.txt");
+        fs::write(&file, b"sensitive").unwrap();
+
+        let resolved =
+            resolve_existing_target_with(&file, |_| Err(io::Error::from_raw_os_error(2))).unwrap();
+
+        assert_eq!(resolved, file);
+    }
+
+    #[test]
+    fn refuses_path_navigation_when_final_path_resolution_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("mounted-volume.txt");
+        fs::write(&file, b"sensitive").unwrap();
+        let traversing_path = directory
+            .path()
+            .join("nested")
+            .join("..")
+            .join("mounted-volume.txt");
+
+        let error = resolve_existing_target_with(&traversing_path, |_| {
+            Err(io::Error::from_raw_os_error(2))
+        })
+        .unwrap_err();
+
+        assert!(error.contains("path navigation"));
     }
 
     #[test]
