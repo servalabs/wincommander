@@ -17,7 +17,7 @@ import { useUsbHidApproval } from '../../context/UsbHidApprovalContext';
 import { DEFAULT_USB_HID_APPROVAL_TTL_SECS } from '../../lib/usbHidApproval';
 import UsbHidApprovalGateSettings from './UsbHidApprovalGateSettings';
 import { newDiagnosticOperationId, recordDiagnostic } from '../../lib/diagnostics';
-import { changeUsbPreference, compareUsbTimelineEvents, isCurrentUsbSession, matchUsbVolume, usbEventState, usbMonitorPresentation, usbPolicyReceiptVerified, usbPolicyTimelineRows } from '../../lib/usbTimeline';
+import { changeUsbPreference, compareUsbTimelineEvents, isCurrentUsbSession, matchUsbVolume, usbEventState, usbMonitorPresentation, usbPolicyReceiptVerified, usbPolicyTimelineRows, usbReadOnlyPolicyReceiptVerified, usbVolumeAccessState, usbWindowsDeviceState } from '../../lib/usbTimeline';
 import type { UsbObservedEvent } from '../../lib/usbTimeline';
 
 interface UsbMonitorFailure {
@@ -45,6 +45,8 @@ interface UsbDeviceIdentity {
   isHid: boolean;
   isMassStorage: boolean;
   instanceId?: string;
+  pnpStatus?: string | null;
+  problemCode?: number | null;
 }
 
 interface UsbDeviceRecord {
@@ -83,6 +85,8 @@ interface UsbTimelineEntry {
   instanceId: string;
   friendlyName: string;
   category: DeviceCategory;
+  pnpStatus?: string | null;
+  problemCode?: number | null;
   lastSeen: number;
   totalPluggedSecs: number;
   sessionCount: number;
@@ -135,6 +139,18 @@ interface UsbVolume {
   label: string;
   model: string;
   serial: string;
+  readOnly?: boolean | null;
+}
+
+interface UsbPolicyStatus {
+  deviceKey: string;
+  instanceId: string;
+  problemCode?: number | null;
+  status?: string | null;
+  volumes?: Array<{
+    driveLetter?: string | null;
+    readOnly?: boolean | null;
+  }>;
 }
 
 interface HidInjectionAlert {
@@ -278,9 +294,32 @@ function volumeForEntry(entry: UsbTimelineEntry, volumes: UsbVolume[]): UsbVolum
   return matchUsbVolume(entry, volumes);
 }
 
+function volumesForEntry(entry: UsbTimelineEntry, volumes: UsbVolume[]): UsbVolume[] {
+  if (entry.category !== 'Storage' || !entry.instanceId) return [];
+  return volumes.filter((volume) => volume.instanceId?.toUpperCase() === entry.instanceId.toUpperCase());
+}
+
 function displayNameForEntry(entry: UsbTimelineEntry, volume: UsbVolume | undefined): string {
   if (!volume) return entry.friendlyName;
-  return `${volume.label || volume.model || 'USB Drive'} (${volume.driveLetter})`;
+  const deviceName = volume.model?.trim() || entry.friendlyName;
+  const label = volume.label?.trim();
+  return `${deviceName}${label && label !== deviceName ? ` · ${label}` : ''} (${volume.driveLetter})`;
+}
+
+function physicalDisplayNameForEntry(entry: UsbTimelineEntry, volumes: UsbVolume[]): string {
+  const mappedVolumes = volumesForEntry(entry, volumes);
+  return mappedVolumes[0]?.model?.trim() || entry.friendlyName;
+}
+
+function policyForEntry(entry: UsbTimelineEntry, policies: Record<string, UsbPolicyStatus>): UsbPolicyStatus | undefined {
+  return policies[entry.key] ?? Object.values(policies).find((policy) =>
+    !!entry.instanceId && policy.instanceId?.toUpperCase() === entry.instanceId.toUpperCase());
+}
+
+function policyVolumeAccess(volume: UsbVolume | undefined, policy: UsbPolicyStatus | undefined) {
+  const policyVolume = volume && policy?.volumes?.find((candidate) =>
+    candidate.driveLetter?.toUpperCase() === volume.driveLetter.toUpperCase());
+  return usbVolumeAccessState(policyVolume ?? volume);
 }
 
 function stateIntent(state: TimelineState): Intent | undefined {
@@ -317,6 +356,7 @@ export default function UsbDevicesSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [volumes, setVolumes] = useState<UsbVolume[]>([]);
+  const [policyStatuses, setPolicyStatuses] = useState<Record<string, UsbPolicyStatus>>({});
   const [trustScores, setTrustScores] = useState<Record<string, UsbTrustScore>>({});
   // A command acknowledgement is not proof that Windows disabled a device.
   // Keep only an explicitly non-authoritative requested state until the
@@ -340,8 +380,19 @@ export default function UsbDevicesSection() {
 
   const hidApprovalGateEnabled = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalGateEnabled === true;
   const masterEnabled = appSettings?.ideal?.privacy?.usbSecurity?.monitorEnabled === true;
-  const protectionActive = masterEnabled && status.running;
+  // The monitor can be running while its next-start preference is still off.
+  // Runtime controls must follow the observed process state, not that saved preference.
+  const protectionActive = status.running;
   const childControlsDisabled = busy || !protectionActive;
+  const advancedPolicyUnavailableReason = busy
+    ? 'A USB action is in progress. Windows state will refresh when it finishes.'
+    : !protectionActive
+      ? 'Arm USB Protection to use Windows device controls.'
+      : !proInstalled
+        ? 'Install WinCommander Pro to use Windows device controls.'
+        : !advancedAvailable
+          ? 'An active WinCommander Pro entitlement is required for Windows device controls.'
+          : null;
   const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
     ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
 
@@ -371,16 +422,18 @@ export default function UsbDevicesSection() {
       setHidAlerts([]);
       setAutoSandboxRunning(false);
       setAutoActions([]);
+      setPolicyStatuses({});
       return;
     }
 
-    const [meterStatus, transferStats, hidStatus, alerts, sandboxStatus, sandboxRecent] = await Promise.allSettled([
+    const [meterStatus, transferStats, hidStatus, alerts, sandboxStatus, sandboxRecent, policyStatus] = await Promise.allSettled([
       invoke<boolean>('usb_metering_status'),
       invoke<UsbTransferStat[]>('get_usb_transfer_stats'),
       invoke<{ running: boolean; sensitivity?: 'lenient' | 'balanced' | 'strict'; humanFloorMs?: number; minBurstKeys?: number }>('usb_hid_guard_status'),
       invoke<HidInjectionAlert[]>('get_usb_hid_alerts'),
       invoke<AutoSandboxStatus>('usb_autosandbox_status'),
       invoke<AutoActionRecord[]>('get_usb_autosandbox_recent'),
+      invoke<UsbPolicyStatus[]>('get_usb_policy_status'),
     ]);
 
     setMetering(meterStatus.status === 'fulfilled' && meterStatus.value === true);
@@ -404,6 +457,15 @@ export default function UsbDevicesSection() {
       });
     }
     if (sandboxRecent.status === 'fulfilled') setAutoActions(Array.isArray(sandboxRecent.value) ? sandboxRecent.value : []);
+    if (policyStatus.status === 'fulfilled' && Array.isArray(policyStatus.value)) {
+      const next: Record<string, UsbPolicyStatus> = {};
+      for (const policy of policyStatus.value) {
+        if (policy.deviceKey?.trim()) next[policy.deviceKey] = policy;
+      }
+      setPolicyStatuses(next);
+    } else {
+      setPolicyStatuses({});
+    }
 
     const scorePairs = await Promise.all(visibleEntries.map(async (entry) => {
       try {
@@ -456,6 +518,8 @@ export default function UsbDevicesSection() {
             instanceId: record.identity.instanceId ?? '',
             friendlyName: safeFriendlyName(record.identity),
             category: categoryFor(record.identity),
+            pnpStatus: record.identity.pnpStatus,
+            problemCode: record.identity.problemCode,
             lastSeen: record.lastSeen,
             totalPluggedSecs: record.totalPluggedSecs,
             sessionCount: record.sessionCount,
@@ -535,6 +599,8 @@ export default function UsbDevicesSection() {
     for (const session of sessions) {
       const entry = byKey.get(session.deviceKey);
       if (!entry) continue;
+      const volume = volumeForEntry(entry, volumes);
+      const name = displayNameForEntry(entry, volume);
       const sourceFor = (time: number): TimelineSource => monitorStartedAt != null && time >= monitorStartedAt
         ? 'Current monitor run'
         : 'Persisted monitor record';
@@ -549,7 +615,7 @@ export default function UsbDevicesSection() {
       events.push({
         id: `${session.deviceKey}:attach:${session.attachedAt}`,
         deviceKey: session.deviceKey,
-        name: entry.friendlyName,
+        name,
         category: entry.category,
         state: attachState,
         at: session.attachedAt,
@@ -560,7 +626,7 @@ export default function UsbDevicesSection() {
         events.push({
           id: `${session.deviceKey}:detach:${session.detachedAt}`,
           deviceKey: session.deviceKey,
-          name: entry.friendlyName,
+          name,
           category: entry.category,
           state: 'Detached',
           at: session.detachedAt,
@@ -571,7 +637,7 @@ export default function UsbDevicesSection() {
         events.push({
           id: `${session.deviceKey}:unknown:${session.endedUnobservedAt}`,
           deviceKey: session.deviceKey,
-          name: entry.friendlyName,
+          name,
           category: entry.category,
           state: 'State unknown',
           at: session.endedUnobservedAt,
@@ -582,10 +648,14 @@ export default function UsbDevicesSection() {
     }
     for (const event of observedEvents) {
       const entry = byKey.get(event.deviceKey);
+      const eventVolume = entry && event.volumeLetter
+        ? volumes.find((volume) => volume.driveLetter === event.volumeLetter
+          && volume.instanceId?.toUpperCase() === entry.instanceId.toUpperCase())
+        : entry ? volumeForEntry(entry, volumes) : undefined;
       events.push({
         id: event.id,
         deviceKey: event.deviceKey,
-        name: `${entry?.friendlyName || 'USB device'}${event.volumeLetter ? ` (${event.volumeLetter})` : ''}`,
+        name: entry ? displayNameForEntry(entry, eventVolume) : `USB device${event.volumeLetter ? ` (${event.volumeLetter})` : ''}`,
         category: entry?.category ?? 'USB device',
         state: usbEventState(event),
         at: event.at,
@@ -599,7 +669,7 @@ export default function UsbDevicesSection() {
         durationSecs: null, source: 'Pro policy record' });
     }
     return events.sort(compareUsbTimelineEvents);
-  }, [autoActions, currentKeys, entries, monitorStartedAt, nowSec, observedEvents, sessions]);
+  }, [autoActions, currentKeys, entries, monitorStartedAt, nowSec, observedEvents, sessions, volumes]);
 
   const toggleMonitor = useCallback(async (on: boolean) => {
     setBusy(true);
@@ -792,22 +862,30 @@ export default function UsbDevicesSection() {
     const displayLetter = letter.replace(/:$/, '');
     if (readOnly) {
       const accepted = await requestConfirm({
-        title: `Make ${displayLetter}: read-only?`,
-        description: 'Writes will be blocked until read-only mode is cleared. Administrator rights are required.',
+        title: `Make this USB device read-only from ${displayLetter}:?`,
+        description: 'This Windows control applies to the physical USB device, including every partition on it. Writes will be blocked until read-only mode is cleared. Administrator rights are required.',
         confirmLabel: 'Make read-only',
       });
       if (!accepted) return;
     }
     setBusy(true);
+    setError(null);
     try {
-      await invoke('set_usb_volume_readonly', { args: { driveLetter: letter, readOnly } });
+      const receipt = await invoke<unknown>('set_usb_volume_readonly', { args: { driveLetter: letter, readOnly } });
+      if (!usbReadOnlyPolicyReceiptVerified(receipt, readOnly)) {
+        throw new Error(`Windows did not verify that the physical USB device is ${readOnly ? 'read-only' : 'writable'}.`);
+      }
       await refresh();
+      void showSuccess(`Windows verified that the physical USB device is ${readOnly ? 'read-only' : 'writable'}.`);
     } catch (reason) {
-      setError(humanizeUsbError(reason));
+      recordUsbFailure('storage_readonly', 'USB.STORAGE_READONLY.FAILED');
+      const message = humanizeUsbError(reason);
+      setError(message);
+      void showError(`Read-only change failed: ${message}`);
     } finally {
       setBusy(false);
     }
-  }, [refresh, requestConfirm]);
+  }, [recordUsbFailure, refresh, requestConfirm]);
 
   const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
     if (!protectionActive) return;
@@ -1049,6 +1127,9 @@ export default function UsbDevicesSection() {
               {entries.map((entry) => {
                 const score = trustScores[entry.key];
                 const policyTrusted = autoSandboxConfig.allowKeys.includes(entry.key);
+                const policy = policyForEntry(entry, policyStatuses);
+                const windowsState = usbWindowsDeviceState(policy ? { problemCode: policy.problemCode, pnpStatus: policy.status } : entry);
+                const volumeAccess = policyVolumeAccess(volumeForEntry(entry, volumes), policy);
                 return (
                   <div key={entry.key} className="rounded-md border border-white/10 p-3">
                     <div className="flex items-start justify-between gap-2">
@@ -1058,6 +1139,11 @@ export default function UsbDevicesSection() {
                       </div>
                       <div className="flex flex-wrap justify-end gap-1">
                         {entry.attached && <Tag minimal intent="success">CONNECTED</Tag>}
+                        {windowsState === 'allowed' && <Tag minimal intent="success">AVAILABLE — WINDOWS ENABLED</Tag>}
+                        {windowsState === 'blocked' && <Tag minimal intent="danger">BLOCKED</Tag>}
+                        {windowsState === 'unknown' && <Tag minimal intent="warning">WINDOWS STATUS UNKNOWN</Tag>}
+                        {volumeAccess === 'read-only' && <Tag minimal intent="warning">READ-ONLY</Tag>}
+                        {volumeAccess === 'writable' && <Tag minimal>WRITABLE</Tag>}
                         {policyTrusted && <Tag minimal intent="success">TRUSTED BY POLICY</Tag>}
                         {score && (
                           <Tag minimal intent={trustScoreTone(score.score)} className="font-mono">
@@ -1224,51 +1310,92 @@ export default function UsbDevicesSection() {
                 <div className="text-xs opacity-60">
                   Device disable/allow and storage read-only enforcement require Pro and administrator rights. Dangerous actions keep their warning visible before confirmation.
                 </div>
+                {advancedPolicyUnavailableReason && (
+                  <div role="status" className="rounded-md border border-white/10 p-2 text-xs opacity-75">
+                    {advancedPolicyUnavailableReason}
+                  </div>
+                )}
                 {entries.map((entry) => {
-                  const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
+                  const name = physicalDisplayNameForEntry(entry, volumes);
                   const volume = volumeForEntry(entry, volumes);
-                  const resolvedLetter = volume?.driveLetter;
+                  const storageVolumes = volumesForEntry(entry, volumes);
                   const blockRequested = pendingBlockKeys.has(entry.key);
                   const approvalControlledHid = hidApprovalGateEnabled && entry.category === 'Keyboard / HID';
+                  const policy = policyForEntry(entry, policyStatuses);
+                  const windowsState = usbWindowsDeviceState(policy ? { problemCode: policy.problemCode, pnpStatus: policy.status } : entry);
+                  const volumeAccess = policyVolumeAccess(volume, policy);
+                  const storageStates = storageVolumes.map((storageVolume) => policyVolumeAccess(storageVolume, policy));
+                  const storageScope = storageVolumes.map((storageVolume) => storageVolume.driveLetter).join(' + ');
+                  const storageReadOnly = storageStates.length > 0 && storageStates.every((state) => state === 'read-only');
+                  const storageAccessSummary = storageScope && storageStates.every((state) => state === 'writable')
+                    ? `${storageScope} Writable`
+                    : storageReadOnly ? `${storageScope} Read-only` : '';
+                  const isBlocked = windowsState === 'blocked';
                   return (
                     <div key={`policy-${entry.key}`} className="rounded-md border border-white/10 p-3">
                       <div className="text-sm font-medium">{name}</div>
+                      <div className="mt-1 text-xs opacity-60">
+                        {windowsState === 'allowed'
+                          ? 'Available (Windows enabled)'
+                          : windowsState === 'blocked'
+                            ? 'Blocked (Windows verified)'
+                            : 'Windows status unavailable — refresh before relying on this control.'}
+                        {entry.category === 'Storage' && (storageAccessSummary || volumeAccess !== 'unknown')
+                          ? ` · ${storageAccessSummary || (volumeAccess === 'read-only' ? 'Read-only' : 'Writable')}`
+                          : ''}
+                      </div>
                       {blockRequested && (
                         <div className="mt-1 text-xs text-[var(--color-warning)]">Block requested; Windows verification is pending.</div>
                       )}
                       <div className="mt-2 flex flex-wrap gap-1">
-                        <Button
-                          intent="danger"
-                          minimal
-                          small
-                          aria-label={`Block ${name}`}
-                          disabled={busy || blockRequested || !proInstalled || !advancedAvailable || !protectionActive}
-                          onClick={() => void blockDevice(entry)}
-                        >
-                          Block
-                        </Button>
-                        <Button
-                          intent="success"
-                          minimal
-                          small
-                          aria-label={`Allow ${name}`}
-                          disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid || !protectionActive}
-                          onClick={() => void allowDevice(entry)}
-                          title={approvalControlledHid ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.' : undefined}
-                        >
-                          Allow
-                        </Button>
-                        {entry.category === 'Storage' && (
+                        {isBlocked ? (
                           <Button
-                            intent="warning"
+                            intent="success"
                             minimal
                             small
-                            aria-label={`Make ${name} read-only`}
-                            disabled={busy || !resolvedLetter || !advancedAvailable || !protectionActive}
-                            onClick={() => resolvedLetter && void setVolumeReadonly(resolvedLetter, true)}
+                            aria-label={`Allow ${name}`}
+                            disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid || !protectionActive}
+                            onClick={() => void allowDevice(entry)}
+                            title={approvalControlledHid ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.' : undefined}
                           >
-                            Read-only
+                            Allow
                           </Button>
+                        ) : (
+                          <Button
+                            intent="danger"
+                            minimal
+                            small
+                            aria-label={`Block ${name}`}
+                            disabled={busy || blockRequested || !proInstalled || !advancedAvailable || !protectionActive}
+                            onClick={() => void blockDevice(entry)}
+                          >
+                            Block
+                          </Button>
+                        )}
+                        {entry.category === 'Storage' && storageVolumes[0] && (
+                          storageReadOnly ? (
+                            <Button
+                              intent="warning"
+                              minimal
+                              small
+                              aria-label={`Make ${name} ${storageScope} writable`}
+                              disabled={busy || !advancedAvailable || !protectionActive}
+                              onClick={() => void setVolumeReadonly(storageVolumes[0].driveLetter, false)}
+                            >
+                              Make {storageScope} writable
+                            </Button>
+                          ) : (
+                            <Button
+                              intent="warning"
+                              minimal
+                              small
+                              aria-label={`Make ${name} ${storageScope} read-only`}
+                              disabled={busy || storageStates.some((state) => state === 'unknown') || !advancedAvailable || !protectionActive}
+                              onClick={() => void setVolumeReadonly(storageVolumes[0].driveLetter, true)}
+                            >
+                              Make {storageScope} read-only
+                            </Button>
+                          )
                         )}
                       </div>
                     </div>

@@ -85,7 +85,7 @@ describe("Privacy Monitor control accessibility", () => {
     expect(usb).toContain('aria-label="Clear USB device timeline"');
     expect(usb).toContain("aria-label={`Block ${name}`}");
     expect(usb).toContain("aria-label={`Allow ${name}`}");
-    expect(usb).toContain("aria-label={`Make ${name} read-only`}");
+    expect(usb).toContain("aria-label={`Make ${name} ${storageScope} read-only`}");
     expect(usb).toContain('aria-label="Clear USB auto-isolate actions"');
     expect(usb).toContain("aria-pressed={autoSandboxMode === m}");
     expect(usb).toContain('aria-label="Refresh USB device timeline"');

@@ -3,6 +3,29 @@ export interface UsbVolumeIdentity {
   instanceId: string;
 }
 
+export type UsbWindowsDeviceState = 'allowed' | 'blocked' | 'unknown';
+
+/**
+ * A PnP state is only useful when Windows supplied a concrete result.  Do not
+ * turn an old timeline row or an action acknowledgement into an allowed state.
+ */
+export function usbWindowsDeviceState(identity: {
+  problemCode?: number | null;
+  pnpStatus?: string | null;
+}): UsbWindowsDeviceState {
+  if (identity.problemCode === 22) return 'blocked';
+  if (identity.problemCode === 0 || identity.pnpStatus?.trim().toUpperCase() === 'OK') return 'allowed';
+  return 'unknown';
+}
+
+export type UsbVolumeAccessState = 'writable' | 'read-only' | 'unknown';
+
+export function usbVolumeAccessState(volume: { readOnly?: boolean | null } | undefined): UsbVolumeAccessState {
+  if (volume?.readOnly === true) return 'read-only';
+  if (volume?.readOnly === false) return 'writable';
+  return 'unknown';
+}
+
 export function matchUsbVolume<T extends UsbVolumeIdentity>(
   entry: { category: string; attached: boolean; instanceId: string; driveLetter: string | null },
   volumes: T[],
@@ -51,6 +74,21 @@ export function compareUsbTimelineEvents(
 export function usbPolicyReceiptVerified(receipt: unknown): boolean {
   return typeof receipt === 'object' && receipt !== null
     && 'verified' in receipt && receipt.verified === true;
+}
+
+/**
+ * The read-only control changes the physical USB disk.  An acknowledgement is
+ * insufficient: the receipt must prove the requested disk state and scope.
+ */
+export function usbReadOnlyPolicyReceiptVerified(receipt: unknown, readOnly: boolean): boolean {
+  return usbPolicyReceiptVerified(receipt)
+    && typeof receipt === 'object' && receipt !== null
+    && 'readOnly' in receipt && receipt.readOnly === readOnly
+    && 'scope' in receipt && receipt.scope === 'physicalUsbDisk'
+    && 'affectedDriveLetters' in receipt
+    && Array.isArray(receipt.affectedDriveLetters)
+    && receipt.affectedDriveLetters.length > 0
+    && receipt.affectedDriveLetters.every((letter) => typeof letter === 'string' && letter.trim().length > 0);
 }
 
 export function isCurrentUsbSession(

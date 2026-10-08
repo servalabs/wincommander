@@ -72,6 +72,10 @@ struct BasicIdentity {
     is_hid: bool,
     is_mass_storage: bool,
     instance_id: String,
+    #[serde(default)]
+    pnp_status: String,
+    #[serde(default)]
+    problem_code: Option<u32>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -122,6 +126,8 @@ struct BasicPnpRow {
     friendly_name: Option<String>,
     class: Option<String>,
     service: Option<String>,
+    status: Option<String>,
+    config_manager_error_code: Option<u32>,
 }
 
 fn basic_state() -> &'static Mutex<BasicTimeline> {
@@ -428,6 +434,8 @@ fn basic_identity(row: BasicPnpRow) -> Option<BasicIdentity> {
             || service.contains(&usb_storage_service)
             || service.contains("UASPSTOR"),
         instance_id,
+        pnp_status: row.status.unwrap_or_default(),
+        problem_code: row.config_manager_error_code,
     })
 }
 
@@ -435,7 +443,7 @@ async fn basic_snapshot() -> Result<Vec<BasicIdentity>, String> {
     let script = r#"
 $ErrorActionPreference='Stop'
 try {
-  $rows=@(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\*' -or $_.InstanceId -like 'HID\*' } | Select-Object InstanceId,FriendlyName,Class,Service)
+  $rows=@(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\*' -or $_.InstanceId -like 'HID\*' } | Select-Object InstanceId,FriendlyName,Class,Service,Status,ConfigManagerErrorCode)
   $rows | ConvertTo-Json -Compress
 } catch {
   Write-Error $_.Exception.Message
@@ -809,6 +817,14 @@ pub async fn get_usb_transfer_stats() -> Result<Value, String> {
     dispatch_paid("get_usb_transfer_stats", "USB Guard", Value::Null).await
 }
 
+/// Returns a read-only, current Windows PnP and volume-policy readback.
+/// This deliberately does not infer an enabled or blocked state from a prior
+/// command acknowledgement or a persisted timeline row.
+#[tauri::command]
+pub async fn get_usb_policy_status() -> Result<Value, String> {
+    dispatch_paid("get_usb_policy_status", "USB device policy", Value::Null).await
+}
+
 #[tauri::command]
 pub async fn clear_usb_transfer_stats() -> Result<Value, String> {
     dispatch_paid("clear_usb_transfer_stats", "USB Guard", Value::Null).await
@@ -1063,6 +1079,8 @@ mod tests {
             is_hid: false,
             is_mass_storage: true,
             instance_id: r"USB\VID_1234&PID_5678\SERIAL".to_string(),
+            pnp_status: "OK".to_string(),
+            problem_code: Some(0),
         }
     }
 

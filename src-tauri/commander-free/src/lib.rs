@@ -2621,6 +2621,7 @@ pub fn run() {
             usb_guard::stop_usb_metering,
             usb_guard::usb_metering_status,
             usb_guard::get_usb_transfer_stats,
+            usb_guard::get_usb_policy_status,
             usb_guard::clear_usb_transfer_stats,
             usb_guard::set_usb_metering_config,
             // ── USB U-C: low-confidence HID timing anomaly (paid · Pro alert only) ──

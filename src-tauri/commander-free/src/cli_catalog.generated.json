@@ -9420,6 +9420,16 @@
       ]
     },
     {
+      "id": "tauri:get_usb_policy_status",
+      "name": "get_usb_policy_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/UsbDevicesSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:get_usb_storage_volumes",
       "name": "get_usb_storage_volumes",
       "transport": "tauri",

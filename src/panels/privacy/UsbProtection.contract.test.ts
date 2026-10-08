@@ -51,11 +51,16 @@ describe("USB Protection truthfulness and lifecycle contracts", () => {
   test("one master arm state gates every child collector and never locally claims Windows verified a block", async () => {
     const source = await read("src/panels/privacy/UsbDevicesSection.tsx");
     const app = await read("src/App.tsx");
-    expect(source).toContain("const protectionActive = masterEnabled && status.running;");
+    expect(source).toContain("const protectionActive = status.running;");
+    expect(source).toContain("Runtime controls must follow the observed process state");
+    expect(source).toContain("advancedPolicyUnavailableReason");
+    expect(source).toContain("Arm USB Protection to use Windows device controls.");
     expect(source).toContain("Advanced USB settings below are saved configuration, not running.");
     expect(source).toContain("if (!protectionActive) return;");
     expect(source).toContain("disabled={childControlsDisabled}");
     expect(source).toContain("Block requested; Windows verification is pending.");
+    expect(source).toContain("usbReadOnlyPolicyReceiptVerified(receipt, readOnly)");
+    expect(source).toContain("Windows did not verify that the physical USB device");
     expect(source).not.toContain('now disabled in Windows.');
     expect(app).toContain("const paidMonitorDesired = usbMonitorEnabled && hasPaid && paidMonitorConfigured;");
     expect(app).toContain("const basicMonitorDesired = usbMonitorEnabled;");

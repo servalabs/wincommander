@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { changeUsbPreference, compareUsbTimelineEvents, isCurrentUsbSession, matchUsbVolume, usbEventState, usbMonitorPresentation, usbPolicyReceiptVerified, usbPolicyTimelineRows } from './usbTimeline';
+import { changeUsbPreference, compareUsbTimelineEvents, isCurrentUsbSession, matchUsbVolume, usbEventState, usbMonitorPresentation, usbPolicyReceiptVerified, usbPolicyTimelineRows, usbReadOnlyPolicyReceiptVerified, usbVolumeAccessState, usbWindowsDeviceState } from './usbTimeline';
 
 const volume = { driveLetter: 'E:', instanceId: 'USB\\VID_1234&PID_5678\\TEST' };
 const entry = { category: 'Storage', attached: true, instanceId: volume.instanceId, driveLetter: null };
@@ -100,5 +100,34 @@ describe('USB identity and verified event display', () => {
     expect(usbEventState({ ...event, kind: 'block_failed' })).toBe('Block failed');
     expect(usbEventState({ ...event, kind: 'mounted' })).toBe('Mount observed');
     expect(usbEventState({ ...event, kind: 'unmounted' })).toBe('Unmount observed');
+  });
+
+  test('read-only receipt proves the requested whole physical USB state', () => {
+    const receipt = {
+      verified: true,
+      readOnly: true,
+      scope: 'physicalUsbDisk',
+      affectedDriveLetters: ['E:', 'F:'],
+    };
+    expect(usbReadOnlyPolicyReceiptVerified(receipt, true)).toBe(true);
+    expect(usbReadOnlyPolicyReceiptVerified(receipt, false)).toBe(false);
+    expect(usbReadOnlyPolicyReceiptVerified({ ...receipt, scope: 'volume' }, true)).toBe(false);
+    expect(usbReadOnlyPolicyReceiptVerified({ ...receipt, affectedDriveLetters: [] }, true)).toBe(false);
+    expect(usbReadOnlyPolicyReceiptVerified({ ...receipt, verified: false }, true)).toBe(false);
+  });
+
+  test('only a Windows PnP readback marks a device allowed or blocked', () => {
+    expect(usbWindowsDeviceState({ problemCode: 0 })).toBe('allowed');
+    expect(usbWindowsDeviceState({ pnpStatus: 'OK' })).toBe('allowed');
+    expect(usbWindowsDeviceState({ problemCode: 22, pnpStatus: 'Error' })).toBe('blocked');
+    expect(usbWindowsDeviceState({ problemCode: 10, pnpStatus: 'Error' })).toBe('unknown');
+    expect(usbWindowsDeviceState({})).toBe('unknown');
+  });
+
+  test('read-only is shown only when the volume readback says so', () => {
+    expect(usbVolumeAccessState({ readOnly: true })).toBe('read-only');
+    expect(usbVolumeAccessState({ readOnly: false })).toBe('writable');
+    expect(usbVolumeAccessState({})).toBe('unknown');
+    expect(usbVolumeAccessState(undefined)).toBe('unknown');
   });
 });
