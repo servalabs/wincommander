@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- USB observation matches Windows device identities correctly, associates volumes
+  by their physical device, and refreshes watcher health and transfer totals.
+  The timeline distinguishes current sessions, observed mounts, and verified
+  manual policy actions. Pro must also be updated for verified block/allow receipts.
+
 - Secure Storage wraps long Vault paths and errors within the card. Narrow cards
   place paths and actions on separate rows, keeping controls reachable without
   horizontal scrolling.

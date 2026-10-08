@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -17,6 +17,8 @@ import { useUsbHidApproval } from '../../context/UsbHidApprovalContext';
 import { DEFAULT_USB_HID_APPROVAL_TTL_SECS } from '../../lib/usbHidApproval';
 import UsbHidApprovalGateSettings from './UsbHidApprovalGateSettings';
 import { newDiagnosticOperationId, recordDiagnostic } from '../../lib/diagnostics';
+import { changeUsbPreference, compareUsbTimelineEvents, isCurrentUsbSession, matchUsbVolume, usbEventState, usbMonitorPresentation, usbPolicyReceiptVerified, usbPolicyTimelineRows } from '../../lib/usbTimeline';
+import type { UsbObservedEvent } from '../../lib/usbTimeline';
 
 interface UsbMonitorFailure {
   code: string;
@@ -66,6 +68,7 @@ interface UsbSessionRow {
 interface UsbTimeline {
   records: Record<string, UsbDeviceRecord>;
   sessions: UsbSessionRow[];
+  events?: UsbObservedEvent[];
   currentKeys?: string[];
   monitorStartedAt?: number | null;
   lastPollAt?: number | null;
@@ -88,8 +91,8 @@ interface UsbTimelineEntry {
   openSinceEpoch: number | null;
 }
 
-type TimelineState = 'Connected now' | 'Attached' | 'Detached' | 'Present when armed' | 'State unknown';
-type TimelineSource = 'Current monitor run' | 'Persisted monitor record';
+type TimelineState = string;
+type TimelineSource = 'Current monitor run' | 'Persisted monitor record' | 'Pro policy record';
 
 interface TimelineEvent {
   id: string;
@@ -98,8 +101,10 @@ interface TimelineEvent {
   category: DeviceCategory;
   state: TimelineState;
   at: number;
+  sortOrder?: number;
   durationSecs: number | null;
   source: TimelineSource;
+  detail?: string;
 }
 
 interface UsbTrustScore {
@@ -126,6 +131,7 @@ interface UsbTransferStat {
 
 interface UsbVolume {
   driveLetter: string;
+  instanceId: string;
   label: string;
   model: string;
   serial: string;
@@ -269,13 +275,7 @@ function humanizeUsbError(error: unknown): string {
 }
 
 function volumeForEntry(entry: UsbTimelineEntry, volumes: UsbVolume[]): UsbVolume | undefined {
-  if (entry.category !== 'Storage' || volumes.length === 0) return undefined;
-  if (entry.driveLetter) {
-    const direct = volumes.find((volume) => volume.driveLetter === entry.driveLetter);
-    if (direct) return direct;
-  }
-  if (volumes.length === 1) return volumes[0];
-  return undefined;
+  return matchUsbVolume(entry, volumes);
 }
 
 function displayNameForEntry(entry: UsbTimelineEntry, volume: UsbVolume | undefined): string {
@@ -284,7 +284,8 @@ function displayNameForEntry(entry: UsbTimelineEntry, volume: UsbVolume | undefi
 }
 
 function stateIntent(state: TimelineState): Intent | undefined {
-  if (state === 'Connected now') return 'success';
+  if (state === 'Connected now' || state === 'Block verified' || state === 'Allow verified') return 'success';
+  if (state.endsWith('failed')) return 'danger';
   if (state === 'Detached') return undefined;
   if (state === 'State unknown') return 'warning';
   return 'primary';
@@ -309,6 +310,8 @@ export default function UsbDevicesSection() {
   const [status, setStatus] = useState<UsbMonitorStatus>({ running: false, notify: true });
   const [entries, setEntries] = useState<UsbTimelineEntry[]>([]);
   const [sessions, setSessions] = useState<UsbSessionRow[]>([]);
+  const [observedEvents, setObservedEvents] = useState<UsbObservedEvent[]>([]);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
   const [currentKeys, setCurrentKeys] = useState<Set<string>>(new Set());
   const [monitorStartedAt, setMonitorStartedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -380,8 +383,8 @@ export default function UsbDevicesSection() {
       invoke<AutoActionRecord[]>('get_usb_autosandbox_recent'),
     ]);
 
-    if (meterStatus.status === 'fulfilled') setMetering(!!meterStatus.value);
-    if (transferStats.status === 'fulfilled') setStats(Array.isArray(transferStats.value) ? transferStats.value : []);
+    setMetering(meterStatus.status === 'fulfilled' && meterStatus.value === true);
+    setStats(transferStats.status === 'fulfilled' && Array.isArray(transferStats.value) ? transferStats.value : []);
     if (hidStatus.status === 'fulfilled') {
       setHidGuardRunning(!!hidStatus.value?.running);
       setHidSensitivity(hidStatus.value?.sensitivity ?? 'balanced');
@@ -415,7 +418,7 @@ export default function UsbDevicesSection() {
     setTrustScores(nextScores);
   }, [advancedAvailable]);
 
-  const refresh = useCallback(async () => {
+  const refreshSnapshot = useCallback(async () => {
     setError(null);
     try {
       const [nextStatus, timeline] = await Promise.all([
@@ -426,19 +429,20 @@ export default function UsbDevicesSection() {
       const startedAt = nextStatus.monitorStartedAt ?? timeline.monitorStartedAt ?? null;
       setMonitorStartedAt(startedAt && startedAt > 0 ? startedAt : null);
 
-      const explicitCurrentKeys = Array.isArray(timeline.currentKeys)
+      const explicitCurrentKeys = nextStatus.lastError ? new Set<string>() : Array.isArray(timeline.currentKeys)
         ? new Set(timeline.currentKeys)
         : new Set(
-          nextStatus.running
-            ? (timeline.sessions ?? []).filter((row) => row.detachedAt == null && row.endedUnobservedAt == null).map((row) => row.deviceKey)
+          nextStatus.running && startedAt != null
+            ? (timeline.sessions ?? []).filter((row) => row.attachedAt >= startedAt && row.detachedAt == null && row.endedUnobservedAt == null).map((row) => row.deviceKey)
             : [],
         );
       setCurrentKeys(explicitCurrentKeys);
       setSessions(Array.isArray(timeline.sessions) ? timeline.sessions : []);
+      setObservedEvents(Array.isArray(timeline.events) ? timeline.events : []);
 
       const openRows = new Map<string, UsbSessionRow>();
       for (const row of timeline.sessions ?? []) {
-        if (explicitCurrentKeys.has(row.deviceKey) && row.detachedAt == null && row.endedUnobservedAt == null) {
+        if (isCurrentUsbSession(row, explicitCurrentKeys, startedAt)) {
           openRows.set(row.deviceKey, row);
         }
       }
@@ -462,16 +466,29 @@ export default function UsbDevicesSection() {
         })
         .sort((a, b) => b.lastSeen - a.lastSeen);
       setEntries(visibleEntries);
-      void refreshVolumes();
-      void refreshAdvanced(visibleEntries);
+      await Promise.all([refreshVolumes(), refreshAdvanced(visibleEntries)]);
     } catch (reason) {
       const message = humanizeUsbError(reason);
       setError(message);
+      setStatus((current) => ({ ...current, running: false }));
+      setCurrentKeys(new Set());
+      setEntries((current) => current.map((entry) => ({ ...entry, attached: false })));
       recordUsbFailure('refresh', 'USB.MONITOR.REFRESH_FAILED');
     }
   }, [recordUsbFailure, refreshAdvanced, refreshVolumes]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const pending = refreshSnapshot().finally(() => { refreshInFlight.current = null; });
+    refreshInFlight.current = pending;
+    return pending;
+  }, [refreshSnapshot]);
+
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
   useEffect(() => {
     invoke<{ installed?: boolean }>('get_pro_install_status')
@@ -521,9 +538,7 @@ export default function UsbDevicesSection() {
       const sourceFor = (time: number): TimelineSource => monitorStartedAt != null && time >= monitorStartedAt
         ? 'Current monitor run'
         : 'Persisted monitor record';
-      const connected = currentKeys.has(session.deviceKey)
-        && session.detachedAt == null
-        && session.endedUnobservedAt == null;
+      const connected = isCurrentUsbSession(session, currentKeys, monitorStartedAt);
       const attachState: TimelineState = session.detachedAt == null && !connected
         ? 'State unknown'
         : connected
@@ -565,29 +580,47 @@ export default function UsbDevicesSection() {
         });
       }
     }
-    return events.sort((a, b) => b.at - a.at);
-  }, [currentKeys, entries, monitorStartedAt, nowSec, sessions]);
+    for (const event of observedEvents) {
+      const entry = byKey.get(event.deviceKey);
+      events.push({
+        id: event.id,
+        deviceKey: event.deviceKey,
+        name: `${entry?.friendlyName || 'USB device'}${event.volumeLetter ? ` (${event.volumeLetter})` : ''}`,
+        category: entry?.category ?? 'USB device',
+        state: usbEventState(event),
+        at: event.at,
+        sortOrder: event.observedOrder,
+        durationSecs: null,
+        source: monitorStartedAt != null && event.at >= monitorStartedAt ? 'Current monitor run' : 'Persisted monitor record',
+      });
+    }
+    for (const event of usbPolicyTimelineRows(autoActions)) {
+      events.push({ ...event, category: byKey.get(event.deviceKey)?.category ?? 'USB device',
+        durationSecs: null, source: 'Pro policy record' });
+    }
+    return events.sort(compareUsbTimelineEvents);
+  }, [autoActions, currentKeys, entries, monitorStartedAt, nowSec, observedEvents, sessions]);
 
   const toggleMonitor = useCallback(async (on: boolean) => {
     setBusy(true);
     setError(null);
     try {
-      if (on) {
-        await invoke('start_usb_monitor');
-      } else {
-        // Stop every child collector in the same interaction. App-level
-        // reconciliation repeats this defensively after persisted settings
-        // change, but the UI must not briefly report Off while they run.
-        await Promise.allSettled([
-          invoke('stop_usb_monitor'),
-          invoke('stop_usb_metering'),
-          invoke('stop_usb_hid_guard'),
-          invoke('stop_usb_autosandbox'),
-          invoke('stop_usb_hid_approval_gate'),
-        ]);
-      }
-      await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(reportSettingsWriteFailure);
-      await refresh();
+      await changeUsbPreference(async () => {
+        if (on) {
+          await invoke('start_usb_monitor');
+        } else {
+          // Stop every child collector in the same interaction. App-level
+          // reconciliation repeats this defensively after persisted settings
+          // change, but the UI must not briefly report Off while they run.
+          await Promise.allSettled([
+            invoke('stop_usb_monitor'),
+            invoke('stop_usb_metering'),
+            invoke('stop_usb_hid_guard'),
+            invoke('stop_usb_autosandbox'),
+            invoke('stop_usb_hid_approval_gate'),
+          ]);
+        }
+      }, () => patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }), refresh);
     } catch (reason) {
       const message = humanizeUsbError(reason);
       setError(message);
@@ -633,10 +666,11 @@ export default function UsbDevicesSection() {
     setBusy(true);
     setError(null);
     try {
-      await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
-      await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(reportSettingsWriteFailure);
-      setMetering(on);
-      await refresh();
+      await changeUsbPreference(
+        () => invoke(on ? 'start_usb_metering' : 'stop_usb_metering'),
+        () => patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }),
+        refresh,
+      );
     } catch (reason) {
       setError(humanizeUsbError(reason));
       recordUsbFailure('metering', 'USB.METERING.CONFIG_FAILED');
@@ -704,10 +738,17 @@ export default function UsbDevicesSection() {
     if (!accepted) return;
     setBusy(true);
     try {
-      await invoke('block_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
-      setPendingBlockKeys((current) => new Set(current).add(entry.key));
+      const receipt = await invoke('block_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
+      const verified = usbPolicyReceiptVerified(receipt);
+      setPendingBlockKeys((current) => {
+        const next = new Set(current);
+        if (verified) next.delete(entry.key); else next.add(entry.key);
+        return next;
+      });
       await refresh();
-      void showSuccess(`Block requested for "${name}". Windows verification will appear when the policy service reports it.`);
+      void showSuccess(verified
+        ? `Windows verified that "${name}" is disabled.`
+        : `Block requested for "${name}". Windows verification is pending.`);
     } catch (reason) {
       recordUsbFailure('block', 'USB.BLOCK.FAILED');
       const message = humanizeUsbError(reason);
@@ -727,14 +768,16 @@ export default function UsbDevicesSection() {
     }
     setBusy(true);
     try {
-      await invoke('allow_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
+      const receipt = await invoke('allow_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
       setPendingBlockKeys((current) => {
         const next = new Set(current);
         next.delete(entry.key);
         return next;
       });
       await refresh();
-      void showSuccess(`Allow requested for "${name}". Windows verification will appear when the policy service reports it.`);
+      void showSuccess(usbPolicyReceiptVerified(receipt)
+        ? `Windows verified that "${name}" is enabled.`
+        : `Allow requested for "${name}". Windows verification is pending.`);
     } catch (reason) {
       recordUsbFailure('allow', 'USB.ALLOW.FAILED');
       const message = humanizeUsbError(reason);
@@ -861,7 +904,7 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [autoSandboxConfig, autoSandboxMode, requestConfirm]);
+  }, [autoSandboxConfig, autoSandboxMode, protectionActive, requestConfirm]);
 
   const clearAutoActions = useCallback(async () => {
     const accepted = await requestConfirm({
@@ -879,7 +922,7 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [protectionActive, requestConfirm]);
+  }, [requestConfirm]);
 
   const connectedCount = entries.filter((entry) => entry.attached).length;
   const alertsToday = advancedAvailable
@@ -888,10 +931,11 @@ export default function UsbDevicesSection() {
     : null;
   const lastEvent = timelineEvents[0] ?? null;
   const monitorFailure = status.lastError ?? null;
+  const monitorPresentation = usbMonitorPresentation(masterEnabled, status.running, monitorFailure != null);
 
   const headerRight = (
-    <Tag minimal intent={protectionActive ? (monitorFailure ? 'warning' : 'success') : 'none'} className="font-mono">
-      {protectionActive ? 'ARMED' : masterEnabled ? 'STARTING' : 'OFF'}
+    <Tag minimal intent={monitorFailure || monitorPresentation.mismatch ? 'warning' : status.running ? 'success' : 'none'} className="font-mono">
+      {monitorPresentation.label.toUpperCase()}
     </Tag>
   );
 
@@ -901,11 +945,11 @@ export default function UsbDevicesSection() {
         <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">State</div>
-            <div className="mt-1 font-mono text-sm font-semibold">{protectionActive ? 'Armed' : masterEnabled ? 'Starting' : 'Off'}</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{monitorPresentation.label}</div>
           </div>
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">Devices currently connected</div>
-            <div className="mt-1 font-mono text-sm font-semibold">{protectionActive ? (monitorFailure ? 'Unknown' : connectedCount) : '—'}</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{status.running ? (monitorFailure ? 'Unknown' : connectedCount) : '—'}</div>
           </div>
           <div className="rounded-md border border-white/10 p-3">
             <div className="text-xs opacity-60">Alerts today</div>
@@ -923,6 +967,14 @@ export default function UsbDevicesSection() {
             The basic monitor stores device presence, a safe Windows-supplied label, category, event time, and observed session duration. It does not log filenames, copied content, keystrokes, or claim activity from periods when monitoring was off.
           </InfoButton>
         </div>
+        <div className="text-xs opacity-65">Monitoring reports device activity. It does not by itself block device access; policy results are shown separately.</div>
+        {monitorPresentation.mismatch && (
+          <div role="status" className="text-xs text-[var(--color-warning)]">
+            {status.running
+              ? 'Monitoring is running, but the saved startup preference is off. The arm switch can stop the running monitor.'
+              : 'The saved startup preference is on, but the monitor is not running.'}
+          </div>
+        )}
 
         {monitorFailure && (
           <div role="alert" className="rounded-md border border-[var(--color-warning)]/35 p-3 text-sm">
@@ -950,13 +1002,13 @@ export default function UsbDevicesSection() {
             </div>
           </div>
 
-          {!protectionActive && (
+          {!status.running && (
             <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
               Monitoring is off. Stored records can be reviewed, but WinCommander cannot say what USB activity occurred while protection was off.
             </div>
           )}
 
-          {protectionActive && !monitorFailure && timelineEvents.length === 0 && (
+          {status.running && !monitorFailure && timelineEvents.length === 0 && (
             <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
               No USB events have been observed since monitoring started. This does not prove that no USB devices were used before it was armed.
             </div>
@@ -964,17 +1016,17 @@ export default function UsbDevicesSection() {
 
           {timelineEvents.length > 0 && (
             <PrivacyEventTable
-              title="USB attach and detach timeline"
+              title="USB activity timeline"
               columns={['Time', 'Device', 'Category', 'State', 'Duration', 'Record source']}
               rows={timelineEvents.map((event) => ({
                 id: event.id,
-                search: `${event.name} ${event.category} ${event.state} ${event.source}`,
-                sort: [String(event.at), event.name, event.category, event.state, String(event.durationSecs ?? -1), event.source],
+                search: `${event.name} ${event.category} ${event.state} ${event.source} ${event.detail ?? ''}`,
+                sort: [String(event.sortOrder ?? event.at * 1000), event.name, event.category, event.state, String(event.durationSecs ?? -1), event.source],
                 cells: [
                   safeDate(event.at),
                   event.name,
                   event.category,
-                  <Tag key={`${event.id}-state`} minimal intent={stateIntent(event.state)}>{event.state}</Tag>,
+                  <span key={`${event.id}-state`}><Tag minimal intent={stateIntent(event.state)}>{event.state}</Tag>{event.detail && <span className="mt-1 block opacity-65">{event.detail}</span>}</span>,
                   formatDuration(event.durationSecs),
                   event.source,
                 ],
@@ -1030,7 +1082,7 @@ export default function UsbDevicesSection() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Switch
-              checked={masterEnabled}
+              checked={monitorPresentation.checked}
               disabled={busy}
               onChange={(event) => void toggleMonitor((event.target as HTMLInputElement).checked)}
               label="Arm USB Protection"
@@ -1050,7 +1102,7 @@ export default function UsbDevicesSection() {
             {busy && <Spinner size={14} />}
           </div>
           <div className="text-xs opacity-65">
-            Clearing records is permanent for WinCommander’s local USB timeline. It does not erase Windows artefacts and must not be used as evidence that a device was never connected.
+              Clearing records is permanent for WinCommander’s local USB timeline. Pro policy records have a separate clear action below. It does not erase Windows artefacts and must not be used as evidence that a device was never connected.
           </div>
           {!protectionActive && (
             <div className="rounded-md border border-white/10 p-3 text-xs opacity-75">
@@ -1175,7 +1227,7 @@ export default function UsbDevicesSection() {
                 {entries.map((entry) => {
                   const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
                   const volume = volumeForEntry(entry, volumes);
-                  const resolvedLetter = volume?.driveLetter ?? entry.driveLetter;
+                  const resolvedLetter = volume?.driveLetter;
                   const blockRequested = pendingBlockKeys.has(entry.key);
                   const approvalControlledHid = hidApprovalGateEnabled && entry.category === 'Keyboard / HID';
                   return (

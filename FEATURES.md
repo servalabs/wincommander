@@ -37,7 +37,9 @@ the backend and private component before execution.
 ### Local alerts and visibility
 
 - Local ransomware-style mass-change alerting.
-- Basic USB attach/detach timeline and device visibility.
+- Basic USB attach/detach timeline, observed volume mounts/unmounts, and device
+  visibility. Times reflect periodic observation, not a complete Windows history.
+  Manual Pro block/allow actions appear with their Windows verification result.
 - Local clipboard-risk warnings and user-controlled clear/snooze behavior.
 - Monitor Operations Center: one content-free view of Free and Pro monitor
   coverage, armed state, recent-event counts, cadence, stale/degraded health,

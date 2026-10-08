@@ -14,6 +14,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 
+#[path = "usb_activity.rs"]
+mod activity;
+#[path = "usb_observation.rs"]
+mod observation;
+
 const TIMELINE_CAP: usize = 200;
 static BASIC_RUNNING: AtomicBool = AtomicBool::new(false);
 static BASIC_NOTIFY: AtomicBool = AtomicBool::new(true);
@@ -34,6 +39,10 @@ struct BasicTimeline {
     records: BTreeMap<String, BasicRecord>,
     #[serde(default)]
     sessions: VecDeque<BasicSession>,
+    #[serde(default)]
+    events: VecDeque<activity::ActivityEvent>,
+    #[serde(skip)]
+    observed_mounts: BTreeSet<(String, String)>,
 }
 
 fn default_basic_notify() -> bool {
@@ -47,6 +56,8 @@ impl Default for BasicTimeline {
             notify: true,
             records: BTreeMap::new(),
             sessions: VecDeque::new(),
+            events: VecDeque::new(),
+            observed_mounts: BTreeSet::new(),
         }
     }
 }
@@ -224,6 +235,9 @@ fn merge_basic_timeline(disk: BasicTimeline, memory: &BasicTimeline) -> BasicTim
             Some(existing) if existing.detached_at.is_none() && session.detached_at.is_some() => {
                 *existing = session;
             }
+            Some(existing) if existing.detached_at.is_none() => {
+                existing.volume_letter = session.volume_letter;
+            }
             None => {
                 sessions.insert(key, session);
             }
@@ -269,11 +283,14 @@ fn merge_basic_timeline(disk: BasicTimeline, memory: &BasicTimeline) -> BasicTim
             .sum();
     }
 
+    let events = activity::merge_events(disk.events, &memory.events);
     BasicTimeline {
         generation: disk.generation.max(memory.generation),
         notify: disk.notify,
         records,
         sessions: merged_sessions.into(),
+        events,
+        observed_mounts: memory.observed_mounts.clone(),
     }
 }
 
@@ -418,7 +435,7 @@ async fn basic_snapshot() -> Result<Vec<BasicIdentity>, String> {
     let script = r#"
 $ErrorActionPreference='Stop'
 try {
-  $rows=@(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\\*' -or $_.InstanceId -like 'HID\\*' } | Select-Object InstanceId,FriendlyName,Class,Service)
+  $rows=@(Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\*' -or $_.InstanceId -like 'HID\*' } | Select-Object InstanceId,FriendlyName,Class,Service)
   $rows | ConvertTo-Json -Compress
 } catch {
   Write-Error $_.Exception.Message
@@ -427,6 +444,7 @@ try {
 "#;
     let mut command = tokio::process::Command::new("powershell.exe");
     command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    command.kill_on_drop(true);
     #[cfg(windows)]
     {
         command.creation_flags(0x08000000);
@@ -564,6 +582,7 @@ async fn basic_poll(app: &AppHandle, first_poll: bool) -> Result<(), String> {
             return Err(safe);
         }
     };
+    let volumes = observation::volumes().await;
     let now = epoch();
     let started_at = basic_health()
         .lock()
@@ -577,7 +596,11 @@ async fn basic_poll(app: &AppHandle, first_poll: bool) -> Result<(), String> {
 
     let (attached, detached) = {
         let mut state = basic_state().lock().unwrap();
-        apply_basic_snapshot(&mut state, &current, now, started_at, first_poll)
+        let changes = apply_basic_snapshot(&mut state, &current, now, started_at, first_poll);
+        if let Ok(volumes) = &volumes {
+            activity::observe_mounts(&mut state, &current, volumes, now, started_at);
+        }
+        changes
     };
 
     *basic_current_keys().lock().unwrap() = current.keys().cloned().collect();
@@ -591,6 +614,13 @@ async fn basic_poll(app: &AppHandle, first_poll: bool) -> Result<(), String> {
     })?;
     *basic_state().lock().unwrap() = merged;
     clear_monitor_error(now);
+    if volumes.is_err() {
+        set_monitor_error(monitor_failure(
+            "volume_query_failed",
+            "USB presence was observed, but Windows could not resolve mounts.",
+            "Refresh USB Protection.",
+        ));
+    }
 
     for identity in attached {
         let _ = app.emit("usb-device-attached", &identity);
@@ -633,6 +663,7 @@ pub async fn start_usb_monitor(app: AppHandle) -> Result<Value, String> {
         health.last_error = None;
     }
     basic_current_keys().lock().unwrap().clear();
+    basic_state().lock().unwrap().observed_mounts.clear();
 
     if let Err(error) = basic_poll(&app, true).await {
         BASIC_RUNNING.store(false, Ordering::SeqCst);
@@ -671,14 +702,16 @@ pub async fn stop_usb_monitor() -> Result<Value, String> {
 pub fn usb_monitor_status() -> Result<Value, String> {
     ensure_basic_loaded()?;
     reload_basic_timeline_machine_wide()?;
-    let running = BASIC_RUNNING.load(Ordering::SeqCst);
+    let configured = BASIC_RUNNING.load(Ordering::SeqCst);
+    let health = basic_health().lock().unwrap().clone();
+    let running = configured && observation_is_fresh(&health, epoch());
     let connected = if running {
         basic_current_keys().lock().unwrap().len()
     } else {
         0
     };
-    let health = basic_health().lock().unwrap().clone();
     Ok(json!({
+        "configured": configured,
         "running": running,
         "notify": BASIC_NOTIFY.load(Ordering::SeqCst),
         "connected": connected,
@@ -690,25 +723,35 @@ pub fn usb_monitor_status() -> Result<Value, String> {
     }))
 }
 
+fn observation_is_fresh(health: &BasicMonitorHealth, now: i64) -> bool {
+    health.last_error.is_none()
+        && health.monitor_started_at.is_some()
+        && health
+            .last_poll_at
+            .is_some_and(|last| (0..=30).contains(&now.saturating_sub(last)))
+}
+
 #[tauri::command]
 pub fn get_usb_timeline() -> Result<Value, String> {
     ensure_basic_loaded()?;
     reload_basic_timeline_machine_wide()?;
     let state = basic_state().lock().unwrap().clone();
     let health = basic_health().lock().unwrap().clone();
-    let current_keys: Vec<String> = if BASIC_RUNNING.load(Ordering::SeqCst) {
-        basic_current_keys()
-            .lock()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let current_keys: Vec<String> =
+        if BASIC_RUNNING.load(Ordering::SeqCst) && observation_is_fresh(&health, epoch()) {
+            basic_current_keys()
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
     Ok(json!({
         "records": state.records,
         "sessions": state.sessions,
+        "events": state.events,
         "currentKeys": current_keys,
         "monitorStartedAt": health.monitor_started_at,
         "lastPollAt": health.last_poll_at,
@@ -719,36 +762,7 @@ pub fn get_usb_timeline() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn get_usb_storage_volumes() -> Result<Value, String> {
-    let script = r#"
-$ErrorActionPreference='SilentlyContinue'
-$rows=@(Get-CimInstance Win32_DiskDrive | Where-Object { $_.InterfaceType -eq 'USB' } | ForEach-Object { $m=$_.Model;$s=$_.SerialNumber;Get-CimAssociatedInstance -InputObject $_ -Association Win32_DiskDriveToDiskPartition | ForEach-Object { Get-CimAssociatedInstance -InputObject $_ -Association Win32_LogicalDiskToPartition | ForEach-Object { [pscustomobject]@{DriveLetter=$_.DeviceID;Label=$_.VolumeName;Model=$m;Serial=$s} } } })
-$rows | ConvertTo-Json -Compress
-"#;
-    let mut command = tokio::process::Command::new("powershell.exe");
-    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-    #[cfg(windows)]
-    {
-        command.creation_flags(0x08000000);
-    }
-    let output = tokio::time::timeout(Duration::from_secs(5), command.output())
-        .await
-        .map_err(|_| "USB volume query timed out".to_string())?
-        .map_err(|error| format!("USB volume query failed: {error}"))?;
-    if !output.status.success() {
-        return Ok(Value::Array(Vec::new()));
-    }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == "null" {
-        return Ok(Value::Array(Vec::new()));
-    }
-    let value: Value =
-        serde_json::from_str(trimmed).map_err(|error| format!("USB volume JSON: {error}"))?;
-    Ok(Value::Array(if let Value::Array(rows) = value {
-        rows
-    } else {
-        vec![value]
-    }))
+    observation::volumes().await
 }
 
 #[tauri::command]
@@ -1018,12 +1032,12 @@ pub async fn clear_usb_autosandbox_recent() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn block_usb_device(args: Value) -> Result<Value, String> {
-    dispatch_paid("Set-UsbDeviceBlock", "USB device policy", args).await
+    activity::control("Set-UsbDeviceBlock", "block", args).await
 }
 
 #[tauri::command]
 pub async fn allow_usb_device(args: Value) -> Result<Value, String> {
-    dispatch_paid("Set-UsbDeviceAllow", "USB device policy", args).await
+    activity::control("Set-UsbDeviceAllow", "allow", args).await
 }
 
 #[tauri::command]
@@ -1040,7 +1054,7 @@ pub async fn quarantine_usb_device(args: Value) -> Result<Value, String> {
 mod tests {
     use super::*;
 
-    fn identity(key: &str, friendly_name: &str) -> BasicIdentity {
+    pub(super) fn identity(key: &str, friendly_name: &str) -> BasicIdentity {
         BasicIdentity {
             key: key.to_string(),
             vid: "1234".to_string(),
@@ -1059,6 +1073,18 @@ mod tests {
     #[test]
     fn basic_timeline_defaults_to_machine_notification_enabled() {
         assert!(BasicTimeline::default().notify);
+    }
+
+    #[test]
+    fn requested_watcher_needs_a_fresh_successful_observation() {
+        let mut health = BasicMonitorHealth::default();
+        health.monitor_started_at = Some(100);
+        assert!(!observation_is_fresh(&health, 100));
+        health.last_poll_at = Some(100);
+        assert!(observation_is_fresh(&health, 105));
+        assert!(!observation_is_fresh(&health, 131));
+        health.last_error = Some(monitor_failure("test", "test", "test"));
+        assert!(!observation_is_fresh(&health, 105));
     }
 
     #[test]
@@ -1125,6 +1151,8 @@ mod tests {
         let key = "USB:1234:5678:SERIAL";
         let timeline = BasicTimeline {
             generation: 7,
+            observed_mounts: BTreeSet::new(),
+            events: VecDeque::new(),
             notify: false,
             records: BTreeMap::from([(
                 key.to_string(),
@@ -1173,6 +1201,8 @@ mod tests {
     fn newer_machine_clear_cannot_be_undone_by_an_old_rds_snapshot() {
         let old = BasicTimeline {
             generation: 3,
+            observed_mounts: BTreeSet::new(),
+            events: VecDeque::new(),
             notify: true,
             records: BTreeMap::from([(
                 "USB:1234:5678:SERIAL".to_string(),

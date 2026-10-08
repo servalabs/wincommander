@@ -51,6 +51,11 @@ model; the private Pro roadmap owns future paid work.
 
 ## Safety and claim boundaries
 
+- **No complete USB file-copy audit.** Transfer metering measures observed volume
+  I/O, including filesystem overhead; cached reads may add no bytes. It does not
+  record filenames, per-file outcomes, or complete USB-wire traffic. Device
+  disable is a reactive administrator operation, not pre-connection filtering.
+
 - **No destructive voice trigger.** Emergency actions require deterministic,
   authenticated inputs.
 - **No universal flash-wipe claim.** Overwrite passes cannot guarantee removal
