@@ -7268,9 +7268,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:add_wifi_guard_ssid",
@@ -7278,9 +7276,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/WifiGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:advisor_build_context",
@@ -7837,7 +7833,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useWifiGuardMonitor.ts"
+        "src/hooks/useWifiGuardMonitor.ts",
+        "src/panels/network/WifiGuardSection.tsx"
       ]
     },
     {
@@ -9029,9 +9026,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:get_network_honeypot_ports",
@@ -9040,7 +9035,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuard.ts"
       ]
     },
     {
@@ -9050,7 +9045,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuard.ts"
       ]
     },
     {
@@ -9128,7 +9123,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuardFirewall.ts"
       ]
     },
     {
@@ -9338,7 +9333,9 @@
         "src/components/EverythingSearchBar.tsx",
         "src/context/AppContext.tsx",
         "src/hooks/queries/useSettingsQuery.ts",
-        "src/hooks/useSettings.ts"
+        "src/hooks/useSettings.ts",
+        "src/hooks/useWifiGuardMonitor.ts",
+        "src/panels/network/WifiGuardSection.tsx"
       ]
     },
     {
@@ -9527,7 +9524,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useWifiGuardMonitor.ts",
         "src/panels/network/WifiGuardSection.tsx"
       ]
     },
@@ -9537,9 +9533,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/WifiGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:get_wifi_guard_recent",
@@ -9947,7 +9941,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuard.ts",
+        "src/hooks/usePortGuardMonitor.ts"
       ]
     },
     {
@@ -10175,6 +10170,16 @@
       ]
     },
     {
+      "id": "tauri:reconcile_network_honeypot",
+      "name": "reconcile_network_honeypot",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usePortGuardMonitor.ts"
+      ]
+    },
+    {
       "id": "tauri:reconcile_purchase_status",
       "name": "reconcile_purchase_status",
       "transport": "tauri",
@@ -10332,9 +10337,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:repair_commander_service",
@@ -10894,9 +10897,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:set_network_honeypot_port_enabled",
@@ -10904,9 +10905,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:set_paste_monitor_auto_clear",
@@ -10955,7 +10954,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuardFirewall.ts"
       ]
     },
     {
@@ -11212,9 +11211,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:start_paste_monitor",
@@ -11326,8 +11323,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useWifiGuardMonitor.ts",
-        "src/panels/network/WifiGuardSection.tsx"
+        "src/hooks/useWifiGuardMonitor.ts"
       ]
     },
     {
@@ -11418,7 +11414,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/network/PortGuardSection.tsx"
+        "src/hooks/usePortGuardMonitor.ts"
       ]
     },
     {
@@ -11639,6 +11635,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "tauri:trust_wifi_guard_current",
+      "name": "trust_wifi_guard_current",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/network/WifiGuardSection.tsx"
+      ]
     },
     {
       "id": "tauri:uninstall_leftovers_cancel",

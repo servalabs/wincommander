@@ -29,6 +29,14 @@ pub struct WifiGuardBaselineEntry {
     pub ssid: String,
     pub bssids: Vec<String>,
     pub best_auth_strength: u8,
+    #[serde(default)]
+    pub ssid_hex: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<String>,
+    #[serde(default)]
+    pub auth_algorithm: Option<u32>,
+    #[serde(default)]
+    pub cipher_algorithm: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +52,10 @@ pub struct WifiGuardConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WifiGuardHit {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub interface_id: String,
     pub ssid: String,
     pub bssid: String,
     pub auth: String,
@@ -56,6 +68,24 @@ pub struct WifiGuardHit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WifiGuardStatus {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub instance_id: String,
+    #[serde(default)]
+    pub baseline_revision: u64,
+    #[serde(default)]
+    pub health: String,
+    #[serde(default)]
+    pub collector_healthy: bool,
+    #[serde(default)]
+    pub observed_at: String,
+    #[serde(default)]
+    pub error_code: Option<u32>,
+    #[serde(default)]
+    pub interfaces: Vec<WifiGuardAssociation>,
+    #[serde(default)]
+    pub monitoring_scope: String,
     pub running: bool,
     pub learning: bool,
     pub learning_until: Option<String>,
@@ -65,6 +95,42 @@ pub struct WifiGuardStatus {
     pub learning_window_secs: u64,
     pub poll_interval_secs: u64,
     pub alert_debounce_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiGuardAssociation {
+    pub interface_id: String,
+    pub name: String,
+    pub state: String,
+    pub ssid: String,
+    pub ssid_hex: String,
+    pub bssid: String,
+    pub auth_algorithm: Option<u32>,
+    pub cipher_algorithm: Option<u32>,
+    pub auth_strength: Option<u8>,
+    pub signal: u32,
+    pub trust: String,
+    pub error_code: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn trust_wifi_guard_current(
+    interface_id: String,
+    expected_ssid_hex: String,
+    expected_bssid: String,
+    expected_auth_algorithm: u32,
+    expected_cipher_algorithm: u32,
+) -> Result<WifiGuardStatus, String> {
+    crate::license::require_paid("wifi guard")?;
+    let value = crate::sidecar::dispatch_paid_command("trust_wifi_guard_current", serde_json::json!({
+        "interfaceId": interface_id,
+        "expectedSsidHex": expected_ssid_hex,
+        "expectedBssid": expected_bssid,
+        "expectedAuthAlgorithm": expected_auth_algorithm,
+        "expectedCipherAlgorithm": expected_cipher_algorithm,
+    })).await?;
+    serde_json::from_value(value).map_err(|error| format!("wifi guard approval decode: {error}"))
 }
 
 #[tauri::command]

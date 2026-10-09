@@ -1443,6 +1443,10 @@ export interface NetworkSettings {
 }
 
 export interface WifiGuardBaselineEntry {
+  ssidHex?: string | null;
+  provenance?: string | null;
+  authAlgorithm?: number | null;
+  cipherAlgorithm?: number | null;
   /** Stored locally only; never included in a Fleet alert. */
   ssid: string;
   /** BSSIDs observed/trusted for this SSID. */

@@ -217,9 +217,9 @@ describe("UI audit fixture", () => {
     expect(adapters.adapters.length).toBeGreaterThan(1);
 
     expect(uiAuditDirectResponse("get_network_honeypot_bind_all_interfaces")).toBe(false);
-    expect(uiAuditDirectResponse("network_honeypot_status")).toMatchObject({ running: false, armedPorts: [] });
+    expect(uiAuditDirectResponse("network_honeypot_status")).toMatchObject({ schemaVersion: 2, running: false, desiredEnabled: false, coverageComplete: false });
     expect(uiAuditDirectResponse("get_ping_block_status")).toEqual({ blocked: false });
-    expect(uiAuditDirectResponse("wifi_guard_status")).toMatchObject({ running: false, currentSsid: "Audit Wi-Fi" });
+    expect(uiAuditDirectResponse("wifi_guard_status")).toMatchObject({ schemaVersion: 2, running: false, health: "needsReview", interfaces: [{ ssid: "Audit Wi-Fi", trust: "learned" }] });
     const firewallBlocks = uiAuditBackendResponse("Get-ProtocolBlocks") as { blocks: unknown[] };
     expect(firewallBlocks.blocks.length).toBeGreaterThan(0);
   });

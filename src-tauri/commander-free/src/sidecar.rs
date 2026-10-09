@@ -1556,6 +1556,7 @@ fn is_agent_affine(feature_id: &str) -> bool {
         || matches!(feature_id,
             "monitoring_overview"
                 | "start_network_honeypot"
+                | "reconcile_network_honeypot"
                 | "stop_network_honeypot"
                 | "network_honeypot_status"
                 | "get_network_honeypot_recent"
@@ -1576,6 +1577,7 @@ fn is_agent_affine(feature_id: &str) -> bool {
                 | "configure_wifi_guard"
                 | "clear_wifi_guard_known"
                 | "add_wifi_guard_ssid"
+                | "trust_wifi_guard_current"
                 | "start_usb_monitor"
                 | "reconcile_usb_guard"
                 | "stop_usb_monitor"
@@ -2349,8 +2351,15 @@ mod tests {
             "monitoring_overview",
             "start_network_honeypot",
             "network_honeypot_status",
+            "reconcile_network_honeypot",
+            "stop_network_honeypot",
+            "get_network_honeypot_recent",
+            "add_network_honeypot_custom_port",
             "start_wifi_guard",
             "wifi_guard_status",
+            "configure_wifi_guard",
+            "stop_wifi_guard",
+            "trust_wifi_guard_current",
             "start_usb_metering",
             "usb_hid_approval_gate_status",
             "start_ransomware_etw",

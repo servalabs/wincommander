@@ -693,9 +693,10 @@ export function uiAuditBackendResponse(command: string): unknown {
     case "Get-PhysicalNetworkAdapters":
       return {
         status: "ok",
+        checkedAt: new Date().toISOString(),
         adapters: [
-          { id: "{AUDIT-WIFI-0001}", groupId: "PCI\\VEN_AUDIT&DEV_WIFI", name: "Audit Wi-Fi", description: "Synthetic Wi-Fi 6E Adapter", kind: "wifi", status: "Up", linkSpeedMbps: "1200", factoryMac: "02-00-00-00-00-01", currentMac: "02-00-00-00-A1-01", isSpoofed: true },
-          { id: "{AUDIT-ETH-0002}", groupId: "PCI\\VEN_AUDIT&DEV_ETH", name: "Audit Ethernet", description: "Synthetic 2.5 GbE Adapter", kind: "ethernet", status: "Disconnected", linkSpeedMbps: null, factoryMac: "02-00-00-00-00-02", currentMac: "02-00-00-00-00-02", isSpoofed: false },
+          { id: "{00000000-0000-0000-0000-000000000001}", groupId: "PCI\\VEN_AUDIT&DEV_WIFI", name: "Audit Wi-Fi", description: "Synthetic Wi-Fi 6E Adapter", kind: "wifi", status: "Up", adminStatus: "Up", linkSpeedMbps: "1200", factoryMac: "020000000001", currentMac: "02000000A101", configuredMac: "02000000A101", configuredMode: "static-random", isSpoofed: true, macState: "changed", configurationError: null, recoveryPending: false, overrideSupport: "unknown", checkedAt: new Date().toISOString() },
+          { id: "{00000000-0000-0000-0000-000000000002}", groupId: "PCI\\VEN_AUDIT&DEV_ETH", name: "Audit Ethernet", description: "Synthetic 2.5 GbE Adapter", kind: "ethernet", status: "Disconnected", adminStatus: "Up", linkSpeedMbps: null, factoryMac: "020000000002", currentMac: "020000000002", configuredMac: null, configuredMode: "", isSpoofed: false, macState: "factory", configurationError: null, recoveryPending: false, overrideSupport: "unknown", checkedAt: new Date().toISOString() },
         ],
       };
     case "Get-ProtocolBlocks":
@@ -1009,13 +1010,13 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "metric_alerts_get_config":
       return AUDIT_METRIC_ALERTS;
     case "network_honeypot_status":
-      return { running: false, armedPorts: [], conflictingPorts: [], bindAllInterfaces: false };
+      return { schemaVersion: 2, running: false, desiredEnabled: false, provider: "windows-wfp", health: "stopped", coverage: "windows-classification-events", coverageComplete: false, coverageNote: "Synthetic UI fixture; not proof of Windows packet coverage.", collectionSettingsRetained: true, collectorHealthy: false, lastError: null, observedAt: new Date().toISOString(), generation: 1, observedEvents: 1, droppedEvents: 0, historyEvicted: 0 };
     case "get_network_honeypot_bind_all_interfaces":
       return false;
     case "get_ping_block_status":
       return { blocked: false };
     case "wifi_guard_status":
-      return { running: false, learning: false, knownSsidCount: 1, currentSsid: "Audit Wi-Fi", currentBssid: "00:11:22:33:44:55" };
+      return { schemaVersion: 2, instanceId: "synthetic-ui-audit", baselineRevision: 1, running: false, collectorHealthy: false, health: "needsReview", observedAt: new Date().toISOString(), pollIntervalSecs: 5, errorCode: null, interfaces: [{ interfaceId: "{00000000-0000-0000-0000-000000000001}", name: "Audit Wi-Fi", state: "connected", ssid: "Audit Wi-Fi", ssidHex: "41756469742057692d4669", bssid: "00:11:22:33:44:55", authAlgorithm: 7, cipherAlgorithm: 4, authStrength: 3, signal: 82, trust: "learned" }] };
     case "routine_cleaner_scan":
       return {
         items: [
@@ -1101,13 +1102,13 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "get_canary_recent":
       return [{ tokenId: "audit-canary", label: "Quarterly report", remoteAddr: "127.0.0.1", userAgent: "UI audit agent", firedAt: "2026-08-01T22:30:00Z" }];
     case "get_network_honeypot_ports":
-      return [{ port: 445, label: "SMB", enabled: true, custom: false }, { port: 3389, label: "RDP", enabled: false, custom: false }];
+      return [{ port: 445, endPort: 445, protocol: "tcp", label: "SMB", enabled: true, custom: false }, { port: 3389, endPort: 3389, protocol: "both", label: "RDP", enabled: false, custom: false }];
     case "get_network_honeypot_recent":
-      return [{ port: 445, service: "SMB", peer: "192.0.2.55", peekHex: "ff534d42", detectedAt: "2026-08-01T22:35:00Z" }];
+      return [{ id: 1, port: 445, protocol: "tcp", service: "SMB", peer: "192.0.2.55:50123", localAddress: "192.0.2.10", outcome: "blocked", loopback: false, detectedAt: "2026-08-01T22:35:00Z" }];
     case "get_wifi_guard_known":
       return [["Audit Wi-Fi", ["00:11:22:33:44:55", "00:11:22:33:44:66"]]];
     case "get_wifi_guard_recent":
-      return [{ ssid: "Audit Wi-Fi", bssid: "00:11:22:33:44:99", auth: "WPA2", signal: "82%", reason: "newBssid", detectedAt: "2026-08-01T22:37:00Z" }];
+      return [{ id: "audit-wifi-event", interfaceId: "{00000000-0000-0000-0000-000000000001}", ssid: "Audit Wi-Fi", bssid: "00:11:22:33:44:99", reason: "newBssid", detectedAt: "2026-08-01T22:37:00Z" }];
     case "f6_list_removable_volumes":
       return [{ driveLetter: "E:", label: "AUDIT USB" }];
     case "list_decoys":

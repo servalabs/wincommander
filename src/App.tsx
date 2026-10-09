@@ -54,6 +54,7 @@ import useRansomwareMonitor, {
   DEFAULT_RANSOMWARE_ACTION,
 } from "./hooks/useRansomwareMonitor";
 import useRemoteAccessMonitor from "./hooks/useRemoteAccessMonitor";
+import usePortGuardMonitor from "./hooks/usePortGuardMonitor";
 import useWifiGuardMonitor, {
   DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
   DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS,
@@ -852,6 +853,7 @@ function AppContent({ splashDone, onSplashComplete }: {
   // file, then rehydrates/re-arms the Pro detector after an app restart. Its
   // baseline never travels in a Fleet event.
   const wifiGuard = appSettings?.ideal?.network?.wifiGuard;
+  usePortGuardMonitor(hasPaid);
   const wifiGuardEnabled = wifiGuard?.enabled ?? false;
   const wifiGuardLearningWindowSecs = wifiGuard?.learningWindowSecs
     ?? DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS;
@@ -862,10 +864,10 @@ function AppContent({ splashDone, onSplashComplete }: {
     ?? DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS;
   const wifiGuardBaseline = wifiGuard?.baseline ?? [];
   const persistWifiGuardBaseline = useCallback((baseline: WifiGuardBaselineEntry[], learningUntil: string | null) => {
-    patchAppSettings({ ideal: { network: { wifiGuard: { baseline, learningUntil } } } }).catch(reportSettingsWriteFailure);
+    return patchAppSettings({ ideal: { network: { wifiGuard: { baseline, learningUntil } } } });
   }, [patchAppSettings]);
   useWifiGuardMonitor(
-    wifiGuardEnabled,
+    hasPaid && wifiGuardEnabled,
     {
       learningWindowSecs: wifiGuardLearningWindowSecs,
       learningUntil: wifiGuardLearningUntil,
@@ -875,6 +877,7 @@ function AppContent({ splashDone, onSplashComplete }: {
     wifiGuardBaseline,
     persistWifiGuardBaseline,
     hasPaid && wifiGuardEnabled ? reportStartupProtectionRearm : undefined,
+    hasPaid,
   );
 
   const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;

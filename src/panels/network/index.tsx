@@ -1,6 +1,7 @@
-import { Icon, Dialog, FormGroup, InputGroup, Button, Classes, HTMLSelect, type IconName } from "@/components/ui/bp";
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import useBackend, { BlocklistStatus, type MacRandomizerMode, type PhysicalNetworkAdapter } from "../../hooks/useBackend";
+import { Icon, Dialog, FormGroup, InputGroup, Button, Classes, type IconName } from "@/components/ui/bp";
+import { useEffect, useState, useCallback, useRef } from "react";
+import useBackend, { BlocklistStatus } from "../../hooks/useBackend";
+import AdapterControls from "./AdapterControls";
 import { useAppState } from "../../context/AppContext";
 import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
@@ -86,17 +87,6 @@ function useDebounceApply(delayMs = 5000) {
     return { schedule, cancel, status, secsLeft };
 }
 
-type AdapterMode = "off" | MacRandomizerMode;
-
-function macDisplay(mac: string | null | undefined): string {
-    if (!mac) return "—";
-    const m = mac.replace(/[:\-]/g, "").toUpperCase();
-    return m.match(/.{1,2}/g)?.join(":") ?? mac;
-}
-
-function deriveAdapterMode(adapter: PhysicalNetworkAdapter): AdapterMode {
-    return adapter.isSpoofed ? "static-random" : "off";
-}
 
 // Blocklist logos resolve through the shared-asset manifest (assets/…).
 // The inversion/height lookups below key on the SAME resolved URLs the <img>
@@ -292,134 +282,6 @@ function resolveDnsProvider(provider: string | null): string {
     return map[provider] || "custom";
 }
 
-// ─── Adapters List (MAC per-adapter) ─────────────────────────────────────────
-
-interface AdaptersListProps {
-    adapters: PhysicalNetworkAdapter[] | null;
-    adaptersLoading: boolean;
-    adapterBusyId: string | null;
-    modeOverrides: Record<string, AdapterMode>;
-    showInactiveAdapters: boolean;
-    onModeChange: (adapter: PhysicalNetworkAdapter, mode: AdapterMode) => void;
-    onShowInactiveToggle: (show: boolean) => void;
-    writesBlocked?: boolean;
-    /** When true, render contents without an outer SectionCard so it can sit
-     *  inside another card alongside another sub-section. */
-    embedded?: boolean;
-}
-
-function AdaptersList({
-    adapters,
-    adaptersLoading,
-    adapterBusyId,
-    modeOverrides,
-    showInactiveAdapters,
-    onModeChange,
-    onShowInactiveToggle,
-    writesBlocked = false,
-    embedded = false,
-}: AdaptersListProps) {
-    const activeAdapters = useMemo(() => (adapters ?? []).filter(a => a.status === "Up"), [adapters]);
-    const inactiveAdapters = useMemo(() => (adapters ?? []).filter(a => a.status !== "Up"), [adapters]);
-
-    const body = (
-        <>
-            <div className="adapter-section-divider">
-                <span>ADAPTERS</span>
-            </div>
-
-            <div className="adapter-list">
-                {adaptersLoading && !adapters && (
-                    <div className="font-mono text-[10px] text-[var(--color-text-muted)] py-2">Detecting adapters…</div>
-                )}
-                {adapters && activeAdapters.length === 0 && (
-                    <div className="font-mono text-[10px] text-[var(--color-text-muted)] py-2">No active physical adapters detected.</div>
-                )}
-
-                {activeAdapters.map(a => {
-                    const liveMode = deriveAdapterMode(a);
-                    const selectedMode = modeOverrides[a.id] ?? liveMode;
-                    const isBusy = adapterBusyId === a.id;
-                    const kindIcon = a.kind === 'wifi' ? 'cell-tower' : 'globe-network';
-
-                    return (
-                        <div key={a.id} className={`adapter-row adapter-row--active${isBusy ? ' adapter-row--busy' : ''}`}>
-                            <Icon icon={kindIcon as any} size={16} className="text-[var(--color-text-muted)] flex-shrink-0" />
-                            <div className="adapter-row__identity">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-mono text-[12px] font-bold text-[var(--color-text-primary)]">{a.name}</span>
-                                    <span className="adapter-status-chip adapter-status-chip--up">UP</span>
-                                    {a.linkSpeedMbps && (
-                                        <span className="font-mono text-[9px] text-[var(--color-text-muted)]">{a.linkSpeedMbps}</span>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">{macDisplay(a.currentMac)}</span>
-                                    {a.isSpoofed && (
-                                        <span className="font-mono text-[9px] font-bold text-[var(--color-accent)] tracking-wider">SPOOFED</span>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="adapter-row__mac">
-                                <HTMLSelect
-                                    value={selectedMode}
-                                    onChange={e => onModeChange(a, e.currentTarget.value as AdapterMode)}
-                                    disabled={isBusy || writesBlocked}
-                                    options={[
-                                        { value: "off", label: "Factory MAC" },
-                                        { value: "static-random", label: "Random (static)" },
-                                        { value: "rotate-on-launch", label: "Random (rotate)" },
-                                    ]}
-                                    minimal
-                                />
-                                {selectedMode !== "off" && (
-                                    <Button
-                                        small minimal icon="refresh"
-                                        title="Re-roll random MAC"
-                                        disabled={isBusy || writesBlocked}
-                                        onClick={() => onModeChange(a, selectedMode as MacRandomizerMode)}
-                                    />
-                                )}
-                            </div>
-                        </div>
-                    );
-                })}
-
-                {inactiveAdapters.length > 0 && (
-                    <>
-                        <button
-                            type="button"
-                            className="hardware-process-toggle mt-1"
-                            onClick={() => onShowInactiveToggle(!showInactiveAdapters)}
-                        >
-                            <span>{showInactiveAdapters ? "HIDE" : "SHOW"} {inactiveAdapters.length} INACTIVE</span>
-                            <Icon icon={showInactiveAdapters ? "chevron-up" : "chevron-down"} size={11} />
-                        </button>
-                        {showInactiveAdapters && inactiveAdapters.map(a => (
-                            <div key={a.id} className="adapter-row adapter-row--inactive">
-                                <Icon icon={(a.kind === 'wifi' ? 'cell-tower' : 'globe-network') as any} size={14} />
-                                <span className="font-mono text-[11px] text-[var(--color-text-muted)]">{a.name}</span>
-                                <span className="adapter-status-chip adapter-status-chip--down">{a.status.toUpperCase()}</span>
-                                <span className="font-mono text-[10px] text-[var(--color-text-muted)] ml-auto">{macDisplay(a.currentMac)}</span>
-                            </div>
-                        ))}
-                    </>
-                )}
-            </div>
-        </>
-    );
-
-    if (embedded) {
-        return body;
-    }
-
-    return (
-        <SectionCard title="Network Adapters" icon="globe-network">
-            {body}
-        </SectionCard>
-    );
-}
 
 // ─── Auto-apply status pill ──────────────────────────────────────────────────
 
@@ -1407,51 +1269,6 @@ function PortsAndConnectionsTab() {
 // ─── Tab: Adapters, Wi-Fi Guard & Diagnostics ──────────────────────────────────
 
 function AdaptersWifiGuardDiagnosticsTab() {
-    const { getPhysicalNetworkAdapters, setAdapterRandomMAC, restoreAdapterMAC } = useBackend();
-    const { systemInfo } = useAppState();
-    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
-
-    // Adapter state — lives here (not at the panel level) since nothing outside
-    // this tab needs it.
-    const [adapters, setAdapters] = useState<PhysicalNetworkAdapter[] | null>(null);
-    const [adaptersLoading, setAdaptersLoading] = useState(false);
-    const [adapterBusyId, setAdapterBusyId] = useState<string | null>(null);
-    const [modeOverrides, setModeOverrides] = useState<Record<string, AdapterMode>>({});
-    const [showInactiveAdapters, setShowInactiveAdapters] = useState(false);
-
-    const refreshAdapters = useCallback(async () => {
-        setAdaptersLoading(true);
-        try {
-            const res = await getPhysicalNetworkAdapters();
-            if (res.success && res.data) setAdapters(res.data.adapters ?? []);
-            else if (res.error) showError(res.error);
-        } finally {
-            setAdaptersLoading(false);
-        }
-    }, [getPhysicalNetworkAdapters]);
-
-    useEffect(() => { refreshAdapters(); }, [refreshAdapters]);
-
-    const handleAdapterModeChange = useCallback(async (adapter: PhysicalNetworkAdapter, nextMode: AdapterMode) => {
-        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
-        setAdapterBusyId(adapter.id);
-        setModeOverrides(m => ({ ...m, [adapter.id]: nextMode }));
-        try {
-            if (nextMode === "off") {
-                const res = await restoreAdapterMAC(adapter.id);
-                if (!res.success) { showError(res.error || "Failed to restore factory MAC"); return; }
-                showSuccess(`Factory MAC restored on ${adapter.name}`);
-            } else {
-                const res = await setAdapterRandomMAC(adapter.id, nextMode);
-                if (!res.success) { showError(res.error || "Failed to randomize MAC"); return; }
-                const mac = res.data?.appliedMac ? ` → ${macDisplay(res.data.appliedMac)}` : "";
-                showSuccess(`MAC randomized on ${adapter.name}${mac}`);
-            }
-            await refreshAdapters();
-        } finally {
-            setAdapterBusyId(null);
-        }
-    }, [restoreAdapterMAC, setAdapterRandomMAC, refreshAdapters, needsElevation]);
 
     return (
         <div className="network-panel-sections">
@@ -1465,34 +1282,7 @@ function AdaptersWifiGuardDiagnosticsTab() {
                                 className="ncr-stretch-card"
                             >
                                 <div className="merged-adapters-wifi-guard">
-                                    {/* Segment 1 — Adapters. Shown to every density (was
-                                        expert-only) — MAC randomization is a useful privacy
-                                        control for Guided users too, not just power users. */}
-                                    <section className="merged-segment merged-segment--adapters">
-                                        <header className="merged-segment__header">
-                                            <Icon icon="globe-network" size={11} />
-                                            <span className="merged-segment__title">Network Adapters</span>
-                                            <span className="merged-segment__count">
-                                                {adapters ? `${(adapters ?? []).filter(a => a.status === 'Up').length} up` : '—'}
-                                            </span>
-                                        </header>
-                                        <p className="merged-segment__blurb">
-                                            Randomize a MAC address so the adapter can't be tracked by hardware ID.
-                                        </p>
-                                        <div className="merged-segment__body">
-                                            <AdaptersList
-                                                adapters={adapters}
-                                                adaptersLoading={adaptersLoading}
-                                                adapterBusyId={adapterBusyId}
-                                                modeOverrides={modeOverrides}
-                                                showInactiveAdapters={showInactiveAdapters}
-                                                onModeChange={handleAdapterModeChange}
-                                                writesBlocked={needsElevation}
-                                                onShowInactiveToggle={setShowInactiveAdapters}
-                                                embedded
-                                            />
-                                        </div>
-                                    </section>
+                                    <AdapterControls />
                                     {/* Segment 2 — Wi-Fi Guard (fake hotspot / rogue AP detector) */}
                                     <section className="merged-segment merged-segment--wifi">
                                         <div className="merged-segment__body">

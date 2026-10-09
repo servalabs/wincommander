@@ -2510,6 +2510,7 @@ pub fn run() {
             ransomware_monitor::set_ransomware_watch_dirs,
             // ── Port monitor (internal recon detector, PAID) ──
             port_monitor::start_network_honeypot,
+            port_monitor::reconcile_network_honeypot,
             port_monitor::stop_network_honeypot,
             port_monitor::network_honeypot_status,
             port_monitor::get_network_honeypot_recent,
@@ -2531,6 +2532,7 @@ pub fn run() {
             wifi_check::configure_wifi_guard,
             wifi_check::clear_wifi_guard_known,
             wifi_check::add_wifi_guard_ssid,
+            wifi_check::trust_wifi_guard_current,
             // ── #4 Remote-session monitor (PAID, Pro detector via B2) ──
             remote_sessions::start_remote_access_monitor,
             remote_sessions::stop_remote_access_monitor,

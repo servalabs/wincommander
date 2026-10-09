@@ -1977,6 +1977,10 @@ pub struct WifiGuardBaselineEntry {
     pub ssid: String,
     pub bssids: Vec<String>,
     pub best_auth_strength: u8,
+    pub ssid_hex: Option<String>,
+    pub provenance: Option<String>,
+    pub auth_algorithm: Option<u32>,
+    pub cipher_algorithm: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

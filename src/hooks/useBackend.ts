@@ -321,7 +321,7 @@ export interface ScrubReportSummary {
   residualCount?: number;
 }
 
-export type MacRandomizerMode = "static-random" | "rotate-on-launch";
+export type MacRandomizerMode = "static-random";
 
 export interface WipeDriveEntry {
   letter: string;
@@ -349,11 +349,30 @@ export interface PhysicalNetworkAdapter {
   factoryMac: string | null;
   currentMac: string | null;
   isSpoofed: boolean;
+  adminStatus?: string;
+  macState?: "factory" | "changed" | "unknown";
+  configuredMac?: string | null;
+  configuredMode?: string;
+  configurationError?: string | null;
+  recoveryPending?: boolean;
+  overrideSupport?: "unknown";
+  checkedAt?: string;
 }
 
 export interface PhysicalNetworkAdaptersResult {
-  status: "ok";
+  status: "ok" | "unavailable";
   adapters: PhysicalNetworkAdapter[];
+  checkedAt?: string;
+  message?: string;
+}
+
+export interface AdapterMacResult {
+  status: "verified" | "unverified" | "pending_restart" | "rolled_back" | "failed" | "blocked";
+  observedMac?: string | null;
+  configuredMac?: string | null;
+  linkStatus?: string;
+  checkedAt?: string;
+  message?: string;
 }
 
 export type DefenderExclusionSeverity = "critical" | "high" | "info";
@@ -2118,14 +2137,14 @@ export function useBackend() {
     getPhysicalNetworkAdapters: () =>
       execute<PhysicalNetworkAdaptersResult>("Get-PhysicalNetworkAdapters"),
     setAdapterRandomMAC: (adapterId: string, mode: MacRandomizerMode) =>
-      execute<{ status: "ok" | "partial"; appliedMac?: string; mode?: MacRandomizerMode; warning?: string }>(
+      execute<AdapterMacResult>(
         "Set-AdapterRandomMAC",
         { AdapterId: adapterId, Mode: mode }
       ),
-    restoreAdapterMAC: (adapterId: string) =>
-      execute<{ status: "ok" | "partial"; warning?: string }>(
+    restoreAdapterMAC: (adapterId: string, restorePrevious = false) =>
+      execute<AdapterMacResult>(
         "Restore-AdapterMAC",
-        { AdapterId: adapterId }
+        { AdapterId: adapterId, RestorePrevious: restorePrevious }
       ),
 
     // App Installation
