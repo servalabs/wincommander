@@ -5,7 +5,7 @@ import SectionCard from '@/components/shared/SectionCard';
 import { WebRTCHeaderButton } from '@/components/network/WebRTCLeakCard';
 import usePortGuard from '@/hooks/usePortGuard';
 import { parsePortSpec, portDisplay, providerLabel, ruleKey, type PortProtocol } from '@/lib/portGuard';
-import { PORT_PRESETS } from '@/lib/portGuardPresets';
+import { PORT_PRESET_CATEGORIES } from '@/lib/portGuardPresets';
 import PortGuardFirewall from './PortGuardFirewall';
 
 export default function PortGuardSection(_props: { expanded?: boolean; onExpandedChange?: (next: boolean) => void } = {}) {
@@ -47,11 +47,15 @@ export default function PortGuardSection(_props: { expanded?: boolean; onExpande
       </select>
       <Button type="submit" icon="plus" intent="primary" loading={guard.busy}>Add watch</Button>
     </form>
-    <details style={{ marginTop: 12 }}><summary>Port presets</summary>
-      <p>Presets fill the form. Review the ports and protocol before adding.</p>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{PORT_PRESETS.map(preset => <Button key={preset.name} small disabled={guard.busy}
-        onClick={() => { setSpec(preset.ports); setLabel(preset.name); setProtocol(preset.protocol); }}>{preset.name} {preset.ports}</Button>)}</div>
-    </details>
+    <section aria-label="Port presets" style={{ marginTop: 16, padding: 12, border: '1px solid var(--color-border)', borderRadius: 6 }}>
+      <strong style={{ fontSize: 12 }}>Port presets — click to prefill</strong>
+      <p style={{ fontSize: 12, margin: '6px 0 12px' }}>Choose a service, review the port and protocol, then select Add watch. A watch records incoming attempts; it does not install or configure the service.</p>
+      {PORT_PRESET_CATEGORIES.map(category => <div key={category.name} style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--color-text-secondary)', marginBottom: 5 }}>{category.name}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{category.presets.map(preset => <Button key={preset.name} small disabled={guard.busy}
+          onClick={() => { setSpec(preset.ports); setLabel(preset.name); setProtocol(preset.protocol); }}>{preset.name} <span style={{ opacity: 0.7 }}>{preset.ports}</span></Button>)}</div>
+      </div>)}
+    </section>
     <div style={{ overflowX: 'auto', marginTop: 14 }}><table className="bp5-html-table bp5-html-table-striped" style={{ width: '100%' }}>
       <thead><tr><th>Ports</th><th>Protocol</th><th>Label</th><th>Watch</th><th>Coverage</th><th>Action</th></tr></thead>
       <tbody>{guard.ports.map(rule => <tr key={ruleKey(rule)}>
