@@ -59,7 +59,7 @@ describe("secure storage deep-state contracts", () => {
     expect(accessFailure).toContain("return vaultOperationError(error)");
     expect(vaultSource).not.toContain("Make this recovered volume accessible on this PC?");
     expect(vaultSource).not.toContain("repairCurrentAccountAccess");
-    expect(backendSource).not.toContain("RepairCurrentAccountAccess");
+    expect(mountHandlerSource).not.toContain("repairCurrentAccountAccess");
     expect(vaultSource).toContain("vault_broker_unavailable");
     expect(vaultSource).toContain("secure mount helper could not be reached");
     expect(vaultSource).toContain("vault_broker_rejected");
