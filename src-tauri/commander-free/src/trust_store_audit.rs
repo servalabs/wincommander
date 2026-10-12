@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::collections::HashSet;
 #[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -85,18 +87,30 @@ pub async fn trust_store_audit() -> Result<TrustStoreAudit, String> {
 }
 
 #[cfg(windows)]
-fn scan_trust_stores() -> Result<TrustStoreAudit, String> {
-    let output = Command::new("powershell.exe")
+fn inventory_command(script: &str) -> Command {
+    let mut command = Command::new("powershell.exe");
+    command
         .args([
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            INVENTORY_SCRIPT,
+            script,
         ])
+        // Prevent console creation, rather than hiding a window after it flashes.
+        // Do not combine this with PowerShell's -WindowStyle Hidden.
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        // Let Windows PowerShell find its own modules, not inherited PowerShell 7 modules.
+        .env_remove("PSModulePath")
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::piped());
+    command
+}
+
+#[cfg(windows)]
+fn scan_trust_stores() -> Result<TrustStoreAudit, String> {
+    let output = inventory_command(INVENTORY_SCRIPT)
         .output()
         .map_err(|error| format!("could not start Windows certificate inventory: {error}"))?;
 
@@ -150,6 +164,49 @@ fn scan_trust_stores() -> Result<TrustStoreAudit, String> {
 #[cfg(test)]
 mod tests {
     use super::INVENTORY_SCRIPT;
+
+    #[cfg(windows)]
+    #[test]
+    fn inventory_does_not_inherit_another_powershell_module_path() {
+        let command = super::inventory_command(INVENTORY_SCRIPT);
+        assert!(command
+            .get_envs()
+            .any(|(name, value)| name == "PSModulePath" && value.is_none()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inventory_powershell_has_no_console_window() {
+        let output = super::inventory_command(
+            r#"
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class AuditConsoleProbe { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); }'
+if ([AuditConsoleProbe]::GetConsoleWindow() -ne [IntPtr]::Zero) { throw 'Inventory PowerShell has a console window' }
+Write-Output 'no-console'
+"#,
+        )
+        .output()
+        .expect("start inventory PowerShell");
+        assert!(
+            output.status.success(),
+            "console probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "no-console");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "reads the current Windows certificate stores; run explicitly for live verification"]
+    fn live_inventory_still_returns_certificates() {
+        let audit = super::scan_trust_stores().expect("read Windows trust stores");
+        assert!(!audit.certificates.is_empty());
+        assert!(audit.certificates.iter().all(|cert| {
+            matches!(cert.scope.as_str(), "LocalMachine" | "CurrentUser")
+                && matches!(cert.store.as_str(), "Root" | "CA" | "TrustedPublisher")
+                && !cert.thumbprint.is_empty()
+        }));
+    }
 
     #[test]
     fn inventory_script_is_observational_only() {

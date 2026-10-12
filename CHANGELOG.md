@@ -5,6 +5,21 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Automatic app updates retain an in-session two-attempt limit even when a
+  stale settings snapshot would otherwise reset the retry count.
+- Port Guard groups repeated observations without discarding raw history,
+  wraps narrow tables and keeps detailed guidance in info buttons. Firewall
+  actions require verified Windows read-back from the matching Pro update.
+
+- Trust Store Audit runs its read-only Windows scan without opening a console
+  window and avoids module conflicts when launched from PowerShell 7.
+
+- Wi-Fi Guard moves connection, alert-history and reporting explanations into
+  info buttons while keeping status, alerts and errors visible.
+
+- Port Guard presets no longer show outgoing-service reference buttons or empty
+  categories. Existing saved watches and firewall rules are unchanged.
+
 - USB observation matches Windows device identities correctly, associates volumes
   by their physical device, and refreshes watcher health and transfer totals.
   The timeline distinguishes current sessions, observed mounts, and verified

@@ -9,6 +9,7 @@ import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../..
 import { isFleetReportControlLocked } from '../../lib/fleetReportingPolicyLock';
 import { applyWifiApproval, canTrustAssociation, isWifiGuardRecoveryBlocked, setWifiGuardRecoveryBlocked, wifiBaselineIdentity, wifiReasonLabel, wifiSecurityLabel, wifiStatusLabel, withWifiGuardOperation, type WifiGuardAssociation, type WifiGuardHit, type WifiGuardStatus } from '../../lib/wifiGuard';
 import type { AppSettings, WifiGuardBaselineEntry } from '../../types/settings';
+import { InfoPopover } from './InfoTip';
 
 export default function WifiGuardSection({ embedded = false }: { expanded?: boolean; onExpandedChange?: (next: boolean) => void; embedded?: boolean } = {}) {
   const { appSettings, patchAppSettings, refreshSettings, systemInfo } = useAppState();
@@ -127,9 +128,12 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
       {embedded && <strong>Wi-Fi Guard</strong>}
       <Switch checked={enabled} disabled={busy || needsElevation} onChange={(event) => void toggle((event.target as HTMLInputElement).checked)} label="Enable Wi-Fi Guard" style={{ marginBottom: 0 }} />
       <Tag intent={guarding ? 'success' : 'warning'}>{label}</Tag>
+      <InfoPopover iconOnly title="About Wi-Fi Guard">
+        <p>Checks the Wi-Fi connection while WinCommander is running. SSID is the network name; BSSID identifies the access point. Alerts flag a change to review and do not prove that a hotspot is malicious.</p>
+        {status?.observedAt && <p>Last checked: {new Date(status.observedAt).toLocaleString()}. Turning this PC’s MAC randomization on does not change the router’s BSSID.</p>}
+      </InfoPopover>
       <Button minimal small icon="refresh" onClick={() => void refresh()}>Refresh</Button>
     </div>
-    <p style={{ margin: 0, fontSize: 12 }}>Checks the Wi-Fi connection while WinCommander is running. SSID is the network name; BSSID identifies the access point. Alerts flag a change to review and do not prove that a hotspot is malicious.</p>
     {enabled && !status?.running && <p role="status" style={{ margin: 0 }}>Guard requested; waiting for its observer to start.</p>}
     {!enabled && status?.running && <p role="alert" style={{ margin: 0 }}>Stop requested; Windows has not yet confirmed that the observer stopped. Automatic retry is active.</p>}
     {status?.health === 'permissionDenied' && <p role="status" style={{ margin: 0 }}>Windows denied access to Wi-Fi details. Check Settings → Privacy &amp; security → Location and your administrator’s policy, then Refresh. The app does not change those permissions.</p>}
@@ -148,7 +152,6 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
         {row.trust !== 'approved' && <Button small intent="primary" disabled={busy || needsElevation || !canTrustAssociation(row)} onClick={() => void approve(row)}>Trust current access point and enable</Button>}
       </> : <div>{row.state === 'disconnected' ? 'Disconnected' : row.state === 'reconnecting' ? 'Reconnecting' : 'Wi-Fi information unavailable'}</div>}
     </div>)}
-    {status?.observedAt && <small>Last checked: {new Date(status.observedAt).toLocaleString()}. Turning this PC’s MAC randomization on does not change the router’s BSSID.</small>}
 
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
       <label>Check every (seconds)<InputGroup type="number" min={5} max={300} value={String(settings?.pollIntervalSecs ?? 10)} disabled={busy || needsElevation} onChange={(event) => {
@@ -160,11 +163,15 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
         if (Number.isInteger(value) && value >= 30 && value <= 3600) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); });
       }} /></label>
     </div>
-    <Switch checked={required || settings?.reportToFleet === true} disabled={reportingLocked || busy || needsElevation} label={reportingLocked ? 'Fleet reporting required by device policy' : 'Report coarse Wi-Fi alerts to Fleet'} onChange={(event) => {
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Switch checked={required || settings?.reportToFleet === true} disabled={reportingLocked || busy || needsElevation} label={reportingLocked ? 'Fleet reporting required by device policy' : 'Report coarse Wi-Fi alerts to Fleet'} onChange={(event) => {
       const reportToFleet = (event.target as HTMLInputElement).checked;
       void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { reportToFleet } } } }); });
-    }} />
-    <small>Network names and access-point identities stay in local settings; Fleet receives only an alert category. Popup delivery follows your notification settings.</small>
+      }} />
+      <InfoPopover iconOnly title="Wi-Fi reporting and notifications">
+        <p>Network names and access-point identities stay in local settings; Fleet receives only an alert category. Popup delivery follows your notification settings.</p>
+      </InfoPopover>
+    </div>
 
     <div>
       <Button minimal small onClick={() => setShowKnown(!showKnown)}>{showKnown ? 'Hide' : 'Show'} saved Wi-Fi identities ({baseline.length})</Button>
@@ -176,13 +183,18 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
       {showKnown && <small>Mesh routers may have several access points. Approve each one you recognize; new ones are never silently trusted.</small>}
     </div>
 
-    <div><strong>Recent Wi-Fi alerts ({recent.length})</strong>
+    <div><div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <strong>Recent Wi-Fi alerts ({recent.length})</strong>
+      <InfoPopover iconOnly title="About Wi-Fi alert history">
+        {recent.length === 0 && <p>No alerts recorded in this observer session. This is not proof of a trusted connection.</p>}
+        <p>Up to 100 alerts are retained for this app-running observer session.</p>
+      </InfoPopover>
       {recent.length > 0 && <Button minimal small disabled={busy} onClick={() => void mutate(async () => { await invoke('clear_wifi_guard_recent'); setRecent([]); })}>Clear alerts</Button>}
-      {recent.length === 0 ? <p>No alerts recorded in this observer session. This is not proof of a trusted connection.</p> : <div style={{ maxHeight: 240, overflowY: 'auto' }}>{recent.map((hit, index) => <div key={hit.id || `${hit.detectedAt}-${index}`} style={{ padding: 8, borderBottom: '1px solid var(--color-border)' }}>
+      </div>
+      {recent.length > 0 && <div style={{ maxHeight: 240, overflowY: 'auto' }}>{recent.map((hit, index) => <div key={hit.id || `${hit.detectedAt}-${index}`} style={{ padding: 8, borderBottom: '1px solid var(--color-border)' }}>
         <strong>{wifiReasonLabel(hit.reason)}</strong> · {new Date(hit.detectedAt).toLocaleString()}
         <div>{hit.ssid} · <code>{hit.bssid}</code></div>
       </div>)}</div>}
-      <small>Up to 100 alerts are retained for this app-running observer session.</small>
     </div>
   </div>;
   return embedded ? body : <SectionCard title="Wi-Fi Guard" icon="cell-tower">{body}</SectionCard>;

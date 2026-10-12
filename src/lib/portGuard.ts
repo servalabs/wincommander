@@ -12,7 +12,12 @@ export interface PortGuardHit {
   id: number; port: number; protocol: string; service: string; peer: string; localAddress: string;
   outcome: string; loopback: boolean; detectedAt: string;
 }
-export interface FirewallBlock { Name: string; Protocol: string; Port: string; Direction: string; Enabled: boolean | number }
+export interface FirewallBlock { Name: string; Protocol: string; Port: string; Direction: string; Enabled: boolean | number; Verified?: boolean; Issues?: string[] }
+export function requireFirewallReceipt(value: unknown): void {
+  if (!value || typeof value !== 'object' || !('verified' in value) || value.verified !== true) {
+    throw new Error('Windows firewall read-back was not confirmed. Refresh the rules before retrying; update WinCommander and Pro together.');
+  }
+}
 export function firewallEnabled(value: boolean | number): boolean { return value === true || value === 1; }
 export function ruleKey(rule: Pick<PortEntry, 'port' | 'endPort' | 'protocol'>): string { return `${rule.protocol}:${rule.port}-${rule.endPort}`; }
 export function portDisplay(rule: Pick<PortEntry, 'port' | 'endPort'>): string { return rule.port === rule.endPort ? `${rule.port}` : `${rule.port}–${rule.endPort}`; }

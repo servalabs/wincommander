@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { PortProtocol } from './portGuard';
 
-export interface PortPreset { name: string; ports: string; protocol: PortProtocol }
+export interface PortPreset { name: string; ports: string; protocol: PortProtocol; note?: string }
 export interface PortPresetCategory { name: string; presets: PortPreset[] }
 
 export const PORT_PRESET_CATEGORIES: PortPresetCategory[] = [
@@ -10,9 +10,9 @@ export const PORT_PRESET_CATEGORIES: PortPresetCategory[] = [
   { name: 'SSH / SFTP', ports: '22', protocol: 'tcp' },
   { name: 'Telnet', ports: '23', protocol: 'tcp' },
   { name: 'VNC', ports: '5900', protocol: 'tcp' },
-  { name: 'TeamViewer', ports: '5938', protocol: 'both' },
-  { name: 'AnyDesk relay', ports: '80,443,6568', protocol: 'tcp' },
-  { name: 'AnyDesk discovery', ports: '50001-50003', protocol: 'udp' },
+  { name: 'AnyDesk direct', ports: '7070', protocol: 'tcp', note: 'Default direct-connection port. Check AnyDesk Settings > Connection if changed. Relay-only sessions do not arrive on this port.' },
+  { name: 'TeamViewer LAN', ports: '5938', protocol: 'both', note: 'For direct LAN connections when enabled in TeamViewer. Internet sessions may use outbound relays or dynamic ports, so this is not a complete session detector.' },
+  { name: 'AnyDesk discovery', ports: '50001-50003', protocol: 'udp', note: 'LAN discovery only; this does not identify a remote-control session.' },
   ] },
   { name: 'Web', presets: [
   { name: 'HTTP', ports: '80', protocol: 'tcp' },
@@ -24,9 +24,10 @@ export const PORT_PRESET_CATEGORIES: PortPresetCategory[] = [
   ] },
   { name: 'File sharing', presets: [
   { name: 'SMB', ports: '445', protocol: 'tcp' },
-  { name: 'NetBIOS', ports: '137,138,139', protocol: 'both' },
+  { name: 'NetBIOS name', ports: '137', protocol: 'both' },
+  { name: 'NetBIOS datagram', ports: '138', protocol: 'udp' },
+  { name: 'NetBIOS session', ports: '139', protocol: 'tcp' },
   { name: 'FTP', ports: '21', protocol: 'tcp' },
-  { name: 'FTP-Data', ports: '20', protocol: 'tcp' },
   ] },
   { name: 'Database', presets: [
   { name: 'MySQL', ports: '3306', protocol: 'tcp' },
@@ -44,20 +45,14 @@ export const PORT_PRESET_CATEGORIES: PortPresetCategory[] = [
   { name: 'IMAPS', ports: '993', protocol: 'tcp' },
   ] },
   { name: 'Gaming', presets: [
-  { name: 'Steam', ports: '27015,27036', protocol: 'both' },
+  { name: 'Source server', ports: '27015', protocol: 'both' },
+  { name: 'Steam Remote Play TCP', ports: '27036', protocol: 'tcp' },
+  { name: 'Steam Remote Play UDP', ports: '27031-27036', protocol: 'udp' },
   { name: 'Xbox-Live', ports: '3074', protocol: 'both' },
-  { name: 'PlayStation', ports: '1935,3478,3479', protocol: 'both' },
-  { name: 'Epic-Games', ports: '5222', protocol: 'tcp' },
-  { name: 'Battle.net', ports: '1119', protocol: 'both' },
-  { name: 'Minecraft', ports: '25565', protocol: 'tcp' },
-  ] },
-  { name: 'Meetings', presets: [
-  { name: 'Zoom', ports: '8801,8802', protocol: 'both' },
-  { name: 'Teams', ports: '3478,3479,3480', protocol: 'udp' },
+  { name: 'Minecraft Java server', ports: '25565', protocol: 'tcp' },
   ] },
   { name: 'Torrent / P2P', presets: [
-  { name: 'BitTorrent', ports: '6881-6889', protocol: 'both' },
-  { name: 'uTorrent', ports: '6969', protocol: 'both' },
+  { name: 'BitTorrent legacy range', ports: '6881-6889', protocol: 'both', note: 'BitTorrent and uTorrent can use a custom or randomized listening port. Enter the actual incoming port shown in your torrent app; 6969 is not a universal uTorrent port.' },
   ] },
   { name: 'IoT', presets: [
   { name: 'MQTT', ports: '1883', protocol: 'tcp' },

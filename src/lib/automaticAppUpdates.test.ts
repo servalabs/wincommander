@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   clearAutomaticAppUpdateAttempt,
+  getAutomaticAppUpdateAttemptCount,
   getAutomaticAppUpdateCandidates,
   recordAutomaticAppUpdateAttempt,
 } from "./automaticAppUpdates";
@@ -34,6 +35,22 @@ describe("automatic app updates", () => {
     expect(second["Git.Git"].attempts).toBe(2);
     expect(getAutomaticAppUpdateCandidates({
       pendingUpdates: [initial], ignoredFindingIds: [], attemptsById: second, manifestOnly: false,
+    })).toEqual([]);
+  });
+
+  test("does not exceed two attempts when a durable settings write is lost", () => {
+    const initial = update("Spotify.Spotify");
+    const first = recordAutomaticAppUpdateAttempt({}, initial);
+    // Simulate a stale settings snapshot arriving after the first attempt.
+    const second = recordAutomaticAppUpdateAttempt({}, initial);
+    const third = recordAutomaticAppUpdateAttempt({}, initial);
+
+    expect(first["Spotify.Spotify"].attempts).toBe(1);
+    expect(second["Spotify.Spotify"].attempts).toBe(2);
+    expect(third["Spotify.Spotify"].attempts).toBe(2);
+    expect(getAutomaticAppUpdateAttemptCount({}, initial)).toBe(2);
+    expect(getAutomaticAppUpdateCandidates({
+      pendingUpdates: [initial], ignoredFindingIds: [], attemptsById: {}, manifestOnly: false,
     })).toEqual([]);
   });
 

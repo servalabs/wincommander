@@ -1,0 +1,50 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+.port-guard-card .port-guard-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.port-guard-card .port-guard-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-top: 14px;
+}
+.port-guard-card .port-guard-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.port-guard-card .port-guard-table :is(th, td) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  text-align: left;
+  padding: 10px 8px;
+}
+.port-guard-card .port-guard-table :is(button, code, summary) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.port-guard-card .port-guard-table button {
+  min-width: 0;
+  height: auto;
+  min-height: 28px;
+}
+.port-guard-card .port-guard-table details {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.port-guard-card .port-guard-table summary { cursor: pointer; }
+.port-guard-card .port-guard-table tbody tr + tr { border-top: 1px solid var(--color-border); }
+.port-guard-card .port-guard-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.port-guard-card .port-guard-form > * { min-width: 0; max-width: 100%; }
+.port-guard-card .port-guard-preset { height: auto; white-space: normal; flex-wrap: wrap; max-width: 100%; }

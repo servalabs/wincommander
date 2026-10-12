@@ -4,6 +4,7 @@ import { useAppState } from "../context/AppContext";
 import {
   MAX_AUTOMATIC_APP_UPDATE_ATTEMPTS,
   clearAutomaticAppUpdateAttempt,
+  getAutomaticAppUpdateAttemptCount,
   getAutomaticAppUpdateCandidates,
   recordAutomaticAppUpdateAttempt,
 } from "../lib/automaticAppUpdates";
@@ -77,9 +78,7 @@ export default function useAutomaticAppUpdates(): void {
 
           let succeeded = false;
           while (!cancelled && livePolicyRef.current.enabled && !succeeded) {
-            const prior = currentAttempts[id];
-            const sameVersion = prior?.version === (update.latestVersion?.trim() || null);
-            if (sameVersion && prior.attempts >= MAX_AUTOMATIC_APP_UPDATE_ATTEMPTS) break;
+            if (getAutomaticAppUpdateAttemptCount(currentAttempts, update) >= MAX_AUTOMATIC_APP_UPDATE_ATTEMPTS) break;
 
             // Write BEFORE starting the package command. A crash/relaunch can
             // therefore never create an unlimited retry loop.

@@ -30,19 +30,21 @@ export function InfoTip({ content, label }: { content: ReactNode; label: string 
   );
 }
 
-export function InfoPopover({ title, children }: { title: string; children: ReactNode }) {
+export function InfoPopover({ title, children, iconOnly = false }: { title: string; children: ReactNode; iconOnly?: boolean }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
+          aria-label={iconOnly ? title : `How it works: ${title}`}
+          style={iconOnly ? { minWidth: 24, minHeight: 24, justifyContent: 'center' } : undefined}
           className="inline-flex items-center gap-1 rounded-[var(--r-sm)] border border-[var(--accent-line)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--accent)] transition-colors hover:bg-[var(--accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)]"
         >
           <Icon icon="info-sign" size={11} />
-          How it works
+          {!iconOnly && 'How it works'}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[340px]">
+      <PopoverContent align="end" className="w-[340px] max-w-[calc(100vw-24px)] max-h-[min(70vh,500px)] overflow-y-auto break-words">
         <div className="mb-2 font-[family-name:var(--font-display)] text-[13px] font-semibold text-[var(--text)]">
           {title}
         </div>
