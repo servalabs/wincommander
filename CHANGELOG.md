@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Manually saved Wi-Fi SSID/BSSID identities now persist to local settings, so
+  periodic policy reconciliation and app restart cannot discard them.
+
 - Automatic app updates retain an in-session two-attempt limit even when a
   stale settings snapshot would otherwise reset the retry count.
 - Port Guard groups repeated observations without discarding raw history,

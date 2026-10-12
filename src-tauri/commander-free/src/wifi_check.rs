@@ -123,13 +123,17 @@ pub async fn trust_wifi_guard_current(
     expected_cipher_algorithm: u32,
 ) -> Result<WifiGuardStatus, String> {
     crate::license::require_paid("wifi guard")?;
-    let value = crate::sidecar::dispatch_paid_command("trust_wifi_guard_current", serde_json::json!({
-        "interfaceId": interface_id,
-        "expectedSsidHex": expected_ssid_hex,
-        "expectedBssid": expected_bssid,
-        "expectedAuthAlgorithm": expected_auth_algorithm,
-        "expectedCipherAlgorithm": expected_cipher_algorithm,
-    })).await?;
+    let value = crate::sidecar::dispatch_paid_command(
+        "trust_wifi_guard_current",
+        serde_json::json!({
+            "interfaceId": interface_id,
+            "expectedSsidHex": expected_ssid_hex,
+            "expectedBssid": expected_bssid,
+            "expectedAuthAlgorithm": expected_auth_algorithm,
+            "expectedCipherAlgorithm": expected_cipher_algorithm,
+        }),
+    )
+    .await?;
     serde_json::from_value(value).map_err(|error| format!("wifi guard approval decode: {error}"))
 }
 
@@ -224,5 +228,39 @@ pub async fn add_wifi_guard_ssid(
         "bssid": bssid,
     });
     let v = crate::sidecar::dispatch_paid_command("add_wifi_guard_ssid", payload).await?;
-    serde_json::from_value(v).map_err(|e| format!("wifi_guard add decode: {}", e))
+    let status = serde_json::from_value(v).map_err(|e| format!("wifi_guard add decode: {}", e))?;
+    // The detector is reconfigured from Free's local settings on its regular
+    // reconciliation and after restart. Do not leave a manually saved identity
+    // only in the sidecar's process memory, where that reconciliation would
+    // silently replace it with the older saved baseline.
+    let baseline =
+        crate::sidecar::dispatch_paid_command("get_wifi_guard_baseline", serde_json::Value::Null)
+            .await?;
+    crate::settings::patch_settings(wifi_guard_baseline_patch(baseline)).map_err(|error| {
+        format!("Wi-Fi identity was added but could not be saved locally: {error}")
+    })?;
+    Ok(status)
+}
+
+fn wifi_guard_baseline_patch(baseline: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "ideal": { "network": { "wifiGuard": { "baseline": baseline } } } })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn manual_wifi_identity_patch_preserves_the_sidecar_baseline() {
+        let baseline = serde_json::json!([{
+            "ssid": "Home",
+            "ssidHex": "486f6d65",
+            "bssids": ["02:00:00:00:00:01"],
+            "bestAuthStrength": 3,
+            "provenance": "learned"
+        }]);
+        assert_eq!(
+            super::wifi_guard_baseline_patch(baseline.clone())["ideal"]["network"]["wifiGuard"]
+                ["baseline"],
+            baseline
+        );
+    }
 }
