@@ -4,7 +4,7 @@
 // React components should prefer hooks/queries/useSettingsQuery.ts.
 
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, DeviceIdentity, DriftItem, SettingsPatch } from '../types/settings';
+import type { AppSettings, DeviceIdentity, DriftItem } from '../types/settings';
 
 // ═══════════════════════════════════════════════════════════════════════
 // STANDALONE FUNCTIONS (for use outside React components)
@@ -34,10 +34,6 @@ export async function exportSettings(): Promise<string> {
   return invoke<string>('export_settings_cmd');
 }
 
-export async function importSettings(json: string): Promise<AppSettings> {
-  return invoke<AppSettings>('import_settings_cmd', { json });
-}
-
 // File selection and exported bytes are owned by Rust, never renderer input.
 export interface SettingsImportFile {
   fileName: string;
@@ -52,14 +48,6 @@ export async function readSettingsImportFile(): Promise<SettingsImportFile | nul
   return invoke<SettingsImportFile | null>('read_settings_import_file');
 }
 
-export async function patchSettingsOnce(patch: SettingsPatch): Promise<AppSettings> {
-  return invoke<AppSettings>('patch_settings_cmd', { patch });
-}
-
 export async function getDriftReport(): Promise<DriftItem[]> {
   return invoke<DriftItem[]>('get_drift_report');
-}
-
-export async function updateCurrentState(probe: Record<string, unknown>): Promise<AppSettings> {
-  return invoke<AppSettings>('update_current_state', { probe });
 }

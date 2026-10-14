@@ -29,9 +29,8 @@ export default function SystemCleanupPanel() {
     //
     //   KT: the active card/detail path passes `clearDisabled` into
     //   CleanupTraceCard and omits TraceDetailDialog.onClear in review
-    //   mode. Older per-category dialog JSX still exists in
-    //   useCleanupLegacyDialogs.tsx as migration ballast, but card clicks
-    //   no longer open it.
+    //   mode. The remaining bespoke Wi-Fi and Browser Audit viewers
+    //   retain their existing command handlers and native review-mode gate.
     const { hasPaid, isLoading: entitlementsLoading, isInvestigator } = useEntitlements();
     const { isInstalled: proInstalled } = useProInstall({
         status: hasPaid,

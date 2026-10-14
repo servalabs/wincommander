@@ -12,11 +12,11 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import SectionCard from "../shared/SectionCard";
 import {
     type SettingsImportFile,
-    importSettings,
     writeSettingsExportFile,
     readSettingsImportFile,
 } from "../../hooks/useSettings";
 import { useAppState } from "../../context/AppContext";
+import { useSettingsWriter } from "../../context/SettingsWriteContext";
 import { showError, showSuccess } from "../../utils/toast";
 import "./ImportExportSettingsCard.css";
 
@@ -28,6 +28,7 @@ const IMPORT_WARNING_FULL_TEXT =
 
 export default function ImportExportSettingsCard() {
     const { refreshSettings } = useAppState();
+    const writer = useSettingsWriter();
     const [exporting, setExporting] = useState(false);
     const [importing, setImporting] = useState(false);
     const [pendingImportFile, setPendingImportFile] = useState<SettingsImportFile | null>(null);
@@ -61,7 +62,7 @@ export default function ImportExportSettingsCard() {
         if (!file) return;
         setImporting(true);
         try {
-            await importSettings(file.json);
+            await writer.import(file.json);
             await refreshSettings();
             showSuccess("Settings imported — this device's identity was kept as-is.");
         } catch (err) {

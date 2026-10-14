@@ -16,10 +16,11 @@
 //   const value = getByPath(settings, "current.privacy.telemetry.windowsDisabled");
 
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, SettingsPatch } from "../../types/settings";
 import { useAuthMode } from "../../context/AuthModeContext";
-import { recoverSettingsWrite } from "../../lib/settingsWriteRecovery";
+import { useSettingsWriter } from "../../context/SettingsWriteContext";
+import { settingsKeys, settingsQueryOptions } from "../../lib/settingsQueryPolicy";
+export { settingsKeys } from "../../lib/settingsQueryPolicy";
 export {
   getControlLifecycle,
   getControlLifecycleTone,
@@ -29,12 +30,6 @@ export {
   type ControlLifecycleState,
 } from "../../lib/settingsControlLifecycle";
 
-// ── Query Keys ──────────────────────────────────────────────────────
-export const settingsKeys = {
-  all: ["settings"] as const,
-  detail: () => [...settingsKeys.all, "detail"] as const,
-};
-
 // ── Core Query ──────────────────────────────────────────────────────
 /** Fetches the full AppSettings from Rust. Fast (~1ms — cached in memory).
  *  Disabled in decoy mode — real settings must not be fetched during a
@@ -42,58 +37,33 @@ export const settingsKeys = {
  *  which every panel already handles gracefully via null guards in AppContext. */
 export function useSettingsQuery() {
   const { mode: authMode } = useAuthMode();
-  return useQuery<AppSettings>({
-    queryKey: settingsKeys.detail(),
-    queryFn: () => invoke<AppSettings>("get_settings"),
-    // KT: disabled in decoy — prevents real settings from reaching useAutoHeal
-    // and useAdoptCurrentState which both consume this query via BackgroundPollers.
-    enabled: authMode !== 'decoy',
-  });
+  const writer = useSettingsWriter();
+  return useQuery(settingsQueryOptions(authMode, writer.read));
 }
 
 // ── Mutations ───────────────────────────────────────────────────────
 
 /** Patch settings (deep merge) and update the query cache with the result. */
 export function usePatchSettings() {
-  const qc = useQueryClient();
+  const writer = useSettingsWriter();
   return useMutation({
-    mutationFn: (patch: SettingsPatch) =>
-      recoverSettingsWrite(
-        () => invoke<AppSettings>("patch_settings_cmd", { patch }),
-        () => invoke<AppSettings>("get_settings"),
-        (restored) => qc.setQueryData(settingsKeys.detail(), restored),
-      ),
-    onSuccess: (updated) => {
-      qc.setQueryData(settingsKeys.detail(), updated);
-    },
+    mutationFn: (patch: SettingsPatch) => writer.patch(patch),
   });
 }
 
 /** Full replace of settings. */
 export function useSetSettings() {
-  const qc = useQueryClient();
+  const writer = useSettingsWriter();
   return useMutation({
-    mutationFn: (settings: AppSettings) =>
-      recoverSettingsWrite(
-        () => invoke<AppSettings>("set_settings", { settings }),
-        () => invoke<AppSettings>("get_settings"),
-        (restored) => qc.setQueryData(settingsKeys.detail(), restored),
-      ),
-    onSuccess: (updated) => {
-      qc.setQueryData(settingsKeys.detail(), updated);
-    },
+    mutationFn: (settings: AppSettings) => writer.replace(settings),
   });
 }
 
 /** Update current state from a probe result. */
 export function useUpdateCurrentState() {
-  const qc = useQueryClient();
+  const writer = useSettingsWriter();
   return useMutation({
-    mutationFn: (probe: Record<string, unknown>) =>
-      invoke<AppSettings>("update_current_state", { probe }),
-    onSuccess: (updated) => {
-      qc.setQueryData(settingsKeys.detail(), updated);
-    },
+    mutationFn: (probe: Record<string, unknown>) => writer.updateCurrent(probe),
   });
 }
 

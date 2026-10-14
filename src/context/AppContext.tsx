@@ -4,7 +4,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuthMode } from './AuthModeContext';
 import useVaultDriveLetters from '../hooks/useVaultDriveLetters';
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from '../lib/decoyFakeData';
-import { settingsKeys } from '../hooks/queries/useSettingsQuery';
+import { settingsKeys } from '../lib/settingsQueryPolicy';
+import { enqueueSettingsWrite } from '../lib/settingsWriteQueue';
+import { SettingsWriteContext, type SettingsUpdater, type SettingsWriter } from './SettingsWriteContext';
 import useBackend, {
     SystemInfo,
     DriveSmartHealthResult,
@@ -174,6 +176,9 @@ function stripNullLeaves(obj: unknown): Record<string, unknown> | undefined {
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { mode: authMode } = useAuthMode();
+    const authModeRef = useRef(authMode);
+    authModeRef.current = authMode;
+    const isDecoyMode = useCallback(() => authModeRef.current === 'decoy', []);
     useVaultDriveLetters(true);
     const { data: startupLicense } = useLicenseQuery();
     const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
@@ -222,7 +227,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     const [personalSettingsStatus, setPersonalSettingsStatus] = useState<PersonalSettingsStatus | null>(null);
     const appSettingsRef = useRef<AppSettings | null>(null);
-    useEffect(() => { appSettingsRef.current = appSettings; }, [appSettings]);
+    const settingsWriterRef = useRef<SettingsWriter | null>(null);
+    const settingsSeedRef = useRef<((patch: SettingsPatch, generation: number, signal: AbortSignal | undefined, sessionFallback: boolean) => Promise<boolean>) | null>(null);
     const patchChainRef = useRef<Promise<unknown>>(Promise.resolve());
     // A background recovery read must never render an older snapshot over a
     // mutation that started after that read. Native already serializes its
@@ -579,16 +585,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const stripped = preserveDashboardPolicyUnknowns(stripNullLeaves(patch) ?? {}, h);
             if (Object.keys(stripped).length === 0) return;
-            const updated = await invoke<AppSettings>('patch_settings_cmd', { patch: stripped });
-            setAppSettings(updated);
-            appSettingsRef.current = updated;
-            // Mirror into React Query so useAdoptCurrentState fires immediately
-            // instead of waiting for the 30s staleTime window.
-            queryClient.setQueryData(settingsKeys.detail(), updated);
+            await settingsWriterRef.current!.patch(stripped);
         } catch {
             // Best-effort — don't break startup if settings write fails
         }
-    }, [queryClient]);
+    }, []);
 
     // ────────────────────────────────────────────────────────────────────
     // seedFromCachedSettings — Instant state hydration from settings.json cache
@@ -715,7 +716,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await patchChainRef.current;
         const requestGeneration = settingsMutationGenerationRef.current;
         const updated = await invoke<AppSettings>('get_settings', { refreshPersonal });
-        if (requestGeneration !== settingsMutationGenerationRef.current) return;
+        if (isDecoyMode() || requestGeneration !== settingsMutationGenerationRef.current) return;
         setPersonalSettingsStatus(previous => readPersonalSettingsStatus(updated, previous));
         // PERF: the active-panel poller calls this every 10s just to READ
         // settings — it mutates nothing. Re-seeding React state with a fresh
@@ -729,7 +730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAppSettings(updated);
         queryClient.setQueryData(settingsKeys.detail(), updated);
         seedFromCachedSettings(updated);
-    }, [queryClient, seedFromCachedSettings]);
+    }, [queryClient, seedFromCachedSettings, isDecoyMode]);
 
     /** Lightweight re-read of settings.json from Rust (~1ms). Does NOT
      *  trigger any PowerShell probe — just reads what Rust already has. */
@@ -815,7 +816,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (updates.success && updates.data) {
                     dashPatch.current.tweaks.security.windowsUpdateDisabled = updates.data.paused;
                 }
-                await invoke('patch_settings_cmd', { patch: dashPatch });
+                await settingsWriterRef.current!.patch(dashPatch);
             } catch { /* best-effort */ }
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, dashboard: false }));
@@ -853,7 +854,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         enabledBlocklists: blocklists.data.applied ?? [],
                     };
                 }
-                await invoke('patch_settings_cmd', { patch: netPatch });
+                await settingsWriterRef.current!.patch(netPatch);
             } catch { /* best-effort */ }
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, network: false }));
@@ -880,7 +881,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     if (res.success && res.data) {
                         // Re-read settings to get the updated inventory that backend auto-persisted
                         try {
-                            const updatedSettings = await invoke<AppSettings>('get_settings');
+                            const updatedSettings = await settingsWriterRef.current!.read();
+                            if (isDecoyMode()) return;
                             setAppSettings(updatedSettings);
                             appSettingsRef.current = updatedSettings;
                             seedFromCachedSettings(updatedSettings);
@@ -913,7 +915,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, apps: false }));
         }
-    }, [getAppInventory, seedFromCachedSettings]);
+    }, [getAppInventory, isDecoyMode, seedFromCachedSettings]);
 
     const waitForAppInventoryScan = useCallback(async () => {
         await appInventoryBackendInFlightRef.current;
@@ -1034,10 +1036,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const initSettings = useCallback(async (runProbe = true, cachedSettings?: AppSettings, signal?: AbortSignal): Promise<AppSettings | null> => {
         try {
             // Phase 1: Fast cache read (~1-5ms) — seeds state for instant score
-            let settings = cachedSettings ?? await settingsReadStoreRef.current.refresh(
+            const readGeneration = settingsMutationGenerationRef.current;
+            let settings = appSettingsRef.current ?? cachedSettings ?? await settingsReadStoreRef.current.refresh(
                 () => invoke<AppSettings>('get_settings'), signal ?? new AbortController().signal,
             );
-            if (signal?.aborted) return null;
+            if (signal?.aborted || isDecoyMode()) return null;
+            if (readGeneration !== settingsMutationGenerationRef.current && appSettingsRef.current) settings = appSettingsRef.current;
             settingsRecoveryMessageRef.current = null;
             settingsFailureMessageRef.current = null;
             setPersonalSettingsStatus(previous => readPersonalSettingsStatus(settings, previous));
@@ -1060,6 +1064,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     // data asynchronously. The shell is safe with its explicit
                     // loading state while this slow PowerShell work completes.
                     await (async () => {
+                        const probeGeneration = settingsMutationGenerationRef.current;
                         let probeRes: unknown = null;
                         try {
                             probeRes = await invoke<unknown>('run_backend_script', {
@@ -1069,39 +1074,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         } catch {
                             return;
                         }
-                        if (signal?.aborted) return;
+                        if (signal?.aborted || isDecoyMode() || probeGeneration !== settingsMutationGenerationRef.current) return;
 
                         if (probeRes && typeof probeRes === 'object') {
-                            // First run: probe populates BOTH ideal and current.
-                            let updated: AppSettings;
-                            try {
-                                updated = await invoke<AppSettings>('patch_settings_cmd', {
-                                    patch: { ideal: probeRes, current: probeRes },
-                                });
-                            } catch {
-                                // First-run probing is useful to every user,
-                                // but only an elevated administrator may save
-                                // the shared device baseline. Keep the result
-                                // in this session rather than failing splash.
-                                updated = { ...settings, ideal: probeRes, current: probeRes } as AppSettings;
-                            }
-                            setAppSettings(updated);
-                            appSettingsRef.current = updated;
-                            seedFromCachedSettings(updated);
+                            // Admission and genuine write-failure fallback both belong
+                            // to the serialized slot; an obsolete seed must do neither.
+                            const admitted = await settingsSeedRef.current!({ ideal: probeRes, current: probeRes } as SettingsPatch,
+                                probeGeneration, signal, true).catch(() => false);
+                            if (!admitted) return;
 
                             // Overlay migration data on ideal (catches branding, etc.)
                             try {
+                                const migrationGeneration = settingsMutationGenerationRef.current;
                                 const migrationRes = await invoke<unknown>('run_backend_script', {
                                     command: 'Get-WCMigrationData',
                                     params: {},
                                 });
                                 if (migrationRes && typeof migrationRes === 'object') {
-                                    const merged = await invoke<AppSettings>('patch_settings_cmd', {
-                                        patch: { ideal: migrationRes },
-                                    });
-                                    setAppSettings(merged);
-                                    appSettingsRef.current = merged;
-                                    seedFromCachedSettings(merged);
+                                    await settingsSeedRef.current!({ ideal: migrationRes } as SettingsPatch, migrationGeneration, signal, false);
                                 }
                             } catch {
                                 // Migration is best-effort
@@ -1117,15 +1107,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         .then(async (probeRes) => {
                             if (signal?.aborted) return;
                             if (probeRes && typeof probeRes === 'object') {
-                                const updated = await invoke<AppSettings>('update_current_state', {
-                                    probe: probeRes,
-                                });
-                                setAppSettings(updated);
-                                appSettingsRef.current = updated;
-                                seedFromCachedSettings(updated);
-                                // Mirror into React Query so useAdoptCurrentState
-                                // fires immediately after the probe completes.
-                                queryClient.setQueryData(settingsKeys.detail(), updated);
+                                await settingsWriterRef.current!.updateCurrent(probeRes as Record<string, unknown>);
                             }
                         })
                         .catch(() => {}); // best-effort
@@ -1139,82 +1121,114 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setStartupDataState('stale');
             return null;
         }
-    }, [seedFromCachedSettings, queryClient]);
+    }, [seedFromCachedSettings, isDecoyMode]);
 
-    const patchAppSettings = useCallback(async (patch: SettingsPatch | ((latest: AppSettings | null) => SettingsPatch)) => {
-        // KT: decoy guard — writes in decoy mode must never reach the backend;
-        // the Rust backstop also blocks them, but preventing the invoke here
-        // ensures no observable round-trip that an examiner could log.
-        if (authMode === 'decoy') {
-            await recoverSettingsWrite(
-                async () => { throw new Error('Decoy mode blocks settings changes'); },
-                async () => appSettingsRef.current ?? await invoke<AppSettings>('get_settings'),
-                () => {},
-            );
-            return;
+    const writeSettings = useCallback(async (prepare: (latest: AppSettings | null) => {
+        command: 'patch_settings_cmd' | 'set_settings' | 'update_current_state' | 'import_settings_cmd';
+        args: Record<string, unknown>;
+    }, options?: {
+        admit?: (latest: AppSettings | null) => boolean;
+        fallback?: (latest: AppSettings | null) => AppSettings | null;
+    }): Promise<AppSettings> => {
+        const assertWritable = () => {
+            if (isDecoyMode()) throw new Error('Decoy mode blocks settings changes');
+        };
+        if (isDecoyMode() && !options?.admit) {
+            return recoverSettingsWrite<AppSettings>(async () => { throw new Error('Decoy mode blocks settings changes'); },
+                async () => appSettingsRef.current ?? DECOY_APP_SETTINGS, () => {});
         }
-        // Serialize overlapping writes so two rapid toggles can't both read the same
-        // stale base and clobber each other; read the latest settings from a ref so
-        // module normalization sees the freshest value, not the closure snapshot.
-        const run = patchChainRef.current.then(async () => {
-          settingsMutationGenerationRef.current += 1;
-          return recoverSettingsWrite(async () => {
-            const latest = appSettingsRef.current;
-            // Resolve function-form patches here, at this write's turn in the
-            // chain, instead of at call time — so callers deriving a next value
-            // from shared collection state (e.g. VisibilityTable's lockedPanelIds/
-            // borrowedHidden arrays, which the backend replaces wholesale rather
-            // than deep-merging) always compute against the freshest settings
-            // rather than the render closure captured when the user clicked.
-            let normalizedPatch: SettingsPatch = typeof patch === 'function' ? patch(latest) : patch;
-
-            // Always persist a COMPLETE modules map (defaults + current + patch),
-            // so missing keys never behave like implicit OFF on next startup.
-            if (normalizedPatch.app?.modules) {
-                const level = normalizedPatch.app?.experienceLevel ?? latest?.app?.experienceLevel ?? 'standard';
-                const currentModules = normalizeModulesConfig(
-                    latest?.app?.modules,
-                    level,
-                    latest?.app?.firstRunComplete,
-                );
-                normalizedPatch = {
-                    ...normalizedPatch,
-                    app: {
-                        ...normalizedPatch.app,
-                        modules: {
-                            ...currentModules,
-                            ...normalizedPatch.app.modules,
-                        },
-                    },
-                };
+        const run = enqueueSettingsWrite(patchChainRef, async () => {
+            try {
+            return await recoverSettingsWrite(async () => {
+                assertWritable();
+                const operation = prepare(appSettingsRef.current);
+                settingsMutationGenerationRef.current += 1;
+                const updated = await invoke<AppSettings>(operation.command, operation.args);
+                appSettingsRef.current = updated;
+                setAppSettings(updated);
+                queryClient.setQueryData(settingsKeys.detail(), updated);
+                if (!isDecoyMode()) seedFromCachedSettings(updated);
+                return updated;
+            },
+            async () => isDecoyMode()
+                ? appSettingsRef.current ?? DECOY_APP_SETTINGS
+                : invoke<AppSettings>('get_settings'),
+            (restored) => {
+                if (isDecoyMode()) return;
+                setPersonalSettingsStatus(previous => readPersonalSettingsStatus(restored, previous));
+                appSettingsRef.current = restored;
+                setAppSettings(restored);
+                queryClient.setQueryData(settingsKeys.detail(), restored);
+                seedFromCachedSettings(restored);
+            });
+            } catch (error) {
+                // First-run shared-write refusal retains the old session-only
+                // baseline behavior, before a later preference can start.
+                const fallback = options?.fallback?.(appSettingsRef.current);
+                if (!fallback) throw error;
+                appSettingsRef.current = fallback;
+                setAppSettings(fallback);
+                queryClient.setQueryData(settingsKeys.detail(), fallback);
+                seedFromCachedSettings(fallback);
+                return fallback;
             }
-
-            const updated = await invoke<AppSettings>('patch_settings_cmd', { patch: normalizedPatch });
-            appSettingsRef.current = updated;
-            setAppSettings(updated);
-            // Mirror into React Query cache so consumers using useSettingsQuery
-            // (ToggleSection, etc.) re-render with the new state immediately.
-            // Without this they keep serving the stale snapshot until staleTime expires.
-            queryClient.setQueryData(settingsKeys.detail(), updated);
-            // KT: Re-seed all individual state vars so the UI stays in sync with
-            // settings.json after every write. Without this, hardeningStatus,
-            // telemetryBlocked etc. stay stale until the next background probe.
-            seedFromCachedSettings(updated);
-          },
-          () => invoke<AppSettings>('get_settings'),
-          (restored) => {
-            setPersonalSettingsStatus(previous => readPersonalSettingsStatus(restored, previous));
-            appSettingsRef.current = restored;
-            setAppSettings(restored);
-            queryClient.setQueryData(settingsKeys.detail(), restored);
-            seedFromCachedSettings(restored);
-          });
-        });
-        // keep the chain alive even if one write throws
-        patchChainRef.current = run.catch(() => {});
+        }, options?.admit ? {
+            admit: () => options.admit!(appSettingsRef.current),
+            skipped: () => appSettingsRef.current ?? DECOY_APP_SETTINGS,
+        } : undefined);
         return run;
-    }, [authMode, seedFromCachedSettings, queryClient]);
+    }, [seedFromCachedSettings, queryClient, isDecoyMode]);
 
+    const seedSettingsIfCurrent = useCallback(async (patch: SettingsPatch, generation: number, signal: AbortSignal | undefined, sessionFallback: boolean): Promise<boolean> => {
+        let admitted = false;
+        await writeSettings(() => ({ command: 'patch_settings_cmd', args: { patch } }), {
+            admit: latest => {
+                admitted = !isDecoyMode() && !signal?.aborted && latest !== null
+                    && !latest.app.firstRunComplete && generation === settingsMutationGenerationRef.current;
+                return admitted;
+            },
+            fallback: sessionFallback ? latest => !isDecoyMode() && !signal?.aborted && latest !== null && !latest.app.firstRunComplete
+                ? { ...latest, ...patch } as AppSettings : null : undefined,
+        });
+        return admitted;
+    }, [writeSettings, isDecoyMode]);
+    settingsSeedRef.current = seedSettingsIfCurrent;
+
+    const patchSettingsSnapshot = useCallback((patch: SettingsUpdater) => writeSettings((latest) => {
+        let normalizedPatch: SettingsPatch = typeof patch === 'function' ? patch(latest) : patch;
+        if (normalizedPatch.app?.modules) {
+            const level = normalizedPatch.app?.experienceLevel ?? latest?.app?.experienceLevel ?? 'standard';
+            const currentModules = normalizeModulesConfig(latest?.app?.modules, level, latest?.app?.firstRunComplete);
+            normalizedPatch = {
+                ...normalizedPatch,
+                app: { ...normalizedPatch.app, modules: { ...currentModules, ...normalizedPatch.app.modules } },
+            };
+        }
+        return { command: 'patch_settings_cmd', args: { patch: normalizedPatch } };
+    }), [writeSettings]);
+    const patchAppSettings = useCallback(async (patch: SettingsUpdater): Promise<void> => {
+        await patchSettingsSnapshot(patch);
+    }, [patchSettingsSnapshot]);
+    const readSettingsSnapshot = useCallback(async (): Promise<AppSettings> => {
+        if (isDecoyMode()) return DECOY_APP_SETTINGS;
+        await patchChainRef.current;
+        if (isDecoyMode()) return DECOY_APP_SETTINGS;
+        const generation = settingsMutationGenerationRef.current;
+        const snapshot = await invoke<AppSettings>('get_settings');
+        if (generation !== settingsMutationGenerationRef.current) {
+            await patchChainRef.current;
+            return appSettingsRef.current ?? snapshot;
+        }
+        return snapshot;
+    }, [isDecoyMode]);
+    const settingsWriter = useMemo(() => ({
+        read: readSettingsSnapshot,
+        patch: patchSettingsSnapshot,
+        replace: (settings: AppSettings) => writeSettings(() => ({ command: 'set_settings', args: { settings } })),
+        updateCurrent: (probe: Record<string, unknown>) => writeSettings(() => ({ command: 'update_current_state', args: { probe } })),
+        import: (json: string) => writeSettings(() => ({ command: 'import_settings_cmd', args: { json } })),
+    }), [patchSettingsSnapshot, writeSettings, readSettingsSnapshot]);
+    settingsWriterRef.current = settingsWriter;
     const startupEligibility = useMemo<StartupEligibility>(() => ({
         hasVerifiedPaidEntitlement: (startupLicense?.licensed === true && startupLicense.valid === true)
             || startupLicense?.trial_active === true,
@@ -1571,7 +1585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return (
         <AppContext.Provider value={ctx}>
-            {children}
+            <SettingsWriteContext.Provider value={settingsWriter}>{children}</SettingsWriteContext.Provider>
         </AppContext.Provider>
     );
 };
