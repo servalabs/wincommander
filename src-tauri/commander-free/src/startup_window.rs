@@ -196,6 +196,9 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
     }
     if let Err(error) = result {
         state.arm();
+        crate::log_message_src("error", "core", &format!("[Startup] window reveal failed: {error}"));
+        #[cfg(debug_assertions)]
+        eprintln!("[wincommander-dev-startup] window reveal failed: {error}");
         if !state.warned.swap(true, Ordering::AcqRel) {
             show_native_startup_error(&format!("WinCommander could not open its window. {error}"));
         }

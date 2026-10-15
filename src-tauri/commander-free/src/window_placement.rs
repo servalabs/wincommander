@@ -57,6 +57,8 @@ fn place(window: &tauri::WebviewWindow) -> Result<(), String> {
         };
         #[cfg(not(windows))]
         let maximized = window.is_maximized().map_err(|e| e.to_string())?;
+        #[cfg(debug_assertions)]
+        eprintln!("[wincommander-dev-startup] placement attempt={attempt} maximized={maximized} position={position:?} size={size:?} work={work:?}");
         if maximized
             && window.is_visible().map_err(|e| e.to_string())?
             && fits_work_area(position, size, work)
