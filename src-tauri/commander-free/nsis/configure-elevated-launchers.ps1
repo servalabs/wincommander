@@ -8,6 +8,10 @@ param(
     # intentionally the product default: automatic startup is on.
     [switch]$PreserveAutostartPreference,
 
+    # Only the installer may defer a preflight ownership conflict. It leaves
+    # every startup route and preference untouched and reports exit code 3.
+    [switch]$DeferAutostartConflict,
+
     # Used only by an explicit NSIS uninstall. It removes every automatic
     # route, including the elevated desktop launcher.
     [switch]$RemoveAutostartRoutes,
@@ -236,9 +240,22 @@ function Test-TaskActionOwnership($Task, [string]$Arguments, [string[]]$OwnedPat
 }
 
 function Assert-TaskNameCanBeReconciled([string]$TaskName, [string]$Arguments, [string[]]$OwnedPaths, [string]$TaskPath = '\') {
-    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+    try {
+        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+    } catch {
+        # Scheduler reports the same structured absence for a missing task and
+        # a missing task folder. Permission/module/query failures aren't absence.
+        if ($_.CategoryInfo.Category -eq [Management.Automation.ErrorCategory]::ObjectNotFound -and
+            $_.FullyQualifiedErrorId -eq 'CmdletizationQuery_NotFound,Get-ScheduledTask' -and
+            $_.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Cmdletization.Cim.CimJobException') {
+            return
+        }
+        throw 'WinCommander could not verify the existing startup task. No replacement was authorized.'
+    }
     if ($null -ne $task -and -not (Test-TaskActionOwnership $task $Arguments $OwnedPaths)) {
-        throw "A task named $TaskName does not belong to WinCommander; refusing to replace it."
+        $conflict = [InvalidOperationException]::new("A task named $TaskName does not belong to WinCommander; refusing to replace it.")
+        $conflict.Data['WinCommanderStartupConflict'] = 'task_ownership_conflict'
+        throw $conflict
     }
 }
 
@@ -311,6 +328,7 @@ function Register-LogonRouterTask {
     Assert-TaskContract (Get-ScheduledTask -TaskPath $systemMaintenanceTaskPath -TaskName $autostartTaskName -ErrorAction Stop) $usersSid 'Highest' '--autostart' $true
 }
 
+$startupMutationStarted = $false
 try {
     $ownedPaths = Get-OwnedExecutablePaths
     $runPaths = @(
@@ -321,9 +339,9 @@ try {
         'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
         'Registry::HKEY_LOCAL_MACHINE\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce'
     )
-    $runValuesRemoved = Remove-OwnedRunValues $runPaths $ownedPaths
-
     if ($RemoveAutostartRoutes) {
+        $startupMutationStarted = $true
+        $runValuesRemoved = Remove-OwnedRunValues $runPaths $ownedPaths
         $tasksRemoved = Remove-AllAutostartTasks $ownedPaths
         if ($RemoveManualLauncher) { [void](Remove-OwnedNamedTask $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath) }
         if ($RemoveAutostartPreference) { Remove-AutostartPreference }
@@ -331,12 +349,14 @@ try {
         exit 0
     }
 
+    # Reject conflicting canonical names before any preference migration,
+    # Run-value removal, task-folder creation or task registration.
+    Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath
+    Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths $systemMaintenanceTaskPath
+    $startupMutationStarted = $true
     $autostartEnabled = Get-AutostartEnabled ([bool]$PreserveAutostartPreference) $ownedPaths
+    $runValuesRemoved = Remove-OwnedRunValues $runPaths $ownedPaths
     if ($autostartEnabled) {
-        # Check the pair before changing either task so a foreign-name collision
-        # cannot leave a partially configured launch route.
-        Assert-TaskNameCanBeReconciled $manualTaskName '--elevated-relaunch' $ownedPaths $systemMaintenanceTaskPath
-        Assert-TaskNameCanBeReconciled $autostartTaskName '--autostart' $ownedPaths $systemMaintenanceTaskPath
         Register-ElevatedLauncherTask
         Register-LogonRouterTask
         $tasksRemoved = Remove-OtherAutostartTasks $ownedPaths
@@ -346,6 +366,12 @@ try {
         Write-Output "WinCommander automatic startup configured: preference=off removedTasks=$tasksRemoved runValues=$runValuesRemoved"
     }
 } catch {
+    if ($DeferAutostartConflict -and -not $RemoveAutostartRoutes -and -not $startupMutationStarted -and
+        $_.Exception -is [InvalidOperationException] -and
+        $_.Exception.Data['WinCommanderStartupConflict'] -eq 'task_ownership_conflict') {
+        Write-Output 'WinCommander automatic startup was not configured because a task name is already in use. Existing tasks and preferences were kept. Launch WinCommander manually.'
+        exit 3
+    }
     Write-Error "Could not reconcile WinCommander automatic startup routes: $($_.Exception.Message)"
     exit 1
 }

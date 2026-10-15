@@ -95,11 +95,13 @@ ${Using:StrFunc} UnStrStr
   ; A manually opened setup is also an upgrade when older routes exist.
   ; Preserve legacy OFF in both modes; a fresh machine still defaults to ON.
   !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference'
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-configure-elevated-launchers.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -PreserveAutostartPreference -DeferAutostartConflict'
   Pop $0
   Pop $1
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "elevated-launchers-configure" "$0" "$1"
-  ${If} $0 != 0
+  ${If} $0 == 3
+    DetailPrint "Automatic startup could not be configured because a task name is already in use. Existing tasks and preferences were kept. Launch WinCommander manually."
+  ${ElseIf} $0 != 0
     Abort "WinCommander could not configure its required automatic startup route. See installer-lifecycle.log."
   ${EndIf}
 !macroend
