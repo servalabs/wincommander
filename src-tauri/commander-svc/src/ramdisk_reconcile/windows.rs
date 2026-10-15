@@ -5,14 +5,15 @@ use anyhow::{bail, Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, LocalFree, ERROR_FILE_NOT_FOUND, INVALID_HANDLE_VALUE,
+    CloseHandle, GetLastError, LocalFree, ERROR_DEVICE_REMOVED, ERROR_FILE_NOT_FOUND,
+    ERROR_PATH_NOT_FOUND, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DefineDosDeviceW, FlushFileBuffers, GetVolumeInformationW, QueryDosDeviceW,
-    DDD_EXACT_MATCH_ON_REMOVE, DDD_RAW_TARGET_PATH, DDD_REMOVE_DEFINITION, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_EXISTING,
+    DDD_EXACT_MATCH_ON_REMOVE, DDD_RAW_TARGET_PATH, DDD_REMOVE_DEFINITION, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Ioctl::{
     FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME, IOCTL_STORAGE_EJECT_MEDIA,
@@ -25,6 +26,36 @@ const LOCK_SDDL: &str = "D:(A;;0x001F0001;;;SY)(A;;0x001F0001;;;BA)(A;;0x0010000
 
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+pub(super) fn unit_open_error(number: u32) -> u32 {
+    let name = wide(OsStr::new(&format!(
+        r"\\?\GLOBALROOT\Device\ImDisk{number}"
+    )));
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        unsafe { GetLastError() }
+    } else {
+        unsafe { CloseHandle(handle) };
+        0
+    }
+}
+
+pub(super) fn unit_is_removed_error(error: u32) -> bool {
+    matches!(
+        error,
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND | ERROR_DEVICE_REMOVED
+    )
 }
 
 pub(super) fn mount_owner() -> Result<Option<u32>> {
@@ -236,6 +267,20 @@ pub(super) fn with_coordination_lock<T>(work: impl FnOnce() -> Result<T>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_confirmed_removed_units_can_be_ignored() {
+        for error in [
+            ERROR_FILE_NOT_FOUND,
+            ERROR_PATH_NOT_FOUND,
+            ERROR_DEVICE_REMOVED,
+        ] {
+            assert!(unit_is_removed_error(error));
+        }
+        for error in [0, 5, 21, 32, 55, 303, 433, 1167] {
+            assert!(!unit_is_removed_error(error));
+        }
+    }
 
     #[test]
     fn coordination_mutex_acl_is_valid_on_windows() {

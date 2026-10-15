@@ -338,7 +338,11 @@ public class RdkDosDevices {
     }
     $buffer = New-Object System.Text.StringBuilder 1024
     $length = [RdkDosDevices]::QueryDosDevice("${Letter}:", $buffer, 1024)
-    if ($length -eq 0) { return $null }
+    if ($length -eq 0) {
+        $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if ($code -eq 2) { return $null }
+        throw "Could not inspect ${Letter}: mount ownership (Windows error $code)"
+    }
     if ($buffer.ToString() -match '^\\Device\\ImDisk(\d+)$') { return [int]$Matches[1] }
     return -1 # Occupied by a non-ImDisk device.
 }
@@ -393,6 +397,33 @@ public static class RdkDosMount {
     }
 }
 
+function _Get-ImDiskUnitOpenError {
+    param([int]$DeviceNumber)
+    if (-not ([System.Management.Automation.PSTypeName]'RdkUnitProbe').Type) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class RdkUnitProbe {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    public static int OpenError(int number) {
+        // Open the driver's unit directly, independent of DOS/session mappings.
+        // Zero access and all share modes avoid modifying or locking the disk.
+        IntPtr handle = CreateFile(@"\\?\GLOBALROOT\Device\ImDisk" + number,
+            0, 7, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (handle == new IntPtr(-1)) { return Marshal.GetLastWin32Error(); }
+        CloseHandle(handle);
+        return 0;
+    }
+}
+'@ -ErrorAction Stop
+    }
+    return [RdkUnitProbe]::OpenError($DeviceNumber)
+}
+
 function _Get-ImDiskUnits {
     $list = _Invoke-ImDisk -Arguments @('-l', '-n')
     if (-not $list.ok) { throw "Cannot enumerate RAM disks: $($list.output.Trim())" }
@@ -402,7 +433,14 @@ function _Get-ImDiskUnits {
         if ($line.Trim() -notmatch '^\d+$') { throw 'Unrecognized RAM disk device list' }
         $number = [int]$line.Trim()
         $details = _Invoke-ImDisk -Arguments @('-l', '-u', "$number")
-        if (-not $details.ok) { throw "Cannot inspect RAM disk unit $number" }
+        if (-not $details.ok) {
+            $code = _Get-ImDiskUnitOpenError -DeviceNumber $number
+            # A removed unit can remain in the driver's list while handles
+            # drain. Only native missing/removed errors prove it isn't live;
+            # access-denied and unknown failures must still block allocation.
+            if ($code -in @(2, 3, 1617)) { continue }
+            throw "Cannot inspect RAM disk unit $number (Windows error $code): $($details.output.Trim())"
+        }
         $info = _Parse-ImDiskDeviceDetails -Text $details.output
         $info.deviceNumber = $number
         $units += $info
@@ -591,6 +629,60 @@ function Get-SystemRamInfo {
     }
 }
 
+function _Test-RamDiskUserModifyAccess {
+    param([System.Security.AccessControl.DirectorySecurity]$Acl,
+        [System.Security.Principal.SecurityIdentifier]$User)
+    $modify = [System.Security.AccessControl.FileSystemRights]::Modify
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    return @($Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object {
+        $_.IdentityReference -eq $User -and
+        $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+        ($_.FileSystemRights -band $modify) -eq $modify -and
+        ($_.InheritanceFlags -band $inherit) -eq $inherit -and
+        $_.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]::None
+    }).Count -gt 0
+}
+
+function _Get-RamDiskFilesystem {
+    param([string]$Letter)
+    return (New-Object System.IO.DriveInfo "${Letter}:\").DriveFormat
+}
+
+function _Ensure-RamDiskWritableAccess {
+    param([string]$Letter, [int]$DeviceNumber, [bool]$ReadOnly = $false)
+    if ($ReadOnly) { return }
+    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    if ($user.IsWellKnown([System.Security.Principal.WellKnownSidType]::LocalSystemSid)) { return }
+    $root = "${Letter}:\"
+    if ((_Get-RamDiskFilesystem -Letter $Letter) -ine 'NTFS') { return }
+    if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
+        throw "${Letter}: changed before checking RAM disk write access"
+    }
+    $acl = Get-Acl -LiteralPath $root -ErrorAction Stop
+    if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
+        throw "${Letter}: changed while checking RAM disk write access"
+    }
+    if (_Test-RamDiskUserModifyAccess -Acl $acl -User $user) { return }
+    # Elevated creation otherwise leaves normal apps unable to edit admin-owned files.
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $user, [System.Security.AccessControl.FileSystemRights]::Modify,
+        ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow)
+    $acl.AddAccessRule($rule)
+    if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
+        throw "${Letter}: changed before applying RAM disk write access"
+    }
+    Set-Acl -LiteralPath $root -AclObject $acl -ErrorAction Stop
+    $verified = Get-Acl -LiteralPath $root -ErrorAction Stop
+    if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber -or
+        -not (_Test-RamDiskUserModifyAccess -Acl $verified -User $user)) {
+        throw "${Letter}: RAM disk write access could not be verified"
+    }
+}
+
 function New-RamDisk {
     param(
         [string]$SizeMB,
@@ -691,6 +783,9 @@ function New-RamDisk {
             # A previous duplicate detach may have left a per-session R:
             # mapping to a device that no longer exists. Remove only that
             # exact mapping before consulting the surviving attached units.
+            if ((_Get-ImDiskUnitOpenError -DeviceNumber $owner) -notin @(2, 3, 1617)) {
+                throw "${letter}: is occupied but its RAM disk cannot be inspected"
+            }
             _Set-ImDiskMountPoint -Letter $letter -DeviceNumber $owner -Remove $true
             $owner = _Get-ImDiskMountOwner -Letter $letter
             $mounted = _Invoke-ImDisk -Arguments @('-l', '-m', "${letter}:")
@@ -739,16 +834,32 @@ function New-RamDisk {
             _Dismount-ImDiskUnitWithoutMountPoint -DeviceNumber $stale.deviceNumber -ExpectedLabel $safeLabel
             for ($i = 0; $i -lt 15; $i++) {
                 $check = _Invoke-ImDisk -Arguments @('-l', '-u', "$($stale.deviceNumber)")
-                if (-not $check.ok) { break }
+                if (-not $check.ok) {
+                    if ((_Get-ImDiskUnitOpenError -DeviceNumber $stale.deviceNumber) -notin @(2, 3, 1617)) {
+                        throw "Cannot verify removal of RAM disk unit $($stale.deviceNumber)"
+                    }
+                    break
+                }
                 Start-Sleep -Milliseconds 200
             }
             if ($check.ok) { throw "RAM disk unit $($stale.deviceNumber) is still attached" }
+            # The driver can remove R: even when eject bypasses the CLI.
+            # Restore only a missing mapping; never replace another owner.
+            if ($null -eq (_Get-ImDiskMountOwner -Letter $letter)) {
+                if ((_Get-ImDiskUnitVolumeLabel -DeviceNumber $owner) -ine $safeLabel) {
+                    throw "${letter}: surviving RAM disk label changed during duplicate removal"
+                }
+                if ($null -eq (_Get-ImDiskMountOwner -Letter $letter)) {
+                    _Set-ImDiskMountPoint -Letter $letter -DeviceNumber $owner
+                }
+            }
             if ((_Get-ImDiskMountOwner -Letter $letter) -ne $owner) {
                 throw "${letter}: changed while removing a duplicate RAM disk"
             }
         }
 
         if ($null -ne $owner) {
+            _Ensure-RamDiskWritableAccess -Letter $letter -DeviceNumber $owner -ReadOnly $ReadOnly
             return @{ status = 'reused'; drive = "${letter}:"; sizeMB = $sizeInt; filesystem = $Filesystem }
         }
 
@@ -770,6 +881,7 @@ function New-RamDisk {
             (_Get-RamDiskVolumeLabel -Letter $letter) -ine $safeLabel) {
             throw "RAM disk attach did not produce the expected ${letter}: volume"
         }
+        _Ensure-RamDiskWritableAccess -Letter $letter -DeviceNumber $newNumber -ReadOnly $ReadOnly
         return @{ status = 'created'; drive = "${letter}:"; sizeMB = $sizeInt; filesystem = $Filesystem }
     } catch {
         $message = $_.Exception.Message
@@ -861,9 +973,28 @@ function Remove-AllRamDisks {
     if (-not $status.installed) { return @{ status = 'error'; error = 'RAM Disk Engine not installed' } }
 
     $detached = @()
+    $failures = @()
     foreach ($d in $status.disks) {
-        $r = Remove-RamDisk -DriveLetter $d.letter
-        if ($r.status -eq 'dismounted') { $detached += $d.letter }
+        try {
+            $r = Remove-RamDisk -DriveLetter $d.letter
+            if ($r.status -eq 'dismounted') {
+                $detached += $d.letter
+            } else {
+                $reason = if ([string]::IsNullOrWhiteSpace([string]$r.error)) {
+                    'Removal did not report success'
+                } else { $r.error }
+                $failures += "$($d.letter) ($reason)"
+            }
+        } catch {
+            $failures += "$($d.letter) ($($_.Exception.Message))"
+        }
+    }
+    if ($failures.Count -gt 0) {
+        return @{
+            status = 'error'
+            error = "Could not dismount RAM disks: $($failures -join '; ')"
+            drives = @($detached)
+        }
     }
     @{ status = 'all_dismounted'; drives = @($detached) }
 }
