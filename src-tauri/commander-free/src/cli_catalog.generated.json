@@ -9333,7 +9333,6 @@
         "src/components/EverythingSearchBar.tsx",
         "src/components/RightSidebar.tsx",
         "src/context/AppContext.tsx",
-        "src/hooks/queries/useSettingsQuery.ts",
         "src/hooks/useQuickMountExplorerPreference.ts",
         "src/hooks/useSettings.ts",
         "src/hooks/useVaultDriveLetters.ts",
@@ -9603,9 +9602,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useSettings.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:install_investigator_product",
@@ -10095,11 +10092,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/components/BackgroundPollers.tsx",
-        "src/context/AppContext.tsx",
-        "src/context/ThemeContext.tsx",
-        "src/hooks/queries/useSettingsQuery.ts",
-        "src/hooks/useAdoptCurrentState.ts",
-        "src/hooks/useSettings.ts"
+        "src/context/ThemeContext.tsx"
       ]
     },
     {
@@ -11028,9 +11021,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/queries/useSettingsQuery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:set_startup_pin_enabled",
@@ -11705,12 +11696,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/context/AppContext.tsx",
-        "src/hooks/queries/useSettingsQuery.ts",
-        "src/hooks/useAutoHeal.ts",
-        "src/hooks/useSettings.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:update_hide_hotkey",
