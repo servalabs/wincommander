@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Value-free Explorer scrub receipts; partial output is never whole-batch success.
+use crate::context_scrub_failure as failure;
 use crate::file_metadata::ScrubReport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,18 +17,23 @@ pub(crate) struct ScrubOutcome {
     failed: usize,
     skipped: usize,
     residual: usize,
+    code: &'static str,
 }
 
 impl ScrubOutcome {
     pub(crate) fn from_result(result: Result<ScrubReport, String>) -> Self {
-        let Ok(report) = result else {
-            return Self {
-                state: ScrubState::Failed,
-                verified: 0,
-                failed: 1,
-                skipped: 0,
-                residual: 0,
-            };
+        let report = match result {
+            Ok(report) => report,
+            Err(error) => {
+                return Self {
+                    state: ScrubState::Failed,
+                    verified: 0,
+                    failed: 1,
+                    skipped: 0,
+                    residual: 0,
+                    code: failure::failure_code(&error),
+                };
+            }
         };
         let observed_verified = report
             .scrubbed
@@ -55,6 +61,24 @@ impl ScrubOutcome {
             && failed == 0
             && skipped == 0
             && residual == 0;
+        let mut codes = report
+            .errors
+            .iter()
+            .map(|error| failure::failure_code(&error.message));
+        let first_code = codes.next();
+        let code = if first_code.is_some_and(|first| codes.any(|code| code != first)) {
+            "multiple_failures"
+        } else if let Some(code) = first_code {
+            code
+        } else if residual > 0 {
+            "metadata_remains"
+        } else if skipped > 0 {
+            "unsupported_selection"
+        } else if complete {
+            "completed"
+        } else {
+            "processing_unconfirmed"
+        };
         Self {
             state: if complete {
                 ScrubState::Completed
@@ -67,6 +91,7 @@ impl ScrubOutcome {
             failed,
             skipped,
             residual,
+            code,
         }
     }
 
@@ -76,6 +101,12 @@ impl ScrubOutcome {
         } else {
             1
         }
+    }
+    pub(crate) fn diagnostic(&self) -> String {
+        format!(
+            "[ContextScrub] code={} verified={} failed={} unsupported={} residual={}",
+            self.code, self.verified, self.failed, self.skipped, self.residual
+        )
     }
     pub(crate) fn title(&self) -> &'static str {
         match self.state {
@@ -95,8 +126,8 @@ impl ScrubOutcome {
         if self.state == ScrubState::Completed {
             return format!("{} file(s) passed metadata checks. Clean copies are in the adjacent _scrubbed folder. Originals were kept.", self.verified);
         }
-        format!("Passed checks: {}. Failed: {}. Unsupported: {}. Metadata remains: {}. Originals kept. Review in Share Safely before retrying. Selection not verified safe to share.",
-            self.verified, self.failed, self.skipped, self.residual)
+        format!("Passed checks: {}. Failed: {}. Unsupported: {}. Metadata remains: {}. Originals kept. {} Selection not verified safe to share. Reference: {}.",
+            self.verified, self.failed, self.skipped, self.residual, failure::next_action(self.code), self.code)
     }
 }
 
@@ -182,5 +213,22 @@ mod tests {
         assert_eq!(outcome.state, ScrubState::Failed);
         assert!(!outcome.message().contains("private path"));
         assert_eq!(outcome.severity(), "danger");
+    }
+
+    #[test]
+    fn distinct_failures_are_not_misreported_as_one_cause() {
+        let mut report = report();
+        for message in ["Read failed: private-input", "Write failed: private-output"] {
+            report.errors.push(ScrubError {
+                input_path: "private-selection".into(),
+                message: message.into(),
+            });
+        }
+        let outcome = ScrubOutcome::from_result(Ok(report));
+        assert_eq!(outcome.state, ScrubState::Partial);
+        assert!(outcome.diagnostic().contains("code=multiple_failures"));
+        assert!(!outcome.diagnostic().contains("private"));
+        assert!(!outcome.message().contains("private"));
+        assert_eq!(outcome.exit_code(), 1);
     }
 }

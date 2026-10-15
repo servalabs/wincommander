@@ -2397,7 +2397,7 @@ pub(crate) fn cached_settings() -> Option<AppSettings> {
 pub(crate) fn context_notification_preferences() -> Result<(bool, bool, String), String> {
     let value = personal_settings::read_notification_overlay()?;
     context_notification_preferences_from_value(&value)
-        .map_err(|_| "Notification preferences could not be verified".to_string())
+        .map_err(|_| "notification_preferences_schema_invalid".to_string())
 }
 
 fn context_notification_preferences_from_value(value: &serde_json::Value) -> Result<(bool, bool, String), ()> {

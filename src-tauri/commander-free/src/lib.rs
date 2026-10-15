@@ -31,6 +31,7 @@ mod canary_tokens;
 mod capture_protection;
 mod context_menu_scrub;
 mod context_scrub_outcome;
+mod context_scrub_failure;
 mod context_scrub_notification;
 mod context_menu_shred;
 mod datastore;

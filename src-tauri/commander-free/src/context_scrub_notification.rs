@@ -30,18 +30,33 @@ fn present_notification_window(app: AppHandle, state: State<'_, HostState>) -> R
     Ok(())
 }
 
-fn preferences() -> Option<(bool, bool, String)> {
+fn preferences() -> Result<(bool, bool, String), &'static str> {
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("scrub-notification-preferences".into())
         .spawn(move || {
             let _ = send.send(crate::settings::context_notification_preferences());
         })
-        .ok()?;
-    receive.recv_timeout(Duration::from_secs(10)).ok()?.ok()
+        .map_err(|_| "preferences_worker_unavailable")?;
+    receive
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => "preferences_worker_timeout",
+            std::sync::mpsc::RecvTimeoutError::Disconnected => "preferences_worker_unavailable",
+        })?
+        .map_err(|error| crate::context_scrub_failure::preference_code(&error))
 }
 
 pub(crate) fn show(outcome: ScrubOutcome) {
+    crate::log_message_src(
+        if outcome.exit_code() == 0 {
+            "info"
+        } else {
+            "warn"
+        },
+        "core",
+        &outcome.diagnostic(),
+    );
     crate::log_message_src(
         if outcome.exit_code() == 0 {
             "info"
@@ -61,13 +76,16 @@ pub(crate) fn show(outcome: ScrubOutcome) {
             }
         },
     );
-    let Some((disabled, configured_decoy, theme)) = preferences() else {
-        crate::log_message_src(
-            "warn",
-            "core",
-            "[ContextScrub] notification preferences unverified; display suppressed",
-        );
-        return;
+    let (disabled, configured_decoy, theme) = match preferences() {
+        Ok(preferences) => preferences,
+        Err(code) => {
+            crate::log_message_src(
+                "warn",
+                "core",
+                &format!("[ContextScrub] {code}; display suppressed"),
+            );
+            return;
+        }
     };
     if disabled || configured_decoy {
         return;

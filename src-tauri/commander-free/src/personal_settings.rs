@@ -186,12 +186,21 @@ pub(super) fn load() -> Result<Loaded, String> {
 
 /// Notification-only helpers must not publish a session or migrate preferences.
 pub(super) fn read_notification_overlay() -> Result<Value, String> {
-    let record = read_service()?;
+    notification_overlay_from_record(read_service()?)
+}
+
+fn notification_overlay_from_record(record: PersonalSettingsRecord) -> Result<Value, String> {
     if record.revision == 0 || record.legacy_recovery_required {
-        return Err("Notification preferences could not be verified".into());
+        return Err("notification_preferences_record_unverified".into());
     }
-    let value = record.value.ok_or("Notification preferences could not be verified")?;
+    let mut value = record.value.ok_or("notification_preferences_record_unverified")?;
+    let object = value.as_object_mut().ok_or("notification_preferences_record_unverified")?;
+    // Ordinary preferences need no secret decryption, session publication or migration.
+    if !matches!(object.remove(SECRET_ENVELOPE), None | Some(Value::Null) | Some(Value::String(_))) {
+        return Err("notification_preferences_record_unverified".into());
+    }
     super::split_settings_value(value).map(|(_, ordinary)| ordinary)
+        .map_err(|_| "notification_preferences_schema_invalid".into())
 }
 
 fn load_current_session() -> Result<(Session, Option<Value>), String> {

@@ -14,6 +14,38 @@ pub(super) fn record(value: Option<Value>) -> PersonalSettingsRecord {
 }
 
 #[test]
+fn notification_preferences_accept_saved_records_without_opening_the_secret_envelope() {
+    for envelope in [Value::Null, json!("private-ciphertext-canary")] {
+        let value = json!({"app":{"theme":"dark","disableNativeNotifications":true,"decoyMode":{"enabled":true}},
+            "_personalSecrets":envelope});
+        // This is the old notification path: even null is an unclassified scalar.
+        assert!(super::super::split_settings_value(value.clone()).is_err());
+        let overlay = notification_overlay_from_record(record(Some(value))).unwrap();
+        assert!(overlay.get(SECRET_ENVELOPE).is_none());
+        assert_eq!(overlay["app"]["disableNativeNotifications"], true);
+        assert_eq!(overlay["app"]["decoyMode"]["enabled"], true);
+        assert!(!overlay.to_string().contains("private-ciphertext-canary"));
+    }
+    assert!(notification_overlay_from_record(record(Some(json!({"app":{"theme":"light"}})))).is_ok());
+}
+
+#[test]
+fn notification_record_uncertainty_and_invalid_envelopes_stay_closed() {
+    for envelope in [json!(true), json!([]), json!({"private":"canary"})] {
+        let failure = notification_overlay_from_record(record(Some(json!({"app":{},"_personalSecrets":envelope})))).unwrap_err();
+        assert_eq!(failure, "notification_preferences_record_unverified");
+        assert!(!failure.contains("private"));
+    }
+    let mut unavailable = record(Some(json!({"app":{}})));
+    unavailable.revision = 0;
+    assert!(notification_overlay_from_record(unavailable).is_err());
+    let mut recovery = record(Some(json!({"app":{}})));
+    recovery.legacy_recovery_required = true;
+    assert!(notification_overlay_from_record(recovery).is_err());
+    assert!(notification_overlay_from_record(record(None)).is_err());
+}
+
+#[test]
 fn migrated_preferences_survive_a_password_reset_while_secrets_remain_locked() {
     let (session, value) = load_with(
         Ok(record(Some(
