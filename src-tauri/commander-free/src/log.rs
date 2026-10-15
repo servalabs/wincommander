@@ -151,7 +151,7 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
 
 #[allow(dead_code)] // Used by the scheduled log-maintenance entrypoint.
 fn should_keep_log_record(line: &str, cutoff: chrono::NaiveDate) -> bool {
-    let date = if let Some(rest) = line.strip_prefix("L:") {
+    let date = if let Some(rest) = encrypted_log_payload(line) {
         rest.get(..10)
     } else if let Some(rest) = line.strip_prefix('[') {
         rest.get(..10)
@@ -174,7 +174,7 @@ pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
     // Short-circuit if every non-empty line is already encrypted.
     if !content
         .lines()
-        .any(|l| !l.is_empty() && !l.starts_with("L:"))
+        .any(|l| !l.is_empty() && encrypted_log_payload(l).is_none())
     {
         return;
     }
@@ -183,7 +183,7 @@ pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
         .lines()
         .filter(|l| !l.is_empty())
         .map(|line| {
-            if line.starts_with("L:") {
+            if encrypted_log_payload(line).is_some() {
                 return line.to_string();
             }
             // Legacy: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
@@ -218,7 +218,7 @@ pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
         Ok(content) => content,
         Err(_) => return,
     };
-    if !content.lines().any(|line| line.starts_with("L:")) {
+    if !content.lines().any(|line| encrypted_log_payload(line).is_some()) {
         return;
     }
     let lines: Vec<String> = content
@@ -576,8 +576,12 @@ fn parse_log_body_legacy(line: &str) -> Option<LogRecord> {
     })
 }
 
+fn encrypted_log_payload(line: &str) -> Option<&str> {
+    line.strip_prefix("L2:").or_else(|| line.strip_prefix("L:"))
+}
+
 fn parse_log_line(line: &str) -> Option<LogRecord> {
-    if line.starts_with("L:") {
+    if encrypted_log_payload(line).is_some() {
         let (date, body) = crate::datastore::log_decrypt_line(line)?;
         parse_log_body(&date, &body)
     } else if line.starts_with('[') {
@@ -758,6 +762,29 @@ mod dedup_tests {
 #[cfg(test)]
 mod log_record_tests {
     use super::*;
+
+    #[test]
+    fn current_encrypted_records_are_not_encrypted_again_during_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("logs.txt");
+        let records = "L2:2026-10-15:opaque-authenticated-payload\nL:2026-10-14:legacy-payload\n";
+        std::fs::write(&path, records).unwrap();
+        migrate_plaintext_logs(&path);
+        migrate_plaintext_logs(&path);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), records);
+    }
+
+    #[test]
+    fn both_encrypted_versions_share_retention_and_dispatch_classification() {
+        let cutoff = chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        for version in ["L:", "L2:"] {
+            assert!(encrypted_log_payload(&format!("{version}2026-10-15:opaque")).is_some());
+            assert!(should_keep_log_record(&format!("{version}2026-10-08:opaque"), cutoff));
+            assert!(!should_keep_log_record(&format!("{version}2026-10-07:opaque"), cutoff));
+        }
+        assert!(encrypted_log_payload("L20:not-a-supported-envelope").is_none());
+        assert!(encrypted_log_payload("untrusted L2:payload").is_none());
+    }
 
     #[test]
     fn test_harness_log_messages_do_not_write_to_user_log() {

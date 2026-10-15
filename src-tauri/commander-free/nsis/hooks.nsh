@@ -13,6 +13,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
+!define WC_SCRUB_MENU_MIGRATION "${__FILEDIR__}\migrate-scrub-context-menus.ps1"
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
 !define WC_CONFIGURE_ELEVATED_LAUNCHERS "${__FILEDIR__}\configure-elevated-launchers.ps1"
 !define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
@@ -370,6 +371,16 @@ ${Using:StrFunc} UnStrStr
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
   ${If} $0 != 0
     Abort "WinCommander could not remove legacy automatic startup routes. See installer-lifecycle.log."
+  ${EndIf}
+
+  File /oname=$PLUGINSDIR\wincommander-migrate-scrub-context-menus.ps1 "${WC_SCRUB_MENU_MIGRATION}"
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-scrub-context-menus.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe"'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "scrub-context-menu-migration" "$0" "$1"
+  ${If} $0 != 0
+    DetailPrint "Some Scrub menus were preserved or deferred. Start the installed WinCommander in the affected account to refresh its menu."
   ${EndIf}
 
   ; Vault-policy changes are authorized by a dedicated local group, not by

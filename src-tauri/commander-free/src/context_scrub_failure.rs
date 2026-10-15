@@ -24,6 +24,8 @@ pub(super) fn failure_code(error: &str) -> &'static str {
         "input_read_failed"
     } else if error.starts_with("PDF full rewrite failed:") {
         "pdf_rewrite_unconfirmed"
+    } else if error.starts_with("PDF post-scrub verification found identifying metadata") {
+        "metadata_remains"
     } else if error.starts_with("ExifTool post-scrub verification") {
         "verification_unconfirmed"
     } else {
@@ -90,6 +92,7 @@ mod tests {
             "Create output dir failed:",
             "Read failed:",
             "PDF full rewrite failed:",
+            "PDF post-scrub verification found identifying metadata",
             "ExifTool post-scrub verification",
             "WinCommander Pro entitlement required for:",
             "PRO_NOT_INSTALLED:",

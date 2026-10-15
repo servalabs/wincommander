@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Setup refreshes recognized Scrub metadata menus for signed-in Windows users,
+  so a previous installation path does not keep launching an older scrubber.
+  Disabled and unrelated menu commands are preserved; offline accounts finish
+  refreshing when they start the installed app.
+- The log viewer recognizes current encrypted records and startup migration
+  preserves them without encrypting them a second time.
+
 - Manually saved Wi-Fi SSID/BSSID identities now persist to local settings, so
   periodic policy reconciliation and app restart cannot discard them.
 
