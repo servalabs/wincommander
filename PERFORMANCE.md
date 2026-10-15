@@ -6,6 +6,11 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 
 ## Responsiveness design
 
+- Explorer metadata scrubbing prepares its hidden notification renderer while
+  the scrub runs. It publishes the verified result before waiting for owned
+  sidecar cleanup, then still joins that cleanup before process exit. A fresh
+  authenticated notification-preference check precedes delivery; output-file
+  creation alone never authorizes a success notification.
 - A small startup entry mounts the actual animated splash before loading the
   application modules. The application updates that same animation instance;
   there is no separate text loading screen. A bounded saved-theme read selects

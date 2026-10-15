@@ -1393,9 +1393,7 @@ pub fn run() {
                 .filter(|arg| !arg.starts_with("--"))
                 .cloned()
                 .collect();
-            let outcome = context_scrub_outcome::ScrubOutcome::from_result(context_menu_scrub::execute_cli(paths));
-            let exit_code = outcome.exit_code();
-            context_scrub_notification::show(outcome);
+            let exit_code = context_scrub_notification::run(paths);
             std::process::exit(exit_code);
         }
         // Explorer secure-delete is another GUI-free operation, but unlike
