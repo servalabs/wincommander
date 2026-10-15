@@ -3204,37 +3204,64 @@ fn handle_personal_vault_syncthing_manage(
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
-    let request: wincmd_shared::vault_sync::VaultSyncManagementRequest =
-        serde_json::from_value(args).map_err(|_| {
-            VerbError::new(
+    let started = std::time::Instant::now();
+    let mut reason = Some(wincmd_shared::vault_access::VaultMountReason::InvalidRequest);
+    let mut requires_recovery = false;
+    let mut action = "syncthing_manage";
+    let result = (|| {
+        let request: wincmd_shared::vault_sync::VaultSyncManagementRequest =
+            serde_json::from_value(args).map_err(|_| {
+                VerbError::new(
+                    "vault_validation_failed",
+                    "personal sync request is invalid",
+                )
+            })?;
+        if !request.valid() {
+            return Err(VerbError::new(
                 "vault_validation_failed",
                 "personal sync request is invalid",
+            ));
+        }
+        action = match request.action {
+            wincmd_shared::vault_sync::VaultSyncAction::List => "syncthing_list",
+            wincmd_shared::vault_sync::VaultSyncAction::Enable => "syncthing_enable",
+            wincmd_shared::vault_sync::VaultSyncAction::Rename => "syncthing_rename",
+            wincmd_shared::vault_sync::VaultSyncAction::Remove => "syncthing_remove",
+        };
+        reason = Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized);
+        let peer = require_personal_mount_peer(peer)?;
+        let result = vault_mount
+            .manage_personal_syncthing(
+                vault_access,
+                request_id,
+                &request,
+                peer.token(),
+                peer.session_id(),
+                peer.caller_sid(),
             )
+            .map_err(|failure| {
+                reason = Some(failure);
+                VerbError::new(
+                    VaultMountBroker::personal_mount_failure_code(failure),
+                    "personal sync management could not be confirmed",
+                )
+            })?;
+        requires_recovery = result.folders.iter().any(|folder| folder.recovery_required);
+        reason = Some(wincmd_shared::vault_access::VaultMountReason::BrokerReplyRejected);
+        let value = serde_json::to_value(result).map_err(|_| {
+            VerbError::new("vault_internal_error", "personal sync result unavailable")
         })?;
-    if !request.valid() {
-        return Err(VerbError::new(
-            "vault_validation_failed",
-            "personal sync request is invalid",
-        ));
-    }
-    let peer = require_personal_mount_peer(peer)?;
-    let result = vault_mount
-        .manage_personal_syncthing(
-            vault_access,
-            request_id,
-            &request,
-            peer.token(),
-            peer.session_id(),
-            peer.caller_sid(),
-        )
-        .map_err(|reason| {
-            VerbError::new(
-                VaultMountBroker::personal_mount_failure_code(reason),
-                "personal sync management could not be confirmed",
-            )
-        })?;
-    serde_json::to_value(result)
-        .map_err(|_| VerbError::new("vault_internal_error", "personal sync result unavailable"))
+        reason = None;
+        Ok(value)
+    })();
+    crate::diagnostics::record_sync_terminal(
+        request_id,
+        action,
+        reason,
+        requires_recovery,
+        started,
+    );
+    result
 }
 
 #[derive(serde::Deserialize)]
@@ -3258,56 +3285,75 @@ fn handle_personal_vault_syncthing_enroll(
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
-    let request: PersonalVaultSyncthingEnrollmentRequest =
-        serde_json::from_value(args).map_err(|_| {
-            VerbError::new(
+    let started = std::time::Instant::now();
+    let mut reason = Some(wincmd_shared::vault_access::VaultMountReason::InvalidRequest);
+    let mut requires_recovery = false;
+    let result = (|| {
+        let request: PersonalVaultSyncthingEnrollmentRequest = serde_json::from_value(args)
+            .map_err(|_| {
+                VerbError::new(
+                    "vault_validation_failed",
+                    "personal sync enrollment request is invalid",
+                )
+            })?;
+        if !request.personal
+            || request.internal_drive > 25
+            || request.relative_path.len() > 240
+            || request
+                .expected_mount_receipt
+                .as_deref()
+                .is_some_and(|value| {
+                    value.len() != 64 || !value.bytes().all(|c| c.is_ascii_hexdigit())
+                })
+        {
+            return Err(VerbError::new(
                 "vault_validation_failed",
                 "personal sync enrollment request is invalid",
+            ));
+        }
+        reason = Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized);
+        let peer = require_personal_mount_peer(peer)?;
+        let enrollment = vault_mount
+            .enroll_personal_syncthing(
+                vault_access,
+                request_id,
+                request.internal_drive,
+                &request.relative_path,
+                peer.token(),
+                peer.session_id(),
+                peer.caller_sid(),
+                &crate::vault_syncthing_recovery::RecoveryOptions {
+                    action: request.recovery_action,
+                    token: request.recovery_token,
+                },
+                request.expected_mount_receipt.as_deref(),
             )
-    })?;
-    if !request.personal
-        || request.internal_drive > 25
-        || request.relative_path.len() > 240
-        || request
-            .expected_mount_receipt
-            .as_deref()
-            .is_some_and(|value| value.len() != 64 || !value.bytes().all(|c| c.is_ascii_hexdigit()))
-    {
-        return Err(VerbError::new(
-            "vault_validation_failed",
-            "personal sync enrollment request is invalid",
-        ));
-    }
-    let peer = require_personal_mount_peer(peer)?;
-    let enrollment = vault_mount
-        .enroll_personal_syncthing(
-            vault_access,
-            request_id,
-            request.internal_drive,
-            &request.relative_path,
-            peer.token(),
-            peer.session_id(),
-            peer.caller_sid(),
-            &crate::vault_syncthing_recovery::RecoveryOptions {
-                action: request.recovery_action,
-                token: request.recovery_token,
-            },
-            request.expected_mount_receipt.as_deref(),
-        )
-        .map_err(|reason| {
-            VerbError::new(
-                VaultMountBroker::personal_mount_failure_code(reason),
-                "personal sync enrollment could not be confirmed",
-            )
-        })?;
-    Ok(serde_json::json!({
-        "enabled": enrollment.managed,
-        "folder_id": enrollment.folder_id,
-        "gui_url": enrollment.gui_url,
-        "recovery_required": enrollment.recovery_required,
-        "recovery_roots": enrollment.recovery_roots,
-        "pairing_required": enrollment.pairing_required,
-    }))
+            .map_err(|failure| {
+                reason = Some(failure);
+                VerbError::new(
+                    VaultMountBroker::personal_mount_failure_code(failure),
+                    "personal sync enrollment could not be confirmed",
+                )
+            })?;
+        requires_recovery = enrollment.recovery_required;
+        reason = None;
+        Ok(serde_json::json!({
+            "enabled": enrollment.managed,
+            "folder_id": enrollment.folder_id,
+            "gui_url": enrollment.gui_url,
+            "recovery_required": enrollment.recovery_required,
+            "recovery_roots": enrollment.recovery_roots,
+            "pairing_required": enrollment.pairing_required,
+        }))
+    })();
+    crate::diagnostics::record_sync_terminal(
+        request_id,
+        "syncthing_setup",
+        reason,
+        requires_recovery,
+        started,
+    );
+    result
 }
 
 fn handle_release_orphaned_vault_drive_letters(

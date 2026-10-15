@@ -419,7 +419,7 @@ html.light .action-item[data-tip][data-tip-intent="danger"]::after {
     border: 1px solid var(--color-border);
     border-radius: 10px;
     padding: 16px;
-    width: min(400px, 94vw);
+    width: min(560px, 94vw);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -490,7 +490,13 @@ html.light .action-item[data-tip][data-tip-intent="danger"]::after {
 .qm-select-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
+}
+.qm-select-row > .qm-select { flex: 1 1 10rem; }
+.qm-select-row > .qm-explorer-btn { margin-left: auto; justify-content: center; }
+@media (max-width: 480px) {
+    .qm-select-row > .qm-explorer-btn { flex-basis: 100%; margin-left: 0; }
 }
 
 .qm-select {

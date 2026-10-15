@@ -343,8 +343,7 @@ export default function RightSidebar() {
                     }
                 }
                 if (result.sync_warning) {
-                    setQmOpen(false);
-                    window.setTimeout(() => notifyPolicyMountSyncWarning(result), 350);
+                    notifyPolicyMountSyncWarning(result);
                 }
             } else {
                 setQmFeedback(vaultMountResultLabel(result));
@@ -533,8 +532,7 @@ export default function RightSidebar() {
                     else setQmFeedback('The Vault mounted, but its owner-session opening receipt could not be verified. Update the WinCommander service before opening it from Quick Mount.', 'info');
                 }
                 if (r.data.syncWarning) {
-                    setQmOpen(false);
-                    window.setTimeout(() => notifyPersonalMountSyncWarning(r), 350);
+                    notifyPersonalMountSyncWarning(r);
                 }
             } else {
                 // Operational mount result → Notifications tab, not System Alerts.
@@ -1242,7 +1240,6 @@ export default function RightSidebar() {
                         <DialogTitle className="sr-only">Quick Mount</DialogTitle>
                         <DialogDescription className="sr-only">Mount a saved Vault and choose whether to open File Explorer afterward.</DialogDescription>
                         <VaultOperationNotice message={qmFeedback} tone={qmFeedbackTone} />
-                        {!explorerPreference.enabled && qmMountedTarget && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedTarget.drive, qmMountedTarget.containerPath, qmMountedTarget) && <button type="button" className="qm-btn qm-btn--primary" disabled={qmBusy} onClick={() => void openQuickMountTarget(qmMountedTarget)}>{qmExplorerOpening ? 'Opening File Explorer…' : `Open ${qmMountedTarget.drive} in File Explorer`}</button>}
                         {qmEditing ? (
                             /* ── Slot editor ── */
                             <>
@@ -1387,22 +1384,29 @@ export default function RightSidebar() {
                                         <>
                                             <div className="qm-field">
                                                 <label className="qm-label" htmlFor="fleet-vault-mount-select">Vault</label>
-                                                <select
-                                                    id="fleet-vault-mount-select"
-                                                    className="qm-select"
-                                                    disabled={qmBusy}
-                                                    value={fleetVaultEntryId}
-                                                    onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); setQmFeedback(''); setQmMountedTarget(null); }}
-                                                >
-                                                    {fleetVaults.map(entry => <option key={entry.entry_id} value={entry.entry_id}>
-                                                        {(entry.drive_letter ?? entry.preferred_letter) ? `${entry.drive_letter ?? entry.preferred_letter}: — ` : ''}{entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
-                                                    </option>)}
-                                                </select>
+                                                <div className="qm-select-row">
+                                                    <select
+                                                        id="fleet-vault-mount-select"
+                                                        className="qm-select"
+                                                        disabled={qmBusy}
+                                                        value={fleetVaultEntryId}
+                                                        onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); setQmFeedback(''); setQmMountedTarget(null); }}
+                                                    >
+                                                        {fleetVaults.map(entry => <option key={entry.entry_id} value={entry.entry_id}>
+                                                            {(entry.drive_letter ?? entry.preferred_letter) ? `${entry.drive_letter ?? entry.preferred_letter}: — ` : ''}{entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
+                                                        </option>)}
+                                                    </select>
+                                                    {!explorerPreference.enabled && fleetExplorerTarget && fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'mounted' && (
+                                                        <button type="button" className="qm-btn qm-btn--primary qm-explorer-btn" disabled={qmBusy}
+                                                            onClick={() => void openQuickMountTarget(fleetExplorerTarget)}>
+                                                            {qmExplorerOpening ? 'Opening File Explorer…' : 'Open File Explorer'}
+                                                        </button>
+                                                    )}
+                                                </div>
                                                 <span className="qm-hint">This list is supplied by the Vault service for this Windows account. Container paths are never exposed here.</span>
                                             </div>
                                             {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'mounted' && <div role="status" className="qm-hint">
                                                 This Vault is already mounted.
-                                                {!explorerPreference.enabled && !qmMountedTarget && fleetExplorerTarget && <button type="button" className="qm-btn qm-btn--primary" disabled={qmBusy} onClick={() => void openQuickMountTarget(fleetExplorerTarget)}>Open in File Explorer</button>}
                                             </div>}
                                             {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'failed' && <div role="status" className="qm-hint">
                                                 This Vault needs cleanup or a fresh status check. Choose Retry cleanup to recover this Vault.
@@ -1483,6 +1487,12 @@ export default function RightSidebar() {
                                                     onClick={() => handleQmRemoveSlot(qmSelectedIdx)}>
                                                     <Icon icon="cross" size={12} />
                                                 </button>
+                                                {!explorerPreference.enabled && qmMountedTarget && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedTarget.drive, quickMountSlots[qmSelectedIdx]?.filePath, qmMountedTarget) && (
+                                                    <button type="button" className="qm-btn qm-btn--primary qm-explorer-btn" disabled={qmBusy}
+                                                        onClick={() => void openQuickMountTarget(qmMountedTarget)}>
+                                                        {qmExplorerOpening ? 'Opening File Explorer…' : 'Open File Explorer'}
+                                                    </button>
+                                                )}
                                             </div>
                                             {quickMountSlots[qmSelectedIdx] && (
                                                 <span className="qm-path-display" title={quickMountSlots[qmSelectedIdx].filePath}>

@@ -2,7 +2,7 @@
 .personal-vault-sync { container-type: inline-size; overflow-wrap: anywhere; }
 .personal-vault-sync p { margin: 0; line-height: 1.5; }
 .personal-vault-sync__intro { color: var(--text-dim); }
-.personal-vault-sync__context, .personal-vault-sync__folder, .personal-vault-sync__help {
+.personal-vault-sync__folder, .personal-vault-sync__help {
   min-width: 0;
   margin-block: 1rem;
   padding: 1rem;
@@ -10,15 +10,20 @@
   border-radius: var(--r);
   background: var(--surface-2);
 }
-.personal-vault-sync__context { display: grid; gap: .35rem; }
-.personal-vault-sync__eyebrow { font-size: .75rem; color: var(--text-mute); }
-.personal-vault-sync__context strong { font-size: 1rem; }
-.personal-vault-sync__context > span:last-child, .personal-vault-sync__muted { font-size: .8125rem; color: var(--text-dim); }
+.personal-vault-sync__overview { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .5rem; }
+.personal-vault-sync__context { display: flex; align-items: baseline; flex-wrap: wrap; gap: .25rem .6rem; min-width: 0; }
+.personal-vault-sync__context span, .personal-vault-sync__muted { font-size: .8125rem; color: var(--text-dim); }
+.personal-vault-sync__context strong { min-width: 0; font-size: .9375rem; }
+.personal-vault-sync .personal-vault-sync__info { flex: 0 0 auto; }
+.personal-vault-sync__tooltip { max-width: min(22rem, calc(100vw - 2rem)); padding: .75rem; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 .personal-vault-sync__section { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .personal-vault-sync h3 { margin: 0 0 .5rem; font-size: .9375rem; font-weight: 600; }
 .personal-vault-sync__section > p + p { margin-top: .4rem; }
 .personal-vault-sync label { display: block; margin-bottom: .4rem; font-size: .8125rem; font-weight: 500; }
-.personal-vault-sync__fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }
+.personal-vault-sync__draft { margin-block: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+.personal-vault-sync__draft-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .75rem; }
+.personal-vault-sync__draft-heading h4 { margin: 0; font-size: .8125rem; font-weight: 600; }
+.personal-vault-sync__fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem 1.25rem; }
 .personal-vault-sync__fields > div, .personal-vault-sync input { min-width: 0; }
 .personal-vault-sync input { text-overflow: ellipsis; }
 .personal-vault-sync__folder-heading, .personal-vault-sync__actions, .personal-vault-sync__footer { display: flex; flex-wrap: wrap; gap: .5rem; }
@@ -30,6 +35,7 @@
 .personal-vault-sync button { max-width: 100%; height: auto; min-height: 2.25rem; white-space: normal; }
 .personal-vault-sync button span { min-width: 0; overflow-wrap: anywhere; }
 .personal-vault-sync__footer { align-items: stretch; }
+.personal-vault-sync__feedback:not(:empty) { margin-top: 1rem; }
 @container (max-width: 32rem) {
   .personal-vault-sync__fields { grid-template-columns: minmax(0, 1fr); }
   .personal-vault-sync__footer > button { flex: 1 1 9rem; }

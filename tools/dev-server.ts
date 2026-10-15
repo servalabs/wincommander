@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   const frontendOnly = FRONTEND_ONLY || vaultState?.state !== "free";
   if (frontendOnly) {
     console.log("[dev-server] frontend only: " + (FRONTEND_ONLY ? "explicit selection." : vaultState?.state === "mounted"
-      ? "A mounted Vault is protected." : "Mounted Vault state could not be verified."));
+      ? "A Vault or pending Vault cleanup is protected." : "Mounted Vault state could not be verified."));
     console.log("[dev-server] Existing desktop, Pro, service, driver and Vaults are preserved. Backend update pending; native changes are not loaded or verified.");
   }
   // Keep this guard for the shared multi-user server. Normal Tauri startup

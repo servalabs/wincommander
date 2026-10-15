@@ -13,7 +13,8 @@ if (-not $PreserveWinCommander) {
     . (Join-Path $PSScriptRoot 'dev-vault-state.ps1')
     $vaultState = Get-WcDevelopmentVaultState
     if ($vaultState.state -ne 'free') {
-        throw 'Desktop cleanup was refused because a Vault is mounted or its state cannot be verified. Run bun run dev:server for the preserved frontend; backend replacement remains pending.'
+        Write-Host 'Vault state requires preservation. Desktop processes and the frontend port were preserved; startup will recheck state before preparing the frontend. Backend replacement remains pending.'
+        exit 0
     }
     Get-Process wincommander-free, wincommander-pro, WinCommander -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
