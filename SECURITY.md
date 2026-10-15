@@ -272,6 +272,10 @@ symmetric encryption where implemented, but symmetric encryption alone does not
 make licences, updates, Fleet identity/commands, evidence, recovery objects, or
 network peer authentication post-quantum.
 
+TLS dependencies may support hybrid key exchange. Library capability alone
+does not establish which algorithm a connection negotiated, the server's
+certificate profile, or a product-wide protection claim.
+
 A supportable current statement is:
 
 > WinCommander uses AES-256 authenticated encryption for protected application
@@ -303,6 +307,14 @@ Do not describe WinCommander as **“quantum-proof,” “unbreakable,”
 secure.”** WinCommander is pursuing standardized post-quantum cryptography, not
 quantum key distribution. A compiled PQC library, one migrated feature, or an
 AES-256 badge is not sufficient evidence for a product-wide claim.
+
+Contributors can run `python tools/crypto_inventory.py --root .` for an offline,
+read-only JSON list of cryptographic indicators in tracked working-copy source,
+configuration and lockfiles. The output lists its suffix scope and skipped-file
+counts, includes comments/tests, and prints no source excerpts or key values.
+It is a partial review aid, not a complete cryptographic bill of materials or
+evidence of deployed protection. It does not run during application startup,
+builds, installation or updates.
 
 ## Reporting non-security defects
 
