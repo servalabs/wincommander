@@ -1,6 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[test]
+fn shared_member_cannot_close_a_record_with_unconfirmed_owner_sync_pause() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.policy_authorizer = |_, _, _| wincmd_shared::vault_access::VaultAuthorizeMountResponse {
+        allowed: true, launch_ready: true, denial_reason: None,
+        mode: Some(wincmd_shared::vault_access::VaultAccess::Read),
+        presentation: Some(VaultPresentation::Machine), preferred_letter: None,
+    };
+    let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+    mount.syncthing_managed = true;
+    assert!(broker.retain_cleanup_mount(&store, "shared", mount.clone()));
+    let saved = store.read_active_mounts().unwrap();
+    let result = broker.dismount_authorized(&store, AuthorizedDismount {
+        operation_id: 1, entry_id: "shared", caller_token: std::ptr::null_mut(),
+        caller_authentication_id: None, caller_session: 8,
+        caller_sid: "S-1-5-21-member", caller_elevated: false,
+    });
+    assert_eq!(result.state, VaultMountState::Failed);
+    assert_eq!(result.reason, Some(VaultMountReason::SyncthingProfileUnavailable));
+    assert_eq!(store.read_active_mounts().unwrap(), saved);
+    assert_eq!(serde_json::to_value(&broker.active.lock().unwrap()["shared"]).unwrap(), serde_json::to_value(mount).unwrap());
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    assert_eq!(broker.snapshot().unwrap().get(&12), Some(&"test-mount:12".to_owned()));
+}
+
+#[test]
 fn sync_recovery_receipt_keeps_each_target_and_mount_warning() {
     let response = serde_json::json!({
         "managed":true, "gui_url":"http://127.0.0.1:8385", "recovery_required":true,

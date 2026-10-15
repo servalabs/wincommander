@@ -1010,6 +1010,8 @@ pub struct VaultSettings {
     /// Must exist here or patch_settings_cmd's round-trip drops it.
     #[serde(default)]
     pub quick_mount_slots: Vec<QuickMountSlot>,
+    #[serde(default)]
+    pub quick_mount_open_explorer_after_mount: bool,
     /// Who can see a mounted vault's drive letter: "auto" (default), "machine" or
     /// "per-user". "auto" resolves to per-user on multi-session/Server SKUs and
     /// machine on single-user desktops.
@@ -2392,6 +2394,30 @@ pub(crate) fn cached_settings() -> Option<AppSettings> {
     SETTINGS_CACHE.lock().ok().and_then(|cache| cache.clone())
 }
 
+pub(crate) fn context_notification_preferences() -> Result<(bool, bool, String), String> {
+    let value = personal_settings::read_notification_overlay()?;
+    context_notification_preferences_from_value(&value)
+        .map_err(|_| "Notification preferences could not be verified".to_string())
+}
+
+fn context_notification_preferences_from_value(value: &serde_json::Value) -> Result<(bool, bool, String), ()> {
+    let app = value.get("app").and_then(serde_json::Value::as_object).ok_or(())?;
+    let disabled = app.get("disableNativeNotifications").and_then(serde_json::Value::as_bool).ok_or(())?;
+    let theme = app.get("theme").and_then(serde_json::Value::as_str)
+        .filter(|theme| matches!(*theme, "light" | "dark" | "system")).ok_or(())?;
+    let decoy = match app.get("decoyMode") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(value) => {
+            let decoy = value.as_object().ok_or(())?;
+            match decoy.get("enabled") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(value) => value.as_bool().ok_or(())?,
+            }
+        }
+    };
+    Ok((disabled, decoy, theme.to_string()))
+}
+
 #[path = "settings_window_policy.rs"]
 mod window_policy;
 pub(crate) use window_policy::WindowPolicy;
@@ -3133,24 +3159,59 @@ fn get_settings_sync() -> Result<serde_json::Value, String> {
 }
 
 fn get_settings_sync_with_refresh(recheck_locked: bool) -> Result<serde_json::Value, String> {
-    // A temporary personal session can become available after the background
-    // service finishes starting. Keep the session replacement and cache
-    // invalidation in the same transaction as settings writes: a stale
-    // renderer snapshot must never save against a freshly recovered revision.
-    if !is_decoy_mode() && personal_settings::session_needs_refresh(recheck_locked) {
-        let _transaction = SETTINGS_TRANSACTION_GATE
-            .lock()
-            .map_err(|_| "Settings transaction lock poisoned".to_string())?;
-        if personal_settings::refresh_session_if_due(recheck_locked) {
-            invalidate_cache_locked();
+    let settings = if recheck_locked && !is_decoy_mode() {
+        // Explicit picker/save readbacks must adopt the persisted service revision,
+        // even when the running session is healthy. Never present cached defaults
+        // as fresh reservations when the authenticated service cannot be read.
+        reload_verified_settings_with(|| {
+            let fresh = load_settings_from_store()?;
+            if !personal_settings::persisted_service_available() {
+                return Err("Personal settings could not be verified; refresh before choosing a drive letter".into());
+            }
+            Ok(fresh)
+        })?
+    } else {
+        // Routine startup reads retain the existing bounded recovery cadence.
+        if !is_decoy_mode() && personal_settings::session_needs_refresh(false) {
+            let _transaction = SETTINGS_TRANSACTION_GATE
+                .lock()
+                .map_err(|_| "Settings transaction lock poisoned".to_string())?;
+            if personal_settings::refresh_session_if_due(false) {
+                invalidate_cache_locked();
+            }
         }
-    }
-    let settings = read_settings()?;
+        read_settings()?
+    };
     let mut v =
         serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
     v["personalSettingsStatus"] = serde_json::to_value(personal_settings::status())
         .map_err(|_| "Could not encode personal settings status".to_string())?;
     Ok(v)
+}
+
+// The explicit read and publication share the same gate as all settings writes.
+// A failed loader can have adopted a newer service revision before overlay validation.
+// Drop the old cache so no subsequent writer combines that revision with old preferences.
+fn reload_verified_settings_with(
+    load: impl FnOnce() -> Result<AppSettings, String>,
+) -> Result<AppSettings, String> {
+    let _transaction = SETTINGS_TRANSACTION_GATE
+        .lock()
+        .map_err(|_| "Settings transaction lock poisoned".to_string())?;
+    let mut fresh = match load() {
+        Ok(fresh) => fresh,
+        Err(error) => {
+            invalidate_cache_locked();
+            return Err(error);
+        }
+    };
+    fresh.snapshot_revision = Some(Uuid::new_v4());
+    *SETTINGS_CACHE
+        .lock()
+        .map_err(|_| "Settings cache lock poisoned".to_string())? = Some(fresh.clone());
+    window_policy::publish(&fresh);
+    crate::set_logging_enabled_flag(fresh.app.logging_enabled.unwrap_or(true));
+    Ok(fresh)
 }
 
 /// Replace the full settings object.
@@ -5424,4 +5485,52 @@ mod tests {
         assert_eq!(encoded["hidGuardEnabled"], true);
         assert!(encoded.get("hid_guard_enabled").is_none());
     }
+    #[test]
+    fn explicit_settings_read_ignores_a_warm_cache_and_holds_the_writer_gate() {
+        let _global = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        warm_cache_with_defaults();
+        let old_revision = cached_settings().unwrap().snapshot_revision;
+        let observed = reload_verified_settings_with(|| {
+            assert!(SETTINGS_TRANSACTION_GATE.try_lock().is_err());
+            let mut latest = create_default_settings();
+            latest.app.theme = "light".to_string();
+            Ok(latest)
+        }).unwrap();
+        assert_eq!(observed.app.theme, "light");
+        assert_eq!(cached_settings().unwrap().app.theme, "light");
+        assert_ne!(observed.snapshot_revision, old_revision);
+        let failure = reload_verified_settings_with(|| Err("unverified persisted state".into()));
+        assert!(failure.is_err());
+        assert!(cached_settings().is_none(), "an adopted revision with failed overlay validation must not leave old preferences writable");
+    }
+
+    #[test]
+    fn quick_mount_explorer_preference_defaults_off_and_round_trips_both_choices() {
+        let legacy: VaultSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!legacy.quick_mount_open_explorer_after_mount);
+        for enabled in [true, false] {
+            let value = serde_json::json!({"app":{"vault":{"quickMountOpenExplorerAfterMount":enabled}}});
+            let (machine, personal) = split_settings_value(value).unwrap();
+            assert!(machine.pointer("/app/vault/quickMountOpenExplorerAfterMount").is_none());
+            assert_eq!(personal["app"]["vault"]["quickMountOpenExplorerAfterMount"], enabled);
+            let settings: VaultSettings = serde_json::from_value(personal["app"]["vault"].clone()).unwrap();
+            let restarted: VaultSettings = serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+            assert_eq!(restarted.quick_mount_open_explorer_after_mount, enabled);
+        }
+    }
+
+    #[test]
+    fn context_notification_preferences_require_verified_user_flags_without_warming_settings() {
+        let _global = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let before = cached_settings().and_then(|settings| settings.snapshot_revision);
+        let value = serde_json::json!({"app":{"disableNativeNotifications":true,"theme":"dark","decoyMode":{"enabled":true}}});
+        assert_eq!(context_notification_preferences_from_value(&value), Ok((true, true, "dark".into())));
+        for invalid in [serde_json::json!({}), serde_json::json!({"app":{"theme":"dark"}}),
+            serde_json::json!({"app":{"disableNativeNotifications":false,"theme":"unknown"}}),
+            serde_json::json!({"app":{"disableNativeNotifications":false,"theme":"dark","decoyMode":{"enabled":"yes"}}})] {
+            assert!(context_notification_preferences_from_value(&invalid).is_err());
+        }
+        assert_eq!(cached_settings().and_then(|settings| settings.snapshot_revision), before);
+    }
+
 }

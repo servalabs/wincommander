@@ -146,7 +146,7 @@ fn ordinary_machine_dismount_allows_admin_but_private_mounts_never_have_admin_ov
                         caller,
                         elevated,
                     );
-                    let allowed = (owner && session == 7)
+                    let allowed = owner
                         || (presentation == VaultPresentation::Machine && elevated);
                     assert_eq!(result.state == VaultMountState::Unmounted, allowed);
                     let events = events.lock().unwrap();
@@ -201,7 +201,7 @@ fn dismount_test_policy_token(
 }
 
 #[test]
-fn dismount_policy_matrix_requires_grant_and_private_owner_or_shared_elevation_on_both_routes() {
+fn dismount_policy_matrix_requires_shared_grant_or_recorded_private_owner_on_both_routes() {
     struct Resolver;
     impl PrincipalResolver for Resolver {
         fn resolve_sid(&self, name: &str) -> Result<String, crate::vault_access::VaultError> {
@@ -267,12 +267,7 @@ fn dismount_policy_matrix_requires_grant_and_private_owner_or_shared_elevation_o
                                 },
                             )
                         };
-                        let allowed = granted
-                            && if presentation == VaultPresentation::Machine {
-                                elevated
-                            } else {
-                                owner
-                            };
+                        let allowed = if presentation == VaultPresentation::Machine { granted } else { owner };
                         assert_eq!(result.state == VaultMountState::Unmounted, allowed,
                             "{presentation:?} owner={owner} elevated={elevated} granted={granted} slot={by_slot}");
                         let events = events.lock().unwrap();

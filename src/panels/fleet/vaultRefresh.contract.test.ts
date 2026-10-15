@@ -5,6 +5,15 @@ declare const Bun: {
 };
 
 describe("Vault refresh boundaries", () => {
+  test("unavailable policy reads preserve the saved revision and show a bounded reason", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const refresh = source.slice(source.indexOf("const refresh ="), source.indexOf("useEffect(() => { void refresh()"));
+    const failedPolicyRead = refresh.slice(refresh.indexOf("// Keep the verified capability"), refresh.indexOf("return true;"));
+    expect(failedPolicyRead).toContain("setPolicyReadFailure(vaultPolicyReadFailure(cause))");
+    expect(failedPolicyRead).not.toContain("setHasSavedPolicy(false)");
+    expect(failedPolicyRead).not.toContain("replacePolicy(");
+    expect(source).toContain("policyReadFailure ||");
+  });
   test("saving invalidates old access before applying and requires a verified refresh", async () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
@@ -77,7 +86,7 @@ describe("Vault refresh boundaries", () => {
     expect(refresh).toContain("setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null)");
     expect(refresh).toContain("const loadedPolicy = await getOwnerPolicyFragment()");
     expect(source).toContain("Windows administrator accounts are unavailable");
-    expect(source).toContain("disabled={saving || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)}");
+    expect(source).toContain("disabled={saving || unconfirmedSave || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)}");
   });
 
   test("the editor mounts the saved authorized container type instead of unsaved fields", async () => {

@@ -26,13 +26,15 @@
 // Usage: bun run tools/dev-server.ts [--free]
 //   --free: skip build:pro entirely (matches the old dev:free script, which
 //           never built the Pro sidecar at all).
+//   --frontend-only: preserve native processes and start only Vite. Mounted
+//           or unverifiable Vault state selects this mode automatically.
 //   WINCOMMANDER_DEV_FREE_ONLY=1: selected by tools/dev.ps1 when a public
 //           checkout has no private Pro sibling. This lets `bun run dev`
 //           start the Free desktop instead of failing before Vite starts.
 
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { syncDevelopmentService } from "./dev-service-startup";
+import { readDevelopmentVaultState, syncDevelopmentService } from "./dev-service-startup";
 import { assertSharedAssets } from "./check-shared-assets";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -52,6 +54,7 @@ const PRE_CLEANED = process.argv.includes("--precleaned");
 // Multi-user development intentionally shares a Vite server; refuse a second
 // multi-user bootstrap if a desktop already owns that server.
 const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wincommander");
+const FRONTEND_ONLY = process.argv.includes("--frontend-only");
 
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
@@ -108,30 +111,40 @@ function desktopDevWindowIsRunning(): boolean {
 
 async function main(): Promise<void> {
   assertSharedAssets(ROOT);
+  const inspection = FRONTEND_ONLY ? null : spawnSync(WINDOWS_POWERSHELL, [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+    "tools/dev-vault-state.ps1", "-InspectOnly",
+  ], { cwd: ROOT, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 4096 });
+  const vaultState = inspection ? readDevelopmentVaultState(inspection.stdout ?? "", inspection.status) : null;
+  const frontendOnly = FRONTEND_ONLY || vaultState?.state !== "free";
+  if (frontendOnly) {
+    console.log("[dev-server] frontend only: " + (FRONTEND_ONLY ? "explicit selection." : vaultState?.state === "mounted"
+      ? "A mounted Vault is protected." : "Mounted Vault state could not be verified."));
+    console.log("[dev-server] Existing desktop, Pro, service, driver and Vaults are preserved. Backend update pending; native changes are not loaded or verified.");
+  }
   // Keep this guard for the shared multi-user server. Normal Tauri startup
   // clears stale processes synchronously at the start of beforeDevCommand and
   // must not classify its own newly launched app as an existing session here.
   const existingViteOwner = activeVitePortOwner();
-  if (PRESERVE_WINCOMMANDER && existingViteOwner && desktopDevWindowIsRunning()) {
+  if (existingViteOwner && (frontendOnly || (PRESERVE_WINCOMMANDER && desktopDevWindowIsRunning()))) {
     throw new Error(
-      `an existing WinCommander development session is already using port 1420 (PID ${existingViteOwner}). ` +
-      "Close that session or run `bun run kill:dev` before starting a fresh one.",
+      "Port 1420 is already in use; its listener was preserved. Use the existing frontend server or close it yourself before starting another.",
     );
   }
 
-  console.log(PRE_CLEANED
+  console.log(frontendOnly ? "[dev-server] installing frontend dependencies..." : PRE_CLEANED
     ? "[dev-server] prior dev processes already cleared; installing dependencies..."
     : "[dev-server] kill:dev and bun install running in parallel...");
 
-  const steps: Array<{ name: string; promise: Promise<number> }> = [
+  const steps: Array<{ name: string; promise: Promise<number> }> = frontendOnly ? [] : [
     ...(!PRE_CLEANED ? [{
       name: "kill:dev",
       promise: run("[kill]", WINDOWS_POWERSHELL, [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
       ]),
     }] : []),
-    { name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) },
   ];
+  steps.push({ name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) });
 
   const results = await Promise.all(steps.map((s) => s.promise));
   for (let i = 0; i < steps.length; i++) {
@@ -141,6 +154,7 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!frontendOnly) {
   console.log(
     FREE_ONLY
       ? "[dev-server] kill:dev/install done — preparing the settings service..."
@@ -161,6 +175,7 @@ async function main(): Promise<void> {
   console.log("[dev-server] SYSTEM settings service verified — starting vite.");
 
   freeVitePort();
+  }
 
   // vite is long-running/foreground — its exit code becomes this script's.
   const vite = spawn("bun", ["x", "vite"], { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });

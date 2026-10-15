@@ -30,6 +30,8 @@ mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
 mod context_menu_scrub;
+mod context_scrub_outcome;
+mod context_scrub_notification;
 mod context_menu_shred;
 mod datastore;
 mod datastore_io;
@@ -1390,10 +1392,10 @@ pub fn run() {
                 .filter(|arg| !arg.starts_with("--"))
                 .cloned()
                 .collect();
-            let result = context_menu_scrub::execute_cli(paths);
-            let succeeded = result.is_ok();
-            context_menu_scrub::show_result(result);
-            std::process::exit(if succeeded { 0 } else { 1 });
+            let outcome = context_scrub_outcome::ScrubOutcome::from_result(context_menu_scrub::execute_cli(paths));
+            let exit_code = outcome.exit_code();
+            context_scrub_notification::show(outcome);
+            std::process::exit(exit_code);
         }
         // Explorer secure-delete is another GUI-free operation, but unlike
         // Safe Copy it is destructive and must report a non-zero process exit
@@ -2397,6 +2399,7 @@ pub fn run() {
             machine_settings::apply_machine_setting,
             service_repair::repair_commander_service,
             vault_mount_verification::verify_vault_drive,
+            backend::vault_inventory::open_quick_mount_drive,
             activity_watch_autostart::activity_watch_request,
             activity_watch_autostart::activity_watch_ensure_started,
             backend::toggle_context_menu,

@@ -3,6 +3,19 @@ use super::*;
 use std::sync::mpsc;
 
 #[tokio::test]
+async fn letter_cleanup_refuses_a_running_settings_write_and_releases_its_permit() {
+    let scheduler = Scheduler::new();
+    let writer = scheduler.acquire("fixture-account").await.unwrap();
+    assert_eq!(scheduler.try_transaction("fixture-account", || Ok(1)), Err(BUSY));
+    drop(writer);
+    assert_eq!(scheduler.try_transaction("fixture-account", || {
+        assert_eq!(scheduler.try_transaction("fixture-account", || Ok(2)), Err(BUSY));
+        Ok(1)
+    }), Ok(1));
+    assert_eq!(scheduler.run("fixture-account", || Ok(3)).await, Ok(3));
+}
+
+#[tokio::test]
 async fn slow_account_does_not_block_other_accounts_or_async_timers() {
     let scheduler = Arc::new(Scheduler::new());
     let (started, ready) = tokio::sync::oneshot::channel();

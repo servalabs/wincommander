@@ -90,6 +90,28 @@ fn could_share_namespace(expected: &OwnerSession, actual: Option<&OwnerSession>)
     actual.is_none_or(|actual| actual == expected)
 }
 
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn verified_owner(logon: LogonId, caller_sid: &str, session: u32) -> Result<bool, ()> {
+    Ok(positively_matches_owner(&saved_owner(caller_sid, session)?, owner_session(logon)?.as_ref()))
+}
+
+fn positively_matches_owner(expected: &OwnerSession, actual: Option<&OwnerSession>) -> bool {
+    actual == Some(expected)
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn owned_logons(logon: LogonId, caller_sid: &str, session: u32) -> Result<Vec<LogonId>, ()> {
+    if !verified_owner(logon, caller_sid, session)? { return Err(()); }
+    let mut owned = vec![logon];
+    for (name, kind) in Api::load()?.entries(r"\Sessions\0\DosDevices", false)? {
+        if kind != "Directory" { continue; }
+        if let Some(other) = parse_logon_name(&name) {
+            if other != logon && verified_owner(other, caller_sid, session)? { owned.push(other); }
+        }
+    }
+    Ok(owned)
+}
+
 pub(super) fn related_logons(
     logon: LogonId,
     caller_sid: &str,
@@ -117,6 +139,15 @@ pub(super) fn related_logons(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_owner_scope_requires_positive_identity_and_original_session() {
+        let expected = OwnerSession { sid: vec![1, 2, 3], session: 9 };
+        assert!(positively_matches_owner(&expected, Some(&expected)));
+        assert!(!positively_matches_owner(&expected, None));
+        assert!(!positively_matches_owner(&expected, Some(&OwnerSession { sid: vec![1, 2, 4], session: 9 })));
+        assert!(!positively_matches_owner(&expected, Some(&OwnerSession { sid: vec![1, 2, 3], session: 10 })));
+    }
     #[test]
     fn paired_alias_scope_requires_both_same_account_and_same_session() {
         let owner = OwnerSession {

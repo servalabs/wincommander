@@ -9331,9 +9331,12 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/components/EverythingSearchBar.tsx",
+        "src/components/RightSidebar.tsx",
         "src/context/AppContext.tsx",
         "src/hooks/queries/useSettingsQuery.ts",
+        "src/hooks/useQuickMountExplorerPreference.ts",
         "src/hooks/useSettings.ts",
+        "src/hooks/useVaultDriveLetters.ts",
         "src/hooks/useWifiGuardMonitor.ts",
         "src/panels/network/WifiGuardSection.tsx"
       ]
@@ -10004,6 +10007,16 @@
         "src/components/tweaks/managers/StartupManager.tsx",
         "src/panels/runtime\u002dvisibility/index.tsx",
         "src/panels/search\u002dfiles/index.tsx"
+      ]
+    },
+    {
+      "id": "tauri:open_quick_mount_drive",
+      "name": "open_quick_mount_drive",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
       ]
     },
     {

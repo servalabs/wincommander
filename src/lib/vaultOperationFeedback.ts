@@ -31,8 +31,18 @@ export function confirmedBulkDismountMessage(receipt: unknown, observed: Encrypt
 export function vaultOperationError(error: unknown, operation: "mount" | "dismount" | "open" = "mount"): string {
   const detail = (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
   const cleanupWarning = "Mounting failed and cleanup could not be confirmed. The drive may still be mounted; check Secure Storage before retrying or removing storage.";
+  if (detail.includes("vault_service_identity_rejected")) return "The Vault service identity could not be verified. No mount or dismount was started. Use the matching WinCommander repair installer before retrying.";
+  if (detail.includes("vault_service_handshake_timeout")) return "The Vault service handshake timed out before the operation was sent. No mount or dismount was started. Refresh status, then retry once the service is ready.";
+  if (detail.includes("vault_service_handshake_rejected")) return "The Vault service handshake could not be verified. No mount or dismount was started. Update or repair the matching app, Pro component and service.";
+  if (detail.includes("vault_service_unavailable")) return "The Vault service connection could not be opened. No mount or dismount was started. Refresh status; if the connection remains unavailable, repair WinCommander.";
+  if (detail.includes("vault_driver_unavailable")) return "The encryption driver readiness check failed. No successful mount was confirmed. Refresh status; if the driver remains unavailable, repair WinCommander.";
+  if (detail.includes("vault_policy_identity_changed")) return "The encrypted file no longer matches its saved Vault permission. Have the authorized owner review that entry in Fleet > Vault permissions before mounting.";
+  if (detail.includes("vault_policy_unavailable")) return "The saved Vault authorization policy could not be verified. No access was granted. Refresh Vault permissions and have its authorized owner review the policy.";
+  if (detail.includes("vault_broker_unavailable")) return "The authorized Vault broker connection could not be opened. No successful mount was confirmed. Refresh status before retrying.";
   if (detail.includes("vault_untracked_mounts")) return "Windows still has an encrypted volume whose WinCommander ownership record is missing. Dismount it with the app that mounted it, or save your work in every signed-in account and restart Windows to release the leftover mount. Signing out or restarting WinCommander alone will not clear it.";
-  if (detail.includes("vault_cleanup_failed")) return cleanupWarning;
+  if (detail.includes("vault_cleanup_failed")) return operation === "dismount"
+    ? "Dismount cleanup could not be confirmed. The drive or its mapping may still be in use. Refresh Secure Storage before retrying or removing storage."
+    : cleanupWarning;
   if (detail.includes("vault_mount_options_timeout")) return "The Vault service did not finish checking the drive list. No mount was started. Wait for any current operation to finish, then refresh the free letters.";
   if (detail.includes("vault_request_timeout") || detail.includes("pro response timeout")) return "The Vault service did not return an operation result in time. The operation may still be running. Do not submit it again; refresh Secure Storage to check the drive's status first.";
   if (detail.includes("vault_operation_unconfirmed")) return "The connection to the Vault service was interrupted before its result arrived. The operation may have completed. Refresh Secure Storage to check the drive's status before trying again.";
@@ -55,11 +65,12 @@ export function vaultOperationError(error: unknown, operation: "mount" | "dismou
   const reason = VAULT_MOUNT_REASONS.find(value => new RegExp(`(?:^|[^a-z_])(?:vault_)?${value}(?:$|[^a-z_])`).test(detail));
   if (reason) {
     if (reason === "dismount_failed" && operation === "mount") return cleanupWarning;
+    if (reason === "syncthing_profile_unavailable" && operation === "dismount") return "Dismount was stopped because WinCommander could not verify that this Vault's synced folders are safely paused. Its private Syncthing helper could not become ready. Refresh Secure Storage and retry the dismount check. If it still fails, repair this Vault's Syncthing setup. The Vault was not confirmed dismounted.";
     const label = vaultMountResultLabel({ entry_id: "", state: "failed", presentation: null, drive_letter: null, reason });
     if (reason === "engine_unlock_failed") return `${label}. Check the password, PIM and keyfiles, then try again.`;
     if (reason === "engine_drive_letter_unavailable") return `${label} or reserved by another Vault. Refresh and select a free letter.`;
     if (reason === "caller_access_denied") return "Windows denied this account access inside the mounted Vault. An elevated local administrator automatically repairs an ordinary writable Vault after unlocking it. A Fleet-managed Vault is identified before mounting and must be opened from Fleet > Vault permissions.";
-    if (reason === "private_owner_required") return `${label}. Use the original mounting session to dismount it. To change its registered owner, dismount it first and have an authorized administrator review Fleet > Vault permissions. Changing Windows file ownership does not change the registered Vault owner.`;
+    if (reason === "private_owner_required") return "Only this private Vault's registered owner can manage it; administrator access does not replace ownership. Sign in to the owner's Windows account to dismount it. To change its registered owner, dismount it first and have an authorized administrator review Fleet > Vault permissions. Changing Windows file ownership does not change the registered Vault owner.";
     if (reason === "policy_access_denied") return `${label} in Fleet > Vault permissions. Changing Windows file ownership does not grant Fleet Vault permission.`;
     return `${label}.`;
   }

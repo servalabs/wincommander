@@ -33,11 +33,11 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const applyOwnerPolicyFragment = useCallback(
-    async (fragment: VaultOwnerPolicyFragment, _operationId?: string) => {
+    async (fragment: VaultOwnerPolicyFragment, operationId?: string) => {
       // This adapter accepts the fragment itself, not a renderer-defined
       // wrapper. Its service side authenticates the caller and derives every
       // authoritative path/identity observation.
-      return afterVaultMutation(() => invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment }));
+      return afterVaultMutation(() => invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment, diagnosticOperationId: operationId }));
     },
     [],
   );

@@ -10,7 +10,7 @@ import useBackend from "@/hooks/useBackend";
 import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import { notifyPolicyMountSyncWarning } from "@/lib/vaultSyncWarning";
 import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
-import { vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
+import { isUncertainVaultPolicySave, recoverVaultPolicySave, vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
@@ -65,7 +65,7 @@ function vaultListFailure(cause: unknown, request: "authorized vault list" | "Va
   };
 }
 
-export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ROLLBACK_UNVERIFIED" | "VLT.POLICY.STATE_UNAVAILABLE" | "VLT.POLICY.PERSISTENCE_FAILED" | "VLT.POLICY.OUTCOME_UNKNOWN" | "VLT.POLICY.GROUP_REQUIRED" | "VLT.POLICY.OWNER_REQUIRED" | "VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN" | "VLT.POLICY.READBACK_FAILED" | "VLT.POLICY.DRIVE_LETTER_CONFLICT" | "VLT.POLICY.DRIVE_LETTER_UNAVAILABLE" | "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -73,6 +73,11 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROU
   // Treat both forms identically so an administrator sees the service's safe
   // category instead of every failure becoming the opaque generic fallback.
   const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
+  if (detail.includes("vault_policy_rollback_unverified")) return { code: "VLT.POLICY.ROLLBACK_UNVERIFIED", message: "The service could not verify that the previous Vault permissions were restored. Access remains blocked while those permissions are uncertain. Your draft was kept. Refresh to check again; if this continues, ask an administrator to review the policy permissions." };
+  if (detail.includes("vault_policy_state_unavailable")) return { code: "VLT.POLICY.STATE_UNAVAILABLE", message: "The service could not verify the existing Vault settings and permissions. Your draft and saved version were kept. Refresh to check again; if this continues, ask an administrator to review the policy permissions." };
+  if (detail.includes("vault_policy_commit_unconfirmed")) return { code: "VLT.POLICY.OUTCOME_UNKNOWN", message: "The service could not confirm the saved Vault settings and their permissions after a write failed. Your draft was kept. Review the saved settings before submitting again; access stays blocked until the saved policy can be verified." };
+  if (detail.includes("vault policy could not be persisted")) return { code: "VLT.POLICY.PERSISTENCE_FAILED", message: "The service could not confirm that Vault settings were safely written. Your draft was kept. Refresh and review the saved settings before trying again." };
+  if (isUncertainVaultPolicySave(cause)) return { code: "VLT.POLICY.OUTCOME_UNKNOWN", message: "The service may still be saving these Vault settings, or its result could not be received. Your draft was kept. Review the saved settings before submitting again. Keep this page open while its current state is checked." };
   if (detail.includes("vault_fleet_group_required")) return { code: "VLT.POLICY.GROUP_REQUIRED", message: vaultOperationError(cause) };
   if (detail.includes("vault_owner_transfer_requires_admin")) return { code: "VLT.POLICY.OWNER_TRANSFER_REQUIRES_ADMIN", message: "A standard Windows account can update its own private Vault, but cannot transfer ownership. Dismount it, remove its policy, then have a local administrator recreate it for the intended owner." };
   if (detail.includes("vault_owner_required")) return { code: "VLT.POLICY.OWNER_REQUIRED", message: vaultOperationError(cause) };
@@ -110,7 +115,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROU
   if (detail.includes("acl") || detail.includes("access plan") || detail.includes("read-back")) {
     return {
       code: "VLT.POLICY.ACL_UNVERIFIED",
-      message: "Windows could not set or verify the Vault's file permissions. Check that the encrypted file and its folder still exist and that Windows allows the selected users or groups to be applied, then save again. The previous Vault permission was left unchanged.",
+      message: "Windows could not set or verify the Vault's file permissions. Check that the encrypted file and its folder still exist and that Windows allows the selected users or groups to be applied, then save again. Your draft was kept. Refresh to verify the existing permissions before saving again.",
     };
   }
   if (detail.includes("dismount") || detail.includes("active vault")) {
@@ -133,8 +138,24 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.GROU
   }
   return {
     code: "VLT.POLICY.APPLY_FAILED",
-    message: "The local service did not save these Vault settings. No existing permission was changed. Refresh the Vault page and retry; use the reference below if it repeats.",
+    message: "The local service did not save these Vault settings. Your draft was kept. Refresh and verify the saved settings before retrying; use the reference below if it repeats.",
   };
+}
+
+export function vaultPolicyReadFailure(cause: unknown): string {
+  const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
+  if (detail.includes("vault_policy_state_unavailable")) return vaultPolicySaveFailure(cause).message;
+  return "The local service could not return verified saved Vault settings. Your draft and saved version were kept. Refresh before making changes.";
+}
+
+export function vaultPolicyReviewConfirmed(policy: VaultAccessPolicy | null, status: VaultPolicyStatus | null): boolean {
+  if (!status || status.validation_state === "degraded") return false;
+  if (!policy) return status.entries.length === 0 && (
+    (status.validation_state === "never_applied" && status.policy_id === null && status.version === 0)
+    || (status.validation_state === "current" && !!status.policy_id && Number.isSafeInteger(status.version) && status.version > 0)
+  );
+  return status.validation_state === "current" && status.policy_id === policy.policy_id
+    && status.version === policy.version;
 }
 
 interface MountTarget {
@@ -199,6 +220,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   // as evidence that a browser-local draft has a live counterpart.
   const [hasSavedPolicy, setHasSavedPolicy] = useState(false);
   const [policyLoadUnavailable, setPolicyLoadUnavailable] = useState(false);
+  const [policyReadFailure, setPolicyReadFailure] = useState("");
   const [statusLoadUnavailable, setStatusLoadUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -241,6 +263,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const lastRefreshErrorAt = useRef(0);
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
+  const [unconfirmedSave, setUnconfirmedSave] = useState(false);
   const vaultChangeRefreshPending = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getOwnerPolicyFragment, getStatus, applyOwnerPolicyFragment, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
@@ -308,6 +331,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       setMountResults({});
       setCanManagePolicy(capabilities.can_manage_policy);
       setPolicyLoadUnavailable(false);
+      setPolicyReadFailure("");
       try {
         const loadedPolicy = await getOwnerPolicyFragment()
           .then(vaultPolicyFromOwnerFragment)
@@ -368,19 +392,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             if (revision !== refreshRevision.current) return false;
             setStatus(loadedStatus);
             setStatusLoadUnavailable(false);
+            // A degraded repair view is useful to an administrator, but it
+            // cannot clear the guard on an earlier unknown save outcome.
+            if (!vaultPolicyReviewConfirmed(loadedPolicy, loadedStatus)) return false;
           } catch {
             if (revision !== refreshRevision.current) return false;
             setStatus(null);
             setStatusLoadUnavailable(true);
+            return false;
           }
         }
-      } catch {
+      } catch (cause) {
         // Keep the verified capability.  Rendering an editable replacement
         // policy after a failed read could overwrite real rules, so block
         // editing until the original policy can be loaded again.
         if (revision !== refreshRevision.current) return false;
         setPolicyLoadUnavailable(true);
-        setHasSavedPolicy(false);
+        setPolicyReadFailure(vaultPolicyReadFailure(cause));
         setStatus(null);
         setStatusLoadUnavailable(true);
         return false;
@@ -641,7 +669,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     policyEntryRemoved = false,
     draftToKeepAfterSave: VaultAccessPolicy | null = null,
   ) => {
-    if (saveInProgress.current) return;
+    if (saveInProgress.current || unconfirmedSave) return;
     if (!policyToApply) return;
     if (statusLoadUnavailable && draftBaseRef.current?.entries.length) {
       const message = "Vault mount status is unavailable. Refresh before changing or removing saved Vault policies.";
@@ -660,6 +688,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     setAuthorizedEntries([]);
     setMountResults({});
     closeMountPrompt();
+    let saveAccepted = false;
     try {
       // The service's optimistic lock accepts only the next revision. The
       // displayed version remains the last observed policy until refresh.
@@ -699,14 +728,20 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           throw new Error("Drive letter is occupied, reserved, or unavailable");
         }
       }
-      const appliedStatus = await applyOwnerPolicyFragment(fragment, operationId);
-      const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
-      if (fragment.remove_entry_ids?.some(id => confirmed?.entries.some(entry => entry.id === id))) {
-        setOperationFeedback("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.");
-        showError("The service still has this Vault policy. Removal was not confirmed. Refresh and try again.", undefined, { operationId });
-        return;
+      let appliedStatus: VaultPolicyStatus;
+      try { appliedStatus = await applyOwnerPolicyFragment(fragment, operationId); }
+      catch (cause) {
+        if (!isUncertainVaultPolicySave(cause)) throw cause;
+        const recovered = await recoverVaultPolicySave(submittedPolicy, fragment.remove_entry_ids ?? [],
+          () => getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment));
+        if (!recovered.confirmed) throw cause;
+        appliedStatus = await getStatus().catch(() => { throw new Error("vault_operation_unconfirmed"); });
+        if (submittedPolicy.entries.length > 0 && (appliedStatus.policy_id !== submittedPolicy.policy_id || appliedStatus.version < submittedPolicy.version)) throw cause;
       }
+      saveAccepted = true;
+      const confirmed = await getOwnerPolicyFragment().then(vaultPolicyFromOwnerFragment);
       if (!vaultPolicyRevisionConfirmed(submittedPolicy, confirmed, fragment.remove_entry_ids ?? [])) throw new Error("vault_policy_readback_unconfirmed");
+      setUnconfirmedSave(false);
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // A successful full removal leaves no saved policy to edit. Clear every
@@ -760,9 +795,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         showSuccess("Vault settings saved. Future mounts only need the password.", undefined, { kind: "notification", operationId });
       }
     } catch (cause) {
-      const failure = vaultPolicySaveFailure(cause);
+      const saveFailure = saveAccepted ? new Error("vault_operation_unconfirmed") : cause;
+      if (isUncertainVaultPolicySave(saveFailure)) setUnconfirmedSave(true);
+      const failure = vaultPolicySaveFailure(saveFailure);
       setOperationFeedback(failure.message);
-      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: failure.code === "VLT.POLICY.ADMIN_ACCESS_REQUIRED" ? "request_admin_access" : "retry", privacyClass: "local_sensitive" });
+      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: failure.code === "VLT.POLICY.OUTCOME_UNKNOWN" ? "refresh_status" : failure.code === "VLT.POLICY.ADMIN_ACCESS_REQUIRED" ? "request_admin_access" : "retry", privacyClass: "local_sensitive" });
       showError(failure.message, undefined, { operationId });
     } finally {
       saveInProgress.current = false;
@@ -1127,7 +1164,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
       {policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
         <Icon icon="warning-sign" size={16} />
-        <div><strong>Vault settings could not be loaded yet</strong><p>The local service did not return your saved Vault settings. Refresh this page before making changes; assigned Vaults can still be mounted normally.</p></div>
+        <div><strong>Vault settings could not be loaded yet</strong><p>{policyReadFailure || "The local service did not return verified saved Vault settings. Your draft and saved version were kept. Refresh before making changes."}</p></div>
       </div>}
 
       {canOpenPolicyEditor && !policyLoadUnavailable && statusLoadUnavailable && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="alert">
@@ -1313,7 +1350,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             <Button variant="outline" onClick={() => addVaultEntryDraft("private")}>Add private vault</Button>
             <Button variant="outline" onClick={() => addVaultEntryDraft("shared")}>Add shared vault</Button>
             </>}
-            {policy && <Button variant="primary" disabled={saving || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)} title={statusLoadUnavailable && hasSavedPolicy ? "Vault mount status must be confirmed before changing saved Vault settings." : ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
+            {unconfirmedSave && <Button variant="outline" disabled={saving} onClick={() => void refresh(false).then(verified => { if (verified) setUnconfirmedSave(false); })}>Review saved settings</Button>}
+            {policy && <Button variant="primary" disabled={saving || unconfirmedSave || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)} title={statusLoadUnavailable && hasSavedPolicy ? "Vault mount status must be confirmed before changing saved Vault settings." : ownerDirectoryUnavailable ? "Windows administrator accounts must be available before saving Vault settings." : undefined} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}

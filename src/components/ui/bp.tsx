@@ -559,6 +559,8 @@ export function Dialog({
   isCloseButtonShown = true,
   hideHeader = false,
   onOpened,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
 }: {
   isOpen?: boolean;
   onClose?: () => void;
@@ -575,6 +577,8 @@ export function Dialog({
   portalClassName?: string;
   enforceFocus?: boolean;
   onOpened?: () => void;
+  onOpenAutoFocus?: (event: Event) => void;
+  onCloseAutoFocus?: (event: Event) => void;
   backdropProps?: unknown;
 }) {
   return (
@@ -603,6 +607,8 @@ export function Dialog({
             zoom-in-95/zoom-out-95 ≈ scale(0.94) via tailwind-animate — no
             custom keyframe needed, keeps this file dependency-free. */}
         <RDialog.Content
+          onOpenAutoFocus={onOpenAutoFocus}
+          onCloseAutoFocus={onCloseAutoFocus}
           onEscapeKeyDown={(e) => {
             if (!canEscapeKeyClose) e.preventDefault();
           }}

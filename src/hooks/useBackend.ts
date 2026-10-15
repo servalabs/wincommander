@@ -1,3 +1,4 @@
+import { readVaultLetterCleanup, type VaultLetterCleanup } from "@/lib/vaultLetterCleanup";
 import { invoke } from "@tauri-apps/api/core";
 import { useState, useCallback, useMemo } from "react";
 import { trackBackendWork } from "../lib/activityStore";
@@ -516,6 +517,8 @@ export interface EncryptionStatus {
     /** The current signed-in Windows session can open the drive root. */
     accessible?: boolean;
     cleanupRequired?: boolean;
+    browseAllowed?: boolean;
+    quickMountReceipt?: string | null;
   }>;
 }
 
@@ -1890,6 +1893,8 @@ export function useBackend() {
       })),
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
+    openQuickMountDrive: (drive: string, expectedMountReceipt: string) =>
+      invoke<void>("open_quick_mount_drive", { drive, expectedMountReceipt }),
     enablePersonalVaultSync: (internalDrive: number, relativePath: string, recoveryAction?: VaultSyncRecoveryAction, recoveryToken?: string, expectedMountReceipt?: string) =>
       afterVaultMutation(() => invoke<PersonalVaultSyncEnrollment>("vault_enroll_personal_syncthing", { internalDrive, relativePath,
         ...(recoveryAction ? { recoveryAction } : {}), ...(recoveryToken ? { recoveryToken } : {}),
@@ -1996,9 +2001,9 @@ export function useBackend() {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
-    releaseOrphanedVaultDriveLetters: async (): Promise<BackendResponse<{ released: number }>> => {
+    releaseOrphanedVaultDriveLetters: async (): Promise<BackendResponse<VaultLetterCleanup>> => {
       try {
-        const data = await invoke<{ released: number }>("vault_release_orphaned_drive_letters");
+        const data = readVaultLetterCleanup(await invoke<unknown>("vault_release_orphaned_drive_letters"));
         return { success: true, data };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };

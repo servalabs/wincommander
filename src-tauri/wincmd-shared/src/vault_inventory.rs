@@ -53,6 +53,7 @@ pub fn project_mount(mount: &PersonalVaultMountedVolume, accessible: bool) -> Va
         "dismountAllowed": mount.dismount_allowed,
         "dismountReason": mount.dismount_reason,
         "browseAllowed": mount.browse_allowed,
+        "quickMountReceipt": mount.quick_mount_receipt,
     })
 }
 

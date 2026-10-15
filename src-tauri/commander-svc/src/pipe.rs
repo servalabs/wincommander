@@ -629,18 +629,22 @@ async fn dispatch_verb(
 
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
-        "svc.vault.get_policy" => Ok(serde_json::to_value(vault_policy_projection(
-            vault_access,
-            peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
-            caller_privileged,
-        ))
-        .unwrap_or(serde_json::Value::Null)),
+        "svc.vault.get_policy" => vault_mount.with_exclusive_operation(|| {
+            require_vault_policy_read_available(vault_access, caller_privileged)?;
+            serde_json::to_value(vault_policy_projection(
+                vault_access,
+                peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
+                caller_privileged,
+            )).map_err(|_| vault_policy_state_unavailable())
+        }),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
-        "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.caller_status(
-            peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
-            caller_privileged,
-        ))
-        .unwrap_or(serde_json::Value::Null)),
+        "svc.vault.get_status" => vault_mount.with_exclusive_operation(|| {
+            require_vault_policy_read_available(vault_access, caller_privileged)?;
+            serde_json::to_value(vault_access.caller_status(
+                peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
+                caller_privileged,
+            )).map_err(|_| vault_policy_state_unavailable())
+        }),
         // The historical whole-policy wire cannot safely be caller-scoped:
         // an owner would have to receive other owners' records or omission
         // would become deletion.  Keep it closed now that fragments exist.
@@ -649,6 +653,7 @@ async fn dispatch_verb(
             "reload Fleet Vaults before saving policy changes",
         )),
         "svc.vault.apply_owner_fragment" => handle_vault_apply_owner_fragment(
+            &diagnostic_operation_id,
             vault_access,
             vault_mount,
             args,
@@ -697,7 +702,7 @@ async fn dispatch_verb(
             peer,
         ),
         "svc.vault.dismount_personal" => {
-            handle_personal_vault_dismount(request_id, vault_access, vault_mount, args, peer)
+            handle_personal_vault_dismount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer)
         }
         "svc.vault.manage_personal_syncthing" => handle_personal_vault_syncthing_manage(
             request_id,
@@ -714,7 +719,7 @@ async fn dispatch_verb(
             peer,
         ),
         "svc.vault.release_orphaned_drive_letters" => {
-            handle_release_orphaned_vault_drive_letters(vault_mount, args, peer)
+            handle_release_orphaned_vault_drive_letters(vault_access, vault_mount, args, peer)
         }
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
@@ -1040,7 +1045,7 @@ fn handle_vault_apply(
                 serde_json::to_value(status)
                     .map_err(|_| crate::vault_access::VaultError::Persistence)
             })
-            .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)));
+            .map_err(vault_policy_apply_error);
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1051,55 +1056,97 @@ fn handle_vault_apply(
         .and_then(|status| {
             serde_json::to_value(status).map_err(|_| crate::vault_access::VaultError::Persistence)
         })
-        .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))
+        .map_err(vault_policy_apply_error)
+}
+
+fn vault_policy_apply_error(error: crate::vault_access::VaultError) -> VerbError {
+    let kind = match &error {
+        crate::vault_access::VaultError::CommitUnconfirmed => "vault_policy_commit_unconfirmed",
+        crate::vault_access::VaultError::RollbackUnverified => "vault_policy_rollback_unverified",
+        _ => "vault_apply_failed",
+    };
+    VerbError::new(kind, vault_error_message(error))
 }
 
 fn handle_vault_apply_owner_fragment(
+    diagnostic_operation_id: &str,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
     caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
-    let fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment =
-        serde_json::from_value(args).map_err(|_| {
-            VerbError::new(
-                "vault_validation_failed",
-                "vault owner policy request is invalid",
-            )
-        })?;
-    let caller_sid = peer
-        .map(AuthenticatedPipePeer::caller_sid)
-        .filter(|sid| !sid.is_empty())
-        .ok_or_else(|| VerbError::new("vault_not_authorized", "vault owner session unavailable"))?;
-    vault_mount.with_exclusive_operation(|| {
+    let started = std::time::Instant::now();
+    let stage = std::cell::Cell::new("validation");
+    let result = (|| {
+        let fragment: wincmd_shared::vault_access::VaultOwnerPolicyFragment =
+            serde_json::from_value(args).map_err(|_| {
+                VerbError::new(
+                    "vault_validation_failed",
+                    "vault owner policy request is invalid",
+                )
+            })?;
+        stage.set("authorization");
+        let caller_sid = peer
+            .map(AuthenticatedPipePeer::caller_sid)
+            .filter(|sid| !sid.is_empty())
+            .ok_or_else(|| VerbError::new("vault_not_authorized", "vault owner session unavailable"))?;
+        vault_mount.with_exclusive_operation(|| {
+            stage.set("policy_state");
+            require_vault_policy_read_available(vault_access, caller_privileged)?;
+            stage.set("policy_merge");
         let policy = merge_owner_fragment(
-            vault_access,
-            fragment.clone(),
-            caller_sid,
-            caller_privileged,
-        )?;
-        validate_private_owner_users(&policy, caller_sid)?;
-        // The fragment has already been merged with the service's complete
-        // protected policy.  The ordinary apply path now performs its normal
-        // identity/ACL read-back and atomic persistence.
-        validate_vault_apply_version(vault_access, &policy)?;
-        validate_vault_owner_mutation(vault_access, &policy, caller_sid, caller_privileged)?;
-        validate_vault_changed_targets_unmounted(vault_access, vault_mount, &policy)?;
-        let occupied = vault_mount.occupied_letters_locked().map_err(|_| {
-            VerbError::new(
-                "vault_drive_letters_unavailable",
-                "Windows drive availability could not be checked. Refresh and try again.",
-            )
-        })?;
-        validate_policy_drive_letters(&policy, vault_access.policy().as_ref(), &occupied)?;
-        vault_access
-            .preflight_apply(policy.clone())
-            .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
-        handle_vault_apply(vault_access, policy)?;
-        serde_json::to_value(vault_access.caller_status(caller_sid, caller_privileged))
-            .map_err(|_| VerbError::new("vault_apply_failed", "Vault status could not be encoded"))
-    })
+                vault_access,
+                fragment.clone(),
+                caller_sid,
+                caller_privileged,
+            )?;
+            stage.set("principal_lookup");
+            validate_private_owner_users(&policy, caller_sid)?;
+            // The fragment has already been merged with the service's complete
+            // protected policy.  The ordinary apply path now performs its normal
+            // identity/ACL read-back and atomic persistence.
+            stage.set("policy_version");
+            validate_vault_apply_version(vault_access, &policy)?;
+            stage.set("authorization");
+            validate_vault_owner_mutation(vault_access, &policy, caller_sid, caller_privileged)?;
+            stage.set("mount_state");
+            validate_vault_changed_targets_unmounted(vault_access, vault_mount, &policy)?;
+            stage.set("drive_letters");
+            let occupied = vault_mount.occupied_letters_locked().map_err(|_| {
+                VerbError::new(
+                    "vault_drive_letters_unavailable",
+                    "Windows drive availability could not be checked. Refresh and try again.",
+                )
+            })?;
+            validate_policy_drive_letters(&policy, vault_access.policy().as_ref(), &occupied)?;
+            stage.set("permission_preflight");
+            vault_access
+                .preflight_apply(policy.clone())
+                .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
+            stage.set("permissions");
+            handle_vault_apply(vault_access, policy)?;
+            stage.set("readback");
+            serde_json::to_value(vault_access.caller_status(caller_sid, caller_privileged))
+                .map_err(|_| VerbError::new("vault_apply_failed", "Vault status could not be encoded"))
+        })
+    })();
+    if let Err(failure) = &result {
+        let detail = failure.message.to_ascii_lowercase();
+        if matches!(failure.kind, "vault_owner_required" | "vault_fleet_group_required" | "vault_not_authorized" | "forbidden" | "vault_owner_transfer_requires_admin") {
+            stage.set("authorization");
+        } else if failure.kind == "vault_policy_commit_unconfirmed" { stage.set("policy_commit_unconfirmed"); }
+        else if failure.kind == "vault_policy_rollback_unverified" { stage.set("permission_rollback"); }
+        else if detail.starts_with("vault principal resolution") { stage.set("principal_lookup"); }
+        else if detail == "vault policy could not be persisted" { stage.set("persistence"); }
+        else if detail.contains("changed elsewhere") { stage.set("policy_version"); }
+        else if detail.starts_with("vault container identity") { stage.set("container_identity"); }
+        else if detail == "vault access plan could not be applied" { stage.set("permission_apply"); }
+        else if detail == "vault access plan read-back failed" { stage.set("permission_readback"); }
+    }
+    crate::diagnostics::record_vault_policy_save(diagnostic_operation_id, stage.get(), result.is_ok(), started);
+    result
+
 }
 
 fn validate_vault_changed_targets_unmounted(
@@ -1246,6 +1293,15 @@ fn validate_private_owner_sids(
         }
     }
     Ok(())
+}
+
+fn vault_policy_state_unavailable() -> VerbError {
+    VerbError::new("vault_policy_state_unavailable",
+        "Saved Vault settings could not be verified. Your draft must be kept. Refresh to check again; if verification still fails, an administrator must review the existing policy permissions.")
+}
+
+fn require_vault_policy_read_available(store: &VaultAccessStore, privileged: bool) -> Result<(), VerbError> {
+    store.ensure_policy_read_available(privileged).map_err(|_| vault_policy_state_unavailable())
 }
 
 fn vault_policy_projection(
@@ -3094,11 +3150,13 @@ fn handle_personal_vault_list(
 
 fn handle_personal_vault_dismount(
     request_id: u64,
+    diagnostic_operation_id: &str,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
+    let started = std::time::Instant::now();
     let Some(object) = args.as_object_mut() else {
         return Err(VerbError::new(
             "vault_validation_failed",
@@ -3134,6 +3192,7 @@ fn handle_personal_vault_dismount(
         peer.caller_sid(),
         token_is_privileged(peer.token()).unwrap_or(false),
     );
+    crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "dismount", &result, started);
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
 }
@@ -3252,6 +3311,7 @@ fn handle_personal_vault_syncthing_enroll(
 }
 
 fn handle_release_orphaned_vault_drive_letters(
+    vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
@@ -3263,20 +3323,10 @@ fn handle_release_orphaned_vault_drive_letters(
         ));
     }
     let peer = require_personal_mount_peer(peer)?;
-    // The namespace comes from the authenticated token, never a selected user or letter.
     vault_mount.with_exclusive_operation(|| {
-        let cleanup_error = |_| VerbError::new(
-            "vault_drive_letter_cleanup_failed",
-            "Unavailable Vault drive letters could not be checked.",
-        );
-        let released_old = crate::vault_drive_letters::release_orphaned_logon_encrypted_links()
-            .map_err(cleanup_error)?;
-        let released_global = crate::vault_drive_letters::release_orphaned_global_encrypted_links()
-            .map_err(cleanup_error)?;
-        let released_caller = crate::vault_drive_letters::release_orphaned_caller_encrypted_links(
-            peer.authentication_id(),
-        ).map_err(cleanup_error)?;
-        Ok(serde_json::json!({ "released": released_old + released_global + released_caller }))
+        crate::personal_settings::with_quick_mount_letters(peer.caller_sid(), |saved| {
+            vault_mount.cleanup_owned_letters_locked(vault_access, peer.caller_sid(), peer.session_id(), peer.authentication_id(), &saved)
+        }).map_err(|_| VerbError::new("vault_drive_letter_cleanup_failed", "Drive ownership, saved shortcuts or Windows state could not be verified. No volume was dismounted."))
     })
 }
 fn handle_vault_list_authorized(
@@ -3323,10 +3373,8 @@ fn handle_vault_list_authorized(
 
 /// Renders a [`crate::vault_access::VaultError`] for an `ErrorReply.message`.
 ///
-/// PRIVACY BOUNDARY: `PrincipalResolution`'s payload is the admin-supplied
-/// principal or local-group name — the admin typed it, so echoing it back is
-/// in scope. No other variant carries, and this function must never format
-/// in, a resolved SID, a container path, or ACL/SDDL detail.
+/// PRIVACY BOUNDARY: errors use fixed stage descriptions. Never format
+/// principal names, resolved SIDs, container paths, or ACL/SDDL details.
 fn vault_error_message(error: crate::vault_access::VaultError) -> String {
     match error {
         crate::vault_access::VaultError::Forbidden => "You are not a member of this Fleet access group. Its settings were not changed.".to_string(),
@@ -3339,8 +3387,8 @@ fn vault_error_message(error: crate::vault_access::VaultError) -> String {
         crate::vault_access::VaultError::VersionConflict => {
             "vault policy was changed elsewhere since this draft was loaded — reload the Vault tab and reapply".to_string()
         }
-        crate::vault_access::VaultError::PrincipalResolution(name) => {
-            format!("vault principal resolution failed for '{name}'")
+        crate::vault_access::VaultError::PrincipalResolution(_) => {
+            "vault principal resolution failed — refresh Windows users and groups before saving".to_string()
         }
         crate::vault_access::VaultError::ContainerIdentity => {
             "vault container identity validation failed".to_string()
@@ -3356,6 +3404,12 @@ fn vault_error_message(error: crate::vault_access::VaultError) -> String {
         }
         crate::vault_access::VaultError::Persistence => {
             "vault policy could not be persisted".to_string()
+        }
+        crate::vault_access::VaultError::RollbackUnverified => {
+            "Vault permission rollback could not be verified. Saved policy access remains blocked until its permissions are verified.".to_string()
+        }
+        crate::vault_access::VaultError::CommitUnconfirmed => {
+            "The Vault policy write outcome could not be confirmed. Do not submit it again until the saved policy and permissions have been reviewed.".to_string()
         }
     }
 }
@@ -4331,6 +4385,27 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use wincmd_shared::svc::SVC_PROTOCOL_VERSION;
+
+    #[test]
+    fn policy_save_ambiguous_write_and_unverified_restore_have_distinct_bounded_stages() {
+        let commit = vault_policy_apply_error(crate::vault_access::VaultError::CommitUnconfirmed);
+        assert_eq!(commit.kind, "vault_policy_commit_unconfirmed");
+        assert!(commit.message.contains("write outcome could not be confirmed"));
+        assert!(!commit.message.contains("unchanged"));
+        let rollback = vault_policy_apply_error(crate::vault_access::VaultError::RollbackUnverified);
+        assert_eq!(rollback.kind, "vault_policy_rollback_unverified");
+        assert!(rollback.message.contains("access remains blocked"));
+        assert!(!rollback.message.contains("unchanged"));
+    }
+
+    #[test]
+    fn policy_principal_lookup_error_does_not_expose_the_identity() {
+        let message = vault_error_message(crate::vault_access::VaultError::PrincipalResolution(
+            "sensitive-account-name".to_owned(),
+        ));
+        assert_eq!(message, "vault principal resolution failed — refresh Windows users and groups before saving");
+        assert!(!message.contains("sensitive-account-name"));
+    }
 
     fn valid_vault_policy_args() -> serde_json::Value {
         serde_json::json!({

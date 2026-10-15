@@ -528,6 +528,8 @@ export interface VaultSettings {
    *  Each slot stores a file path + drive letter; clicking Mount only
    *  needs a password at that point. */
   quickMountSlots?: QuickMountSlot[];
+  /** Per-user choice; only an explicit checkbox change updates it. */
+  quickMountOpenExplorerAfterMount?: boolean;
   /** Auto-create a RAM disk on PC startup. When `enabled` is true, the
    *  frontend invokes createRamDisk with the embedded spec right after
    *  the splash dismisses (and the ImDisk engine is confirmed installed).

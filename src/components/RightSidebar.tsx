@@ -1,6 +1,7 @@
 import { Icon } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
+import { Checkbox } from "./ui/bp";
 import { cn } from "../lib/utils";
 import { useAppState } from "../context/AppContext";
 import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
@@ -8,7 +9,8 @@ import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../li
 import { getDisplayBranding } from "../lib/branding";
 import useBackend, { type EncryptionPartition } from "../hooks/useBackend";
 import useVaultDriveLetters from "../hooks/useVaultDriveLetters";
-import type { QuickMountSlot } from "../types/settings";
+import useQuickMountExplorerPreference from "../hooks/useQuickMountExplorerPreference";
+import type { AppSettings, QuickMountSlot } from "../types/settings";
 import useVisibility from "../hooks/useVisibility";
 import useEntitlements from "../hooks/useEntitlements";
 import useBorrowedActive from "../hooks/useBorrowedActive";
@@ -29,7 +31,8 @@ import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskC
 import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
 import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "../hooks/useVaultAccess";
 import { createVaultStatusRefresh } from "../lib/vaultStatusRefresh";
-import { canOpenQuickMountDrive } from "../lib/quickMountObservation";
+import { changeQuickMountSlot } from "../lib/quickMountSlots";
+import { canOpenQuickMountDrive, quickMountExplorerTarget, quickMountExplorerTargetForDrive, openQuickMountIfEnabled, type QuickMountExplorerTarget } from "../lib/quickMountObservation";
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import './RightSidebar.css';
 
@@ -121,6 +124,7 @@ export default function RightSidebar() {
         vaultStatusError,
         appSettings,
         patchAppSettings,
+        refreshSettings,
         systemInfo,
     } = useAppState();
     const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
@@ -138,7 +142,7 @@ export default function RightSidebar() {
         mountVolume,
         verifyVaultDrive,
         getEncryptionPartitions,
-        openEncryptionVolume,
+        openQuickMountDrive,
         safePastePrepare,
     } = useBackend();
 
@@ -175,6 +179,7 @@ export default function RightSidebar() {
     const dismountAvailable = true;
 
     const [loadingAction, setLoadingAction] = useState<string | null>(null);
+    const dismountOperation = useRef(false);
     // Manual Lockdown/Self-Destruct button + 4s abort countdown — restored
     // 2026-06-09 (owner). The button was removed in the redesign; the cascade
     // only fired via hotkey/coercion events. sdCountdownRef lets the
@@ -200,14 +205,19 @@ export default function RightSidebar() {
     const [qmPartitions, setQmPartitions] = useState<EncryptionPartition[]>([]);
     const [qmPartitionsLoading, setQmPartitionsLoading] = useState(false);
     const [qmSaving, setQmSaving] = useState(false);
+    const qmOperation = useRef(false);
     const [qmFeedback, setQmFeedbackMessage] = useState('');
     const [qmFeedbackTone, setQmFeedbackTone] = useState<VaultNoticeTone>('error');
     const setQmFeedback = useCallback((message: string, tone: VaultNoticeTone = 'error') => {
         setQmFeedbackMessage(message);
         setQmFeedbackTone(tone);
     }, []);
-    const [qmMountedDrive, setQmMountedDrive] = useState<string | null>(null);
-    const { letters: qmAvailableLetters, loading: qmLettersLoading, refresh: refreshDriveLetters } = useVaultDriveLetters();
+    const [qmMountedTarget, setQmMountedTarget] = useState<QuickMountExplorerTarget | null>(null);
+    const [qmExplorerOpening, setQmExplorerOpening] = useState(false);
+    const qmExplorerInFlight = useRef(false);
+    const qmReturnFocus = useRef<HTMLElement | null>(null);
+    const explorerPreference = useQuickMountExplorerPreference();
+    const { letters: qmAvailableLetters, loading: qmLettersLoading, refresh: refreshDriveLetters } = useVaultDriveLetters(false, false);
     const [dismountFailure, setDismountFailure] = useState('');
     // Fleet Vaults never use this user-settings list: the secure service owns
     // the caller-filtered projection and takes only an opaque entry id on mount.
@@ -216,8 +226,12 @@ export default function RightSidebar() {
     const [fleetVaultEntryId, setFleetVaultEntryId] = useState('');
     const [fleetVaultPassword, setFleetVaultPassword] = useState('');
     const [fleetVaultMounting, setFleetVaultMounting] = useState(false);
+    const qmBusy = qmSaving || qmMountingIdx !== null || fleetVaultMounting || qmExplorerOpening || explorerPreference.saving;
     const { listAuthorizedEntries, mountEntry: mountFleetVaultEntry, unmountEntry: unmountFleetVaultEntry } = useVaultAccess<unknown, unknown>();
     const fleetVaultNeedsCleanup = fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'failed';
+    const selectedFleetDrive = fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.drive_letter;
+    const fleetExplorerTarget = !vaultStatusError && selectedFleetDrive
+        ? quickMountExplorerTargetForDrive(encryptionStatus, selectedFleetDrive) : null;
     type QmSlot = QuickMountSlot;
     // useMemo so the array identity is stable across renders — otherwise the
     // `?? []` fallback minted a fresh [] every render, churning the deps of
@@ -276,16 +290,30 @@ export default function RightSidebar() {
         .filter((_, index) => qmEditing?.idx === 'new' || index !== qmEditing?.idx)
         .map(slot => slot.driveLetter));
 
-    const openVaultDrive = async (drive: string) => {
+    const openQuickMountTarget = useCallback(async (target: QuickMountExplorerTarget, automatic = false) => {
+        if (qmExplorerInFlight.current || (!automatic && qmOperation.current)) return;
+        qmExplorerInFlight.current = true;
+        setQmExplorerOpening(true);
         try {
-            const result = await openEncryptionVolume(drive);
-            if (!result.success) throw new Error(result.error);
-        } catch (error) { setQmFeedback(vaultOperationError(error, 'open')); }
+            await openQuickMountIfEnabled(!automatic || explorerPreference.enabled, target, () => refreshVault(true), verifyVaultDrive, openQuickMountDrive);
+        } catch {
+            setQmFeedback(explorerPreference.enabled
+                ? 'The Vault is mounted, but File Explorer could not be opened safely. Refresh status. To try opening manually, turn off automatic opening.'
+                : 'The Vault is mounted, but File Explorer could not be opened safely. Refresh its status and use Open in File Explorer again.', 'info');
+        } finally { qmExplorerInFlight.current = false; setQmExplorerOpening(false); }
+    }, [refreshVault, verifyVaultDrive, openQuickMountDrive, setQmFeedback, explorerPreference.enabled]);
+
+    const saveExplorerPreference = async (enabled: boolean) => {
+        if (qmOperation.current || qmExplorerInFlight.current) return;
+        qmOperation.current = true;
+        try { await explorerPreference.save(enabled); }
+        catch { setQmFeedback('The File Explorer preference could not be confirmed saved. Refresh settings before changing it again.'); }
+        finally { qmOperation.current = false; }
     };
 
     useEffect(() => {
         const refreshAfterFleetVaultSave = () => {
-            setQmMountedDrive(null);
+            setQmMountedTarget(null);
             void refreshFleetVaults();
         };
         window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave);
@@ -293,10 +321,11 @@ export default function RightSidebar() {
     }, [refreshFleetVaults]);
 
     const handleFleetVaultMount = useCallback(async () => {
-        if (!fleetVaultEntryId || !fleetVaultPassword || fleetVaultMounting || fleetVaultNeedsCleanup) return;
+        if (!fleetVaultEntryId || !fleetVaultPassword || qmBusy || qmOperation.current || fleetVaultNeedsCleanup) return;
+        qmOperation.current = true;
         setFleetVaultMounting(true);
         setQmFeedback('');
-        setQmMountedDrive(null);
+        setQmMountedTarget(null);
         try {
             const result = await mountFleetVaultEntry(fleetVaultEntryId, fleetVaultPassword, 'outer');
             if (result.state === 'mounted') {
@@ -305,6 +334,14 @@ export default function RightSidebar() {
                 showSuccess(vaultMountResultLabel(result), undefined, { kind: 'notification' });
                 setFleetVaultPassword('');
                 setQmFeedback(vaultMountResultLabel(result), 'success');
+                if (result.drive_letter) {
+                    const target = quickMountExplorerTargetForDrive(await refreshVault(true), result.drive_letter);
+                    setQmMountedTarget(target);
+                    if (explorerPreference.enabled) {
+                        if (target) await openQuickMountTarget(target, true);
+                        else setQmFeedback('The Vault mounted, but its owner-session opening receipt could not be verified. Refresh status or update the WinCommander service before opening it from Quick Mount.', 'info');
+                    }
+                }
                 if (result.sync_warning) {
                     setQmOpen(false);
                     window.setTimeout(() => notifyPolicyMountSyncWarning(result), 350);
@@ -321,23 +358,26 @@ export default function RightSidebar() {
         } finally {
             setFleetVaultPassword('');
             setFleetVaultMounting(false);
+            qmOperation.current = false;
         }
-    }, [fleetVaultEntryId, fleetVaultMounting, fleetVaultNeedsCleanup, fleetVaultPassword, mountFleetVaultEntry, refreshFleetVaults]);
+    }, [fleetVaultEntryId, qmBusy, fleetVaultNeedsCleanup, fleetVaultPassword, mountFleetVaultEntry, refreshFleetVaults, refreshVault, setQmFeedback, explorerPreference.enabled, openQuickMountTarget]);
 
     const handleFleetVaultCleanup = useCallback(async () => {
-        if (!fleetVaultEntryId || fleetVaultMounting) return;
+        if (!fleetVaultEntryId || qmBusy || qmOperation.current) return;
+        qmOperation.current = true;
         setFleetVaultMounting(true);
-        setQmMountedDrive(null);
+        setQmMountedTarget(null);
         try {
             const result = await unmountFleetVaultEntry(fleetVaultEntryId);
             setQmFeedback(vaultMountResultLabel(result), result.state === 'unmounted' ? 'success' : 'error');
         } catch (error) {
             setQmFeedback(vaultOperationError(error, 'dismount'));
         } finally {
-            await Promise.all([refreshFleetVaults(), refreshVault(true)]);
+            await Promise.allSettled([refreshFleetVaults(), refreshVault(true)]);
             setFleetVaultMounting(false);
+            qmOperation.current = false;
         }
-    }, [fleetVaultEntryId, fleetVaultMounting, unmountFleetVaultEntry, refreshFleetVaults, refreshVault, setQmFeedback]);
+    }, [fleetVaultEntryId, qmBusy, unmountFleetVaultEntry, refreshFleetVaults, refreshVault, setQmFeedback]);
 
     const nextFreeLetter = useCallback((excludeIdx?: number) => {
         const taken = new Set(
@@ -349,22 +389,40 @@ export default function RightSidebar() {
     }, [quickMountSlots, qmAvailableLetters]);
 
     const handleQmOpen = useCallback(() => {
+        qmReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         setQmPassword('');
         setFleetVaultPassword('');
         setQmFeedback('');
-        setQmMountedDrive(null);
+        setQmMountedTarget(null);
         setQmSelectedIdx(0);
         // A service-owned Fleet Vault is a mount target immediately after its
         // policy is saved.  Do not force the personal-shortcut editor merely
         // because this Windows account has no local Quick Mount slots.
         setQmEditing(null);
         setQmOpen(true);
-    }, []);
+    }, [setQmFeedback]);
 
-    const patchQmSlots = useCallback(async (slots: QmSlot[]) => {
+    const patchQmSlots = useCallback(async (expected: QmSlot | null, replacement: QmSlot | null) => {
         setQmSaving(true);
         try {
-            await patchAppSettings({ app: { vault: { quickMountSlots: slots } } });
+            await invoke<AppSettings>("get_settings", { refreshPersonal: true });
+            await refreshSettings();
+            let next: QmSlot[] = [];
+            await patchAppSettings(latest => {
+                next = changeQuickMountSlot(latest?.app?.vault?.quickMountSlots ?? [], expected, replacement);
+                return { app: { vault: { quickMountSlots: next } } };
+            });
+            const readback = await invoke<AppSettings>("get_settings", { refreshPersonal: true });
+            const slots = readback.app.vault.quickMountSlots ?? [];
+            if (slots.length !== next.length || slots.some((slot, index) => slot.filePath !== next[index].filePath || slot.driveLetter !== next[index].driveLetter)) {
+                setQmFeedback('The shortcut was saved, but the saved list changed before readback. Refresh Quick Mount before making another change.');
+                return false;
+            }
+            await refreshSettings();
+            if (!await refreshQmLetters()) {
+                setQmFeedback('The shortcut was saved, but current Windows drive availability could not be verified. Refresh free letters before mounting or saving again.');
+                return false;
+            }
             return true;
         } catch {
             setQmFeedback('The shortcut could not be saved. Your changes are still here; try saving again.');
@@ -372,10 +430,13 @@ export default function RightSidebar() {
             return false;
         }
         finally { setQmSaving(false); }
-    }, [patchAppSettings]);
+    }, [patchAppSettings, refreshSettings, refreshQmLetters, setQmFeedback]);
 
     const handleQmSaveSlot = useCallback(async () => {
-        if (!qmEditing) return;
+        if (!qmEditing || qmOperation.current) return;
+        qmOperation.current = true;
+        setQmSaving(true);
+        try {
         const path = qmEditing.path.trim();
         const letter = qmEditing.letter.trim().toUpperCase().slice(0, 1);
         if (!path || !letter) return;
@@ -396,12 +457,11 @@ export default function RightSidebar() {
             showError(`Drive ${letter}: is already used by another vault. Pick a different letter.`);
             return;
         }
-        const next = [...quickMountSlots];
         const saved: QmSlot = { filePath: path, driveLetter: letter, targetType: qmEditing.targetType };
-        if (qmEditing.idx === 'new') next.push(saved);
-        else next[qmEditing.idx as number] = saved;
-        if (await patchQmSlots(next)) setQmEditing(null);
-    }, [qmEditing, quickMountSlots, patchQmSlots, refreshQmLetters]);
+        const expected = qmEditing.idx === 'new' ? null : quickMountSlots[qmEditing.idx];
+        if (await patchQmSlots(expected, saved)) setQmEditing(null);
+        } finally { qmOperation.current = false; setQmSaving(false); }
+    }, [qmEditing, quickMountSlots, patchQmSlots, refreshQmLetters, setQmFeedback]);
 
     const loadQmPartitions = useCallback(async () => {
         setQmPartitionsLoading(true);
@@ -414,22 +474,26 @@ export default function RightSidebar() {
     }, [getEncryptionPartitions]);
 
     const handleQmRemoveSlot = useCallback(async (idx: number) => {
-        const next = quickMountSlots.filter((_, i) => i !== idx);
-        if (await patchQmSlots(next)) setQmSelectedIdx(0);
+        if (qmOperation.current || !quickMountSlots[idx]) return;
+        qmOperation.current = true;
+        try {
+            if (await patchQmSlots(quickMountSlots[idx], null)) setQmSelectedIdx(0);
+        } finally { qmOperation.current = false; }
     }, [quickMountSlots, patchQmSlots]);
 
     const handleQmMount = useCallback(async () => {
         const slot = quickMountSlots[qmSelectedIdx];
-        if (!slot || !qmPassword) return;
+        if (!slot || !qmPassword || qmOperation.current || explorerPreference.saving || qmExplorerInFlight.current) return;
+        qmOperation.current = true;
         setQmMountingIdx(qmSelectedIdx);
         setQmFeedback('');
-        setQmMountedDrive(null);
+        setQmMountedTarget(null);
         try {
             const status = await refreshVault(true);
             const existing = status?.volumes?.find(volume => volume.accessible !== false && volume.path?.toLowerCase() === slot.filePath.toLowerCase());
             if (existing) {
                 setQmFeedback(`This container is already mounted at ${existing.letter}.`, 'info');
-                setQmMountedDrive(existing.letter);
+                setQmMountedTarget(quickMountExplorerTarget(status, null, existing.letter, slot.filePath, existing.internalDrive));
                 return;
             }
             const available = await refreshQmLetters();
@@ -461,8 +525,13 @@ export default function RightSidebar() {
                 }
                 showSuccess(`Volume mounted as ${r.data.drive}`);
                 setQmFeedback(`Volume mounted as ${r.data.drive}.`, 'success');
-                setQmMountedDrive(r.data.drive);
+                const target = quickMountExplorerTarget(refreshed, null, r.data.drive, slot.filePath, r.data.internalDrive);
+                setQmMountedTarget(target);
                 setQmPassword('');
+                if (explorerPreference.enabled) {
+                    if (target) await openQuickMountTarget(target, true);
+                    else setQmFeedback('The Vault mounted, but its owner-session opening receipt could not be verified. Update the WinCommander service before opening it from Quick Mount.', 'info');
+                }
                 if (r.data.syncWarning) {
                     setQmOpen(false);
                     window.setTimeout(() => notifyPersonalMountSyncWarning(r), 350);
@@ -482,8 +551,9 @@ export default function RightSidebar() {
         } finally {
             setQmPassword('');
             setQmMountingIdx(null);
+            qmOperation.current = false;
         }
-    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault, verifyVaultDrive, refreshQmLetters]);
+    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault, verifyVaultDrive, refreshQmLetters, setQmFeedback, explorerPreference.enabled, explorerPreference.saving, openQuickMountTarget]);
 
     // Safe Paste requests are kept in a native queue until this listener drains
     // them. Tauri events alone can be emitted before this effect subscribes on
@@ -865,6 +935,10 @@ export default function RightSidebar() {
     }, [sdCountdown, fireSelfDestruct]);
 
     const handleAction = useCallback(async (action: string, handler: () => Promise<any>) => {
+        if (action === "dismount") {
+            if (dismountOperation.current) return;
+            dismountOperation.current = true;
+        }
         setLoadingAction(action);
         if (action === "dismount") setDismountFailure('');
         try {
@@ -886,6 +960,7 @@ export default function RightSidebar() {
             const msg = err instanceof Error ? err.message : String(err);
             showError(`Failed: ${msg}`);
         } finally {
+            if (action === "dismount") dismountOperation.current = false;
             setLoadingAction(null);
         }
     }, [refreshVault, refreshFleetVaults]);
@@ -1155,19 +1230,27 @@ export default function RightSidebar() {
             <Dialog open={Boolean(dismountFailure)} onOpenChange={open => { if (!open) setDismountFailure(''); }}>
                 <DialogContent className="vault-dismount-dialog"><DialogHeader><DialogTitle>Dismount needs attention</DialogTitle></DialogHeader><VaultOperationNotice message={dismountFailure} /><button type="button" className="qm-btn qm-btn--primary" onClick={() => setDismountFailure('')}>Close</button></DialogContent>
             </Dialog>
-            {qmOpen && (
-                <div className="qm-overlay" role="dialog" aria-modal="true"
-                    onClick={(e) => { if (e.target === e.currentTarget) { setQmOpen(false); setQmEditing(null); } }}>
-                    <div className="qm-dialog">
+            <Dialog open={qmOpen} onOpenChange={open => {
+                if (!open && (qmBusy || qmOperation.current || qmExplorerInFlight.current)) return;
+                setQmOpen(open);
+                if (!open) setQmEditing(null);
+            }}>
+                    <DialogContent className="qm-dialog" aria-busy={qmBusy}
+                        onEscapeKeyDown={event => { if (qmBusy || qmOperation.current) event.preventDefault(); }}
+                        onInteractOutside={event => { if (qmBusy || qmOperation.current) event.preventDefault(); }}
+                        onCloseAutoFocus={event => { event.preventDefault(); qmReturnFocus.current?.focus(); }}>
+                        <DialogTitle className="sr-only">Quick Mount</DialogTitle>
+                        <DialogDescription className="sr-only">Mount a saved Vault and choose whether to open File Explorer afterward.</DialogDescription>
                         <VaultOperationNotice message={qmFeedback} tone={qmFeedbackTone} />
-                        {qmMountedDrive && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedDrive, quickMountSlots[qmSelectedIdx]?.filePath) && <button type="button" className="qm-btn qm-btn--primary" onClick={() => void openVaultDrive(qmMountedDrive)}>Open {qmMountedDrive} in File Explorer</button>}
+                        {!explorerPreference.enabled && qmMountedTarget && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedTarget.drive, qmMountedTarget.containerPath, qmMountedTarget) && <button type="button" className="qm-btn qm-btn--primary" disabled={qmBusy} onClick={() => void openQuickMountTarget(qmMountedTarget)}>{qmExplorerOpening ? 'Opening File Explorer…' : `Open ${qmMountedTarget.drive} in File Explorer`}</button>}
                         {qmEditing ? (
                             /* ── Slot editor ── */
                             <>
                                 <div className="qm-title-row">
                                     {quickMountSlots.length > 0 && (
                                         <button type="button" className="qm-back-btn"
-                                            onClick={() => setQmEditing(null)}>
+                                            disabled={qmBusy}
+                                            onClick={() => { if (!qmOperation.current) setQmEditing(null); }}>
                                             <Icon icon="arrow-left" size={13} />
                                         </button>
                                     )}
@@ -1179,8 +1262,10 @@ export default function RightSidebar() {
                                     <label className="qm-label">Target type</label>
                                     <div className="qm-actions">
                                         <button type="button" className={`qm-btn ${qmEditing.targetType === 'file' ? 'qm-btn--primary' : 'qm-btn--ghost'}`}
+                                            disabled={qmBusy}
                                             onClick={() => setQmEditing(ed => ed && ({ ...ed, targetType: 'file', path: '' }))}>Container file</button>
                                         <button type="button" className={`qm-btn ${qmEditing.targetType === 'partition' ? 'qm-btn--primary' : 'qm-btn--ghost'}`}
+                                            disabled={qmBusy}
                                             onClick={() => {
                                                 setQmEditing(ed => ed && ({ ...ed, targetType: 'partition', path: '' }));
                                                 void loadQmPartitions();
@@ -1189,9 +1274,10 @@ export default function RightSidebar() {
                                 </div>
                                 {qmEditing.targetType === 'partition' ? (
                                     <div className="qm-field">
-                                        <label className="qm-label">Encrypted partition</label>
+                                        <label className="qm-label" htmlFor="quick-mount-partition">Encrypted partition</label>
                                         {qmPartitionsLoading ? <span className="qm-hint">Finding mountable partitions…</span> : (
-                                            <select className="qm-select" value={qmEditing.path}
+                                            <select id="quick-mount-partition" className="qm-select" value={qmEditing.path}
+                                                disabled={qmBusy}
                                                 onChange={(e) => setQmEditing(ed => ed && ({ ...ed, path: e.target.value }))}>
                                                 <option value="">Select a partition</option>
                                                 {qmPartitions.map((partition) => (
@@ -1205,9 +1291,11 @@ export default function RightSidebar() {
                                     </div>
                                 ) : (
                                 <div className="qm-field">
-                                    <label className="qm-label">File Path</label>
+                                    <label className="qm-label" htmlFor="quick-mount-file-path">File Path</label>
                                     <div className="qm-path-row">
                                         <input
+                                            id="quick-mount-file-path"
+                                            disabled={qmBusy}
                                             className="qm-input"
                                             type="text"
                                             placeholder="C:\path\to\vault.hc"
@@ -1220,6 +1308,7 @@ export default function RightSidebar() {
                                             type="button"
                                             className="qm-browse-btn"
                                             title="Browse for file"
+                                            disabled={qmBusy}
                                             onClick={async () => {
                                                 try {
                                                     const selected = await openFilePicker({
@@ -1241,7 +1330,7 @@ export default function RightSidebar() {
                                     <select
                                         className="qm-select"
                                         aria-label="Quick Mount free drive letter"
-                                        disabled={qmLettersLoading}
+                                        disabled={qmBusy || qmLettersLoading}
                                         value={qmEditing.letter}
                                         onChange={(e) => setQmEditing(ed => ed && ({ ...ed, letter: e.target.value }))}
                                     >
@@ -1249,7 +1338,7 @@ export default function RightSidebar() {
                                         {qmEditing.letter && !qmLetterChoices.includes(qmEditing.letter) && <option value={qmEditing.letter} disabled>{qmEditing.letter}: — {qmLettersLoading ? 'checking' : 'unavailable'}</option>}
                                         {qmLetterChoices.map(letter => <option key={letter} value={letter}>{letter}:</option>)}
                                     </select>
-                                    <button type="button" className="qm-btn qm-btn--ghost" disabled={qmLettersLoading} onClick={() => void refreshQmLetters()}>Refresh free letters</button>
+                                    <button type="button" className="qm-btn qm-btn--ghost" disabled={qmBusy || qmLettersLoading} onClick={() => void refreshQmLetters()}>Refresh free letters</button>
                                     {quickMountSlots.filter((_, i) => qmEditing.idx === 'new' || i !== qmEditing.idx).length > 0 && (
                                         <span className="qm-hint">
                                             Already used:{' '}
@@ -1262,7 +1351,8 @@ export default function RightSidebar() {
                                 </div>
                                 <div className="qm-actions">
                                     <button type="button" className="qm-btn qm-btn--ghost"
-                                        onClick={() => quickMountSlots.length > 0 ? setQmEditing(null) : setQmOpen(false)}>
+                                        disabled={qmBusy}
+                                        onClick={() => { if (!qmOperation.current) quickMountSlots.length > 0 ? setQmEditing(null) : setQmOpen(false); }}>
                                         Cancel
                                     </button>
                                     <button type="button" className="qm-btn qm-btn--primary"
@@ -1275,6 +1365,14 @@ export default function RightSidebar() {
                         ) : (
                             /* ── Mount view — dropdown + path info + password ── */
                             <>
+                                <div className="qm-field qm-explorer-preference">
+                                    <Checkbox checked={explorerPreference.enabled} disabled={qmBusy || !appSettings}
+                                        ariaLabel="Open File Explorer after Quick Mount"
+                                        label="Open File Explorer after Quick Mount"
+                                        onChange={event => void saveExplorerPreference(event.target.checked)} />
+                                    <span className="qm-hint">Saved for this Windows account until you change it. File Explorer opens only after the Vault is ready.</span>
+                                    {explorerPreference.saving && <span className="qm-hint" role="status">Saving preference…</span>}
+                                </div>
                                 <div className="qm-fleet-vaults">
                                     <div className="qm-title-row">
                                         <span className="qm-title">Saved Fleet Vaults</span>
@@ -1292,8 +1390,9 @@ export default function RightSidebar() {
                                                 <select
                                                     id="fleet-vault-mount-select"
                                                     className="qm-select"
+                                                    disabled={qmBusy}
                                                     value={fleetVaultEntryId}
-                                                    onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); setQmFeedback(''); setQmMountedDrive(null); }}
+                                                    onChange={(event) => { setFleetVaultEntryId(event.target.value); setFleetVaultPassword(''); setQmFeedback(''); setQmMountedTarget(null); }}
                                                 >
                                                     {fleetVaults.map(entry => <option key={entry.entry_id} value={entry.entry_id}>
                                                         {(entry.drive_letter ?? entry.preferred_letter) ? `${entry.drive_letter ?? entry.preferred_letter}: — ` : ''}{entry.label} — {entry.access === 'write' ? 'Edit / read-write' : 'View / read only'}
@@ -1303,10 +1402,7 @@ export default function RightSidebar() {
                                             </div>
                                             {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'mounted' && <div role="status" className="qm-hint">
                                                 This Vault is already mounted.
-                                                {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.drive_letter && <button type="button" className="qm-btn qm-btn--primary" onClick={() => {
-                                                    const drive = fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.drive_letter;
-                                                    if (drive) void openVaultDrive(drive);
-                                                }}>Open in File Explorer</button>}
+                                                {!explorerPreference.enabled && !qmMountedTarget && fleetExplorerTarget && <button type="button" className="qm-btn qm-btn--primary" disabled={qmBusy} onClick={() => void openQuickMountTarget(fleetExplorerTarget)}>Open in File Explorer</button>}
                                             </div>}
                                             {fleetVaults.find(entry => entry.entry_id === fleetVaultEntryId)?.mount_state === 'failed' && <div role="status" className="qm-hint">
                                                 This Vault needs cleanup or a fresh status check. Choose Retry cleanup to recover this Vault.
@@ -1319,14 +1415,14 @@ export default function RightSidebar() {
                                                     type="password"
                                                     placeholder="Enter password"
                                                     value={fleetVaultPassword}
-                                                    disabled={fleetVaultNeedsCleanup}
+                                                    disabled={fleetVaultNeedsCleanup || qmBusy}
                                                     onChange={(event) => setFleetVaultPassword(event.target.value)}
                                                     onKeyDown={(event) => { if (event.key === 'Enter') void handleFleetVaultMount(); }}
                                                 />
                                             </div>
                                             <div className="qm-actions">
                                                 <button type="button" className="qm-btn qm-btn--primary"
-                                                    disabled={!fleetVaultEntryId || (!fleetVaultNeedsCleanup && !fleetVaultPassword) || fleetVaultMounting}
+                                                    disabled={!fleetVaultEntryId || (!fleetVaultNeedsCleanup && !fleetVaultPassword) || qmBusy}
                                                     onClick={() => { void (fleetVaultNeedsCleanup ? handleFleetVaultCleanup() : handleFleetVaultMount()); }}>
                                                     {fleetVaultMounting ? <Spinner size={14} /> : fleetVaultNeedsCleanup ? 'Retry cleanup' : 'Mount inside'}
                                                 </button>
@@ -1337,6 +1433,7 @@ export default function RightSidebar() {
                                 <div className="qm-title-row">
                                     <span className="qm-title">Quick Mount</span>
                                     <button type="button" className="qm-add-btn"
+                                        disabled={qmBusy}
                                         onClick={() => setQmEditing({ idx: 'new', path: '', letter: nextFreeLetter(), targetType: 'file' })}>
                                         <Icon icon="plus" size={13} /> Add
                                     </button>
@@ -1349,12 +1446,14 @@ export default function RightSidebar() {
                                 ) : (
                                     <>
                                         <div className="qm-field">
-                                            <label className="qm-label">Vault</label>
+                                            <label className="qm-label" htmlFor="quick-mount-shortcut">Vault</label>
                                             <div className="qm-select-row">
                                                 <select
+                                                    id="quick-mount-shortcut"
                                                     className="qm-select"
                                                     value={qmSelectedIdx}
-                                                    onChange={(e) => { setQmSelectedIdx(Number(e.target.value)); setQmPassword(''); setQmFeedback(''); setQmMountedDrive(null); }}
+                                                    disabled={qmBusy}
+                                                    onChange={(e) => { setQmSelectedIdx(Number(e.target.value)); setQmPassword(''); setQmFeedback(''); setQmMountedTarget(null); }}
                                                 >
                                                     {quickMountSlots.map((slot, idx) => {
                                                         const name = slot.targetType === 'partition'
@@ -1368,6 +1467,7 @@ export default function RightSidebar() {
                                                     })}
                                                 </select>
                                                 <button type="button" className="qm-slot-edit-btn" title="Edit"
+                                                    disabled={qmBusy}
                                                     onClick={() => {
                                                         const s = quickMountSlots[qmSelectedIdx];
                                                         if (s) {
@@ -1379,6 +1479,7 @@ export default function RightSidebar() {
                                                     <Icon icon="edit" size={12} />
                                                 </button>
                                                 <button type="button" className="qm-slot-remove-btn" title="Remove"
+                                                    disabled={qmBusy}
                                                     onClick={() => handleQmRemoveSlot(qmSelectedIdx)}>
                                                     <Icon icon="cross" size={12} />
                                                 </button>
@@ -1392,10 +1493,12 @@ export default function RightSidebar() {
                                         </div>
 
                                         <div className="qm-field">
-                                            <label className="qm-label">Password</label>
+                                            <label className="qm-label" htmlFor="quick-mount-password">Password</label>
                                             <input
+                                                id="quick-mount-password"
                                                 className="qm-input"
                                                 type="password"
+                                                disabled={qmBusy}
                                                 placeholder="Enter password"
                                                 autoFocus
                                                 value={qmPassword}
@@ -1406,9 +1509,10 @@ export default function RightSidebar() {
 
                                         <div className="qm-actions">
                                             <button type="button" className="qm-btn qm-btn--ghost"
+                                                disabled={qmBusy}
                                                 onClick={() => setQmOpen(false)}>Cancel</button>
                                             <button type="button" className="qm-btn qm-btn--primary"
-                                                disabled={!qmPassword || qmMountingIdx !== null}
+                                                disabled={!qmPassword || qmBusy}
                                                 onClick={handleQmMount}>
                                                 {qmMountingIdx !== null ? <Spinner size={14} /> : 'Mount'}
                                             </button>
@@ -1417,9 +1521,8 @@ export default function RightSidebar() {
                                 )}
                             </>
                         )}
-                    </div>
-                </div>
-            )}
+                    </DialogContent>
+            </Dialog>
 
             {/* Lockdown countdown popup — shown only when armed from the sidebar
                 CLICK (the hotkey path stays popup-less). Click ABORT, the rail

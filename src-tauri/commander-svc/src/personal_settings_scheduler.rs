@@ -30,6 +30,12 @@ struct Transaction {
 }
 
 impl Scheduler {
+    pub(super) fn try_transaction<T>(&self, sid: &str, work: impl FnOnce() -> super::StoreResult<T>) -> super::StoreResult<T> {
+        let account = self.account(sid)?;
+        let _transaction = account.transaction.clone().try_acquire_owned().map_err(|_| BUSY)?;
+        work()
+    }
+
     pub(super) fn new() -> Self {
         Self {
             accounts: Mutex::new(HashMap::new()),

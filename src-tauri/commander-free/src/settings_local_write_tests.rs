@@ -4,6 +4,25 @@ use super::*;
 use serde_json::json;
 use std::cell::Cell;
 
+#[test]
+fn quick_mount_settings_refuse_new_duplicates_and_protected_letters_but_allow_removal() {
+    let current = create_default_settings();
+    for letters in [vec!["Q", "q:"], vec!["C"], vec!["A"], vec!["QQ"]] {
+        let mut candidate = current.clone();
+        candidate.app.vault.quick_mount_slots = letters.into_iter().map(|letter| super::super::QuickMountSlot {
+            file_path: "fixture.hc".into(), drive_letter: letter.into(), ..Default::default()
+        }).collect();
+        assert!(validate(&current, &candidate).is_err());
+    }
+    let mut legacy = current.clone();
+    legacy.app.vault.quick_mount_slots = vec![super::super::QuickMountSlot {
+        file_path: "fixture.hc".into(), drive_letter: "Q".into(), ..Default::default()
+    }; 2];
+    let mut repaired = legacy.clone(); repaired.app.vault.quick_mount_slots.pop();
+    assert!(validate(&legacy, &repaired).is_ok());
+    assert!(validate(&legacy, &current).is_ok());
+}
+
 struct Fixture {
     _lock: std::sync::MutexGuard<'static, ()>,
     previous: Option<AppSettings>,

@@ -4,6 +4,13 @@ import { readFileSync } from "node:fs";
 const source = readFileSync("src/components/RightSidebar.tsx", "utf8");
 
 describe("Fleet Vault quick mount", () => {
+  test("saved Explorer preference gates manual buttons and the Fleet automatic opening path", () => {
+    expect(source).toContain("!explorerPreference.enabled && qmMountedTarget");
+    expect(source).toContain("!explorerPreference.enabled && !qmMountedTarget && fleetExplorerTarget");
+    expect(source).toContain("quickMountExplorerTargetForDrive(await refreshVault(true), result.drive_letter)");
+    expect(source).toContain("await openQuickMountTarget(target, true)");
+    expect(source).not.toContain("void openVaultDrive(drive)");
+  });
   test("requires an authorized receipt before trusting even an empty mount readback", () => {
     expect(source).toContain("confirmedBulkDismountMessage(receipt, observed)");
     expect(source).not.toContain("if (!observed) throw new Error('vault_dismount_readback_unconfirmed')");
@@ -25,7 +32,8 @@ describe("Fleet Vault quick mount", () => {
 
   test("refreshes its service-filtered list after a saved Fleet Vault changes", async () => {
     const hook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
-    expect(hook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment })');
+    expect(hook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment,');
+    expect(hook).toContain("diagnosticOperationId: operationId");
     expect(hook).toContain('afterVaultMutation(() => invoke<Status>("apply_vault_owner_policy_fragment"');
     expect(source).toContain('window.addEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave)');
     expect(source).toContain('window.removeEventListener(FLEET_VAULTS_CHANGED_EVENT, refreshAfterFleetVaultSave)');

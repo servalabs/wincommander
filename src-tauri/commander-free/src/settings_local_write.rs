@@ -78,6 +78,22 @@ fn at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 fn validate(current: &AppSettings, candidate: &AppSettings) -> Result<(), String> {
+    let before_slots = &current.app.vault.quick_mount_slots;
+    let after_slots = &candidate.app.vault.quick_mount_slots;
+    if serde_json::to_value(before_slots).ok() != serde_json::to_value(after_slots).ok() {
+        if after_slots.len() > 128 { return Err("Too many Quick Mount entries".into()); }
+        let mut counts = std::collections::HashMap::new();
+        for slot in after_slots {
+            let letter = slot.drive_letter.trim_end_matches(':').to_ascii_uppercase();
+            if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() { return Err("Invalid Quick Mount drive letter".into()); }
+            let count = counts.entry(letter.clone()).or_insert(0usize);
+            *count += 1;
+            let old_count = before_slots.iter().filter(|old| old.drive_letter.trim_end_matches(':').eq_ignore_ascii_case(&letter)).count();
+            if (*count > 1 || letter.as_str() <= "C") && *count > old_count {
+                return Err("Quick Mount cannot add duplicate or protected drive-letter reservations".into());
+            }
+        }
+    }
     if current.device_id != candidate.device_id || current.created_at != candidate.created_at {
         return Err("Device identity is owned by WinCommander, not settings input".into());
     }

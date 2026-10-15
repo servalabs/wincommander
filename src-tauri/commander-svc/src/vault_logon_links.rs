@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Remove dead encrypted aliases only from Windows logons proven to have ended.
+//! Remove exact dead encrypted aliases under verified logon cleanup authority.
 use super::{Api, GlobalEncryptedLinkCleanup};
 
 #[path = "vault_logon_liveness.rs"]
@@ -170,6 +170,37 @@ pub(crate) fn cleanup_ended_logon_encrypted_link(
     Ok(result)
 }
 
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn cleanup_owned_logon_encrypted_link(
+    logon: LogonId, letter: char, internal_drive: u8, caller_sid: &str, session: u32,
+) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    if !('D'..='Z').contains(&letter) || internal_drive > 25 { return Err(()); }
+    let owned = scope::owned_logons(logon, caller_sid, session)?;
+    let native = native::LinkApi::load()?;
+    let expected = format!(r"\Device\VeraCryptVolume{}", char::from(b'A' + internal_drive));
+    for other in scope::related_logons(logon, caller_sid, session)? {
+        if owned.contains(&other) { continue; }
+        if let Some(link) = native.open(&link_path(other, letter)?, false)? {
+            if native.target(&link)?.eq_ignore_ascii_case(&expected) {
+                return Ok(GlobalEncryptedLinkCleanup::Retained);
+            }
+        }
+    }
+    let mut result = GlobalEncryptedLinkCleanup::Absent;
+    for owner in owned {
+        let cleanup = cleanup_link(&link_path(owner, letter)?, Some(internal_drive), || {
+            scope::verified_owner(owner, caller_sid, session)
+        })?;
+        if cleanup == GlobalEncryptedLinkCleanup::Retained { return Ok(cleanup); }
+        if cleanup == GlobalEncryptedLinkCleanup::Removed { result = cleanup; }
+    }
+    if !related_links_absent(logon, &scope::related_logons(logon, caller_sid, session)?, &expected, |other| {
+        let Some(link) = native.open(&link_path(other, letter)?, false)? else { return Ok(None); };
+        native.target(&link).map(Some)
+    })? { return Ok(GlobalEncryptedLinkCleanup::Retained); }
+    Ok(result)
+}
+
 pub(crate) fn ended_logon_encrypted_link_absent(
     logon: LogonId,
     letter: char,
@@ -217,68 +248,12 @@ fn related_links_absent(
     Ok(true)
 }
 
-pub(crate) fn release_orphaned_logon_encrypted_links() -> Result<usize, ()> {
-    let api = Api::load()?;
-    let mut removed = 0;
-    for (name, kind) in api.entries(r"\Sessions\0\DosDevices", false)? {
-        if kind != "Directory" {
-            continue;
-        }
-        let Some(logon) = parse_logon_name(&name) else {
-            continue;
-        };
-        if logon_ended(logon) != Ok(true) {
-            continue;
-        }
-        let Ok(entries) = api.entries(
-            &format!(
-                r"\Sessions\0\DosDevices\{:08x}-{:08x}",
-                logon.1 as u32, logon.0
-            ),
-            true,
-        ) else {
-            continue;
-        };
-        for (name, kind) in entries {
-            let bytes = name.as_bytes();
-            if kind != "SymbolicLink"
-                || bytes.len() != 2
-                || bytes[1] != b':'
-                || !bytes[0].is_ascii_alphabetic()
-            {
-                continue;
-            }
-            // An unreadable or racing alias remains blocked; it must not prevent
-            // independent, provably stale aliases from being repaired.
-            if cleanup_link(
-                &link_path(logon, char::from(bytes[0].to_ascii_uppercase()))?,
-                None,
-                || logon_ended(logon),
-            ) == Ok(GlobalEncryptedLinkCleanup::Removed)
-            {
-                removed += 1;
-            }
-        }
-    }
-    Ok(removed)
+pub(crate) fn cleanup_owned_caller_link(logon: LogonId, letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    if !('D'..='Z').contains(&letter) || slot > 25 { return Err(()); }
+    cleanup_link(&link_path(logon, letter)?, Some(slot), || Ok(true))
 }
 
-pub(crate) fn release_orphaned_caller_encrypted_links(logon: LogonId) -> Result<usize, ()> {
-    let mut removed = 0;
-    // The service supplies the pipe peer's authenticated LUID, never a request argument.
-    for letter in 'A'..='Z' {
-        if cleanup_link(&link_path(logon, letter)?, None, || Ok(true))
-            == Ok(GlobalEncryptedLinkCleanup::Removed)
-        {
-            removed += 1;
-        }
-    }
-    Ok(removed)
-}
-
-pub(super) fn cleanup_global_link(letter: char) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    if !letter.is_ascii_uppercase() {
-        return Err(());
-    }
-    cleanup_link(&format!(r"\GLOBAL??\{letter}:"), None, || Ok(true))
+pub(super) fn cleanup_global_link(letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    if !('D'..='Z').contains(&letter) || slot > 25 { return Err(()); }
+    cleanup_link(&format!(r"\GLOBAL??\{letter}:"), Some(slot), || Ok(true))
 }

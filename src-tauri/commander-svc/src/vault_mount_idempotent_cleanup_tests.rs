@@ -54,6 +54,29 @@ fn authorized_retry_after_startup_cleanup_returns_unmounted_without_another_dism
 }
 
 #[test]
+fn authorized_shared_member_retry_does_not_require_administrator_approval() {
+    struct Resolver;
+    impl PrincipalResolver for Resolver {
+        fn resolve_sid(&self, name: &str) -> Result<String, crate::vault_access::VaultError> {
+            Ok(if name == "Member" { "S-1-5-21-1-2-3-1002" } else { "S-1-5-21-1-2-3-1001" }.into())
+        }
+    }
+    let store = VaultAccessStore::open(Box::new(MountFs {
+        files: Arc::new(Mutex::new(HashMap::new())), fail_next_active_write: Arc::new(AtomicBool::new(false)),
+    }), Box::new(Resolver), Box::new(MountAcl), PathBuf::from("/policy"));
+    dismount_policy_fixture(&store, VaultPresentation::Machine);
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.policy_authorizer = dismount_test_policy_token;
+    broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+    let result = broker.dismount_authorized(&store, policy_cleanup_request());
+    assert_eq!(result.state, VaultMountState::Unmounted);
+    assert_eq!(result.presentation, Some(VaultPresentation::Machine));
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+}
+
+#[test]
 fn unmounted_retry_requires_existing_policy_grant_and_private_owner() {
     for scenario in [
         "missing-entry",

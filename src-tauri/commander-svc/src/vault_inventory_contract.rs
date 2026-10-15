@@ -9,6 +9,7 @@ pub(super) enum InventoryVersion {
     Legacy,
     Current,
     VerifyCleanup,
+    QuickMountReceipts,
 }
 
 pub(super) fn parse_query(args: &Value) -> Option<InventoryVersion> {
@@ -18,6 +19,13 @@ pub(super) fn parse_query(args: &Value) -> Option<InventoryVersion> {
     }
     if object.len() == 1 {
         return Some(InventoryVersion::Legacy);
+    }
+    if object.len() == 3
+        && object.get("inventory_version").and_then(Value::as_u64)
+            == Some(u64::from(VAULT_INVENTORY_VERSION))
+        && object.get("quick_mount_receipts") == Some(&Value::Bool(true))
+    {
+        return Some(InventoryVersion::QuickMountReceipts);
     }
     if object.len() == 3
         && object.get("inventory_version").and_then(Value::as_u64)
@@ -38,7 +46,19 @@ pub(super) fn reply(
     mounts: &[PersonalVaultMountedVolume],
 ) -> Result<Value, serde_json::Error> {
     match version {
-        InventoryVersion::Current | InventoryVersion::VerifyCleanup => serde_json::to_value(mounts),
+        InventoryVersion::QuickMountReceipts => serde_json::to_value(mounts),
+        InventoryVersion::Current | InventoryVersion::VerifyCleanup => {
+            let mut value = serde_json::to_value(mounts)?;
+            // Installed version-2 readers reject unknown fields.
+            if let Some(rows) = value.as_array_mut() {
+                for row in rows {
+                    if let Some(row) = row.as_object_mut() {
+                        row.remove("quick_mount_receipt");
+                    }
+                }
+            }
+            Ok(value)
+        }
         InventoryVersion::Legacy => Ok(Value::Array(
             mounts
                 .iter()
@@ -77,6 +97,7 @@ mod tests {
             presentation: VaultPresentation::Machine,
             cleanup_required: false,
             browse_allowed: true,
+            quick_mount_receipt: None,
             dismount_allowed: false,
             dismount_reason: Some(VaultMountReason::AdministratorRequired),
             canonical_container_path: Some(r"D:\Vaults\fixture.hc".into()),
@@ -127,5 +148,18 @@ mod tests {
         let version = parse_query(&query).unwrap();
         assert_eq!(version, InventoryVersion::VerifyCleanup);
         assert_eq!(reply(version, &[]).unwrap(), json!([]));
+    }
+
+    #[test]
+    fn quick_mount_receipts_are_opt_in_and_do_not_break_installed_readers() {
+        let mut mount = fixture();
+        mount.quick_mount_receipt = Some(format!("qm1:{}", "a".repeat(64)));
+        let quick = parse_query(&json!({"personal":true,"inventory_version":2,"quick_mount_receipts":true})).unwrap();
+        assert_eq!(quick, InventoryVersion::QuickMountReceipts);
+        assert_eq!(reply(quick, &[mount.clone()]).unwrap()[0]["quick_mount_receipt"], mount.quick_mount_receipt.as_ref().unwrap().as_str());
+        for version in [InventoryVersion::Current, InventoryVersion::VerifyCleanup, InventoryVersion::Legacy] {
+            assert!(reply(version, &[mount.clone()]).unwrap()[0].get("quick_mount_receipt").is_none());
+        }
+        assert!(parse_query(&json!({"personal":true,"inventory_version":2,"quick_mount_receipts":false})).is_none());
     }
 }

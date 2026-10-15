@@ -2,6 +2,22 @@ import { expect, test } from "bun:test";
 import { confirmedBulkDismountMessage, confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
 import type { EncryptionStatus } from "@/hooks/useBackend";
 
+test("pre-request service failures identify their stage without restart advice or raw context", () => {
+  for (const [code, stage] of [
+    ["vault_service_unavailable", "connection"],
+    ["vault_service_identity_rejected", "identity"],
+    ["vault_service_handshake_rejected", "handshake"],
+    ["vault_service_handshake_timeout", "handshake"],
+  ]) {
+    const message = vaultOperationError(`${code} secret-value C:\\protected\\container.hc`);
+    expect(message.toLowerCase()).toContain(stage);
+    expect(message).not.toContain("secret-value");
+    expect(message).not.toContain("protected");
+    expect(message.toLowerCase()).not.toContain("restart");
+    expect(message).toContain("No mount or dismount was started");
+  }
+});
+
 test("bulk success requires an explicit bounded authorized-subset receipt", () => {
   const receipt = { status: "authorized_dismounted", state: "unmounted", scope: "authorized", dismounted: 2 };
   expect(isAuthorizedBulkDismountReceipt(receipt)).toBe(true);
@@ -38,6 +54,15 @@ test("failed mount rollback reports uncertain cleanup without claiming dismount 
     expect(message).not.toContain("password");
   }
   expect(vaultOperationError("vault_dismount_failed", "dismount")).not.toContain("Mounting failed");
+});
+
+test("dismount cleanup uncertainty explains the mapping stage without mount wording or raw details", () => {
+  const message = vaultOperationError("vault_cleanup_failed C:\\private\\test.hc password=hidden", "dismount");
+  expect(message).toContain("Dismount cleanup could not be confirmed");
+  expect(message).toContain("mapping may still be in use");
+  expect(message).not.toContain("Mounting failed");
+  expect(message).not.toContain("private");
+  expect(message).not.toContain("hidden");
 });
 
 test("runtime incompatibility distinguishes preflight denial from unverified post-operation status", () => {
@@ -113,7 +138,7 @@ test("mounted-root access denial explains automatic ordinary-Vault recovery", ()
 
 test("registered ownership and Fleet denial give policy recovery rather than filesystem repair", () => {
   const owner = vaultOperationError("vault_private_owner_required", "dismount");
-  expect(owner).toContain("original mounting session");
+  expect(owner).toContain("owner's Windows account");
   expect(owner).toContain("dismount it first");
   expect(owner).toContain("authorized administrator");
   expect(owner).toContain("Fleet > Vault permissions");
@@ -123,6 +148,19 @@ test("registered ownership and Fleet denial give policy recovery rather than fil
     expect(message).not.toContain("Properties > Security");
     expect(message).not.toContain("take ownership");
     expect(message).not.toContain("password");
+  }
+});
+
+test("private-owner denial names the authorized account without requiring the original logon", () => {
+  for (const operation of ["mount", "dismount"] as const) {
+    const message = vaultOperationError("vault_private_owner_required S-1-5-private-owner C:\\protected\\vault.hc", operation);
+    expect(message).toContain("registered owner");
+    expect(message).toContain("owner's Windows account");
+    expect(message).toContain("administrator access does not replace ownership");
+    expect(message).not.toContain("original mounting session");
+    expect(message).not.toContain("session where it was mounted");
+    expect(message).not.toContain("S-1-5-private-owner");
+    expect(message).not.toContain("protected");
   }
 });
 
@@ -165,6 +203,24 @@ test("partial bulk dismount preserves safe counts and its exact authorization ca
   expect(message).toContain("Fleet Vault permission");
   expect(message).not.toContain("password");
   expect(vaultOperationError("vault_bulk_dismount_partial:secret-user:2:1", "dismount")).not.toContain("secret-user");
+});
+
+test("Syncthing readiness failure stops dismount at the pause check without exposing private context", () => {
+  const message = vaultOperationError("vault_syncthing_profile_unavailable secret-key C:\\protected\\profile", "dismount");
+  expect(message).toContain("synced folders are safely paused");
+  expect(message).toContain("retry the dismount check");
+  expect(message).toContain("not confirmed dismounted");
+  expect(message).not.toContain("Keep the personal Vault mounted");
+  expect(message).not.toContain("secret-key");
+  expect(message).not.toContain("protected");
+  expect(vaultOperationError("vault_syncthing_profile_unavailable", "mount")).toContain("Keep the personal Vault mounted");
+});
+
+test("partial Syncthing dismount failure keeps confirmed counts and the remaining pause barrier", () => {
+  const message = vaultOperationError("vault_bulk_dismount_partial:syncthing_profile_unavailable:2:1", "dismount");
+  expect(message).toContain("2 encrypted volume(s) dismounted; 1 not confirmed dismounted");
+  expect(message).toContain("synced folders are safely paused");
+  expect(message).not.toContain("Keep the personal Vault mounted");
 });
 test("untracked driver cleanup explains the recovery action without exposing raw details", () => {
   const message = vaultOperationError("vault_untracked_mounts C:\\private\\container", "dismount");

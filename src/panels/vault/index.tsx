@@ -1,3 +1,4 @@
+import { vaultLetterReportMessage, type VaultLetterReport } from "@/lib/vaultLetterCleanup";
 import { Button, Icon, Dialog, FormGroup, InputGroup, Tooltip, CheckboxControl } from "@/components/ui/bp";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,78 +33,7 @@ import MountProgress from "./MountProgress";
 import { waitForMountOptions, waitForMountReadback, type MountStage } from "./mountOperationProgress";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
-const MOUNT_ERROR_MAX_LENGTH = 300;
-
-const boundedMountError = (error: unknown) => {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "Failed to mount volume.";
-  const normalized = message.replace(/\s+/g, " ").trim();
-  if (/vault_mount_readback_unconfirmed|vault_confirmed_mount_list_unavailable/.test(normalized)) return vaultOperationError(error);
-  if (/vault_mount_options_timeout|vault_request_timeout|vault_operation_unconfirmed|vault_service_busy|all pipe instances are busy|pro response timeout/i.test(normalized)) return vaultOperationError(error);
-  if (/pro_not_installed|vault_runtime_update_required|vault_service_personal_status_invalid|vault_entitlement_denied|vault_owner_required|vault_administrator_required|vault_policy_access_denied|vault_private_owner_required|vault_mount_state_unknown|vault_not_authorized/i.test(normalized)) return vaultOperationError(error);
-  if (normalized.includes("vault_already_mounted")) {
-    return "This container is already mounted. Open its existing drive in Secure Storage, or dismount it before changing mount options.";
-  }
-  if (normalized.includes("vault_engine_unlock_failed")) {
-    return "WinCommander could not unlock this volume. Check that you selected the correct file and entered its original password, PIM, and keyfile.";
-  }
-  if (normalized.includes("vault_engine_drive_letter_unavailable")) {
-    return "That drive letter is already in use. Choose a free drive letter, then try again.";
-  }
-  if (normalized.includes("vault_caller_access_denied")) {
-    return vaultOperationError(error);
-  }
-  if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
-    return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";
-  }
-  if (normalized.includes("vault_policy_managed")) {
-    return "This container is managed by a Vault permission. Open Fleet, choose Vault permissions, then mount the assigned Vault there.";
-  }
-  if (normalized.includes("vault_policy_identity_changed")) {
-    return "This exact encrypted file was replaced after its Vault permission was saved. In Fleet, edit that Vault permission to select and save the current file, or remove the obsolete policy. Other containers in the same folder are unaffected.";
-  }
-  if (normalized.includes("vault_policy_unavailable")) {
-    return "A Vault permission controls this container but could not be verified. Open Fleet, review the Vault permission, then try again.";
-  }
-  if (normalized.includes("vault_not_authorized")) {
-    return "This Windows account is not authorized to mount that container. Select the original container and use its original account, password, PIM, and keyfile.";
-  }
-  if (normalized.includes("vault_driver_unavailable")) {
-    return "The encrypted-volume driver is unavailable. Open Settings and repair WinCommander, then retry.";
-  }
-  if (normalized.includes("vault_session_unavailable")) {
-    return "WinCommander could not access your interactive Windows session. Sign out and back in, then retry.";
-  }
-  if (normalized.includes("vault_broker_unavailable")) {
-    return "WinCommander's secure mount helper could not be reached, so no mount was confirmed. Restart WinCommander, then try again.";
-  }
-  if (normalized.includes("vault_broker_rejected")) {
-    return "WinCommander could not verify the secure mount helper. Update or repair WinCommander, then try again.";
-  }
-  if (normalized.includes("vault_broker_identity_rejected")) {
-    return "WinCommander could not verify the secure helper identity. Restart the current WinCommander service, then try again.";
-  }
-  if (normalized.includes("vault_broker_handshake_rejected")) {
-    return "WinCommander could not verify the secure helper handshake. Restart the current WinCommander service, then try again.";
-  }
-  if (normalized.includes("vault_broker_reply_rejected")) {
-    return "WinCommander could not verify the secure helper reply. Restart the current WinCommander service, then try again.";
-  }
-  if (normalized.includes("vault_broker_plan_rejected")) {
-    return "The secure Vault helper rejected the service-generated mount plan. Restart WinCommander after updating both components, then try again.";
-  }
-  if (normalized.includes("vault_presentation_rejected")) {
-    return "WinCommander mounted the Vault but Windows did not make its drive available to this signed-in account, so it was safely dismounted.";
-  }
-  if (normalized.includes("vault_entitlement_denied")) {
-    return "WinCommander could not verify the Pro licence for this Vault operation. Refresh the licence status, then try again.";
-  }
-  if (normalized.includes("vault_cleanup_failed")) {
-    return "The final mount state could not be confirmed after cleanup. Do not use the selected drive letter until you restart WinCommander and check Secure Storage.";
-  }
-  return normalized.length > MOUNT_ERROR_MAX_LENGTH
-    ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
-    : normalized;
-};
+const boundedMountError = (error: unknown) => vaultOperationError(error);
 
 const vaultMountErrorCode = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
@@ -191,6 +121,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountFailure, setMountFailure] = useState("");
   const [volumeActionFailure, setVolumeActionFailure] = useState("");
   const [releasingOrphanedLetters, setReleasingOrphanedLetters] = useState(false);
+  const letterCleanupInFlight = useRef(false);
+  const [letterReports, setLetterReports] = useState<VaultLetterReport[]>([]);
 
   const {
     mountVolume,
@@ -236,14 +168,19 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   }, [availableLetters]);
 
   const releaseOrphanedMountLetters = useCallback(async () => {
+    if (letterCleanupInFlight.current || mountInFlight.current) return;
+    letterCleanupInFlight.current = true;
     setReleasingOrphanedLetters(true);
+    setLetterReports([]);
     try {
       const result = await releaseOrphanedVaultDriveLetters();
       if (!result.success || !result.data) {
-        showError(result.error || "Unavailable Vault drive letters could not be checked.");
+        showError("Drive ownership, saved shortcuts or Windows state could not be verified. Refresh status before trying again. No volume was dismounted.");
         return;
       }
-      await refreshMountLetters();
+      setLetterReports(result.data.letters);
+      const refreshed = await refreshMountLetters();
+      if (!refreshed) { showError("Cleanup returned a result, but current drive availability could not be refreshed. Check status before mounting."); return; }
       showSuccess(
         result.data.released === 0
           ? "No stale Vault drive mappings could be safely removed."
@@ -251,6 +188,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       );
     } finally {
       setReleasingOrphanedLetters(false);
+      letterCleanupInFlight.current = false;
     }
   }, [refreshMountLetters, releaseOrphanedVaultDriveLetters]);
   useEffect(() => {
@@ -775,6 +713,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               onReleaseOrphaned={() => void releaseOrphanedMountLetters()}
               releasingOrphaned={releasingOrphanedLetters}
             />
+            {letterReports.length > 0 && <div role="status" className="vault-letter-cleanup-report">
+              {letterReports.map(report => <p key={report.letter}>{vaultLetterReportMessage(report)}</p>)}
+            </div>}
           </FormGroup>
 
           <FormGroup label="Password" labelFor="password" helperText="The password selects the matching standard, outer, or hidden volume automatically. Make sure CAPS Lock is off.">

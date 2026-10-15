@@ -59,7 +59,7 @@ describe("Vault Access service intent", () => {
       "entitlement_denied",
       "pro_not_installed",
       "session_unavailable", "syncthing_profile_unavailable", "syncthing_install_failed",
-      "syncthing_root_conflict", "engine_unlock_failed", "engine_drive_letter_unavailable",
+      "syncthing_root_conflict", "syncthing_not_enabled", "engine_unlock_failed", "engine_drive_letter_unavailable",
       "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",
     ]);
   });

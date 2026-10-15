@@ -5,7 +5,7 @@
 mod logon_links;
 pub(crate) use logon_links::{
     cleanup_ended_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
-    release_orphaned_caller_encrypted_links, release_orphaned_logon_encrypted_links,
+    cleanup_owned_caller_link, cleanup_owned_logon_encrypted_link,
 };
 
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
@@ -233,32 +233,18 @@ pub(crate) fn global_drive_letter_absent(letter: char) -> Result<bool, ()> {
     Ok(global_dos_device_target(letter)?.is_none())
 }
 
+pub(crate) fn is_real_global_volume(letter: char) -> bool {
+    global_dos_device_target(letter).ok().flatten().is_some_and(|target| {
+        let target = target.to_ascii_lowercase();
+        target.starts_with(r"\device\harddiskvolume") || target.starts_with(r"\device\cdrom")
+    })
+}
+
 /// Confirm that one global encrypted-volume letter is absent, removing it
 /// only when Windows still reports the exact dead VeraCrypt/TrueCrypt target.
 /// A live/foreign mapping or an uncertain native-device check is retained.
-pub(crate) fn cleanup_global_encrypted_link(letter: char) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    logon_links::cleanup_global_link(letter)
-}
-
-/// Remove only dead global VeraCrypt/TrueCrypt drive names.
-/// Names are pinned until removal and the encrypted device must be absent.
-/// Filesystem access failures are never treated as evidence that a drive is dead.
-fn release_orphaned_global_encrypted_links_with(
-    mut cleanup: impl FnMut(char) -> Result<GlobalEncryptedLinkCleanup, ()>,
-) -> Result<usize, ()> {
-    let mut released: usize = 0;
-    for byte in b'A'..=b'Z' {
-        let letter = char::from(byte);
-        // An unreadable mapping stays blocked without preventing later repairs.
-        if cleanup(letter) == Ok(GlobalEncryptedLinkCleanup::Removed) {
-            released = released.saturating_add(1);
-        }
-    }
-    Ok(released)
-}
-
-pub(crate) fn release_orphaned_global_encrypted_links() -> Result<usize, ()> {
-    release_orphaned_global_encrypted_links_with(cleanup_global_encrypted_link)
+pub(crate) fn cleanup_global_encrypted_link(letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    logon_links::cleanup_global_link(letter, slot)
 }
 
 #[cfg(test)]
@@ -307,25 +293,12 @@ mod tests {
     }
 
     #[test]
-    fn bulk_cleanup_keeps_scanning_after_an_uncertain_earlier_letter() {
-        let released = release_orphaned_global_encrypted_links_with(|letter| match letter {
-            'A' => Ok(GlobalEncryptedLinkCleanup::Retained),
-            'B' => Ok(GlobalEncryptedLinkCleanup::Removed),
-            _ => Ok(GlobalEncryptedLinkCleanup::Retained),
-        })
-        .unwrap();
-        assert_eq!(released, 1);
-    }
-
-    #[test]
-    fn bulk_cleanup_preserves_failed_aliases_and_continues_with_later_letters() {
-        let mut seen = Vec::new();
-        let result = release_orphaned_global_encrypted_links_with(|letter| {
-            seen.push(letter);
-            if letter == 'K' { Ok(GlobalEncryptedLinkCleanup::Removed) } else { Err(()) }
-        });
-        assert_eq!(result, Ok(1));
-        assert_eq!(seen, ('A'..='Z').collect::<Vec<_>>());
+    fn owned_cleanup_refuses_protected_letters_before_native_access() {
+        for letter in ['A', 'B', 'C', '?'] {
+            assert!(cleanup_global_encrypted_link(letter, 12).is_err());
+            assert!(cleanup_owned_caller_link((1, 0), letter, 12).is_err());
+        }
+        assert!(cleanup_global_encrypted_link('Q', 26).is_err());
     }
 
     #[test]

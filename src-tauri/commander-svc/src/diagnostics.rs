@@ -490,6 +490,19 @@ pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) 
     ));
 }
 
+pub(crate) fn record_vault_policy_save(operation_id: &str, stage: &'static str, succeeded: bool, started: Instant) {
+    let unconfirmed = matches!(stage, "policy_commit_unconfirmed" | "permission_rollback" | "policy_state");
+    let mut event = vault_event(operation_id, "apply_policy",
+        if succeeded { DiagnosticOutcome::Succeeded } else if unconfirmed { DiagnosticOutcome::Degraded } else { DiagnosticOutcome::Failed },
+        if succeeded { "VLT.POLICY.SAVED" } else if stage == "policy_commit_unconfirmed" { "VLT.POLICY.COMMIT_UNCONFIRMED" }
+        else if stage == "permission_rollback" { "VLT.POLICY.ROLLBACK_UNVERIFIED" }
+        else if stage == "policy_state" { "VLT.POLICY.STATE_UNAVAILABLE" } else { "VLT.POLICY.SAVE_FAILED" },
+        if succeeded { DiagnosticSeverity::Info } else { DiagnosticSeverity::Error }, false,
+        if succeeded { "none" } else { "review_saved_policy" }, started, BTreeMap::new());
+    event.stage = stage.into();
+    let _ = record_event(event);
+}
+
 #[allow(clippy::too_many_arguments)] // Stable diagnostic fields are intentionally explicit at call sites.
 fn vault_event(
     operation_id: &str,

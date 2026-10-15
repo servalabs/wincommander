@@ -35,10 +35,10 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn request_timeout_for(feature_id: &str) -> std::time::Duration {
     match feature_id {
-        // Applying a policy first dismounts active vaults and may resolve
-        // domain principals. A five-second caller deadline falsely reported a
-        // failure while the service continued the exclusive operation.
+        // Policy saves resolve Windows principals and apply/read back permissions.
+        // A short probe deadline does not cancel the exclusive mutation.
         "svc.vault.apply_policy"
+        | "svc.vault.apply_owner_fragment"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
         // The repair is a bounded mutation in the caller's Explorer session.
@@ -60,6 +60,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
         feature_id,
         "svc.vault.mount"
             | "svc.vault.apply_policy"
+            | "svc.vault.apply_owner_fragment"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
@@ -172,8 +173,8 @@ async fn call_via_with_timeout(
     // Clear it immediately after the pipe write, including timeout/error.
     zeroize_envelope(&mut request);
     write_result
-        .map_err(|_| "service request write timed out".to_string())?
-        .map_err(|e| format!("service request write failed: {e}"))?;
+        .map_err(|_| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { "service request write timed out".to_string() })?
+        .map_err(|e| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { format!("service request write failed: {e}") })?;
     let reply = timeout(request_timeout, wincmd_shared::read_envelope(&mut client))
         .await
         .map_err(|_| {
@@ -184,7 +185,7 @@ async fn call_via_with_timeout(
                 "service reply timed out".to_string()
             }
         })?
-        .map_err(|e| format!("service reply read failed: {e}"))?;
+        .map_err(|e| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { format!("service reply read failed: {e}") })?;
     let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
         reply
             .verify_and_unwrap(&session_token)
@@ -235,6 +236,8 @@ fn retries_service_startup_handshake(feature_id: &str) -> bool {
     matches!(
         feature_id,
         "svc.vault.list_authorized"
+            | "svc.vault.get_policy"
+            | "svc.vault.get_status"
             | "svc.vault.capabilities"
             | wincmd_shared::personal_settings::READ_PERSONAL_SETTINGS_VERB
     )
@@ -419,8 +422,34 @@ mod tests {
         assert!(signed.tag.is_empty());
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn owner_policy_save_accepts_a_reply_after_the_short_probe_deadline_without_restart() {
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let pipe_name = format!(r"\\.\pipe\wincmd-save-fixture-{}", uuid::Uuid::new_v4());
+        let mut server = ServerOptions::new().first_pipe_instance(true).create(&pipe_name).unwrap();
+        let worker = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            let wincmd_shared::Envelope::Hello(hello) = wincmd_shared::read_envelope(&mut server).await.unwrap() else { panic!("Hello required") };
+            wincmd_shared::write_envelope(&mut server, &wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&hello.session_token))).await.unwrap();
+            let frame = wincmd_shared::read_envelope(&mut server).await.unwrap().verify_and_unwrap(&hello.session_token).unwrap();
+            let wincmd_shared::Envelope::Request(request) = frame else { panic!("signed request required") };
+            assert_eq!(request.feature_id, "svc.vault.apply_owner_fragment");
+            tokio::time::sleep(SVC_TRANSPORT_TIMEOUT + std::time::Duration::from_millis(100)).await;
+            wincmd_shared::write_envelope(&mut server, &wincmd_shared::Envelope::Response(wincmd_shared::Response {
+                request_id: request.request_id, result: serde_json::json!({"fixture_confirmed":true}),
+            })).await.unwrap();
+            assert!(matches!(wincmd_shared::read_envelope(&mut server).await.unwrap(), wincmd_shared::Envelope::Bye));
+        });
+        let response = call_via(&pipe_name, "svc.vault.apply_owner_fragment", serde_json::json!({"fixture_only":true})).await.unwrap();
+        assert_eq!(response["fixture_confirmed"], true);
+        worker.await.unwrap();
+    }
+
     #[test]
     fn long_deadlines_are_reserved_for_vault_mutations() {
+        assert_eq!(request_timeout_for("svc.vault.apply_owner_fragment"), VAULT_MUTATION_TIMEOUT);
+        assert!(may_still_be_completing("svc.vault.apply_owner_fragment"));
         assert_eq!(request_timeout_for("svc.vault.mount"), VAULT_MOUNT_TIMEOUT);
         assert_eq!(
             request_timeout_for("svc.vault.apply_policy"),

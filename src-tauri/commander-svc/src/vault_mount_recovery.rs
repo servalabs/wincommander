@@ -55,11 +55,10 @@ impl VaultMountBroker {
         }
         if entry.mount.presentation == VaultPresentation::PerUser
             && entry.primary_owner_sid.as_deref() != Some(request.caller_sid)
+            && !store.is_shared_per_user_policy_for_authorized_caller(request.entry_id,
+                entry.container_identity.as_deref(), request.caller_sid)
         {
             return uncertain();
-        }
-        if entry.mount.presentation == VaultPresentation::Machine && !request.caller_elevated {
-            return denied(request.entry_id, VaultMountReason::AdministratorRequired);
         }
         if self.recovery.lock().map_or(true, |state| {
             state.registry_untrusted || state.recoverable_registry
@@ -102,11 +101,10 @@ impl VaultMountBroker {
         &self,
         request: &AuthorizedDismount<'_>,
         mount: &ActiveMount,
-        owner_logon_ended: bool,
+        _owner_logon_ended: bool,
         mut pause: impl FnMut(&ActiveMount) -> Result<SyncthingLifecycleResult, VaultMountReason>,
     ) -> Result<(), VaultMountReason> {
         if mount.caller_sid != request.caller_sid
-            || !owner_logon_ended
             || !requires_syncthing_pause(mount)
         {
             return Ok(());
@@ -126,7 +124,7 @@ impl VaultMountBroker {
     }
 
     pub(super) fn owner_may_recover(&self, mount: &ActiveMount, caller_sid: &str) -> bool {
-        mount.caller_sid == caller_sid && self.owner_logon_ended(mount)
+        mount.caller_sid == caller_sid
     }
 
     pub(super) fn recovery_request_with_logon_proof<'a>(
@@ -135,8 +133,8 @@ impl VaultMountBroker {
         owner_logon_ended: bool,
     ) -> BrokerDismountRequest<'a> {
         let mut request = recovery_dismount_request(mount);
-        if mount.presentation == VaultPresentation::PerUser && owner_logon_ended {
-            request.owner_logon_ended = true;
+        if mount.presentation == VaultPresentation::PerUser {
+            request.owner_logon_ended = owner_logon_ended;
             request.presented_drive_letter = None;
         }
         request
@@ -250,4 +248,16 @@ pub(super) fn private_alias_absent(mount: &ActiveMount) -> Result<bool, ()> {
 
 pub(super) fn cleanup_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
     private_alias_operation(mount, true)
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn cleanup_owned_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
+    let logon = mount.authentication_id.ok_or(())?;
+    let letter = mount.drive_letter.strip_suffix(':').ok_or(())?;
+    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() { return Err(()); }
+    use crate::vault_drive_letters::GlobalEncryptedLinkCleanup;
+    Ok(matches!(crate::vault_drive_letters::cleanup_owned_logon_encrypted_link(
+        logon, letter.as_bytes()[0].to_ascii_uppercase() as char, mount.internal_drive,
+        &mount.caller_sid, mount.session_id,
+    )?, GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed))
 }

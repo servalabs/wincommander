@@ -3,6 +3,16 @@ use super::*;
 use serde_json::json;
 use std::sync::{Arc, Barrier};
 
+#[test]
+fn cleanup_settings_refuse_malformed_reservations_and_preserve_duplicates_for_review() {
+    for value in [json!({}), json!({"app":null}), json!({"app":{"vault":[]}}),
+        json!({"app":{"vault":{"quickMountSlots":"unknown"}}}), json!({"app":{"vault":{"quickMountSlots":[{"driveLetter":"QQ"}]}}})] {
+        assert!(quick_mount_letters(&value).is_err());
+    }
+    assert_eq!(quick_mount_letters(&json!({"app":{"vault":{"quickMountSlots":[{"driveLetter":"q:"},{"driveLetter":"Q"}]}}})).unwrap(), vec!["Q", "Q"]);
+    assert!(quick_mount_letters(&json!({"app":{"vault":{"quickMountSlots":[]}}})).unwrap().is_empty());
+}
+
 struct TestRoot(PathBuf);
 impl TestRoot {
     fn new() -> Self {

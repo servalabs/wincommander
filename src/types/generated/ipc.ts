@@ -171,4 +171,12 @@ export type VaultSyncAction = "enable" | "list" | "rename" | "remove";
 
 export type VaultSyncFolder = { folder_id: string, relative_path: string, label: string, paused: boolean, recovery_required: boolean, };
 
-export type VaultSyncManagementResult = { managed: boolean, mount_receipt: string | null, gui_url: string | null, folders: Array<VaultSyncFolder>, removed: boolean, syncthing_enabled: boolean, can_enable_syncthing: boolean, };
+export type VaultSyncManagementResult = { managed: boolean, mount_receipt: string | null, gui_url: string | null, folders: Array<VaultSyncFolder>, removed: boolean,
+/**
+ * The service reports consent without contacting the private adapter.
+ */
+syncthing_enabled: boolean,
+/**
+ * Only a standalone personal Vault can be enabled by its cloud action.
+ */
+can_enable_syncthing: boolean, };

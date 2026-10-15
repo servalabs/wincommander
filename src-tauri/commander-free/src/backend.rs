@@ -15,7 +15,7 @@ mod backend_paid_args;
 mod fix_scope;
 
 #[path = "vault_inventory.rs"]
-mod vault_inventory;
+pub(crate) mod vault_inventory;
 
 // ═══════════════════════════════════════════════════════════════════════
 // COMMAND REGISTRY — data-driven tier + risk classification (P0 seam)

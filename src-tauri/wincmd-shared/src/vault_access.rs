@@ -358,6 +358,9 @@ pub struct PersonalVaultMountedVolume {
     pub cleanup_required: bool,
     #[serde(default)]
     pub browse_allowed: bool,
+    /// Present only for the verified original Windows account, session and logon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_mount_receipt: Option<String>,
     #[serde(default)]
     pub dismount_allowed: bool,
     #[serde(default)]

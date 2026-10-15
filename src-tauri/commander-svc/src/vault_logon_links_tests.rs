@@ -5,6 +5,13 @@ use std::cell::Cell;
 use std::collections::HashSet;
 
 #[test]
+fn live_owner_cleanup_refuses_system_letters_before_namespace_inspection() {
+    for letter in ['A', 'B', 'C', 'c', '\\'] {
+        assert!(cleanup_owned_logon_encrypted_link((0, 0), letter, 12, "invalid", 0).is_err());
+    }
+}
+
+#[test]
 fn vanished_primary_alias_does_not_hide_linked_alias_from_inventory() {
     let primary = (7, 0);
     let related = [primary, (8, 0)];

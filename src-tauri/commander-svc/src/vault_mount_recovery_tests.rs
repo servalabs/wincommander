@@ -185,9 +185,9 @@ fn relogged_owner_can_close_verified_private_mount_without_using_old_alias() {
 }
 
 #[test]
-fn another_logon_cannot_claim_live_disconnected_or_unknown_owner_mount() {
+fn another_owner_cannot_claim_live_disconnected_or_unknown_private_mount() {
     for probe in [Ok(false), Err(())] {
-        for caller in ["S-1-5-21-owner", "S-1-5-21-outsider"] {
+        for caller in ["S-1-5-21-outsider"] {
             if probe == Ok(true) && caller == "S-1-5-21-owner" { continue; }
             let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
             let events = Arc::new(Mutex::new(BrokerEvents::default()));
@@ -262,7 +262,111 @@ fn ended_owner_pause_uses_authenticated_new_session_and_preserves_failure() {
 }
 
 #[test]
-fn signoff_retains_bound_pause_obligation_after_native_cleanup() {
+fn same_owner_live_signin_cleanup_closes_only_its_recorded_slot_without_fake_signout() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let mut mount = expired_private_mount();
+    mount.syncthing_managed = false;
+    mount.syncthing_resume_unresolved = false;
+    let recovery = broker.recovery_request_with_logon_proof(&mount, false);
+    assert!(!recovery.owner_logon_ended);
+    assert!(recovery.presented_drive_letter.is_none());
+    assert!(broker.retain_cleanup_mount(&store, "old", mount));
+    let rows = broker.personal_mounts_for_caller(&store, std::ptr::null_mut(), 8, "S-1-5-21-owner", false).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].dismount_allowed);
+    let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(), 8, "S-1-5-21-owner", false);
+    assert_eq!(result.state, VaultMountState::Unmounted);
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+    assert!(events.lock().unwrap().cleanup_contexts[0].1.is_none());
+    assert!(broker.active.lock().unwrap().is_empty());
+}
+
+#[test]
+fn live_same_owner_cleanup_keeps_authority_when_original_alias_cannot_be_verified() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    broker.owned_private_alias_cleanup = |_| Err(());
+    assert!(broker.retain_cleanup_mount(&store, "old", expired_private_mount()));
+    let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(), 8, "S-1-5-21-owner", false);
+    assert_eq!(result.state, VaultMountState::Failed);
+    assert!(broker.active.lock().unwrap()["old"].cleanup_required);
+    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+}
+
+#[test]
+fn live_same_owner_sync_pause_requires_a_receipt_in_the_current_context() {
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+    let mut mount = expired_private_mount(); mount.syncthing_managed = true;
+    let request = AuthorizedDismount { caller_authentication_id: Some((99, 0)), operation_id: 1,
+        entry_id: "old", caller_token: std::ptr::null_mut(), caller_session: 8,
+        caller_sid: "S-1-5-21-owner", caller_elevated: false };
+    assert_eq!(broker.pause_expired_owner_binding(&request, &mount, false, |context| {
+        assert_eq!(context.session_id, request.caller_session);
+        assert_eq!(context.container_identity, mount.container_identity);
+        Err(VaultMountReason::SyncthingProfileUnavailable)
+    }), Err(VaultMountReason::SyncthingProfileUnavailable));
+}
+
+#[test]
+fn completed_native_dismount_never_claims_success_when_registry_lock_is_poisoned() {
+    struct PoisonAfterCloseBroker {
+        native: MountBroker,
+        target: Arc<Mutex<Option<Arc<VaultMountBroker>>>>,
+    }
+    impl PoisonAfterCloseBroker {
+        fn poison_after_close(&self) {
+            let target = self.target.lock().unwrap().take().unwrap();
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _registry = target.active.lock().unwrap();
+                panic!("injected registry lock failure");
+            })).is_err());
+        }
+    }
+    impl AuthenticatedVaultBroker for PoisonAfterCloseBroker {
+        fn observed_slots(&self) -> Result<HashMap<u8, String>, String> { self.native.observed_slots() }
+        fn mount(&self, request: &mut InternalMountRequest) -> Result<InternalMountReply, VaultMountReason> { self.native.mount(request) }
+        fn dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
+            self.native.dismount(request)?;
+            self.poison_after_close();
+            Ok(())
+        }
+        fn recover_dismount(&self, request: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
+            self.native.recover_dismount(request)?;
+            self.poison_after_close();
+            Ok(())
+        }
+        fn cleanup_orphans(&self) -> Result<(), VaultMountReason> { Ok(()) }
+    }
+    for cross_signin in [false, true] {
+        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let target = Arc::new(Mutex::new(None));
+        let broker = Arc::new(VaultMountBroker::with_broker(Box::new(PoisonAfterCloseBroker {
+            native: MountBroker(events.clone()), target: target.clone(),
+        })));
+        *target.lock().unwrap() = Some(broker.clone());
+        let mut mount = expired_private_mount();
+        mount.authentication_id = None;
+        assert!(broker.retain_cleanup_mount(&store, "old", mount));
+        let saved = store.read_active_mounts().unwrap();
+        let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(),
+            if cross_signin { 8 } else { 7 }, "S-1-5-21-owner", false);
+        assert_eq!(result.state, VaultMountState::Failed);
+        assert_eq!(result.reason, Some(VaultMountReason::DismountFailed));
+        assert!(broker.recovery.lock().unwrap().persistence_pending.contains("old"));
+        assert_eq!(store.read_active_mounts().unwrap(), saved);
+        assert!(broker.snapshot().unwrap().is_empty());
+        let events = events.lock().unwrap();
+        assert_eq!(events.dismounted.len(), usize::from(!cross_signin));
+        assert_eq!(events.recovered.len(), usize::from(cross_signin));
+    }
+}
+
+#[test]
+fn signoff_preserves_bound_native_mount_until_sync_pause_is_confirmed() {
     let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
     let events = Arc::new(Mutex::new(BrokerEvents::default()));
     let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
@@ -271,10 +375,11 @@ fn signoff_retains_bound_pause_obligation_after_native_cleanup() {
     mount.syncthing_managed = true;
     assert!(broker.retain_cleanup_mount(&store, "old", mount));
     broker.dismount_session(&store, 7);
-    assert_eq!(events.lock().unwrap().recovered, vec![12]);
+    assert!(events.lock().unwrap().recovered.is_empty());
     let saved: DurableMountRegistry = serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
     assert!(saved.mounts["old"].syncthing_managed);
-    assert!(saved.mounts["old"].cleanup_required && saved.mounts["old"].driver_slot_absent);
+    assert!(!saved.mounts["old"].driver_slot_absent);
+    assert_eq!(broker.snapshot().unwrap().get(&12), Some(&"test-mount:12".to_owned()));
 }
 
 #[test]
@@ -301,26 +406,21 @@ fn native_logon_probe_keeps_the_current_logon_and_legacy_session_alive() {
 }
 
 #[test]
-fn reused_session_number_requires_original_luid_or_proven_old_logon_end() {
+fn reused_session_number_allows_recorded_owner_cleanup_without_claiming_browse_access() {
     for ended in [false, true] {
         let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
         let events = Arc::new(Mutex::new(BrokerEvents::default()));
         let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
         broker.owner_logon_probe = if ended { |_| Ok(true) } else { |_| Err(()) };
         assert!(broker.retain_cleanup_mount(&store, "old", expired_private_mount()));
-        let saved = store.read_active_mounts().unwrap();
         let result = broker.dismount_authorized(&store, AuthorizedDismount {
             operation_id: 1, entry_id: "old", caller_token: std::ptr::null_mut(),
             caller_session: 7, caller_sid: "S-1-5-21-owner", caller_elevated: true,
             caller_authentication_id: Some((43, 0)),
         });
-        if ended { assert_eq!(result.state, VaultMountState::Unmounted); }
-        else {
-            assert_eq!(result.reason, Some(VaultMountReason::MountStateUnknown));
-            assert_eq!(store.read_active_mounts().unwrap(), saved);
-            assert!(events.lock().unwrap().recovered.is_empty());
-            assert!(events.lock().unwrap().dismounted.is_empty());
-        }
+        assert_eq!(result.state, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().recovered, vec![12]);
+        assert!(events.lock().unwrap().cleanup_contexts[0].1.is_none());
     }
 }
 

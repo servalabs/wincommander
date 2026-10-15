@@ -414,17 +414,6 @@ html.light .action-item[data-tip][data-tip-intent="danger"]::after {
     padding-bottom: 14px;
     border-bottom: 1px solid var(--border);
 }
-.qm-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 9990;
-    background: rgba(0, 0, 0, 0.55);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    animation: ld-fade 0.12s ease;
-}
-
 .qm-dialog {
     background: var(--color-bg-primary, #1c1c1e);
     border: 1px solid var(--color-border);
@@ -435,7 +424,22 @@ html.light .action-item[data-tip][data-tip-intent="danger"]::after {
     flex-direction: column;
     gap: 12px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+    overflow-wrap: anywhere;
 }
+
+.qm-dialog > [data-slot="dialog-close"] { top: 6px; right: 6px; }
+.qm-dialog[aria-busy="true"] > [data-slot="dialog-close"] { visibility: hidden; }
+.qm-explorer-preference label { align-items: flex-start; white-space: normal; }
+.qm-explorer-preference label > button { flex-shrink: 0; margin-top: 2px; }
+.qm-explorer-preference label > span { min-width: 0; overflow-wrap: anywhere; }
+.qm-dialog button:focus-visible, .qm-dialog select:focus-visible {
+    outline: 2px solid var(--color-accent, #37b6a6);
+    outline-offset: 2px;
+}
+.qm-dialog .qm-btn { white-space: normal; overflow-wrap: anywhere; }
+.qm-dialog .qm-actions { flex-wrap: wrap; }
 
 .qm-title-row {
     display: flex;

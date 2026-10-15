@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { newVaultEntry, type VaultAccessPolicy, type VaultAuthorizedEntry, type VaultMountEntryResult } from "./vaultAccessTypes";
-import { vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
+import { recoverVaultPolicySave, vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 
 const entry = { ...newVaultEntry(), id: "fixture", primary_owner_sid: "owner-a" };
 const policy: VaultAccessPolicy = { schema_version: 1, policy_id: "policy", version: 2, expected_previous_version: 1, entries: [entry] };
@@ -32,6 +32,22 @@ test("an old revision or still-present removed entry cannot show saved or delete
   expect(vaultPolicyRevisionConfirmed({ ...policy, entries: [] }, null, [entry.id])).toBe(true);
 });
 
+test("save readback rejects a different encrypted file and changed Syncthing choice", () => {
+  const expected = { ...policy, entries: [{ ...entry, container_path: "D:\\fixture\\one.hc", syncthing_opt_in: false }] };
+  expect(vaultPolicyRevisionConfirmed(expected, { ...expected, entries: [{ ...expected.entries[0], container_path: "D:\\fixture\\two.hc" }] }, [])).toBe(false);
+  expect(vaultPolicyRevisionConfirmed(expected, { ...expected, entries: [{ ...expected.entries[0], syncthing_opt_in: true }] }, [])).toBe(false);
+  expect(vaultPolicyRevisionConfirmed(expected, { ...expected, entries: [{ ...expected.entries[0], container_path: "\\\\?\\D:\\fixture\\one.hc" }] }, [])).toBe(true);
+});
+
+test("an uncertain save uses bounded observations and never replays its mutation", async () => {
+  let reads = 0;
+  const recovered = await recoverVaultPolicySave(policy, [], async () => ++reads === 1 ? { ...policy, version: 1 } : policy, async () => {});
+  expect(recovered.confirmed).toBe(true); expect(reads).toBe(2);
+  reads = 0;
+  const unknown = await recoverVaultPolicySave(policy, [], async () => { reads++; throw new Error("service unavailable"); }, async () => {});
+  expect(unknown.confirmed).toBe(false); expect(reads).toBe(3);
+});
+
 test("policy confirmation compares all grant access while tolerating order and name case", () => {
   const expected = { ...policy, entries: [{ ...entry, grants: [
     { principal_name: "Owner", access: "write" as const }, { principal_name: "Reader", access: "read" as const },
@@ -59,4 +75,16 @@ test("a draft whose private owner changed reports ownership rather than stale ve
   const transferred = { ...policy, entries: [{ ...entry, primary_owner_sid: "owner-b" }] };
   expect(vaultDraftConflictReason(policy, policy, transferred, "owner-a")).toBe("vault_owner_required");
   expect(vaultDraftConflictReason(policy, policy, policy, "owner-a")).toBe("Vault policy version conflict");
+});
+
+test("a missing projection never recovers an uncertain final removal", async () => {
+  let reads = 0;
+  const result = await recoverVaultPolicySave({ ...policy, entries: [] }, [entry.id], async () => { reads++; return null; }, async () => {});
+  expect(result.confirmed).toBe(false);
+  expect(reads).toBe(0);
+});
+
+test("uncertain partial removal cannot recover from caller visibility alone", async () => {
+  const result = await recoverVaultPolicySave(policy, ["removed-entry"], async () => policy, async () => {});
+  expect(result.confirmed).toBe(false);
 });

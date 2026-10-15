@@ -136,6 +136,10 @@ pub(super) fn automation_available() -> bool {
     status.can_save && !status.recovery_required
 }
 
+pub(super) fn persisted_service_available() -> bool {
+    status().mode == Mode::Service
+}
+
 pub(super) fn session_needs_refresh(recheck_locked: bool) -> bool {
     recovery::session_needs_refresh(recheck_locked)
 }
@@ -178,6 +182,16 @@ pub(super) fn load() -> Result<Loaded, String> {
     publish_status(state.status());
     *session = Some(state);
     Ok(loaded)
+}
+
+/// Notification-only helpers must not publish a session or migrate preferences.
+pub(super) fn read_notification_overlay() -> Result<Value, String> {
+    let record = read_service()?;
+    if record.revision == 0 || record.legacy_recovery_required {
+        return Err("Notification preferences could not be verified".into());
+    }
+    let value = record.value.ok_or("Notification preferences could not be verified")?;
+    super::split_settings_value(value).map(|(_, ordinary)| ordinary)
 }
 
 fn load_current_session() -> Result<(Session, Option<Value>), String> {

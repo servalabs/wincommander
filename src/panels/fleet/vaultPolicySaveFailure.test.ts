@@ -1,7 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { vaultPolicySaveFailure } from "./VaultAccessTab";
+import { vaultPolicyReadFailure, vaultPolicyReviewConfirmed, vaultPolicySaveFailure } from "./VaultAccessTab";
+import { newVaultPolicy, type VaultPolicyStatus } from "./vaultAccessTypes";
 
 describe("Vault policy save failures", () => {
+  test("review cannot clear an unknown save when status is missing, degraded, or a different revision", () => {
+    const policy = { ...newVaultPolicy(), policy_id: "p", version: 4 };
+    const status: VaultPolicyStatus = { policy_id: "p", version: 4, validation_state: "current", applied_at: null, entries: [] };
+    expect(vaultPolicyReviewConfirmed(policy, status)).toBe(true);
+    expect(vaultPolicyReviewConfirmed(policy, null)).toBe(false);
+    expect(vaultPolicyReviewConfirmed(null, null)).toBe(false);
+    expect(vaultPolicyReviewConfirmed(policy, { ...status, validation_state: "degraded" })).toBe(false);
+    expect(vaultPolicyReviewConfirmed(null, { ...status, validation_state: "degraded" })).toBe(false);
+    expect(vaultPolicyReviewConfirmed(policy, { ...status, version: 3 })).toBe(false);
+    expect(vaultPolicyReviewConfirmed(policy, { ...status, policy_id: "other" })).toBe(false);
+    expect(vaultPolicyReviewConfirmed(null, { ...status, validation_state: "never_applied" })).toBe(false);
+    expect(vaultPolicyReviewConfirmed(null, { ...status, policy_id: null, version: 0, validation_state: "never_applied" })).toBe(true);
+  });
+  test("an ambiguous protected write remains unknown even with a service rejection receipt", () => {
+    const failure = vaultPolicySaveFailure("service rejected request: vault_policy_commit_unconfirmed (raw secret detail)");
+    expect(failure.code).toBe("VLT.POLICY.OUTCOME_UNKNOWN");
+    expect(failure.message).toContain("Review the saved settings");
+    expect(failure.message).not.toContain("secret");
+    const rollback = vaultPolicySaveFailure("vault_policy_rollback_unverified raw secret detail");
+    expect(rollback.code).toBe("VLT.POLICY.ROLLBACK_UNVERIFIED");
+    expect(rollback.message).toContain("Access remains blocked");
+    expect(rollback.message).not.toContain("unchanged");
+  });
+  test("unverified protected state preserves the draft instead of implying deletion", () => {
+    const failure = vaultPolicySaveFailure("vault_policy_state_unavailable secret-path secret-account");
+    expect(failure.code).toBe("VLT.POLICY.STATE_UNAVAILABLE");
+    expect(failure.message).toContain("draft and saved version were kept");
+    expect(failure.message).not.toContain("secret-");
+    expect(failure.message).not.toContain("restart");
+    expect(vaultPolicyReadFailure("vault_policy_state_unavailable secret-password")).toBe(failure.message);
+    expect(vaultPolicyReadFailure("raw unexpected service error secret-path")).not.toContain("secret-");
+  });
+  test("persistence failure does not claim permission rollback or a successful save", () => {
+    const failure = vaultPolicySaveFailure("service rejected request: vault_apply_failed (Vault policy could not be persisted)");
+    expect(failure.code).toBe("VLT.POLICY.PERSISTENCE_FAILED");
+    expect(failure.message).toContain("could not confirm");
+    expect(failure.message).not.toContain("unchanged");
+  });
+  test("an accepted save with a lost reply remains unknown and never asks for a restart or replay", () => {
+    for (const reason of ["vault_operation_unconfirmed", "service operation did not confirm before its deadline; refresh vault state before retrying", "service reply read failed: secret-value"] ) {
+      const failure = vaultPolicySaveFailure(reason);
+      expect(failure.code).toBe("VLT.POLICY.OUTCOME_UNKNOWN");
+      expect(failure.message).toContain("may still be saving");
+      expect(failure.message).not.toContain("no Vault settings were changed");
+      expect(failure.message).not.toContain("secret-value");
+      expect(failure.message.toLowerCase()).not.toContain("restart");
+    }
+  });
   test("outsider administrator denial explains the group boundary before generic errors", () => {
     const failure = vaultPolicySaveFailure("vault_fleet_group_required: forbidden version conflict");
     expect(failure.code).toBe("VLT.POLICY.GROUP_REQUIRED");
