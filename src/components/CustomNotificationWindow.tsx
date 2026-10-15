@@ -24,6 +24,7 @@ interface NotificationPayload {
 const MAX_VISIBLE_NOTIFICATIONS = 3;
 const DUPLICATE_SUPPRESS_MS = 8_000;
 const DISPLAY_DURATION_MS = 8_000;
+const SCRUB_DISPLAY_DURATION_MS = 30_000;
 
 async function positionNotificationWindow() {
   const windowRef = getCurrentWindow();
@@ -131,7 +132,7 @@ export default function CustomNotificationWindow() {
       if (existingTimer !== undefined) window.clearTimeout(existingTimer);
       timers.set(
         payload.id,
-        window.setTimeout(() => removeNotification(payload.id), DISPLAY_DURATION_MS),
+        window.setTimeout(() => removeNotification(payload.id), payload.source === "Metadata Scrubber" ? SCRUB_DISPLAY_DURATION_MS : DISPLAY_DURATION_MS),
       );
     };
 
@@ -190,7 +191,12 @@ export default function CustomNotificationWindow() {
               <span>{payload.source ?? "WinCommander"}</span>
             </div>
             <div className="wc-custom-notification__title">{payload.title}</div>
-            <div className="wc-custom-notification__text">{payload.body}</div>
+            <div
+              className={`wc-custom-notification__text${payload.source === "Metadata Scrubber" ? " wc-custom-notification__text--scrub" : ""}`}
+              tabIndex={payload.source === "Metadata Scrubber" ? 0 : undefined}
+              role={payload.source === "Metadata Scrubber" ? "region" : undefined}
+              aria-label={payload.source === "Metadata Scrubber" ? "Scrub result details" : undefined}
+            >{payload.body}</div>
           </div>
           <button
             type="button"

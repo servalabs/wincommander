@@ -37,9 +37,9 @@ export function vaultSyncRecoveryChoice(internalDrive: unknown, roots: unknown):
 
 export function vaultSyncRecoveryReason(reason: VaultSyncRecoveryReason): string {
   return {
-    configuration_missing: "Its Syncthing configuration was removed.",
+    configuration_missing: "Its sync configuration was removed.",
     root_missing: "The folder inside the Vault is missing.",
-    marker_missing: "The folder's Syncthing safety marker is missing.",
+    marker_missing: "The folder's sync safety marker is missing.",
     confirmation_required: "This folder needs your recovery decision before it can sync again.",
   }[reason];
 }

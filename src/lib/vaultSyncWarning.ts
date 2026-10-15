@@ -31,9 +31,9 @@ export function notifyVaultSyncWarning(drive: unknown, warning: unknown, target:
 export function vaultSyncWarningMessage(notice: VaultSyncNotice): string {
   if (notice.warning === "recovery_required") return `${notice.drive} The Vault is mounted. One or more sync folders need your recovery decision and remain paused. Your other sync folders can continue normally.`;
   const syncIssue = notice.warning === "stopped"
-    ? "Syncthing is still stopped after an automatic rescan."
-    : "WinCommander could not confirm Syncthing's status after checking it.";
-  return `${notice.drive} The file container mounted successfully and your files remain accessible. ${syncIssue} Keep the container mounted and open Syncthing to check its folder error. Sync has not been confirmed; the container was not dismounted.`;
+    ? "Sync is still stopped after an automatic rescan."
+    : "WinCommander could not confirm the sync status after checking it.";
+  return `${notice.drive} The file container mounted successfully and your files remain accessible. ${syncIssue} Keep the container mounted and open Sync to check its folder error. Sync has not been confirmed; the container was not dismounted.`;
 }
 
 /** A mount receipt may carry a sync warning without becoming a failed mount. */

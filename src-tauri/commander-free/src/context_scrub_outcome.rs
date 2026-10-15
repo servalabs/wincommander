@@ -2,6 +2,8 @@
 //! Value-free Explorer scrub receipts; partial output is never whole-batch success.
 use crate::context_scrub_failure as failure;
 use crate::file_metadata::ScrubReport;
+#[path = "context_scrub_summary.rs"]
+mod summary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScrubState {
@@ -18,6 +20,7 @@ pub(crate) struct ScrubOutcome {
     skipped: usize,
     residual: usize,
     code: &'static str,
+    summary: String,
 }
 
 impl ScrubOutcome {
@@ -32,6 +35,7 @@ impl ScrubOutcome {
                     skipped: 0,
                     residual: 0,
                     code: failure::failure_code(&error),
+                    summary: String::new(),
                 };
             }
         };
@@ -92,6 +96,7 @@ impl ScrubOutcome {
             skipped,
             residual,
             code,
+            summary: summary::confirmed_summary(&report),
         }
     }
 
@@ -123,112 +128,20 @@ impl ScrubOutcome {
         }
     }
     pub(crate) fn message(&self) -> String {
-        if self.state == ScrubState::Completed {
-            return format!("{} file(s) passed metadata checks. Clean copies are in the adjacent _scrubbed folder. Originals were kept.", self.verified);
+        let message = if self.state == ScrubState::Completed {
+            format!("{} file(s) passed metadata checks. Clean copies are in the adjacent _scrubbed folder. Originals were kept.", self.verified)
+        } else {
+            format!("Passed checks: {}. Failed: {}. Unsupported: {}. Metadata remains: {}. Originals kept. {} Selection not verified safe to share. Reference: {}.",
+                self.verified, self.failed, self.skipped, self.residual, failure::next_action(self.code), self.code)
+        };
+        if self.summary.is_empty() {
+            message
+        } else {
+            format!("{message}\n{}", self.summary)
         }
-        format!("Passed checks: {}. Failed: {}. Unsupported: {}. Metadata remains: {}. Originals kept. {} Selection not verified safe to share. Reference: {}.",
-            self.verified, self.failed, self.skipped, self.residual, failure::next_action(self.code), self.code)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::file_metadata::{ScrubError, ScrubResult, StrippedField};
-    fn report() -> ScrubReport {
-        ScrubReport {
-            scrubbed: vec![ScrubResult {
-                input_path: "private-original".into(),
-                output_path: "private-clean-copy".into(),
-                file_type: "pdf".into(),
-                bytes_in: 1,
-                bytes_out: 1,
-                fields_stripped: vec![],
-                gps_coords: None,
-                sample_values: vec!["secret-author-value".into()],
-                dry_run: false,
-                residual_fields: vec![],
-            }],
-            ..Default::default()
-        }
-    }
-    #[test]
-    fn only_verified_nonempty_full_output_is_success() {
-        assert_eq!(ScrubOutcome::from_result(Ok(report())).exit_code(), 0);
-        assert_eq!(
-            ScrubOutcome::from_result(Ok(ScrubReport::default())).exit_code(),
-            1
-        );
-        for invalid in [true, false] {
-            let mut report = report();
-            if invalid {
-                report.scrubbed[0].dry_run = true;
-            } else {
-                report.scrubbed[0].output_path.clear();
-            }
-            assert_eq!(
-                ScrubOutcome::from_result(Ok(report)).state,
-                ScrubState::Failed
-            );
-        }
-    }
-    #[test]
-    fn mixed_outputs_keep_counts_without_exposing_paths_or_raw_errors() {
-        let mut report = report();
-        report.errors.push(ScrubError {
-            input_path: "private-failed-file".into(),
-            message: "secret-helper-value".into(),
-        });
-        report.skipped_count = 1;
-        let outcome = ScrubOutcome::from_result(Ok(report));
-        assert_eq!(outcome.state, ScrubState::Partial);
-        assert_eq!(outcome.exit_code(), 1);
-        let message = outcome.message();
-        assert!(message.contains("Passed checks: 1"));
-        assert!(message.contains("Failed: 1"));
-        assert!(message.contains("Unsupported: 1"));
-        for private in ["private", "secret"] {
-            assert!(!message.contains(private));
-        }
-    }
-    #[test]
-    fn residual_fields_fail_closed_even_if_aggregate_count_is_wrong() {
-        let mut report = report();
-        report.scrubbed[0].residual_fields.push(StrippedField {
-            category: "pdfInfo".into(),
-            label: "Document properties".into(),
-            details: vec!["Author".into()],
-            bytes: 1,
-            is_identifying: true,
-        });
-        let outcome = ScrubOutcome::from_result(Ok(report));
-        assert_eq!(outcome.state, ScrubState::Failed);
-        assert!(outcome.message().contains("Passed checks: 0"));
-        assert!(outcome.message().contains("Metadata remains: 1"));
-        assert_eq!(outcome.exit_code(), 1);
-    }
-    #[test]
-    fn helper_failure_has_a_bounded_failed_receipt() {
-        let outcome = ScrubOutcome::from_result(Err("private path and helper error".into()));
-        assert_eq!(outcome.state, ScrubState::Failed);
-        assert!(!outcome.message().contains("private path"));
-        assert_eq!(outcome.severity(), "danger");
-    }
-
-    #[test]
-    fn distinct_failures_are_not_misreported_as_one_cause() {
-        let mut report = report();
-        for message in ["Read failed: private-input", "Write failed: private-output"] {
-            report.errors.push(ScrubError {
-                input_path: "private-selection".into(),
-                message: message.into(),
-            });
-        }
-        let outcome = ScrubOutcome::from_result(Ok(report));
-        assert_eq!(outcome.state, ScrubState::Partial);
-        assert!(outcome.diagnostic().contains("code=multiple_failures"));
-        assert!(!outcome.diagnostic().contains("private"));
-        assert!(!outcome.message().contains("private"));
-        assert_eq!(outcome.exit_code(), 1);
-    }
-}
+#[path = "context_scrub_outcome_tests.rs"]
+mod tests;

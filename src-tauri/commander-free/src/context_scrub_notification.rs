@@ -213,16 +213,22 @@ pub(crate) fn run(paths: Vec<String>) -> i32 {
                 // This is a delivery deadline, never a deadline for scrubbing.
                 let deadline = Instant::now() + Duration::from_secs(45);
                 loop {
-                    let elapsed = handle
+                    let presented = handle
                         .state::<HostState>()
                         .presented
                         .lock()
                         .ok()
                         .and_then(|time| *time)
-                        .map(|time| time.elapsed());
-                    if elapsed.is_some_and(|elapsed| elapsed >= Duration::from_secs(10))
-                        || Instant::now() >= deadline
-                    {
+                        .is_some();
+                    // Detailed scrub receipts need reading time. Once shown,
+                    // only a verified hide (Dismiss or auto-hide) ends delivery;
+                    // unknown visibility retains the bounded delivery deadline.
+                    let hidden = presented
+                        && handle
+                            .get_webview_window("notification-alerts")
+                            .and_then(|window| window.is_visible().ok())
+                            == Some(false);
+                    if hidden || Instant::now() >= deadline {
                         handle.exit(outcome.exit_code());
                         break;
                     }

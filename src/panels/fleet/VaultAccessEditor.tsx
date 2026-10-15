@@ -140,15 +140,15 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
 
     <VaultAccessPatternPicker value={accessPreset} disabled={locked} onChange={onPresetChange} />
 
-    {accessPreset === "private" && <Field label="Syncthing" help="When turned on, this Vault can manage only the sync folders you add from its cloud button. Turning it off keeps Syncthing and this Vault separate.">
+    {accessPreset === "private" && <Field label="Sync" help="When turned on, this Vault can manage only the sync folders you add from its cloud button. Turning it off keeps Sync and this Vault separate.">
       <label className="flex items-start gap-2 text-sm">
         <input
           type="checkbox"
-          aria-label={`Enable Syncthing for Vault ${vaultNumber}`}
+          aria-label={`Enable Sync for Vault ${vaultNumber}`}
           checked={entry.syncthing_opt_in === true}
           onChange={event => onEntryChange({ syncthing_opt_in: event.target.checked })}
         />
-        <span>Enable Syncthing for this personal Vault</span>
+        <span>Enable Sync for this personal Vault</span>
       </label>
       <small>Save this Vault policy before using its cloud button. You can turn it off later; existing synced files are not deleted.</small>
     </Field>}

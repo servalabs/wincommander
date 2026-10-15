@@ -65,7 +65,7 @@ export function vaultOperationError(error: unknown, operation: "mount" | "dismou
   const reason = VAULT_MOUNT_REASONS.find(value => new RegExp(`(?:^|[^a-z_])(?:vault_)?${value}(?:$|[^a-z_])`).test(detail));
   if (reason) {
     if (reason === "dismount_failed" && operation === "mount") return cleanupWarning;
-    if (reason === "syncthing_profile_unavailable" && operation === "dismount") return "Dismount was stopped because WinCommander could not verify that this Vault's synced folders are safely paused. Its private Syncthing helper could not become ready. Refresh Secure Storage and retry the dismount check. If it still fails, repair this Vault's Syncthing setup. The Vault was not confirmed dismounted.";
+    if (reason === "syncthing_profile_unavailable" && operation === "dismount") return "Dismount was stopped because WinCommander could not verify that this Vault's synced folders are safely paused. Its private sync helper could not become ready. Refresh Secure Storage and retry the dismount check. If it still fails, repair this Vault's Sync setup. The Vault was not confirmed dismounted.";
     const label = vaultMountResultLabel({ entry_id: "", state: "failed", presentation: null, drive_letter: null, reason });
     if (reason === "engine_unlock_failed") return `${label}. Check the password, PIM and keyfiles, then try again.`;
     if (reason === "engine_drive_letter_unavailable") return `${label} or reserved by another Vault. Refresh and select a free letter.`;

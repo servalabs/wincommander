@@ -10,7 +10,10 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   the scrub runs. It publishes the verified result before waiting for owned
   sidecar cleanup, then still joins that cleanup before process exit. A fresh
   authenticated notification-preference check precedes delivery; output-file
-  creation alone never authorizes a success notification.
+  creation alone never authorizes a success notification. Detailed scrub
+  receipts normally remain visible for 30 seconds, with keyboard-scrollable
+  removal kinds and early Dismiss. The notification host waits for a verified
+  hide after presentation or its bounded 45-second delivery deadline.
 - A small startup entry mounts the actual animated splash before loading the
   application modules. The application updates that same animation instance;
   there is no separate text loading screen. A bounded saved-theme read selects

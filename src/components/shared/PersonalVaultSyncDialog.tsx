@@ -160,7 +160,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     window.requestAnimationFrame(() => document.getElementById(focusId === undefined
       ? `${fieldId}-add-folder` : `${fieldId}-path-${focusId}`)?.focus());
   };
-  return <Dialog isOpen={isOpen} onClose={close} title="Syncthing setup" className="personal-vault-sync"
+  return <Dialog isOpen={isOpen} onClose={close} title="Sync setup" className="personal-vault-sync"
     onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
     onCloseAutoFocus={event => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus({ preventScroll: true }); } }}
     style={{ width: "min(48rem, calc(100vw - 2rem))" }} canEscapeKeyClose={!changing} canOutsideClickClose={!changing} isCloseButtonShown={!changing}>
@@ -169,16 +169,16 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
         <div className="personal-vault-sync__context"><span>Selected Vault</span><strong>{driveLabel}</strong></div>
         <Tooltip open={showInfo} onOpenChange={setShowInfo}>
           <TooltipTrigger asChild>
-            <UiButton variant="ghost" size="icon" className="personal-vault-sync__info" aria-label="About Syncthing setup"
+            <UiButton variant="ghost" size="icon" className="personal-vault-sync__info" aria-label="About Sync setup"
               onClick={event => { event.preventDefault(); setShowInfo(current => !current); }}><Icon icon="info-sign" size={16} /></UiButton>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="end" className="personal-vault-sync__tooltip">
-            After setup, open Syncthing to share each configured folder with your device. Other Syncthing folders keep running when this Vault is dismounted.
+            After setup, open Sync to share each configured folder with your device. Other sync folders keep running when this Vault is dismounted.
           </TooltipContent>
         </Tooltip>
       </div>
       <p className="personal-vault-sync__intro">Sync selected folders with your phone or another device. Keep this Vault mounted during setup.</p>
-      {syncDisabled && <p role="status" className="personal-vault-sync__help">{canEnableSync ? "Sync is off for this Vault. Enable it before adding folders." : "Sync is off for this Vault. Open Vault access, edit this Vault, turn on Syncthing, and save."}</p>}
+      {syncDisabled && <p role="status" className="personal-vault-sync__help">{canEnableSync ? "Sync is off for this Vault. Enable it before adding folders." : "Sync is off for this Vault. Open Vault access, edit this Vault, turn on Sync, and save."}</p>}
       <section aria-labelledby={`${fieldId}-existing`} className="personal-vault-sync__section">
         <h3 id={`${fieldId}-existing`}>Existing synced folders</h3>
         {loaded && folders.length === 0 && <p className="personal-vault-sync__muted" role="status">No folders added yet. Add your first folder below.</p>}
@@ -187,7 +187,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
             <strong>{driveLabel}\{folder.relative_path}</strong>
             <span className="personal-vault-sync__status">{!loaded ? "Status unverified" : folder.recovery_required ? "Needs recovery" : folder.paused ? "Paused" : "Enabled"}</span>
           </div>
-          <label htmlFor={`${fieldId}-saved-${index}`}>Syncthing display name</label>
+          <label htmlFor={`${fieldId}-saved-${index}`}>Sync display name</label>
           <Input id={`${fieldId}-saved-${index}`} value={labels[folder.folder_id] ?? folder.label} maxLength={128} disabled={busy}
             aria-describedby={`${fieldId}-name-help ${fieldId}-saved-error-${index}`} aria-invalid={!validVaultSyncLabel(vaultSyncLabel(labels[folder.folder_id]))}
             onChange={event => setLabels(current => ({ ...current, [folder.folder_id]: event.target.value }))} />
@@ -215,7 +215,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
       <section aria-labelledby={`${fieldId}-add`} className="personal-vault-sync__section">
         <h3 id={`${fieldId}-add`}>Add a folder</h3>
         <p id={`${fieldId}-path-help`} className="personal-vault-sync__muted">Use a path inside this Vault, for example <code>Phone\Camera</code>. Choose separate folders that do not overlap.</p>
-        <p id={`${fieldId}-name-help`} className="personal-vault-sync__muted">The Syncthing name is a label. It does not rename, move or delete files.</p>
+        <p id={`${fieldId}-name-help`} className="personal-vault-sync__muted">The sync name is a label. It does not rename, move or delete files.</p>
         {drafts.map((draft, index) => <div key={draft.id} className="personal-vault-sync__draft">
           <div className="personal-vault-sync__draft-heading"><h4>Folder {index + 1}</h4>
             <Button minimal disabled={busy} aria-label={`Remove folder ${index + 1} from setup`} onClick={() => removeDraft(draft.id)}>Remove</Button>
@@ -228,7 +228,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
               onChange={event => setDrafts(current => current.map((item, i) => i === index ? { ...item, path: event.target.value } : item))} />
           </div>
           <div>
-            <label htmlFor={`${fieldId}-label-${draft.id}`}>Syncthing display name</label>
+            <label htmlFor={`${fieldId}-label-${draft.id}`}>Sync display name</label>
             <Input id={`${fieldId}-label-${draft.id}`} value={draft.label} maxLength={128} disabled={busy}
               aria-describedby={`${fieldId}-name-help ${fieldId}-error`} aria-invalid={Boolean(error) && !validVaultSyncLabel(vaultSyncLabel(draft.label))}
               onChange={event => setDrafts(current => current.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} />
@@ -243,7 +243,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     </DialogBody>
     <DialogFooter className="personal-vault-sync__footer" actions={<>
       <Button disabled={busy} onClick={() => void perform(() => refresh(), "refresh")}>Refresh</Button>
-      {gui && <Button disabled={busy} onClick={() => void perform(() => open(gui), "open")}>Open Syncthing</Button>}
+      {gui && <Button disabled={busy} onClick={() => void perform(() => open(gui), "open")}>Open Sync</Button>}
       <Button disabled={changing} onClick={close}>Close</Button>
       {syncDisabled && canEnableSync
         ? <Button intent="primary" disabled={busy || !loaded} onClick={enableSyncForVault}>Enable sync for this Vault</Button>

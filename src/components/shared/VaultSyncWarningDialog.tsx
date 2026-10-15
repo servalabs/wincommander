@@ -90,7 +90,7 @@ export default function VaultSyncWarningDialog() {
     <Dialog open={Boolean(notice)} onOpenChange={open => { if (!open) close(); }}>
       <DialogContent className="max-w-lg flex flex-col">
         <DialogHeader>
-          <DialogTitle>Container mounted — Syncthing needs attention</DialogTitle>
+          <DialogTitle>Container mounted — Sync needs attention</DialogTitle>
           <DialogDescription className="break-words whitespace-normal">
             {notice ? notice.message ?? vaultSyncWarningMessage(notice) : ""}
           </DialogDescription>

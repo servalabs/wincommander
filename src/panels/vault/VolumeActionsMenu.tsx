@@ -132,7 +132,7 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
             disabled={!accessible || Boolean(statusError) || internalDrive === undefined}
             onClick={() => { setFailure(""); setSyncSetupOpen(true); }}
             className="vol-inline-btn"
-            aria-label={`Manage Syncthing folders in ${driveLabel}`}
+            aria-label={`Manage Sync folders in ${driveLabel}`}
           />
         </Tooltip>
         <Tooltip content="Force dismount" position="top">

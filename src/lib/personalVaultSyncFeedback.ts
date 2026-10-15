@@ -1,4 +1,4 @@
-export const RECOVERED_SYNC_SHARING_GUIDANCE = "Share this new folder with your phone in Syncthing and accept it there. If the phone says the folder location is already in use, remove its old Syncthing folder entry while keeping the files, then accept the new share.";
+export const RECOVERED_SYNC_SHARING_GUIDANCE = "Share this new folder with your phone in Sync and accept it there. If the phone says the folder location is already in use, remove its old sync folder entry while keeping the files, then accept the new share.";
 
 export type VaultSyncFolderValidation =
   | { ok: true; folders: string[] }
@@ -38,7 +38,7 @@ export function validatePersonalVaultSyncFolders(values: readonly string[]): Vau
 
 export function personalVaultSyncSetupMessage(path: string, pairingRequired = false): string {
   if (pairingRequired) return `Sync setup for ${path} is ready. ${RECOVERED_SYNC_SHARING_GUIDANCE}`;
-  return `Sync is configured for ${path}. Its folder pauses when this personal Vault is dismounted and resumes after it is mounted again; that does not stop Syncthing or other sync folders. Connect your other device in Syncthing to exchange files.`;
+  return `Sync is configured for ${path}. Its folder pauses when this personal Vault is dismounted and resumes after it is mounted again; that does not stop Sync or other sync folders. Connect your other device in Sync to exchange files.`;
 }
 
 /** Translate bounded service outcomes without exposing private helper diagnostics. */
@@ -51,12 +51,12 @@ export function personalVaultSyncError(error: unknown, stage: "setup" | "status"
   const detail = error instanceof Error ? error.message.toLowerCase() : typeof error === "string" ? error.toLowerCase() : "";
   if (detail.includes("vault_sync_mount_changed")) return "The Vault in this drive slot has changed. Close this dialog, refresh Secure Storage, and open sync settings for the intended Vault again.";
   if (detail.includes("vault_sync_label_update_failed")) return "The folder was enabled, but its name update could not be confirmed. Refresh the list and use Save name on that folder; you do not need to enable it again.";
-  if (detail.includes("vault_syncthing_not_enabled")) return "Sync is off for this personal Vault. In Vault access, edit this Vault, turn on Syncthing, save the policy, then try again.";
+  if (detail.includes("vault_syncthing_not_enabled")) return "Sync is off for this personal Vault. In Vault access, edit this Vault, turn on Sync, save the policy, then try again.";
   if (detail.includes("vault_not_authorized")) return "Sync is available only for a personal Vault owned and mounted by this Windows account. Shared Vaults cannot use it.";
   if (detail.includes("vault_mount_state_unknown")) return "WinCommander could not confirm that this Vault is still mounted for your account. Refresh Secure Storage, then try again.";
-  if (detail.includes("vault_syncthing_install_failed")) return "Syncthing could not be installed or its download could not be verified. Check your Internet connection and available disk space, then enable sync again.";
-  if (detail.includes("vault_syncthing_profile_unavailable")) return "Syncthing could not start using this account's saved configuration. Your sync identity has been preserved. Check Diagnostics for the startup failure.";
-  if (detail.includes("vault_syncthing_root_conflict")) return "The saved sync folder conflicts with the selected folder or its current location. Check the folder in Syncthing before retrying; do not add a duplicate folder.";
+  if (detail.includes("vault_syncthing_install_failed")) return "The Sync helper could not be installed or its download could not be verified. Check your Internet connection and available disk space, then enable sync again.";
+  if (detail.includes("vault_syncthing_profile_unavailable")) return "Sync could not start using this account's saved configuration. Your sync identity has been preserved. Check Diagnostics for the startup failure.";
+  if (detail.includes("vault_syncthing_root_conflict")) return "The saved sync folder conflicts with the selected folder or its current location. Check the folder in Sync before retrying; do not add a duplicate folder.";
   if (detail.includes("vault_broker_rejected")) return stage === "status"
     ? "The sync helper responded but could not confirm this Vault’s sync folders. Select Refresh; if this repeats, check Diagnostics for the sync status stage."
     : "The sync helper responded but could not complete this folder's setup. Check Diagnostics for the reported cause, then retry with the Vault mounted.";

@@ -3,7 +3,7 @@ import { personalVaultSyncError, personalVaultSyncOutcomeUnknown, personalVaultS
 
 test("confirmed new sync setup explains the remaining device connection step", () => {
   expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("Connect your other device");
-  expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("does not stop Syncthing");
+  expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("does not stop Sync");
 });
 
 test("sync setup accepts separate child folders but refuses duplicate or nested folders", () => {
@@ -16,7 +16,7 @@ test("sync setup accepts separate child folders but refuses duplicate or nested 
 test("reopening recreated sync preserves phone sharing and existing-file guidance", () => {
   const message = personalVaultSyncSetupMessage("V:\\Sync", true);
   expect(message).toContain("Share this new folder");
-  expect(message).toContain("old Syncthing folder entry while keeping the files");
+  expect(message).toContain("old sync folder entry while keeping the files");
   expect(message).toContain("accept the new share");
   expect(message).not.toContain("Connect your other device");
 });
@@ -28,7 +28,7 @@ test("a responding helper's rejected folder is not reported as unreachable", () 
 });
 
 test("failed installation, retained configuration and unknown completion need different next steps", () => {
-  expect(personalVaultSyncError("vault_syncthing_not_enabled")).toContain("turn on Syncthing");
+  expect(personalVaultSyncError("vault_syncthing_not_enabled")).toContain("turn on Sync");
   expect(personalVaultSyncError("vault_syncthing_install_failed")).toContain("download could not be verified");
   expect(personalVaultSyncError("vault_syncthing_profile_unavailable")).toContain("identity has been preserved");
   expect(personalVaultSyncError("vault_request_timeout")).toContain("before submitting another request");

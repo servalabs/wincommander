@@ -228,9 +228,9 @@ describe("Vault path display", () => {
       mount: { presentation: "per-user" },
       syncthing_opt_in: false,
     });
-    expect(personal).toContain('aria-label="Enable Syncthing for Vault 1"');
+    expect(personal).toContain('aria-label="Enable Sync for Vault 1"');
     expect(personal).toContain("Save this Vault policy before using its cloud button.");
-    expect(renderEditor()).not.toContain('aria-label="Enable Syncthing for Vault 1"');
+    expect(renderEditor()).not.toContain('aria-label="Enable Sync for Vault 1"');
   });
 });
 

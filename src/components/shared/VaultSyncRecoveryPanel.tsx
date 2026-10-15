@@ -92,7 +92,7 @@ export default function VaultSyncRecoveryPanel({ notice, onBusyChange }: Props) 
     try {
       const result = await latest.current.enablePersonalVaultSync(choice.internalDrive, root.relative_path, "keep_paused", root.token);
       if (!active.current) return;
-      const message = `${root.relative_path}: kept paused. This does not stop Syncthing or pause this Vault’s other sync folders.`;
+      const message = `${root.relative_path}: kept paused. This does not stop Sync or pause this Vault’s other sync folders.`;
       setMessages(current => [...current, message]);
       setChoice(current => current ? { ...current, roots: current.roots.filter(item => item.token !== token) } : null);
       if (isSyncthingSetupUrl(result.gui_url)) setSetupUrl(result.gui_url);
@@ -109,7 +109,7 @@ export default function VaultSyncRecoveryPanel({ notice, onBusyChange }: Props) 
   };
 
   return <div className="space-y-3 text-sm">
-    <p>Recreating makes a new sync setup for the selected folder. Existing files stay in place; deleted files are not restored. You must share the new folder with your phone and accept it there again. Your paired devices stay saved. Keeping it paused leaves only this folder paused; it does not stop Syncthing, block the mounted Vault, or pause other folders.</p>
+    <p>Recreating makes a new sync setup for the selected folder. Existing files stay in place; deleted files are not restored. You must share the new folder with your phone and accept it there again. Your paired devices stay saved. Keeping it paused leaves only this folder paused; it does not stop Sync, block the mounted Vault, or pause other folders.</p>
     {busy && <p role="status">Checking or updating this Vault’s sync setup…</p>}
     {choice?.roots.map(root => <div key={root.token} className="rounded-md border p-3 space-y-2">
       <p className="font-medium break-words">{notice.drive}\{root.relative_path}</p>
@@ -122,6 +122,6 @@ export default function VaultSyncRecoveryPanel({ notice, onBusyChange }: Props) 
     {checked && !choice?.roots.length && !messages.length && <p>No sync folders currently need recreation.</p>}
     {messages.map(message => <p role="status" key={message}>{message}</p>)}
     {error && <div role="alert"><p>{error}</p><Button variant="outline" disabled={busy} onClick={() => void inspect()}>Check again</Button></div>}
-    {setupUrl && <Button variant="outline" disabled={busy} onClick={() => void open(setupUrl).catch(() => setError("Syncthing’s setup page could not open. Try again from the Vault’s sync button."))}>Open Syncthing</Button>}
+    {setupUrl && <Button variant="outline" disabled={busy} onClick={() => void open(setupUrl).catch(() => setError("The Sync setup page could not open. Try again from the Vault’s sync button."))}>Open Sync</Button>}
   </div>;
 }
