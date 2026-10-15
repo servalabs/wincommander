@@ -53,6 +53,23 @@ fn parse_unit(number: u32, text: &str) -> Unit {
     unit
 }
 
+fn parse_unit_query(
+    number: u32,
+    text: &str,
+    succeeded: bool,
+    probe_error: impl FnOnce() -> u32,
+) -> Result<Option<Unit>> {
+    if succeeded {
+        return Ok(Some(parse_unit(number, text)));
+    }
+    // Removed devices can remain in ImDisk's list while old handles are open.
+    let error = probe_error();
+    if windows::unit_is_removed_error(error) {
+        return Ok(None);
+    }
+    bail!("could not inspect ImDisk unit {number} (native open error {error})");
+}
+
 fn imdisk_exe() -> Option<PathBuf> {
     [
         "SystemRoot",
@@ -94,6 +111,14 @@ fn device_list_result_succeeded(exit_code: Option<i32>, stderr: &[u8]) -> bool {
     matches!(exit_code, Some(0 | 1)) && stderr.iter().all(u8::is_ascii_whitespace)
 }
 
+fn should_restore_mount(expected: u32, actual: Option<u32>) -> Result<bool> {
+    match actual {
+        None => Ok(true),
+        Some(number) if number == expected => Ok(false),
+        Some(_) => bail!("R: mount changed during duplicate removal"),
+    }
+}
+
 pub fn reconcile_temp_r() -> Result<()> {
     let Some(exe) = imdisk_exe() else {
         return Ok(());
@@ -121,10 +146,14 @@ fn reconcile_locked(exe: &PathBuf) -> Result<()> {
     {
         let number: u32 = line.parse().context("unrecognized ImDisk device list")?;
         let details = run(exe, &["-l", "-u", &number.to_string()])?;
-        if !details.status.success() {
-            bail!("could not inspect ImDisk unit {number}");
+        if let Some(unit) = parse_unit_query(
+            number,
+            &output_text(&details),
+            details.status.success(),
+            || windows::unit_open_error(number),
+        )? {
+            units.push(unit);
         }
-        units.push(parse_unit(number, &output_text(&details)));
     }
     if let Some(number) = owner {
         if !units
@@ -164,14 +193,16 @@ fn reconcile_locked(exe: &PathBuf) -> Result<()> {
         .filter(|unit| unit.is_temp_r_candidate() && unit.number != owner)
     {
         eject_without_mountpoint(unit.number)?;
-        if mount_owner()? != Some(owner) {
-            bail!("R: mount changed during duplicate removal");
-        }
         let mut remains = true;
         for _ in 0..15 {
-            remains = run(exe, &["-l", "-u", &unit.number.to_string()])?
-                .status
-                .success();
+            let details = run(exe, &["-l", "-u", &unit.number.to_string()])?;
+            remains = parse_unit_query(
+                unit.number,
+                &output_text(&details),
+                details.status.success(),
+                || windows::unit_open_error(unit.number),
+            )?
+            .is_some();
             if !remains {
                 break;
             }
@@ -180,6 +211,18 @@ fn reconcile_locked(exe: &PathBuf) -> Result<()> {
         if remains {
             bail!("stale ImDisk unit {} remains attached", unit.number);
         }
+        // The driver itself can unlink R: while ejecting a duplicate.
+        if should_restore_mount(owner, mount_owner()?)? {
+            if !unit_label(owner)?.eq_ignore_ascii_case("TEMP") {
+                bail!("surviving ImDisk unit {owner} is not a TEMP volume");
+            }
+            if !mount_existing_unit(owner)? {
+                bail!("could not restore R: after duplicate removal");
+            }
+        }
+        if mount_owner()? != Some(owner) {
+            bail!("R: mount changed during duplicate removal");
+        }
     }
     Ok(())
 }
@@ -187,6 +230,42 @@ fn reconcile_locked(exe: &PathBuf) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_query_skips_removed_units_but_preserves_unknown_failures() {
+        for error in [2, 3, 1617] {
+            assert!(parse_unit_query(0, "", false, || error).unwrap().is_none());
+        }
+        for error in [0, 5, 21, 32, 1167] {
+            assert!(parse_unit_query(0, "", false, || error).is_err());
+        }
+        let unit = parse_unit_query(0, "Drive letter: R\n", true, || {
+            panic!("successful queries must not probe")
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(unit.number, 0);
+        assert_eq!(unit.letter, Some('R'));
+    }
+
+    #[test]
+    fn post_eject_query_requires_native_proof_of_removal() {
+        let text = "Drive letter: R\nNo image file.\n";
+        assert!(parse_unit_query(3, text, true, || panic!("live unit"))
+            .unwrap()
+            .is_some());
+        for error in [0, 5, 32] {
+            assert!(parse_unit_query(3, "", false, || error).is_err());
+        }
+        assert!(parse_unit_query(3, "", false, || 1617).unwrap().is_none());
+    }
+
+    #[test]
+    fn duplicate_eject_restores_only_a_missing_drive_letter() {
+        assert!(should_restore_mount(7, None).unwrap());
+        assert!(!should_restore_mount(7, Some(7)).unwrap());
+        assert!(should_restore_mount(7, Some(99)).is_err());
+    }
 
     #[test]
     fn real_cli_shape_identifies_only_matching_temp_ram_disk() {
