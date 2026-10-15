@@ -1,9 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "@/types/settings";
-import { settingsKeys } from "./queries/useSettingsQuery";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthMode } from "../context/AuthModeContext";
+import { createSettingsCacheObserver, settingsKeys } from "../lib/settingsQueryPolicy";
 import useBackend from "./useBackend";
 import { selectableDriveLetters } from "@/lib/vaultOperationFeedback";
 import { waitForMountOptions } from "../panels/vault/mountOperationProgress";
@@ -14,9 +14,12 @@ const EMPTY_LETTERS: string[] = [];
 export default function useVaultDriveLetters(preload = false, includeSavedReservations = true) {
   const { mode } = useAuthMode();
   const queryClient = useQueryClient();
-  const settings = useQuery<AppSettings>({ queryKey: settingsKeys.detail(), enabled: false });
-  const settingsUnavailable = includeSavedReservations && !settings.data;
-  const savedLetters = settings.data?.app.vault.quickMountSlots?.map(slot => slot.driveLetter) ?? EMPTY_LETTERS;
+  const settingsObserver = useMemo(() => createSettingsCacheObserver(queryClient, mode), [queryClient, mode]);
+  const subscribeSettings = useCallback((notify: () => void) => settingsObserver.subscribe(notify), [settingsObserver]);
+  const readSettings = useCallback(() => settingsObserver.getCurrentResult().data, [settingsObserver]);
+  const settings = useSyncExternalStore(subscribeSettings, readSettings, readSettings);
+  const settingsUnavailable = includeSavedReservations && !settings;
+  const savedLetters = settings?.app.vault.quickMountSlots?.map(slot => slot.driveLetter) ?? EMPTY_LETTERS;
   const { getAvailableDriveLetters } = useBackend();
   const query = useQuery({
     queryKey: ["vault", "available-drive-letters", mode],

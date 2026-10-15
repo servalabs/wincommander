@@ -1,12 +1,42 @@
 import { describe, expect, test } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type { AppSettings } from "../types/settings";
-import { settingsKeys, settingsQueryOptions } from "./settingsQueryPolicy";
+import { createSettingsCacheObserver, settingsKeys, settingsQueryOptions } from "./settingsQueryPolicy";
 
 const privateSettings = { app: { advisor: { endpoint: "private-fixture" } } } as unknown as AppSettings;
 const updatedSettings = { app: { advisor: { endpoint: "updated-private-fixture" } } } as unknown as AppSettings;
 
 describe("settings query mode isolation", () => {
+  test("a cache-only subscriber receives writes without fetching or disabling the owner reader", async () => {
+    const client = new QueryClient();
+    let reads = 0;
+    const read = async () => { reads += 1; return updatedSettings; };
+    client.setQueryData(settingsKeys.detail(), privateSettings);
+    const passive = createSettingsCacheObserver(client, "real");
+    const unsubscribePassive = passive.subscribe(() => {});
+    expect(reads).toBe(0);
+    client.setQueryData(settingsKeys.detail(), updatedSettings);
+    expect(passive.getCurrentResult().data).toEqual(updatedSettings);
+    expect(reads).toBe(0);
+    const owner = new QueryObserver(client, { ...settingsQueryOptions("real", read), staleTime: Infinity });
+    const unsubscribeOwner = owner.subscribe(() => {});
+    const laterPassive = createSettingsCacheObserver(client, "real");
+    const unsubscribeLater = laterPassive.subscribe(() => {});
+    await client.invalidateQueries({ queryKey: settingsKeys.detail() });
+    expect(reads).toBe(1);
+    expect(passive.getCurrentResult().data).toEqual(updatedSettings);
+    const decoy = createSettingsCacheObserver(client, "decoy");
+    const unsubscribeDecoy = decoy.subscribe(() => {});
+    client.setQueryData(settingsKeys.decoy(), privateSettings);
+    expect(reads).toBe(1);
+    expect(decoy.getCurrentResult().data).toBeUndefined();
+    unsubscribeDecoy();
+    unsubscribeLater();
+    unsubscribePassive();
+    unsubscribeOwner();
+    client.clear();
+  });
+
   test("hides an existing real cache without replacing the shared QueryClient", () => {
     const client = new QueryClient();
     client.setQueryData(settingsKeys.detail(), privateSettings);

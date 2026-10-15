@@ -1,3 +1,4 @@
+import { QueryObserver, type QueryClient } from "@tanstack/react-query";
 import type { AppSettings } from "../types/settings";
 import type { AuthMode } from "../context/AuthModeContext";
 import { DECOY_APP_SETTINGS } from "./decoyFakeData";
@@ -16,4 +17,12 @@ export function settingsQueryOptions(mode: AuthMode, read: () => Promise<AppSett
     enabled: mode !== "decoy",
     select: (settings: AppSettings): AppSettings | undefined => mode === "decoy" ? undefined : settings,
   };
+}
+// A passive observer retains the cache without installing a competing reader.
+export function createSettingsCacheObserver(client: QueryClient, mode: AuthMode) {
+  return new QueryObserver<AppSettings, Error, AppSettings | undefined>(client, {
+    queryKey: mode === "decoy" ? settingsKeys.decoy() : settingsKeys.detail(),
+    enabled: false,
+    select: settings => mode === "decoy" ? undefined : settings,
+  });
 }
