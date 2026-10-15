@@ -6,9 +6,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type Event } from "@tauri-apps/api/event";
 import type { Rule } from "../panels/flows/rules";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
+import { createAsyncListenerScope } from "../lib/asyncListeners";
 
 export interface FlowLogEntry {
   id: number;
@@ -98,27 +99,21 @@ export function useFlowsV2(hasPaid: boolean) {
   // Live activity stream.
   useEffect(() => {
     if (!hasPaid) return;
-    const unlisteners: UnlistenFn[] = [];
+    const listeners = createAsyncListenerScope(() => console.warn("Unable to manage Flow activity listener"));
     void (async () => {
-      unlisteners.push(
-        await listen<{ ruleId?: string; actionCount?: number }>("flow-executed", (e) => {
-          pushLog({ kind: "executed", ruleId: e.payload?.ruleId, message: `ran ${e.payload?.actionCount ?? 0} action(s)` });
-        }),
-      );
-      unlisteners.push(
-        await listen<{ ruleId?: string; reason?: string; message?: string }>("flow-log", (e) => {
-          const reason = e.payload?.reason ?? "";
-          const kind = reason === "admit" ? "admit" : "refused";
-          pushLog({ kind, ruleId: e.payload?.ruleId, message: e.payload?.message ?? reason });
-        }),
-      );
-      unlisteners.push(
-        await listen<{ message?: string }>("flow-notify", (e) => {
-          pushLog({ kind: "notify", message: e.payload?.message ?? "" });
-        }),
-      );
+      if (!await listeners.listen<Event<{ ruleId?: string; actionCount?: number }>>((handler) => listen("flow-executed", handler), (e) => {
+        pushLog({ kind: "executed", ruleId: e.payload?.ruleId, message: `ran ${e.payload?.actionCount ?? 0} action(s)` });
+      })) return;
+      if (!await listeners.listen<Event<{ ruleId?: string; reason?: string; message?: string }>>((handler) => listen("flow-log", handler), (e) => {
+        const reason = e.payload?.reason ?? "";
+        const kind = reason === "admit" ? "admit" : "refused";
+        pushLog({ kind, ruleId: e.payload?.ruleId, message: e.payload?.message ?? reason });
+      })) return;
+      await listeners.listen<Event<{ message?: string }>>((handler) => listen("flow-notify", handler), (e) => {
+        pushLog({ kind: "notify", message: e.payload?.message ?? "" });
+      });
     })();
-    return () => unlisteners.forEach((u) => u());
+    return () => listeners.dispose();
   }, [hasPaid, pushLog]);
 
   const saveRule = useCallback(

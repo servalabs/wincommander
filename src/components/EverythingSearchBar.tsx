@@ -29,6 +29,7 @@ import type { AppSettings } from "../types/settings";
 import { dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
 import { formatResultSize, isDirectoryResult, isEngineMissingError, sfExtOf } from "@/lib/fileNameSearch";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
+import { createAsyncListenerScope } from "@/lib/asyncListeners";
 import type { SearchResult } from "@/lib/fileNameSearch";
 import { recordOpen, topPaths } from "@/lib/frecency";
 import { describeQuery, isDriveRootPath, splitScopePaths } from "@/lib/searchQueryPlan";
@@ -435,9 +436,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   useEffect(() => {
     if (!overlayMode) return;
     const win = getCurrentWindow();
-    let unlistenFocus: (() => void) | null = null;
-    let unlistenBlur: (() => void) | null = null;
-    let unlistenExplicitFocus: (() => void) | null = null;
+    const listeners = createAsyncListenerScope(() => console.warn("Unable to manage search overlay listener"));
 
     const triggerOverlayFocus = () => {
       // Record the timestamp so the blur guard (below) can ignore OS-level
@@ -464,32 +463,31 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       focusInputUntilStuck();
     };
 
-    win.listen("tauri://focus", () => {
+    void listeners.listen((handler) => win.listen("tauri://focus", handler), () => {
       triggerOverlayFocus();
-    }).then(fn => { unlistenFocus = fn; });
+    });
 
-    win.listen("tauri://blur", () => {
+    void listeners.listen((handler) => win.listen("tauri://blur", handler), () => {
       // Ignore blur events that fire during the OS foreground-promotion
       // race (first 600 ms after the overlay is shown). Windows sometimes
       // sends a spurious blur to a window that is in the middle of being
       // activated, which would otherwise close the overlay immediately.
       if (Date.now() - lastShowTimeRef.current < 600) return;
       close();
-    }).then(fn => { unlistenBlur = fn; });
+    });
 
     // Explicit "focus the input" cue from Rust's handle_search_hotkey.
     // tauri://focus can no-op when Windows refuses SetForegroundWindow,
     // so this is the reliable path the global hotkey always fires.
-    win.listen("focus-search-input", () => {
+    void listeners.listen((handler) => win.listen("focus-search-input", handler), () => {
       triggerOverlayFocus();
-    }).then(fn => { unlistenExplicitFocus = fn; });
+    });
 
     // A second Ctrl+Space press asks Rust to open the complete Search Files
     // panel. A Tauri acknowledgement carries the exact text to the main
     // WebView; memory remains a fallback for the in-window "View all"
     // button and for a panel that mounts after navigation.
-    let unlistenHandoff: (() => void) | null = null;
-    win.listen("handoff-search-query", () => {
+    void listeners.listen((handler) => win.listen("handoff-search-query", handler), () => {
       const text = queryTextRef.current.trim();
       if (text) rememberSearchHandoff(text);
       // Rust registers its one-shot listener *before* requesting this event.
@@ -500,7 +498,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         // The memory fallback still covers in-window navigation if a
         // native event cannot be delivered during shutdown.
       });
-    }).then(fn => { unlistenHandoff = fn; });
+    });
 
     // Native browser focus / visibility events fire when the WebView2
     // child HWND actually becomes active inside the native window — this
@@ -529,10 +527,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     triggerOverlayFocus();
 
     return () => {
-      unlistenFocus?.();
-      unlistenBlur?.();
-      unlistenExplicitFocus?.();
-      unlistenHandoff?.();
+      listeners.dispose();
       window.removeEventListener("focus", onWinFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (focusPollRef.current !== null) {

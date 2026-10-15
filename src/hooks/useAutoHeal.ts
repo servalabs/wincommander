@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { settingsKeys } from "./queries/useSettingsQuery";
+import { useSettingsWriter } from "../context/SettingsWriteContext";
 import { executeBackendCommand } from "./useBackend";
 import { getRadarDriftToggles, getToggleById } from "../registry";
 import { useAuthMode } from "../context/AuthModeContext";
@@ -18,10 +16,10 @@ export default function useAutoHeal() {
   const { mode } = useAuthMode();
   const { appSettings, refreshSettings } = useAppState();
   const { canUse } = useEntitlements();
-  const queryClient = useQueryClient();
+  const writer = useSettingsWriter();
   const mounted = useRef(false);
-  const latest = useRef({ mode, appSettings, refreshSettings, canUse });
-  latest.current = { mode, appSettings, refreshSettings, canUse };
+  const latest = useRef({ mode, appSettings, refreshSettings, canUse, writer });
+  latest.current = { mode, appSettings, refreshSettings, canUse, writer };
   const run = useMemo(() => createAutoHealer({
     getSettings: () => !mounted.current || latest.current.mode === "decoy" ? undefined : latest.current.appSettings ?? undefined,
     toggles: getRadarDriftToggles(),
@@ -43,9 +41,8 @@ export default function useAutoHeal() {
         const value = privacy.success ? privacy.data?.[field] : null;
         if (toggle) setByPath(probe, toggle.currentPath.replace(/^current\./, ""), typeof value === "boolean" ? value : null);
       }
-      const updated = await invoke<AppSettings>("update_current_state", { probe });
+      const updated = await latest.current.writer.updateCurrent(probe);
       if (!mayRun()) return;
-      queryClient.setQueryData(settingsKeys.detail(), updated);
       await latest.current.refreshSettings();
       return { ...updated, current: probe as unknown as AppSettings["current"] };
     },
@@ -60,7 +57,7 @@ export default function useAutoHeal() {
     failureMessage: dashboardFixFailure,
     notify: (label, message) => { void showWarning(`Auto Heal — ${label}: ${message}`, undefined, { kind: "notification" }); },
     verified: repair => { window.dispatchEvent(new CustomEvent(TOGGLE_REPAIR_VERIFIED_EVENT, { detail: repair })); },
-  }), [queryClient]);
+  }), []);
   const enabled = mode !== "decoy" && isAutoHealEnabled(appSettings ?? undefined);
   useEffect(() => {
     if (!enabled) return;

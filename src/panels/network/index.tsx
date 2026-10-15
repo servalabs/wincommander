@@ -1,5 +1,6 @@
 import { Icon, Dialog, FormGroup, InputGroup, Button, Classes, type IconName } from "@/components/ui/bp";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useDebounceApply } from "../../hooks/useDebounceApply";
 import useBackend, { BlocklistStatus } from "../../hooks/useBackend";
 import AdapterControls from "./AdapterControls";
 import { useAppState } from "../../context/AppContext";
@@ -28,65 +29,6 @@ import './index.css';
 const FREE_CONTROLD_LIMIT = 3;
 
 // ─── Auto-apply debounce (5 s) ───────────────────────────────────────────────
-
-/** Debounces an async apply action by `delayMs` (default 5 000 ms).
- *  Returns { schedule, status } where schedule(fn) resets the countdown
- *  each call, and status is one of: 'idle' | 'pending' | 'applying' | 'applied'. */
-function useDebounceApply(delayMs = 5000) {
-    const [status, setStatus] = useState<'idle' | 'pending' | 'applying' | 'applied'>('idle');
-    const [secsLeft, setSecsLeft] = useState(0);
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    // KT: resetRef must be tracked so it can be cancelled on unmount — bare setTimeout would fire setState after unmount
-    const resetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const fnRef = useRef<(() => Promise<void>) | null>(null);
-
-    const clearTimers = useCallback(() => {
-        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-        if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
-        if (resetRef.current) { clearTimeout(resetRef.current); resetRef.current = null; }
-    }, []);
-
-    const schedule = useCallback((fn: () => Promise<void>) => {
-        fnRef.current = fn;
-        clearTimers();
-        setSecsLeft(Math.ceil(delayMs / 1000));
-        setStatus('pending');
-
-        tickRef.current = setInterval(() => {
-            setSecsLeft(s => Math.max(0, s - 1));
-        }, 1000);
-
-        timerRef.current = setTimeout(async () => {
-            clearTimers();
-            setStatus('applying');
-            try {
-                if (fnRef.current) await fnRef.current();
-            } finally {
-                setStatus('applied');
-                resetRef.current = setTimeout(() => setStatus('idle'), 2000);
-            }
-        }, delayMs);
-    }, [delayMs, clearTimers]);
-
-    // Cancels any pending/in-flight-scheduled apply without running it, and
-    // resets status back to idle. Used for cross-cancellation between the
-    // independent DNS-affecting debounces (main toggle / category set /
-    // advanced provider) so the last user action wins instead of a stale
-    // timer reviving or overriding it later.
-    const cancel = useCallback(() => {
-        fnRef.current = null;
-        clearTimers();
-        setStatus('idle');
-        setSecsLeft(0);
-    }, [clearTimers]);
-
-    // Cleanup on unmount
-    useEffect(() => () => clearTimers(), [clearTimers]);
-
-    return { schedule, cancel, status, secsLeft };
-}
-
 
 // Blocklist logos resolve through the shared-asset manifest (assets/…).
 // The inversion/height lookups below key on the SAME resolved URLs the <img>
@@ -292,6 +234,8 @@ function AutoApplyPill({ status, secsLeft }: { status: string; secsLeft: number 
             {status === 'pending' && `Applying in ${secsLeft}s…`}
             {status === 'applying' && 'Applying…'}
             {status === 'applied' && 'Applied'}
+            {status === 'failed' && 'Not confirmed — refresh DNS status'}
+            {status === 'unknown' && 'Check DNS status'}
         </span>
     );
 }
@@ -414,7 +358,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     // pushes the encrypted filter slug. Called by the debounced inline toggles
     // AND by the main toggle's auto-select-defaults path below.
     const applyControldSet = useCallback(async (nextSet: Set<string>) => {
-        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return false; }
         // Free tier is capped at FREE_CONTROLD_LIMIT categories. The per-category
         // toggle enforces this, but the main-toggle auto-default path applies the
         // full 7-category default set; clamp here (preserving DNS_CATEGORIES
@@ -426,20 +370,22 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
         const slug = buildControldSlug(effectiveSet);
         setDnsProvider("controld");
         setDnsBusy(true);
-        const response = await applySecureDNS("controld", {
-            filterSlug: slug || undefined,
-            silent: true,
-        });
-        setDnsBusy(false);
-        if (response.success) {
-            ignoreDnsStatusUpdate.current = true;
-            setSecureDNS(true);
-            setControldFilters(effectiveSet);
-            refreshNetwork(true, true);
-            patchAppSettings({
-                ideal: { network: { dns: { provider: 'controld', controlDFilterSlug: slug || null } } },
-            }).catch(reportSettingsWriteFailure);
-        }
+        try {
+            const response = await applySecureDNS("controld", {
+                filterSlug: slug || undefined,
+                silent: true,
+            });
+            if (response.success) {
+                ignoreDnsStatusUpdate.current = true;
+                setSecureDNS(true);
+                setControldFilters(effectiveSet);
+                refreshNetwork(true, true);
+                patchAppSettings({
+                    ideal: { network: { dns: { provider: 'controld', controlDFilterSlug: slug || null } } },
+                }).catch(reportSettingsWriteFailure);
+            }
+            return response.success;
+        } finally { setDnsBusy(false); }
     }, [applySecureDNS, refreshNetwork, patchAppSettings, isPaid, needsElevation]);
 
     const handleDnsToggle = useCallback(async (checked: boolean) => {
@@ -467,58 +413,60 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
         }
         scheduleDns(async () => {
             setOptimisticDns(null);
-            if (!checked) {
-                setDnsBusy(true);
-                // Turning encrypted DNS off must also lift censorship protection:
-                // otherwise the port-53 block would remain with no encrypted resolver
-                // to carry DNS, breaking all name resolution.
-                let censorshipDisabled = true;
-                if (censorshipProtectionRef.current) {
-                    const censorshipResponse = await disableDnsCensorshipProtection();
-                    censorshipDisabled = censorshipResponse.success;
-                    if (!censorshipDisabled) {
-                        showError(censorshipResponse.error || "Failed to disable censorship protection");
+            try {
+                if (!checked) {
+                    setDnsBusy(true);
+                    // Turning encrypted DNS off must also lift censorship protection:
+                    // otherwise the port-53 block would remain with no encrypted resolver
+                    // to carry DNS, breaking all name resolution.
+                    let censorshipDisabled = true;
+                    if (censorshipProtectionRef.current) {
+                        const censorshipResponse = await disableDnsCensorshipProtection();
+                        censorshipDisabled = censorshipResponse.success;
+                        if (!censorshipDisabled) {
+                            showError(censorshipResponse.error || "Failed to disable censorship protection");
+                        }
                     }
-                }
-                const response = await clearSecureDNS();
-                setDnsBusy(false);
-                if (response.success) {
-                    ignoreDnsStatusUpdate.current = true;
-                    setSecureDNS(false);
-                    setDnsProvider("custom");
-                    setControldFilters(new Set());
-                    refreshNetwork(true, true);
-                    patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
-                }
-            } else if (dnsProviderRef.current === 'controld' || dnsProviderRef.current === 'custom' || !dnsProviderRef.current) {
-                // ControlD is the primary flow: turning the main toggle on with no
-                // categories picked yet auto-enables the sensible default set
-                // (everything except gov + social — those are opt-in, not defaults).
-                // nextSet was already computed and optimistically applied to
-                // local state above, before the debounce window started.
-                const nextSet = optimisticNextSet ?? (controldFiltersRef.current.size > 0
-                    ? controldFiltersRef.current
-                    : new Set(DNS_CATEGORY_DEFAULT_IDS));
-                setControldFilters(nextSet);
-                await applyControldSet(nextSet);
-            } else {
-                // An Advanced provider (AdGuard / Enterprise Firewall / custom) was
-                // previously active — re-enable that same provider.
-                setDnsBusy(true);
-                const provider = dnsProviderRef.current;
-                const response = await applySecureDNS(provider);
-                setDnsBusy(false);
-                if (response.success) {
-                    ignoreDnsStatusUpdate.current = true;
-                    setSecureDNS(true);
-                    setDnsProvider(provider);
-                    refreshNetwork(true, true);
-                    patchAppSettings({ ideal: { network: { dns: { provider } } } }).catch(reportSettingsWriteFailure);
+                    const response = await clearSecureDNS();
+                    if (response.success) {
+                        ignoreDnsStatusUpdate.current = true;
+                        setSecureDNS(false);
+                        setDnsProvider("custom");
+                        setControldFilters(new Set());
+                        refreshNetwork(true, true);
+                        patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
+                    }
+                    return response.success && censorshipDisabled;
+                } else if (dnsProviderRef.current === 'controld' || dnsProviderRef.current === 'custom' || !dnsProviderRef.current) {
+                    // ControlD is the primary flow: turning the main toggle on with no
+                    // categories picked yet auto-enables the sensible default set
+                    // (everything except gov + social — those are opt-in, not defaults).
+                    // nextSet was already computed and optimistically applied to
+                    // local state above, before the debounce window started.
+                    const nextSet = optimisticNextSet ?? (controldFiltersRef.current.size > 0
+                        ? controldFiltersRef.current
+                        : new Set(DNS_CATEGORY_DEFAULT_IDS));
+                    setControldFilters(nextSet);
+                    return await applyControldSet(nextSet);
                 } else {
-                    setOptimisticDns(false);
-                    setSecureDNS(false);
+                    // An Advanced provider (AdGuard / Enterprise Firewall / custom) was
+                    // previously active — re-enable that same provider.
+                    setDnsBusy(true);
+                    const provider = dnsProviderRef.current;
+                    const response = await applySecureDNS(provider);
+                    if (response.success) {
+                        ignoreDnsStatusUpdate.current = true;
+                        setSecureDNS(true);
+                        setDnsProvider(provider);
+                        refreshNetwork(true, true);
+                        patchAppSettings({ ideal: { network: { dns: { provider } } } }).catch(reportSettingsWriteFailure);
+                    } else {
+                        setOptimisticDns(false);
+                        setSecureDNS(false);
+                    }
+                    return response.success;
                 }
-            }
+            } finally { setDnsBusy(false); }
         });
     }, [secureDNS, dnsBusy, disableDnsCensorshipProtection, clearSecureDNS, applySecureDNS,
         applyControldSet, refreshNetwork, patchAppSettings, scheduleDns, cancelControld, needsElevation]);
@@ -534,23 +482,25 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     // ON" with nothing actually applied).
     const clearDnsForEmptyCategories = useCallback(async () => {
         setDnsBusy(true);
-        let censorshipDisabled = true;
-        if (censorshipProtectionRef.current) {
-            const censorshipResponse = await disableDnsCensorshipProtection();
-            censorshipDisabled = censorshipResponse.success;
-            if (!censorshipDisabled) {
-                showError(censorshipResponse.error || "Failed to disable censorship protection");
+        try {
+            let censorshipDisabled = true;
+            if (censorshipProtectionRef.current) {
+                const censorshipResponse = await disableDnsCensorshipProtection();
+                censorshipDisabled = censorshipResponse.success;
+                if (!censorshipDisabled) {
+                    showError(censorshipResponse.error || "Failed to disable censorship protection");
+                }
             }
-        }
-        const response = await clearSecureDNS();
-        setDnsBusy(false);
-        if (response.success) {
-            ignoreDnsStatusUpdate.current = true;
-            setSecureDNS(false);
-            setDnsProvider("custom");
-            refreshNetwork(true, true);
-            patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
-        }
+            const response = await clearSecureDNS();
+            if (response.success) {
+                ignoreDnsStatusUpdate.current = true;
+                setSecureDNS(false);
+                setDnsProvider("custom");
+                refreshNetwork(true, true);
+                patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
+            }
+            return response.success && censorshipDisabled;
+        } finally { setDnsBusy(false); }
     }, [clearSecureDNS, disableDnsCensorshipProtection, refreshNetwork, patchAppSettings]);
 
     const toggleControldCategory = (catId: string) => {
@@ -625,35 +575,37 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
             setOptimisticDns(false);
             scheduleDns(async () => {
                 setOptimisticDns(null);
-                setDnsBusy(true);
-                let censorshipDisabled = true;
-                if (censorshipProtectionRef.current) {
-                    const censorshipResponse = await disableDnsCensorshipProtection();
-                    censorshipDisabled = censorshipResponse.success;
-                    if (!censorshipDisabled) {
-                        showError(censorshipResponse.error || "Failed to disable censorship protection");
+                try {
+                    setDnsBusy(true);
+                    let censorshipDisabled = true;
+                    if (censorshipProtectionRef.current) {
+                        const censorshipResponse = await disableDnsCensorshipProtection();
+                        censorshipDisabled = censorshipResponse.success;
+                        if (!censorshipDisabled) {
+                            showError(censorshipResponse.error || "Failed to disable censorship protection");
+                        }
                     }
-                }
-                const response = await clearSecureDNS();
-                setDnsBusy(false);
-                if (response.success) {
-                    ignoreDnsStatusUpdate.current = true;
-                    setSecureDNS(false);
-                    setDnsProvider("custom");
-                    setControldFilters(new Set());
-                    refreshNetwork(true, true);
-                    patchAppSettings({
-                        ideal: {
-                            network: {
-                                dns: {
-                                    provider: null,
-                                    censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current,
-                                    controlDFilterSlug: null,
+                    const response = await clearSecureDNS();
+                    if (response.success) {
+                        ignoreDnsStatusUpdate.current = true;
+                        setSecureDNS(false);
+                        setDnsProvider("custom");
+                        setControldFilters(new Set());
+                        refreshNetwork(true, true);
+                        patchAppSettings({
+                            ideal: {
+                                network: {
+                                    dns: {
+                                        provider: null,
+                                        censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current,
+                                        controlDFilterSlug: null,
+                                    },
                                 },
                             },
-                        },
-                    }).catch(reportSettingsWriteFailure);
-                }
+                        }).catch(reportSettingsWriteFailure);
+                    }
+                    return response.success && censorshipDisabled;
+                } finally { setDnsBusy(false); }
             });
             return;
         }
@@ -663,20 +615,22 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
         setControldFilters(new Set());
         scheduleDns(async () => {
             setOptimisticDns(null);
-            setDnsBusy(true);
-            const response = await applySecureDNS(provider, { silent: true });
-            setDnsBusy(false);
-            if (response.success) {
-                ignoreDnsStatusUpdate.current = true;
-                setSecureDNS(true);
-                refreshNetwork(true, true);
-                patchAppSettings({
-                    ideal: { network: { dns: { provider, controlDFilterSlug: null } } },
-                }).catch(reportSettingsWriteFailure);
-            } else {
-                setDnsProvider(previousProvider);
-                setOptimisticDns(null);
-            }
+            try {
+                setDnsBusy(true);
+                const response = await applySecureDNS(provider, { silent: true });
+                if (response.success) {
+                    ignoreDnsStatusUpdate.current = true;
+                    setSecureDNS(true);
+                    refreshNetwork(true, true);
+                    patchAppSettings({
+                        ideal: { network: { dns: { provider, controlDFilterSlug: null } } },
+                    }).catch(reportSettingsWriteFailure);
+                } else {
+                    setDnsProvider(previousProvider);
+                    setOptimisticDns(null);
+                }
+                return response.success;
+            } finally { setDnsBusy(false); }
         });
     }, [dnsBusy, effectiveDns, dnsProvider, disableDnsCensorshipProtection, clearSecureDNS, applySecureDNS, previousProvider, refreshNetwork, patchAppSettings, scheduleDns, cancelDns, cancelControld, needsElevation]);
 

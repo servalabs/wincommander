@@ -2424,6 +2424,17 @@ impl VaultMountBroker {
     }
 
     pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
+        // Mount completion can hold active state while its broker needs runtime I/O.
+        if tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(|| self.projection_sync(entry_id))
+        } else {
+            self.projection_sync(entry_id)
+        }
+    }
+
+    fn projection_sync(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
         if self.recovery.lock().map_or(true, |state| {
             state.registry_untrusted && !state.recoverable_registry
         }) {
@@ -3970,6 +3981,46 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(1),
             "service timer starved for {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn mount_projection_wait_does_not_starve_other_service_requests() {
+        let broker = Arc::new(VaultMountBroker::with_broker(Box::new(MountBroker(
+            Arc::new(Mutex::new(BrokerEvents::default())),
+        ))));
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = Arc::clone(&broker);
+        let holding_thread = std::thread::spawn(move || {
+            let _active = holder.active.lock().unwrap();
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(2));
+        });
+        held_rx.recv().unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let elapsed = runtime.block_on(async move {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let observer = tokio::spawn(async move {
+                started_tx.send(()).unwrap();
+                broker.projection("unmounted-fixture")
+            });
+            started_rx.await.unwrap();
+            let started = std::time::Instant::now();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let elapsed = started.elapsed();
+            let _ = release_tx.send(());
+            assert_eq!(observer.await.unwrap(), (VaultMountState::Unmounted, None));
+            elapsed
+        });
+        holding_thread.join().unwrap();
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "Vault status polling starved unrelated service work for {elapsed:?}"
         );
     }
 

@@ -20,11 +20,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { listen } from '@tauri-apps/api/event';
+import { listen, type Event } from '@tauri-apps/api/event';
 import { Button, Classes, Dialog, Icon, ProgressBar, Switch, Tag } from '@/components/ui/bp';
 import { useTheme } from '../context/ThemeContext';
 import { useAppState } from '../context/AppContext';
 import useDependencies from '../hooks/useDependencies';
+import { createAsyncListenerScope } from '../lib/asyncListeners';
 
 const GPS_MAP_MESSAGE = 'wincommander:metadata-gps-map';
 
@@ -332,8 +333,8 @@ export default function MetadataScrubberDialog({
   // of one shared bar alternating between folders.
   useEffect(() => {
     if (!isOpen) return;
-    let unlisten: (() => void) | undefined;
-    listen<ScrubProgress>('scrub-progress', (e) => {
+    const listeners = createAsyncListenerScope(() => console.warn('Unable to manage scrub progress listener'));
+    void listeners.listen<Event<ScrubProgress>>((handler) => listen('scrub-progress', handler), (e) => {
       const p = e.payload;
       if (p.done) {
         setScrubDone(true);
@@ -362,12 +363,8 @@ export default function MetadataScrubberDialog({
           },
         }));
       }
-    }).then((u) => {
-      unlisten = u;
     });
-    return () => {
-      unlisten?.();
-    };
+    return () => listeners.dispose();
   }, [isOpen]);
 
 
@@ -403,22 +400,16 @@ export default function MetadataScrubberDialog({
   // so other panels don't accidentally consume drops.
   useEffect(() => {
     if (!isOpen) return;
-    let unlisten: (() => void) | undefined;
-    listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+    const listeners = createAsyncListenerScope(() => console.warn('Unable to manage scrub drag listener'));
+    void listeners.listen<Event<{ paths: string[] }>>((handler) => listen('tauri://drag-drop', handler), (event) => {
       const paths = event.payload?.paths ?? [];
       if (paths.length === 0) return;
       setSelectedPaths((prev) => Array.from(new Set([...prev, ...paths])));
       setDragHover(false);
-    }).then((u) => {
-      unlisten = u;
     });
-    const dragOverUnlistenP = listen('tauri://drag-over', () => setDragHover(true));
-    const dragLeaveUnlistenP = listen('tauri://drag-leave', () => setDragHover(false));
-    return () => {
-      unlisten?.();
-      dragOverUnlistenP.then((u) => u());
-      dragLeaveUnlistenP.then((u) => u());
-    };
+    void listeners.listen((handler) => listen('tauri://drag-over', handler), () => setDragHover(true));
+    void listeners.listen((handler) => listen('tauri://drag-leave', handler), () => setDragHover(false));
+    return () => listeners.dispose();
   }, [isOpen]);
 
   const handlePickFiles = useCallback(async () => {

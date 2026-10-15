@@ -17,9 +17,8 @@
 //   - Requires firstRunComplete so it does not run while setup is unresolved
 
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { useSettingsQuery, settingsKeys } from "./queries/useSettingsQuery";
+import { useSettingsQuery } from "./queries/useSettingsQuery";
+import { useSettingsWriter } from "../context/SettingsWriteContext";
 import { getByPath } from "../types/toggles";
 import { getRadarDriftToggles } from "../registry";
 import { useAuthMode } from "../context/AuthModeContext";
@@ -43,7 +42,7 @@ function buildDeepPatch(paths: string[], value: unknown): Record<string, unknown
 export default function useAdoptCurrentState() {
   const { mode: authMode } = useAuthMode();
   const { data: appSettings } = useSettingsQuery();
-  const queryClient = useQueryClient();
+  const writer = useSettingsWriter();
   const lastCurrentHashRef = useRef<string>("");
 
   useEffect(() => {
@@ -77,10 +76,7 @@ export default function useAdoptCurrentState() {
 
     const patch = buildDeepPatch(toAdopt, true);
 
-    invoke<unknown>("patch_settings_cmd", { patch })
-      .then((updated) => {
-        if (updated) queryClient.setQueryData(settingsKeys.detail(), updated);
-      })
+    writer.patch(patch)
       .catch(() => { /* best-effort; probe will re-run shortly */ });
-  }, [authMode, appSettings, queryClient]);
+  }, [authMode, appSettings, writer]);
 }

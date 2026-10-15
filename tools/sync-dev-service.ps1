@@ -125,6 +125,27 @@ function Test-ServiceProcessCurrent([switch]$AllowUnverifiable) {
     } catch { return [bool]$AllowUnverifiable }
 }
 
+function Test-ServiceAcceptingConnections([int]$Attempts = 3) {
+    for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
+        # Connect only: send no Hello, request or credentials to an unverified peer.
+        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+            '.', 'wincmd-svc', [System.IO.Pipes.PipeDirection]::InOut,
+            [System.IO.Pipes.PipeOptions]::Asynchronous,
+            [Security.Principal.TokenImpersonationLevel]::Anonymous)
+        try {
+            $pipe.Connect(1000)
+            return $true
+        }
+        catch [System.TimeoutException] { }
+        catch [System.IO.IOException] { }
+        catch [System.UnauthorizedAccessException] { }
+        finally { $pipe.Dispose() }
+        if ($attempt + 1 -lt $Attempts) { Start-Sleep -Milliseconds 250 }
+    }
+    Write-Diagnostic 'The development service pipe is not accepting connections.'
+    return $false
+}
+
 function Get-ServiceImagePath {
     $line = @(& sc.exe qc $serviceName 2>$null | Where-Object { $_ -match 'BINARY_PATH_NAME' }) |
         Select-Object -First 1
@@ -165,6 +186,9 @@ function Assert-StagedDevelopmentService {
     }
     if ($SyncPro -and -not (Test-DevelopmentProCurrent)) {
         throw 'The service Pro helper does not match the current development build.'
+    }
+    if (-not (Test-ServiceAcceptingConnections -Attempts 24)) {
+        throw 'The development service is running but its pipe is unavailable. Startup readiness was not verified; no preference save was attempted.'
     }
 }
 
@@ -339,7 +363,8 @@ if (-not $Elevated) {
         $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -and
         $serviceRunning -and (Test-ServiceProcessCurrent) -and
         (-not $SyncPro -or (Test-EncryptedVolumeDriverReady)) -and
-        (-not $SyncPro -or (Test-DevelopmentProCurrent))) {
+        (-not $SyncPro -or (Test-DevelopmentProCurrent)) -and
+        (Test-ServiceAcceptingConnections)) {
         Write-Host 'WinCommander development service is current.'
         return
     }
