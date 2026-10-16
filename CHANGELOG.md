@@ -5,10 +5,15 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
-- Bluetooth uses a compact dashboard control with automatic state checks and
-  in-app error notifications. Unconfirmed adapter operations retain their
-  recovery evidence and require an explicit retry instead of repeated
-  background calls. Failures report their stage without exposing device details.
+- Hidden backend commands now rebuild Windows PowerShell's module search path,
+  preventing inherited PowerShell 7 modules from breaking permission checks.
+
+- Bluetooth now uses Windows policy only. Adapter disabling and its background
+  worker are removed. The compact control verifies policy results, reports
+  unsupported or managed systems explicitly and uses in-app notifications.
+  Existing device-change records are preserved for manual administrator review.
+  Server 2025 and later now check the installed policy provider instead of
+  being rejected solely because they are Windows Server.
 
 - Service changes preview affected dependencies and save settings before applying.
   A collapsed Service changes view compares snapshots with the current PC;

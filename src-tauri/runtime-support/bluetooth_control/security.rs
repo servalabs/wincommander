@@ -153,12 +153,15 @@ impl MachineLock {
             return Err(ACL_ERROR.into());
         }
         let descriptor = Descriptor(descriptor);
-        let name: Vec<u16> = "Global\\WinCommander_BluetoothControl_v1\0"
+        let name: Vec<u16> = "Global\\WinCommander_BluetoothPolicy_v2\0"
             .encode_utf16()
             .collect();
         let handle = unsafe { CreateMutexW(&descriptor.attributes(), 0, name.as_ptr()) };
         if handle.is_null() {
-            return Err("[BT_STATE_UNVERIFIED] Bluetooth operation lock is unavailable. Retry shortly.".into());
+            return Err(
+                "[BT_STATE_UNVERIFIED] Bluetooth operation lock is unavailable. Retry shortly."
+                    .into(),
+            );
         }
         if let Err(error) = verify(handle, SE_KERNEL_OBJECT, 0x001f0001 | 0x10000000) {
             unsafe {
@@ -172,7 +175,10 @@ impl MachineLock {
                 unsafe {
                     CloseHandle(handle);
                 }
-                Err("[BT_OPERATION_BUSY] Another Bluetooth operation is busy. Retry shortly.".into())
+                Err(
+                    "[BT_OPERATION_BUSY] Another Bluetooth operation is busy. Retry shortly."
+                        .into(),
+                )
             }
         }
     }
@@ -192,7 +198,7 @@ mod tests {
 
     #[test]
     fn native_mutex_serializes_workers_without_touching_devices_or_registry() {
-        if super::super::windows::require_admin().is_err() {
+        if super::super::provider::require_admin().is_err() {
             eprintln!("Native protected-mutex acceptance requires an elevated test process.");
             return;
         }

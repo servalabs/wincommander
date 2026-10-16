@@ -1,26 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Machine-owned Bluetooth adapter restriction; never removes paired devices.
-//! Reconciliation is reactive, not a guarantee against traffic before hotplug detection.
+//! Machine-owned Bluetooth CSP policy. No adapter or radio mutation exists here.
 
 #[path = "bluetooth_control/engine.rs"]
 mod engine;
 #[cfg(windows)]
 #[path = "bluetooth_control/journal.rs"]
 mod journal;
+#[path = "bluetooth_control/legacy.rs"]
+mod legacy;
+#[cfg(windows)]
+#[path = "bluetooth_control/provider.rs"]
+mod provider;
 #[cfg(windows)]
 #[path = "bluetooth_control/security.rs"]
 mod security;
-#[cfg(windows)]
-#[path = "bluetooth_control/windows.rs"]
-mod windows;
 
 pub use engine::BluetoothStatus;
 
-/// Observe the current machine restriction and verified Windows adapter state.
+/// Observe configured and resultant policy; never saves or applies a setting.
 pub fn get() -> Result<BluetoothStatus, String> {
     #[cfg(windows)]
     {
-        engine::status(&mut windows::Platform)
+        engine::status(&mut provider::Platform::default())
     }
     #[cfg(not(windows))]
     {
@@ -32,27 +33,13 @@ pub fn get() -> Result<BluetoothStatus, String> {
 pub fn set_internal(blocked: bool) -> Result<BluetoothStatus, String> {
     #[cfg(windows)]
     {
-        windows::require_admin()?;
+        provider::require_admin()?;
         let _guard = security::MachineLock::acquire()?;
-        engine::set(&mut windows::Platform, blocked)
+        engine::set(&mut provider::Platform::default(), blocked)
     }
     #[cfg(not(windows))]
     {
         let _ = blocked;
-        Err("Bluetooth control is available only on Windows.".into())
-    }
-}
-
-/// Service-owned worker enforces only an already-persisted machine restriction.
-pub fn reconcile() -> Result<BluetoothStatus, String> {
-    #[cfg(windows)]
-    {
-        windows::require_admin()?;
-        let _guard = security::MachineLock::acquire()?;
-        engine::reconcile(&mut windows::Platform)
-    }
-    #[cfg(not(windows))]
-    {
         Err("Bluetooth control is available only on Windows.".into())
     }
 }

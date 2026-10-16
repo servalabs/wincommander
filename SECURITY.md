@@ -213,17 +213,19 @@ These qualify the product's security claims and are stated here because this
 document owns the public limits. The threat-model boundaries above remain the
 authoritative statement of what WinCommander does not claim to defend against.
 
-- Bluetooth blocking uses persistent Windows radio-adapter disablement and
-  service polling. Newly connected hardware has a detection interval; this is
-  not pre-boot or zero-packet enforcement. A stopped service cannot enforce the
-  saved block on newly added adapters. Restoration requires matching confirmed
-  records and no detected external restriction. Unconfirmed attempts require
-  an explicit retry; background enforcement does not repeat those native calls.
-  Windows does not record a
-  second disable request by another administrator on an already-disabled
-  adapter, so WinCommander cannot attribute that indistinguishable intent.
-  Restore records bind Windows logical device identities; identical hardware
-  without serial numbers may reuse those identities.
+- Bluetooth control changes only Windows' machine Bluetooth policy. Eligible
+  client editions and Server 2025 or later require a live, readable/writable
+  provider and verified configured/effective results. Unsupported editions,
+  missing providers, managed policy and uncertain results refuse changes.
+  A policy read-back is not a claim that an existing connection terminated or
+  that the radio is physically powered off. No adapter or service is disabled.
+  Allow writes the neutral default only for a confirmed owned restriction;
+  an originally absent value becomes an explicit default. Another privileged
+  writer using the same local policy source can make an indistinguishable edit;
+  concurrent external policy edits are outside this ownership guarantee.
+  Detectable ownership/context changes fail closed. Legacy device-change
+  records remain evidence for manual administrator review, never authority to
+  enable hardware automatically.
 
 - Ransomware alerts and response can reduce time to detection or containment.
   They cannot guarantee that no file changes before Windows observes activity.

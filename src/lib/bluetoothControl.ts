@@ -1,85 +1,79 @@
 export interface BluetoothControlStatus {
+  schemaVersion: 2;
   blocked: boolean;
-  state: "allowed" | "blocked" | "no_adapter" | "partial" | "recovery_required" | "externally_blocked";
-  adapterCount: number;
-  ownedAdapterCount: number;
+  state: "allowed" | "blocked" | "pending" | "unsupported" | "externally_managed" | "legacy_recovery_required";
   canChange: boolean;
   message: string;
-  monitoring: boolean;
 }
 
-const STATES = new Set(["allowed", "blocked", "no_adapter", "partial", "recovery_required", "externally_blocked"]);
+const STATES = new Set(["allowed", "blocked", "pending", "unsupported", "externally_managed", "legacy_recovery_required"]);
+const FIELDS = new Set(["schemaVersion", "blocked", "state", "canChange", "message"]);
+const LOCKED_STATES = new Set(["unsupported", "externally_managed", "legacy_recovery_required"]);
 
 export function parseBluetoothControlStatus(value: unknown): BluetoothControlStatus {
-  if (!value || typeof value !== "object") throw new Error("Bluetooth status unavailable");
+  if (!value || typeof value !== "object") throw new Error("Bluetooth policy status unavailable");
   const status = value as Record<string, unknown>;
-  if (typeof status.blocked !== "boolean" || typeof status.state !== "string" || !STATES.has(status.state)
-    || typeof status.canChange !== "boolean" || typeof status.monitoring !== "boolean"
-    || typeof status.message !== "string" || status.message.length > 1024
-    || !Number.isInteger(status.adapterCount) || (status.adapterCount as number) < 0 || (status.adapterCount as number) > 128
-    || !Number.isInteger(status.ownedAdapterCount) || (status.ownedAdapterCount as number) < 0 || (status.ownedAdapterCount as number) > 128
-    || ((status.state === "blocked" || status.state === "partial") && !status.blocked)
-    || ((status.state === "blocked" || status.state === "partial") && status.adapterCount === 0)
-    || ((status.state === "allowed" || status.state === "externally_blocked") && status.blocked)
-    || (status.state === "allowed" && (status.adapterCount === 0 || status.ownedAdapterCount !== 0))
-    || (status.state === "no_adapter" && status.adapterCount !== 0)) {
-    throw new Error("Bluetooth status unavailable");
+  if (status.schemaVersion !== 2 || Object.keys(status).some((key) => !FIELDS.has(key))
+    || typeof status.blocked !== "boolean" || typeof status.state !== "string" || !STATES.has(status.state)
+    || typeof status.canChange !== "boolean" || typeof status.message !== "string" || status.message.length > 1024
+    || (status.state === "blocked" && !status.blocked)
+    || (status.state === "allowed" && status.blocked)
+    || (LOCKED_STATES.has(status.state) && status.canChange)) {
+    throw new Error("Bluetooth policy status unavailable");
   }
   return status as unknown as BluetoothControlStatus;
 }
 
 export function bluetoothControlLabel(status: BluetoothControlStatus | null): string {
-  if (!status) return "Bluetooth unknown";
+  if (!status) return "Bluetooth policy unknown";
   switch (status.state) {
-    case "allowed": return "Bluetooth allowed";
-    case "blocked": return "Bluetooth blocked";
-    case "no_adapter": return status.blocked ? "Bluetooth block saved" : "No Bluetooth adapter";
-    case "externally_blocked": return "Bluetooth externally blocked";
-    case "partial": return "Bluetooth partly blocked";
-    case "recovery_required": return "Bluetooth needs recovery";
+    case "allowed": return "Bluetooth policy allowed";
+    case "blocked": return "Bluetooth policy blocked";
+    case "pending": return "Bluetooth policy pending";
+    case "unsupported": return "Bluetooth policy unsupported";
+    case "externally_managed": return "Bluetooth policy managed";
+    case "legacy_recovery_required": return "Bluetooth needs review";
   }
 }
 
 export function bluetoothControlDescription(status: BluetoothControlStatus | null): string {
-  if (!status) return "Bluetooth state could not be verified. WinCommander will retry automatically.";
-  if (!status.monitoring && status.blocked) return "Bluetooth protection needs its local service. Wait for the service, or allow Bluetooth to release WinCommander’s restriction.";
-  if (!status.monitoring) return "Bluetooth protection needs its local service before a new block can be enabled. WinCommander will check again automatically.";
+  if (!status) return "Bluetooth policy state could not be verified. WinCommander will retry automatically.";
   switch (status.state) {
-    case "allowed": return "Allowed for this PC. Windows or another policy may still keep Bluetooth off.";
-    case "blocked": return "Blocked for all Windows accounts on this PC. Paired devices are remembered. New adapters are checked in the background.";
-    case "no_adapter": return status.blocked ? "No adapter detected. The block is saved; new adapters are checked in the background." : "No Bluetooth adapter detected on this PC.";
-    case "externally_blocked": return "Windows or another policy blocks Bluetooth. WinCommander will not override it.";
-    case "partial": return "Some Bluetooth adapters could not be blocked. WinCommander will keep checking. Check the adapter in Windows Device Manager if this persists, or allow Bluetooth to release the saved block.";
-    case "recovery_required": return "Reconnect removed adapters and retry Allow. For an interrupted change, check the adapter in Windows Device Manager; WinCommander will not enable an unverified adapter.";
+    case "allowed": return "WinCommander’s Bluetooth policy restriction is released. Windows radio settings and other restrictions still apply.";
+    case "blocked": return "Windows confirms the Bluetooth policy block for every account on this PC. Existing pairings are preserved.";
+    case "pending": return "Windows has not confirmed the requested Bluetooth policy state. WinCommander will keep checking automatically.";
+    case "unsupported": return "Bluetooth policy control is unsupported on this Windows installation. Ask your administrator to check Windows policy support.";
+    case "externally_managed": return "Another Windows or organisation policy controls Bluetooth. Ask your administrator to review it.";
+    case "legacy_recovery_required": return "A previous device-based Bluetooth restriction needs administrator review in Windows Device Manager before policy control can continue.";
   }
 }
 
 export function bluetoothControlIssue(status: BluetoothControlStatus | null): { key: string; message: string } | null {
   if (!status) return { key: "unavailable", message: bluetoothControlDescription(null) };
-  if (!status.monitoring) return { key: `service:${status.blocked}`, message: bluetoothControlDescription(status) };
-  if (status.state === "partial" || status.state === "recovery_required" || status.state === "externally_blocked") {
+  if (status.state !== "allowed" && status.state !== "blocked") {
     return { key: status.state, message: bluetoothControlDescription(status) };
   }
   return null;
 }
 
 export function canChangeBluetooth(status: BluetoothControlStatus | null, isAdmin: boolean | null | undefined): boolean {
-  return isAdmin === true && status?.canChange === true;
+  return isAdmin === true && status?.canChange === true && !LOCKED_STATES.has(status.state);
 }
 
-export function describeBluetoothFailure(error: unknown, fallback = "Windows did not confirm the Bluetooth change. WinCommander will check its current state automatically before another action. No result is assumed."): string {
+export function describeBluetoothFailure(error: unknown, fallback = "Windows did not confirm the Bluetooth policy change. WinCommander will check its current state automatically before another action. No result is assumed."): string {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const code = message.match(/\[(BT_[A-Z_]+)\]/)?.[1];
   switch (code) {
-    case "BT_ACCESS_DENIED": return "Windows denied the Bluetooth adapter change. Run WinCommander as administrator and check Windows device policy.";
-    case "BT_DEVICE_CHANGED": return "The Bluetooth adapter changed or disconnected. WinCommander is checking its current state automatically.";
-    case "BT_RESTART_REQUIRED": return "Check the Bluetooth adapter in Windows Device Manager. Windows reported that this adapter change requires a restart; no completed change is assumed.";
-    case "BT_DISABLE_REJECTED": return "Windows rejected blocking the Bluetooth adapter. Check the adapter in Windows Device Manager; WinCommander will recheck automatically.";
-    case "BT_ENABLE_REJECTED": return "Windows rejected restoring the Bluetooth adapter. Check the adapter in Windows Device Manager and review Windows device policy.";
-    case "BT_TRANSITION_TIMEOUT": return "Windows did not finish the Bluetooth adapter transition in time. WinCommander will recheck automatically. No success is assumed.";
-    case "BT_STATE_UNVERIFIED": return "WinCommander could not verify protected Bluetooth recovery state. Ask your administrator to check the adapter in Windows Device Manager before another change.";
-    case "BT_OPERATION_BUSY": return "Another Bluetooth operation is already running. WinCommander will check its current state automatically.";
-    case "BT_SERVICE_UNAVAILABLE": return "The local Bluetooth service connection could not be verified. WinCommander will check again automatically. If this persists, check that the matching WinCommander service is running.";
+    case "BT_POLICY_UNSUPPORTED": return "Bluetooth policy control is unsupported on this Windows installation. Ask your administrator to check Windows policy support.";
+    case "BT_POLICY_MANAGED": return "Another Windows or organisation policy controls Bluetooth. Ask your administrator to review it.";
+    case "BT_POLICY_PENDING": return "Windows has not confirmed the Bluetooth policy change. WinCommander will keep checking automatically.";
+    case "BT_POLICY_REJECTED": return "Windows rejected the Bluetooth policy change. Check Windows policy support and organisation restrictions before retrying.";
+    case "BT_POLICY_UNVERIFIED": return "WinCommander could not verify the Windows Bluetooth policy. It will keep checking; ask your administrator to review Windows policy if this persists.";
+    case "BT_STATE_UNVERIFIED": return "WinCommander could not verify protected Bluetooth policy state. Ask your administrator to review it before another change.";
+    case "BT_OPERATION_BUSY": return "Another Bluetooth policy operation is already running. WinCommander will check its current state automatically.";
+    case "BT_ACCESS_DENIED": return "Windows denied the Bluetooth policy change. Run WinCommander as administrator and check organisation policy.";
+    case "BT_LEGACY_RECOVERY": return "A previous device-based Bluetooth restriction needs administrator review in Windows Device Manager. Policy control cannot restore that earlier device change.";
+    case "BT_SERVICE_UNAVAILABLE": return "The local service could not confirm Bluetooth policy state. WinCommander will check again automatically. If this persists, check that the matching WinCommander service is running.";
     default: return fallback;
   }
 }

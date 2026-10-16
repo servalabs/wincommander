@@ -40,14 +40,13 @@ the backend and private component before execution.
   confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
-- Dashboard Bluetooth block/allow applies to every Windows account on the PC
-  and requires administrator approval plus the matching local service. Paired
-  devices are preserved. Persistent adapter blocks survive Windows restarts;
-  the service checks new adapters in the background. Allow restores only
-  verified WinCommander-owned changes. Uncertain or external restrictions
-  remain visible and are not overridden. Interrupted changes require an
-  explicit retry; the dashboard checks state automatically and uses in-app
-  notifications for errors.
+- Dashboard Bluetooth uses Windows machine policy, with administrator approval
+  and the matching local service. It does not disable adapters. Policy control
+  checks eligible Windows client editions and Server 2025 or later against the
+  installed policy provider and configured/effective results. A missing provider
+  is reported explicitly; managed or uncertain policy is not overridden. Allow releases
+  only a confirmed WinCommander restriction; it does not turn the radio on.
+  The compact control checks status automatically and uses in-app notifications.
 - Export/import of non-secret application settings through validated backend
   paths.
 

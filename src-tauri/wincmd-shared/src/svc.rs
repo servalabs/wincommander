@@ -103,8 +103,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
         "svc.status"
             | "svc.get_settings"
             | "svc.ping"
-            | "svc.bluetooth.status"
-            | "svc.bluetooth.set_blocked"
+            | "svc.bluetooth.policy.status"
+            | "svc.bluetooth.policy.set_blocked"
             | "svc.health"
             | "svc.diagnostics.query"
             | "svc.personal_settings.read"
@@ -150,7 +150,7 @@ pub enum MachineSettingId {
     RdpLock,
 }
 
-/// A machine-wide Bluetooth restriction. Targets are enumerated by the service.
+/// Fixed machine Bluetooth policy request; callers cannot select a policy path.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BluetoothSetBlockedRequest {
@@ -312,8 +312,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
         "svc.ping" => CapabilityClass::ReadOnly,
-        "svc.bluetooth.status" => CapabilityClass::ReadOnly,
-        "svc.bluetooth.set_blocked" => CapabilityClass::Privileged,
+        "svc.bluetooth.policy.status" => CapabilityClass::ReadOnly,
+        "svc.bluetooth.policy.set_blocked" => CapabilityClass::Privileged,
         "svc.health" => CapabilityClass::ReadOnly,
         // The service pipe returns only a bounded, context-free diagnostic
         // projection. `commander-svc` still requires an authenticated pipe
@@ -430,10 +430,12 @@ mod tests {
 
     #[test]
     fn bluetooth_mutation_requires_privilege_and_a_typed_targetless_request() {
-        assert!(is_known_verb("svc.bluetooth.status"));
-        assert!(is_known_verb("svc.bluetooth.set_blocked"));
-        assert_eq!(classify_verb("svc.bluetooth.status"), CapabilityClass::ReadOnly);
-        assert_eq!(classify_verb("svc.bluetooth.set_blocked"), CapabilityClass::Privileged);
+        assert!(!is_known_verb("svc.bluetooth.status"));
+        assert!(!is_known_verb("svc.bluetooth.set_blocked"));
+        assert!(is_known_verb("svc.bluetooth.policy.status"));
+        assert!(is_known_verb("svc.bluetooth.policy.set_blocked"));
+        assert_eq!(classify_verb("svc.bluetooth.policy.status"), CapabilityClass::ReadOnly);
+        assert_eq!(classify_verb("svc.bluetooth.policy.set_blocked"), CapabilityClass::Privileged);
         assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":true,"path":"arbitrary"})).is_err());
         assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":"false"})).is_err());
     }

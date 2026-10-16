@@ -58,19 +58,14 @@ fn fixture(descriptor: &Descriptor) -> DisposableKey {
 
 #[test]
 fn native_disposable_registry_fixture_verifies_acl_and_durable_value_without_machine_state() {
-    if super::super::windows::require_admin().is_err() {
+    if super::super::provider::require_admin().is_err() {
         eprintln!("Native protected-registry acceptance requires an elevated test process.");
         return;
     }
     let fixture = fixture(&Descriptor::new().unwrap());
     let key = fixture.key.as_ref().unwrap();
     security::verify(key.0.cast(), SE_REGISTRY_KEY, 0x500d_0006).unwrap();
-    let bytes = serde_json::to_vec(&Journal {
-        version: 1,
-        blocked: true,
-        records: vec![],
-    })
-    .unwrap();
+    let bytes = serde_json::to_vec(&Journal::default()).unwrap();
     assert_eq!(
         unsafe {
             RegSetValueExW(
@@ -107,7 +102,7 @@ fn native_disposable_registry_fixture_verifies_acl_and_durable_value_without_mac
 
 #[test]
 fn native_registry_fixture_rejects_user_writable_recovery_authority() {
-    if super::super::windows::require_admin().is_err() {
+    if super::super::provider::require_admin().is_err() {
         return;
     }
     let sddl = wide("O:BAG:BAD:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KA;;;BU)");

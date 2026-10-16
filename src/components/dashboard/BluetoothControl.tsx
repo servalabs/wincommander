@@ -8,9 +8,9 @@ export default function BluetoothControl() {
   const { systemInfo } = useAppState();
   const { status, busy, refreshing, change } = useBluetoothControl(systemInfo?.isAdmin);
   const canChange = canChangeBluetooth(status, systemInfo?.isAdmin);
-  const nextBlocked = status?.state === "recovery_required" ? false : !status?.blocked;
+  const nextBlocked = !status?.blocked;
   const description = systemInfo?.isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : bluetoothControlDescription(status);
-  const label = busy ? "Changing Bluetooth…" : refreshing && !status ? "Checking Bluetooth…" : bluetoothControlLabel(status);
+  const label = busy ? "Changing Bluetooth policy…" : refreshing && !status ? "Checking Bluetooth policy…" : bluetoothControlLabel(status);
 
   return (
     <button
@@ -19,7 +19,7 @@ export default function BluetoothControl() {
       style={{ marginTop: 0, whiteSpace: "normal", padding: "6px 8px" }}
       disabled={busy || !canChange}
       aria-busy={busy}
-      title={canChange ? `${description} ${nextBlocked ? "Click to block Bluetooth for all Windows accounts." : "Click to allow Bluetooth on this PC."}` : description}
+      title={canChange ? `${description} ${nextBlocked ? "Click to apply the Bluetooth block policy for all Windows accounts." : "Click to release WinCommander’s Bluetooth policy restriction."}` : description}
       onClick={() => void change(nextBlocked)}
     >
       {status?.state === "blocked" ? <BluetoothOff size={13} aria-hidden="true" /> : <Bluetooth size={13} aria-hidden="true" />}

@@ -598,7 +598,7 @@ async fn dispatch_verb(
         "svc.get_settings" => Ok(settings_host::get_settings()),
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
-        "svc.bluetooth.status" | "svc.bluetooth.set_blocked" => {
+        "svc.bluetooth.policy.status" | "svc.bluetooth.policy.set_blocked" => {
             crate::bluetooth_control::handle(&feature_id, args, caller_privileged)
                 .await
                 .map_err(|message| VerbError::new("bluetooth_unverified", message))
@@ -6145,7 +6145,7 @@ mod integration {
 
     #[tokio::test]
     async fn bluetooth_change_from_a_normal_user_is_denied_at_the_pipe() {
-        let reply = run_one_request("bluetooth-denied", "svc.bluetooth.set_blocked", false, false).await;
+        let reply = run_one_request("bluetooth-denied", "svc.bluetooth.policy.set_blocked", false, false).await;
         match reply {
             Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
             other => panic!("expected Bluetooth permission denial, got {other:?}"),

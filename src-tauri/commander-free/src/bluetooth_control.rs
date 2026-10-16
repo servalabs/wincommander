@@ -12,7 +12,7 @@ pub(crate) fn confirmation_args(blocked: bool) -> String {
 
 #[tauri::command]
 pub async fn bluetooth_control_status() -> Result<Value, String> {
-    crate::svc_client::call("svc.bluetooth.status", json!({}))
+    crate::svc_client::call("svc.bluetooth.policy.status", json!({}))
         .await
         .map_err(|error| failure::describe(&error).to_string())
 }
@@ -23,7 +23,7 @@ pub async fn bluetooth_control_set(
     capability_token: Option<String>,
 ) -> Result<Value, String> {
     if !crate::process_privileges::current_process_elevation().unwrap_or(false) {
-        return Err("Administrator approval is required to change Bluetooth for this PC.".into());
+        return Err("[BT_ACCESS_DENIED] Administrator approval is required to change Bluetooth policy for this PC.".into());
     }
     crate::authz::consume_required(
         capability_token.as_deref(),
@@ -31,12 +31,9 @@ pub async fn bluetooth_control_set(
         &confirmation_args(blocked),
     )?;
     // A timeout is an unknown outcome. Never automatically replay a mutation.
-    crate::svc_client::call("svc.bluetooth.set_blocked", json!({ "blocked": blocked }))
+    crate::svc_client::call("svc.bluetooth.policy.set_blocked", json!({ "blocked": blocked }))
         .await
-        .map_err(|error| {
-            eprintln!("[bluetooth] {}", failure::support_reference(&error));
-            failure::describe(&error).to_string()
-        })
+        .map_err(|error| failure::describe(&error).to_string())
 }
 
 #[cfg(test)]

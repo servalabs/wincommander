@@ -113,9 +113,9 @@ impl DestructiveRequest {
             ),
             Self::BluetoothControlSet { blocked } => {
                 if *blocked {
-                    "Block Bluetooth for every Windows account on this PC? Bluetooth keyboards, mice and headphones will disconnect. Have a wired keyboard/mouse or another working input method ready. Paired devices are preserved. The restriction remains after restarting Windows.".to_string()
+                    "Block Bluetooth through Windows policy for every account on this PC? This requires a supported Windows policy provider. Bluetooth input and other connections may stop working; have another input method ready. WinCommander will not disable an adapter or override organisation policy.".to_string()
                 } else {
-                    "Allow Bluetooth on this PC? Only adapters disabled and verified by WinCommander will be restored. Existing Windows or organisation restrictions remain in effect.".to_string()
+                    "Release WinCommander's Bluetooth policy restriction on this PC? Only its verified policy change will be released. Existing organisation restrictions remain in effect. This does not enable an adapter or turn the Bluetooth radio on.".to_string()
                 }
             },
             Self::SecureErase { path } => format!(

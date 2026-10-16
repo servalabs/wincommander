@@ -1,108 +1,90 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
-
 pub(super) struct Fake {
-    pub(super) admin: bool,
-    pub(super) journal: Journal,
-    pub(super) adapters: Vec<Adapter>,
-    pub(super) external: bool,
-    pub(super) fail_write: bool,
-    pub(super) fail_write_at: usize,
-    pub(super) fail_policy: bool,
-    pub(super) fail_disable: bool,
-    pub(super) fail_enable: bool,
-    pub(super) disables: usize,
-    pub(super) enables: usize,
-    pub(super) writes: usize,
+    pub admin: bool,
+    pub legacy: bool,
+    pub journal: Journal,
+    pub observation: Observation,
+    pub writes: usize,
+    pub applies: usize,
+    pub observes: usize,
+    pub fail_write_at: usize,
+    pub fail_apply: bool,
+    pub fail_observe: bool,
+    pub after: Option<Observation>,
 }
-
 impl Default for Fake {
     fn default() -> Self {
         Self {
             admin: true,
-            journal: Journal {
-                version: 1,
-                ..Default::default()
+            legacy: false,
+            journal: Journal::default(),
+            observation: Observation {
+                supported: true,
+                managed: false,
+                context: "a".repeat(64),
+                configured: None,
+                effective: Some(2),
             },
-            adapters: vec![adapter("RADIO1", 0)],
-            external: false,
-            fail_write: false,
-            fail_write_at: 0,
-            fail_policy: false,
-            fail_disable: false,
-            fail_enable: false,
-            disables: 0,
-            enables: 0,
             writes: 0,
+            applies: 0,
+            observes: 0,
+            fail_write_at: 0,
+            fail_apply: false,
+            fail_observe: false,
+            after: None,
         }
     }
 }
-
-pub(super) fn adapter(id: &str, problem: u32) -> Adapter {
-    Adapter {
-        id: id.into(),
-        identity: format!("{id}-hardware"),
-        problem,
-    }
-}
-
 impl Platform for Fake {
     fn admin(&self) -> bool {
         self.admin
     }
+    fn legacy_active(&mut self) -> Result<bool, String> {
+        Ok(self.legacy)
+    }
     fn read(&mut self) -> Result<Journal, String> {
         Ok(self.journal.clone())
     }
-    fn write(&mut self, value: &Journal) -> Result<(), String> {
+    fn write(&mut self, journal: &Journal) -> Result<(), String> {
         self.writes += 1;
-        if self.fail_write || self.writes == self.fail_write_at {
-            return Err("write failed".into());
+        if self.writes == self.fail_write_at {
+            return Err(STATE_ERROR.into());
         }
-        self.journal = value.clone();
+        self.journal = journal.clone();
         Ok(())
     }
-    fn adapters(&mut self) -> Result<Vec<Adapter>, String> {
-        Ok(self.adapters.clone())
-    }
-    fn externally_managed(&mut self) -> Result<bool, String> {
-        if self.fail_policy {
-            return Err("policy unreadable".into());
+    fn observe(&mut self) -> Result<Observation, String> {
+        self.observes += 1;
+        if self.fail_observe {
+            return Err(UNVERIFIED.into());
         }
-        Ok(self.external)
+        Ok(self.observation.clone())
     }
-    fn disable(&mut self, target: &Adapter) -> Result<(), String> {
-        self.disables += 1;
-        assert!(
-            self.journal.blocked,
-            "disable requires saved machine intent"
-        );
-        assert!(self.journal.records.iter().any(|r| r.id == target.id));
-        if self.fail_disable {
-            return Err("disable failed".into());
+    fn apply(&mut self, action: Action) -> Result<Observation, String> {
+        self.applies += 1;
+        assert!(matches!(
+            self.journal.phase,
+            Phase::PendingBlock | Phase::PendingAllow
+        ));
+        if self.fail_apply {
+            return Err("[BT_POLICY_REJECTED] Windows rejected the policy.".into());
         }
-        self.adapters
-            .iter_mut()
-            .find(|a| a.id == target.id)
-            .unwrap()
-            .problem = 22;
-        Ok(())
-    }
-    fn enable(&mut self, target: &Adapter) -> Result<(), String> {
-        self.enables += 1;
-        assert!(!self.journal.blocked && !self.external);
-        assert!(self
-            .journal
-            .records
-            .iter()
-            .any(|r| r.id == target.id && r.confirmed));
-        if self.fail_enable {
-            return Err("enable failed".into());
+        match action {
+            Action::Block { expected } => {
+                assert_eq!(self.observation.configured, expected);
+                self.observation.configured = Some(0);
+                self.observation.effective = Some(0);
+            }
+            Action::Allow => {
+                assert_eq!(self.observation.configured, Some(0));
+                self.observation.configured = Some(2);
+                self.observation.effective = Some(2);
+            }
         }
-        self.adapters
-            .iter_mut()
-            .find(|a| a.id == target.id)
-            .unwrap()
-            .problem = 0;
-        Ok(())
+        if let Some(after) = self.after.take() {
+            self.observation = after;
+        }
+        Ok(self.observation.clone())
     }
 }

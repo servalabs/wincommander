@@ -62,7 +62,7 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
   const change = useCallback(async (blocked: boolean) => {
     if (operating.current) return;
     if (!canChangeBluetooth(status, isAdmin)) {
-      void showError(isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : "Bluetooth cannot be changed until its current state and local service are verified. WinCommander will check again automatically.", undefined, { kind: "notification" }).catch(() => undefined);
+      void showError(isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : "Bluetooth policy cannot be changed until its current state and local service are verified. WinCommander will check again automatically.", undefined, { kind: "notification" }).catch(() => undefined);
       return;
     }
     operating.current = true;
@@ -71,9 +71,9 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
     setRefreshing(false);
     try {
       if (blocked && !await confirm({
-        title: "Block Bluetooth for this PC?",
-        description: "This affects every Windows account and stays blocked after restarting. Bluetooth keyboards, mice, headphones and other connected devices will disconnect. Connect a wired keyboard and mouse or use built-in controls before continuing. Paired devices will be remembered.",
-        confirmLabel: "Block Bluetooth",
+        title: "Block Bluetooth by policy for this PC?",
+        description: "Apply the Windows Bluetooth restriction to every account on this PC. Bluetooth keyboards, mice, headphones and other connected devices may stop working when Windows applies the policy. Connect a wired keyboard and mouse or use built-in controls before continuing. Existing pairings are preserved.",
+        confirmLabel: "Apply Bluetooth block",
         cancelLabel: "Keep current setting",
       })) return;
       if (!mounted.current) return;
