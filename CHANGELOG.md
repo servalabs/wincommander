@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Hidden backend commands now rebuild Windows PowerShell's module search path,
+  preventing inherited PowerShell 7 modules from breaking permission checks.
+
 - Add administrator-confirmed Bluetooth machine policy control with protected
   ownership records, configured/effective Windows policy checks and in-app
   notifications. Server 2025 and later check the installed provider. Organisation

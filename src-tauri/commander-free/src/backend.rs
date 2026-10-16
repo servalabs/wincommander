@@ -538,6 +538,10 @@ fn resolve_powershell_path() -> String {
     "powershell".to_string()
 }
 
+#[cfg(all(test, windows))]
+#[path = "backend_powershell_tests.rs"]
+mod powershell_host_tests;
+
 fn build_powershell_command() -> (Command, String) {
     let exe = resolve_powershell_path();
     let mut cmd = Command::new(&exe);
@@ -554,6 +558,8 @@ fn build_powershell_command() -> (Command, String) {
         "-Command",
         "-",
     ])
+    // A PowerShell 7 parent can otherwise make Windows PowerShell load incompatible modules.
+    .env_remove("PSModulePath")
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
