@@ -101,10 +101,10 @@ export function AppConfirmProvider({ children }: { children: ReactNode }) {
             <AlertDialogTitle>{active?.title}</AlertDialogTitle>
             <AlertDialogDescription className="whitespace-pre-line">{active?.description}</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => choose(false)}>{active?.cancelLabel ?? "Back"}</AlertDialogCancel>
+          <AlertDialogFooter className="flex-col sm:flex-row">
+            <AlertDialogCancel className="h-auto min-h-9 max-w-full whitespace-normal break-words" onClick={() => choose(false)}>{active?.cancelLabel ?? "Back"}</AlertDialogCancel>
             <AlertDialogAction
-              className={active?.destructive === false ? undefined : "bg-[var(--danger)] text-white hover:bg-[color-mix(in_srgb,var(--danger)_82%,black)]"}
+              className={`h-auto min-h-9 max-w-full whitespace-normal break-words ${active?.destructive === false ? "" : "bg-[var(--danger)] text-white hover:bg-[color-mix(in_srgb,var(--danger)_82%,black)]"}`}
               onClick={() => choose(true)}
             >
               {active?.confirmLabel ?? "Continue"}

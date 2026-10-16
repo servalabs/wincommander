@@ -7597,6 +7597,26 @@
       ]
     },
     {
+      "id": "tauri:bluetooth_control_set",
+      "name": "bluetooth_control_set",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBluetoothControl.ts"
+      ]
+    },
+    {
+      "id": "tauri:bluetooth_control_status",
+      "name": "bluetooth_control_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBluetoothControl.ts"
+      ]
+    },
+    {
       "id": "tauri:canary_listener_status",
       "name": "canary_listener_status",
       "transport": "tauri",

@@ -30,6 +30,19 @@ fn token_is_single_use() {
 }
 
 #[test]
+fn bluetooth_confirmation_cannot_be_reversed_replayed_or_replaced_by_internet_confirmation() {
+    let block = crate::bluetooth_control::confirmation_args(true);
+    let allow = crate::bluetooth_control::confirmation_args(false);
+    let token = mint(DestructiveAction::KillSwitch, &block);
+    assert!(consume(&token, DestructiveAction::KillSwitch, &allow).is_err());
+    let token = mint(DestructiveAction::KillSwitch, &kill_switch_args(true));
+    assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_err());
+    let token = mint(DestructiveAction::KillSwitch, &block);
+    assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_ok());
+    assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_err());
+}
+
+#[test]
 fn unknown_token_refused() {
     assert!(consume("not-a-real-token", DestructiveAction::SelfDestruct, "x").is_err());
 }

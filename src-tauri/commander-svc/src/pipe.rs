@@ -598,6 +598,11 @@ async fn dispatch_verb(
         "svc.get_settings" => Ok(settings_host::get_settings()),
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
+        "svc.bluetooth.policy.status" | "svc.bluetooth.policy.set_blocked" => {
+            crate::bluetooth_control::handle(&feature_id, args, caller_privileged)
+                .await
+                .map_err(|message| VerbError::new("bluetooth_unverified", message))
+        }
         "svc.diagnostics.query" => handle_diagnostics_query(args, peer),
         "svc.personal_settings.read" | "svc.personal_settings.write" => {
             crate::personal_settings::handle(&feature_id, args, peer)
@@ -6135,6 +6140,15 @@ mod integration {
                 assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
             }
             other => panic!("expected Envelope::Error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn bluetooth_change_from_a_normal_user_is_denied_at_the_pipe() {
+        let reply = run_one_request("bluetooth-denied", "svc.bluetooth.policy.set_blocked", false, false).await;
+        match reply {
+            Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
+            other => panic!("expected Bluetooth permission denial, got {other:?}"),
         }
     }
 

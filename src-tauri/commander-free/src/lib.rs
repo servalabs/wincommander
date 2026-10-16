@@ -84,6 +84,7 @@ mod net_traffic_alert;
 mod network_guard;
 mod network_maintenance;
 mod network_toggle;
+mod bluetooth_control;
 mod package_updates;
 mod paste_monitor;
 mod path_identity;
@@ -2833,6 +2834,8 @@ pub fn run() {
             // ── Network toggle (free, in-process firewall block) ──
             network_toggle::internet_kill_switch_set,
             network_toggle::internet_kill_switch_get,
+            bluetooth_control::bluetooth_control_status,
+            bluetooth_control::bluetooth_control_set,
             // ── VPN-drop kill switch (free, tunnel watchdog) ──
             vpn_kill_switch::vpn_kill_switch_arm,
             vpn_kill_switch::vpn_kill_switch_status,

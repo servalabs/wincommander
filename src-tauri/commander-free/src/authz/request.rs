@@ -26,6 +26,9 @@ pub enum DestructiveRequest {
     InternetKillSwitchSet {
         enable: bool,
     },
+    BluetoothControlSet {
+        blocked: bool,
+    },
     SecureErase {
         path: String,
     },
@@ -47,6 +50,7 @@ impl DestructiveRequest {
             Self::DiskDeleteItem { .. } => DestructiveAction::DiskDelete,
             Self::DeleteDecoy { .. } => DestructiveAction::DecoyDelete,
             Self::InternetKillSwitchSet { .. } => DestructiveAction::KillSwitch,
+            Self::BluetoothControlSet { .. } => DestructiveAction::KillSwitch,
             Self::SecureErase { .. } => DestructiveAction::DiskDelete,
             Self::FreeSpaceErase { .. } => DestructiveAction::CryptoErase,
             Self::SelectiveCryptoErase { .. } => DestructiveAction::CryptoErase,
@@ -70,6 +74,7 @@ impl DestructiveRequest {
             Self::DiskDeleteItem { path } => disk_delete_args(path),
             Self::DeleteDecoy { path } => decoy_delete_args(path),
             Self::InternetKillSwitchSet { enable } => kill_switch_args(*enable),
+            Self::BluetoothControlSet { blocked } => crate::bluetooth_control::confirmation_args(*blocked),
             Self::SecureErase { path } => secure_erase_args(path),
             Self::FreeSpaceErase {
                 drive_letter,
@@ -106,6 +111,13 @@ impl DestructiveRequest {
                 "Turn the Internet Kill Switch {} now? This changes machine-wide network access.",
                 if *enable { "ON" } else { "OFF" }
             ),
+            Self::BluetoothControlSet { blocked } => {
+                if *blocked {
+                    "Block Bluetooth through Windows policy for every account on this PC? This requires a supported Windows policy provider. Bluetooth input and other connections may stop working; have another input method ready. WinCommander will not disable an adapter or override organisation policy.".to_string()
+                } else {
+                    "Release WinCommander's Bluetooth policy restriction on this PC? Only its verified policy change will be released. Existing organisation restrictions remain in effect. This does not enable an adapter or turn the Bluetooth radio on.".to_string()
+                }
+            },
             Self::SecureErase { path } => format!(
                 "Securely overwrite and permanently delete this item?\n\nTarget: {}",
                 safe_detail(&canonical_path(path))

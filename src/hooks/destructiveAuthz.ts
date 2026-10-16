@@ -6,6 +6,7 @@ export type DestructiveRequest =
   | { command: "disk_delete_item"; path: string }
   | { command: "delete_decoy"; path: string }
   | { command: "internet_kill_switch_set"; enable: boolean }
+  | { command: "bluetooth_control_set"; blocked: boolean }
   | { command: "secure_erase"; path: string }
   | { command: "free_space_erase"; driveLetter: string; mediaType: string }
   | {

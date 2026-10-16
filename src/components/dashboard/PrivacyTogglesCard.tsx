@@ -1,5 +1,6 @@
 import { Camera, CameraOff, Mic, MicOff, Globe, GlobeLock, VideoOff } from "lucide-react";
 import RadarControlStrip from "./RadarControlStrip";
+import BluetoothControl from "./BluetoothControl";
 
 interface PrivacyTogglesCardProps {
   cameraBlocked?: boolean;
@@ -83,6 +84,7 @@ export default function PrivacyTogglesCard({
             {internetCut ? "Internet OFF" : "Internet ON"}
           </button>
         )}
+        <BluetoothControl />
       </div>
       <RadarControlStrip />
     </div>

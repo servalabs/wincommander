@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Add administrator-confirmed Bluetooth machine policy control with protected
+  ownership records, configured/effective Windows policy checks and in-app
+  notifications. Server 2025 and later check the installed provider. Organisation
+  policies and uncertain state remain protected; no adapter is disabled.
+
 - Setup refreshes recognized Scrub metadata menus for signed-in Windows users,
   so a previous installation path does not keep launching an older scrubber.
   Disabled and unrelated menu commands are preserved; offline accounts finish
