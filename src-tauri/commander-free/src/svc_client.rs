@@ -38,6 +38,8 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn request_timeout_for(feature_id: &str) -> std::time::Duration {
     match feature_id {
+        "svc.bluetooth.set_blocked" => std::time::Duration::from_secs(90),
+        "svc.bluetooth.status" => std::time::Duration::from_secs(10),
         // Policy saves resolve Windows principals and apply/read back permissions.
         // A short probe deadline does not cancel the exclusive mutation.
         "svc.vault.apply_policy"

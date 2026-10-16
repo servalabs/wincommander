@@ -51,6 +51,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1
 toolchain/components pinned in `rust-toolchain.toml`, then starts Tauri. The
 Visual Studio C++ Build Tools and Windows SDK remain manual prerequisites.
 
+For administrator-only development checks, run `bun run dev:admin`. The
+supported launcher completes dependency, Pro and local-service preparation
+before starting Tauri's frontend wait, so a cold native build cannot consume
+that deadline. Keep Vaults safely dismounted for backend replacement; mounted
+or unverifiable Vault state stops native preparation. `bun run dev:server`
+remains available for a preserved frontend session. Use the desktop launcher
+for native testing; a browser-only session does not load new native code.
+
 ## Verify your download
 
 Every release is built in public CI and verifiable end to end. The signed NSIS setup,

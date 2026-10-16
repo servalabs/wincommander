@@ -82,11 +82,16 @@ try {
     if ($ServerOnly) {
         & $bun run dev:server
     } else {
-        # Release an old debug executable before Tauri starts its build. The
-        # beforeDevCommand repeats this as its first step for direct CLI starts;
-        # its later dev-server phase is marked pre-cleaned to avoid killing the
-        # new desktop after Cargo has launched it.
+        # Release the old debug files before preparation. The prepared Tauri
+        # hook starts only Vite and never kills the freshly launched desktop.
         & (Join-Path $PSScriptRoot "kill-dev.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "Development cleanup failed (exit $LASTEXITCODE)." }
+        & $bun run fetch-icons
+        if ($LASTEXITCODE -ne 0) { throw "Development icon preparation failed (exit $LASTEXITCODE)." }
+        # Pro/service builds can exceed Tauri's fixed 180-second frontend wait.
+        # Complete them before launching Tauri, keeping its hook Vite-only.
+        & $bun run tools/dev-server.ts --precleaned --prepare-only
+        if ($LASTEXITCODE -ne 0) { throw "Native development preparation failed (exit $LASTEXITCODE); the desktop was not started." }
         # Use the repository's installed, pinned Tauri CLI. `bun x` uses a
         # disposable cache under %TEMP%, which can disappear between runs and
         # leave Node trying to load a deleted tauri.js file.
@@ -94,7 +99,7 @@ try {
         if (-not (Test-Path -LiteralPath $tauriCli)) {
             throw "The local Tauri CLI is missing. Run bun install, then start tools/dev.ps1 again."
         }
-        & $tauriCli dev --config src-tauri/commander-free/tauri.conf.json
+        & $tauriCli dev --config src-tauri/commander-free/tauri.conf.json --config src-tauri/commander-free/tauri.prepared-dev.conf.json
     }
     $exitCode = $LASTEXITCODE
 } finally {

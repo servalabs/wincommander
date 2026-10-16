@@ -213,6 +213,18 @@ These qualify the product's security claims and are stated here because this
 document owns the public limits. The threat-model boundaries above remain the
 authoritative statement of what WinCommander does not claim to defend against.
 
+- Bluetooth blocking uses persistent Windows radio-adapter disablement and
+  service polling. Newly connected hardware has a detection interval; this is
+  not pre-boot or zero-packet enforcement. A stopped service cannot enforce the
+  saved block on newly added adapters. Restoration requires matching confirmed
+  records and no detected external restriction. Unconfirmed attempts require
+  an explicit retry; background enforcement does not repeat those native calls.
+  Windows does not record a
+  second disable request by another administrator on an already-disabled
+  adapter, so WinCommander cannot attribute that indistinguishable intent.
+  Restore records bind Windows logical device identities; identical hardware
+  without serial numbers may reuse those identities.
+
 - Ransomware alerts and response can reduce time to detection or containment.
   They cannot guarantee that no file changes before Windows observes activity.
 - Unknown-keyboard approval is reactive. It cannot guarantee first-keystroke,

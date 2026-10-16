@@ -24,6 +24,15 @@ the backend and private component before execution.
   controls where the public backend supports the operation.
 - Current-versus-intended state reporting so the UI can show whether Windows
   actually applied a requested setting.
+- Hosts Protection keeps one Telemetry switch with independently verified
+  hosts-entry status, a dated scope review, and an update action for older or
+  incomplete entries. Shared Microsoft security, update, configuration, and
+  connectivity destinations are excluded from its bundled telemetry defaults.
+- Hosts changes support one-step undo, including the Recommended action as a
+  whole. Undo preserves entries outside WinCommander and refuses later edits
+  inside its managed section. Network maintenance includes an on-demand DNS,
+  HTTPS, Windows connectivity, and essential-hosts check; it does not change
+  settings or establish that every app, update, or security service works.
 - Fix All keeps supported Explorer preferences in the current Windows account,
   even when machine-wide fixes are selected. Machine protections still require
   elevation; mixed or application-defined actions retain their actual scope.
@@ -31,6 +40,14 @@ the backend and private component before execution.
   confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
+- Dashboard Bluetooth block/allow applies to every Windows account on the PC
+  and requires administrator approval plus the matching local service. Paired
+  devices are preserved. Persistent adapter blocks survive Windows restarts;
+  the service checks new adapters in the background. Allow restores only
+  verified WinCommander-owned changes. Uncertain or external restrictions
+  remain visible and are not overridden. Interrupted changes require an
+  explicit retry; the dashboard checks state automatically and uses in-app
+  notifications for errors.
 - Export/import of non-secret application settings through validated backend
   paths.
 
@@ -77,6 +94,11 @@ the backend and private component before execution.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;
   changes and per-service failures remain actionable.
+- Service Manager and dashboard service-profile changes show a dependency-aware
+  preview and save service settings before applying. Expired or changed plans
+  require another preview; driver changes are excluded. The collapsed Service
+  changes view compares saved settings with this PC, separating configuration
+  from running state. Snapshots do not automatically restore settings.
 - Guided Routine Hygiene previews an exact, test-locked cache allowlist and
   refuses bulk clear when any category is missing, busy, failed, or unscanned.
   Clears run sequentially and publish an authoritative post-action rescan.

@@ -50,6 +50,10 @@ windows-service = "0.8"
 # Low-level Windows APIs: security, pipes, tokens.
 # Match the MAJOR version already in Cargo.lock (0.61.x) so no duplicate.
 windows-sys = { version = "0.61", features = [
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Bluetooth",
+  "Win32_Devices_Properties",
+  "Win32_System_Registry",
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",

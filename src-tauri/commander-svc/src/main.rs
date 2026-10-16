@@ -38,6 +38,12 @@ mod machine_settings;
 #[cfg(windows)]
 mod rdp_lock_query;
 
+#[cfg(windows)]
+#[path = "../../runtime-support/bluetooth_control.rs"]
+mod bluetooth_control_core;
+#[cfg(windows)]
+mod bluetooth_control;
+
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.
 #[cfg(windows)]
@@ -364,6 +370,7 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
         Arc::clone(&clipboard_state),
     ));
     tokio::spawn(reconciler::run());
+    tokio::spawn(bluetooth_control::run());
     tokio::spawn(command_worker::run());
     tokio::spawn(fleet_transport::run());
     // Pro can extract the engine after this service has already started.

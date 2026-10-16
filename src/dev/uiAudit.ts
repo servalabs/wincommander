@@ -2,6 +2,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from "../lib/decoyFakeData";
 import { modulesForPersona } from "../types/modules";
 import type { AppSettings } from "../types/settings";
+import { serviceSafetyAuditResponse } from "./serviceSafetyAudit";
 
 export const UI_AUDIT_QUERY_KEY = "wc-ui-audit";
 export const UI_AUDIT_PANEL_QUERY_KEY = "panel";
@@ -504,7 +505,9 @@ export function createUiAuditSettings(): AppSettings {
   });
 }
 
-export function uiAuditBackendResponse(command: string): unknown {
+export function uiAuditBackendResponse(command: string, params: Record<string, unknown> = {}): unknown {
+  const serviceSafety = serviceSafetyAuditResponse(command, params);
+  if (serviceSafety !== undefined) return serviceSafety;
   switch (command) {
     case "Get-StartupStatus":
       return { systemInfo: AUDIT_SYSTEM_INFO, productivity: { installed: true, running: true, details: { server: true, input: true, active: true } } };
@@ -1233,7 +1236,7 @@ export function installUiAuditMocks(): void {
       settings = mergeSettings(settings, patch);
       return structuredClone(settings);
     }
-    if (command === "run_backend_script") return uiAuditBackendResponse(String(args.command ?? ""));
+    if (command === "run_backend_script") return uiAuditBackendResponse(String(args.command ?? ""), args.params as Record<string, unknown> | undefined);
     if (command === "flow_list_rules") return structuredClone(flowRules);
     if (command === "flow_save_rule" && args.rule && typeof args.rule === "object") {
       const next = structuredClone(args.rule) as (typeof flowRules)[number];

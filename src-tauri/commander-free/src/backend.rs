@@ -600,6 +600,18 @@ const NETWORK_HOSTS: &[u8] = embedded_module!(
     "../scripts/modules/network/hosts.ps1",
     "../scripts/modules/network/hosts.enc"
 );
+const NETWORK_HOSTS_STATE: &[u8] = embedded_module!(
+    "../scripts/modules/network/hosts-state.ps1",
+    "../scripts/modules/network/hosts-state.enc"
+);
+const NETWORK_HOSTS_VERIFICATION: &[u8] = embedded_module!(
+    "../scripts/modules/network/hosts-verification.ps1",
+    "../scripts/modules/network/hosts-verification.enc"
+);
+const NETWORK_CONNECTION_CHECK: &[u8] = embedded_module!(
+    "../scripts/modules/network/connection-check.ps1",
+    "../scripts/modules/network/connection-check.enc"
+);
 const NETWORK_BLOCKLISTS_DATA: &[u8] = embedded_module!(
     "../scripts/modules/network/blocklists-data.ps1",
     "../scripts/modules/network/blocklists-data.enc"
@@ -712,6 +724,22 @@ const TWEAKS_SCHEDULED_TASKS: &[u8] = embedded_module!(
 const TWEAKS_SERVICE_MANAGER: &[u8] = embedded_module!(
     "../scripts/modules/tweaks/service-manager.ps1",
     "../scripts/modules/tweaks/service-manager.enc"
+);
+const SERVICE_STORE: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/service-store.ps1",
+    "../scripts/modules/tweaks/service-store.enc"
+);
+const SERVICE_SNAPSHOTS: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/service-snapshots.ps1",
+    "../scripts/modules/tweaks/service-snapshots.enc"
+);
+const SERVICE_PLAN: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/service-plan.ps1",
+    "../scripts/modules/tweaks/service-plan.enc"
+);
+const SERVICE_EXECUTION: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/service-execution.ps1",
+    "../scripts/modules/tweaks/service-execution.enc"
 );
 const TWEAKS_LOCAL_USERS: &[u8] = embedded_module!(
     "../scripts/modules/tweaks/local-users.ps1",
@@ -2135,6 +2163,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-BlocklistStatus" => Some("network/hosts"),
         "Add-BlocklistToHosts" => Some("network/hosts"),
         "Remove-BlocklistFromHosts" => Some("network/hosts"),
+        "Undo-HostsBlocklistChange" => Some("network/hosts"),
+        "Set-HostsRecommendedProtection" => Some("network/hosts"),
+        "Test-BlocklistConnection" => Some("network/connection-check"),
 
         // Network - DNS
         "Get-DNSStatus" => Some("network/dns"),
@@ -2544,10 +2575,12 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         | "Remove-ScheduledTaskByPath" => Some("tweaks/scheduled-tasks"),
 
         // ── Tweaks - Service Manager ─────────────────────────────────
-        // Bulk "Apply Recommended Profile" routes through the existing
-        // Set-ServicesManual command (tweaks/maintenance) — single button
-        // in the System Maintenance card. No separate Apply command here.
         "Get-AllServices"
+        | "Get-ServiceChangePlan"
+        | "Invoke-ServiceChangePlan"
+        | "New-ServiceSnapshot"
+        | "Get-ServiceSnapshots"
+        | "Compare-ServiceSnapshot"
         | "Set-ServiceStartMode"
         | "Start-ServiceByName"
         | "Stop-ServiceByName"
@@ -2785,6 +2818,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Disable-LockdownMode",
         "Add-BlocklistToHosts",
         "Remove-BlocklistFromHosts",
+        "Undo-HostsBlocklistChange",
+        "Set-HostsRecommendedProtection",
+        "Test-BlocklistConnection",
         "Set-SecureDNS",
         "Clear-SecureDNS",
         "Enable-DNSCensorshipProtection",
@@ -2872,6 +2908,9 @@ fn load_module(module_name: &str) -> Result<String, String> {
         "privacy/telemetry" => PRIVACY_TELEMETRY,
         "privacy/cleanup" => PRIVACY_CLEANUP,
         "network/hosts" => NETWORK_HOSTS,
+        "network/hosts-state" => NETWORK_HOSTS_STATE,
+        "network/hosts-verification" => NETWORK_HOSTS_VERIFICATION,
+        "network/connection-check" => NETWORK_CONNECTION_CHECK,
         "network/blocklists-data" => NETWORK_BLOCKLISTS_DATA,
         "network/firewall" => NETWORK_FIREWALL,
         "network/dns" => NETWORK_DNS,
@@ -2890,6 +2929,10 @@ fn load_module(module_name: &str) -> Result<String, String> {
         "tweaks/ui-granular" => TWEAKS_UI_GRANULAR,
         "tweaks/scheduled-tasks" => TWEAKS_SCHEDULED_TASKS,
         "tweaks/service-manager" => TWEAKS_SERVICE_MANAGER,
+        "tweaks/service-store" => SERVICE_STORE,
+        "tweaks/service-snapshots" => SERVICE_SNAPSHOTS,
+        "tweaks/service-plan" => SERVICE_PLAN,
+        "tweaks/service-execution" => SERVICE_EXECUTION,
         "tweaks/local-users" => TWEAKS_LOCAL_USERS,
         "tweaks/disk-cleanup-granular" => TWEAKS_DISK_CLEANUP_GRANULAR,
         "tweaks/prevention" => TWEAKS_PREVENTION,
@@ -3952,6 +3995,30 @@ mod settings_sync_patch_tests {
 
 fn get_module_dependencies(module_name: &str) -> &'static [&'static str] {
     match module_name {
+        "network/hosts" => &[
+            "network/blocklists-data",
+            "network/hosts-state",
+            "network/hosts-verification",
+        ],
+        "network/connection-check" => &[
+            "network/blocklists-data",
+            "network/hosts-state",
+            "network/hosts-verification",
+            "network/hosts",
+        ],
+        "tweaks/service-manager" => &[
+            "tweaks/maintenance",
+            "tweaks/service-store",
+            "tweaks/service-snapshots",
+            "tweaks/service-plan",
+            "tweaks/service-execution",
+        ],
+        "tweaks/maintenance" => &[
+            "tweaks/service-store",
+            "tweaks/service-snapshots",
+            "tweaks/service-plan",
+            "tweaks/service-execution",
+        ],
         // KT: Browser hardening filters extension policy through Get-WCSetting.
         // privacy/telemetry stays in the command-specific composition below
         // because the Copilot handlers add their own companion modules there.
@@ -3967,6 +4034,60 @@ fn get_module_dependencies(module_name: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod module_dependency_tests {
     use super::*;
+
+    #[test]
+    fn hosts_protection_commands_load_their_helpers_and_keep_free_access() {
+        for command in [
+            "Get-BlocklistStatus",
+            "Add-BlocklistToHosts",
+            "Remove-BlocklistFromHosts",
+            "Set-HostsRecommendedProtection",
+            "Undo-HostsBlocklistChange",
+            "Test-BlocklistConnection",
+        ] {
+            let module = get_module_for_command(command).expect("hosts command is registered");
+            assert_eq!(get_command_tier(command), "free");
+            for helper in [
+                "network/blocklists-data",
+                "network/hosts-state",
+                "network/hosts-verification",
+            ] {
+                assert!(get_module_dependencies(module).contains(&helper));
+                assert!(load_module(helper).is_ok());
+            }
+        }
+        assert!(get_module_dependencies("network/connection-check").contains(&"network/hosts"));
+        assert!(is_machine_wide_fix_command("Undo-HostsBlocklistChange"));
+        assert!(is_machine_wide_fix_command(
+            "Set-HostsRecommendedProtection"
+        ));
+    }
+
+    #[test]
+    fn service_changes_load_the_same_planner_and_snapshot_helpers() {
+        for command in [
+            "Get-ServiceChangePlan",
+            "Invoke-ServiceChangePlan",
+            "New-ServiceSnapshot",
+            "Get-ServiceSnapshots",
+            "Compare-ServiceSnapshot",
+            "Set-ServicesManual",
+            "Stop-ServiceByName",
+            "Set-ServiceStartMode",
+        ] {
+            let module = get_module_for_command(command).expect("service command is registered");
+            assert_eq!(get_command_tier(command), "free");
+            let dependencies = get_module_dependencies(module);
+            for helper in [
+                "tweaks/service-store",
+                "tweaks/service-snapshots",
+                "tweaks/service-plan",
+                "tweaks/service-execution",
+            ] {
+                assert!(dependencies.contains(&helper), "{command} needs {helper}");
+            }
+        }
+    }
 
     #[test]
     fn browser_hardening_commands_load_the_settings_bridge() {
@@ -4332,6 +4453,8 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Set-AppCapabilityAccess",
     "Add-BlocklistToHosts",
     "Remove-BlocklistFromHosts",
+    "Undo-HostsBlocklistChange",
+    "Set-HostsRecommendedProtection",
 ];
 
 fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool, String> {
@@ -5190,6 +5313,13 @@ pub(crate) async fn run_backend_script_with_timeout(
             || command == "Provision-EncryptedBackupTarget"
             || command == "Invoke-AIControlOperation"
             || command == "Invoke-CleanupClearAllUsers";
+        let mutating = mutating
+            || matches!(
+                command.as_str(),
+                "Add-BlocklistToHosts"
+                    | "Set-HostsRecommendedProtection"
+                    | "Undo-HostsBlocklistChange"
+            );
         if mutating {
             let msg = format!(
                 "Refused: investigator mode forbids state-mutating commands. \
@@ -5407,10 +5537,6 @@ pub(crate) async fn run_backend_script_with_timeout(
         additional_modules.push_str(&load_module("tweaks/ai-control-removal")?);
         additional_modules.push_str("\n\n");
         additional_modules.push_str(&load_module("tweaks/ai-control-maintenance")?);
-        additional_modules.push_str("\n\n");
-    } else if module_name == "network/hosts" {
-        // Hosts module needs blocklists data
-        additional_modules.push_str(&load_module("network/blocklists-data")?);
         additional_modules.push_str("\n\n");
     } else if command == "Get-StartupStatus" {
         // Startup needs system info, hardening, privacy, cleanup, productivity, and apps (essential status)

@@ -12,6 +12,7 @@
 import { ArpCacheCard } from "./ArpCacheCard";
 import { FirewallAuditCard } from "./FirewallAuditCard";
 import { TrustStoreAuditCard } from "./TrustStoreAuditCard";
+import { ConnectionCheckCard } from "./ConnectionCheckCard";
 import { useArpMaintenance } from "./useArpMaintenance";
 import { useFirewallAudit } from "./useFirewallAudit";
 import type { ReactNode } from "react";
@@ -26,6 +27,7 @@ export function NetworkMaintenanceTools({ adapterControls }: { adapterControls: 
         <ArpCacheCard arp={arp} />
         <div className="network-maintenance-layout__adapters">{adapterControls}</div>
       </div>
+      <ConnectionCheckCard />
       <FirewallAuditCard firewall={firewall} />
       <TrustStoreAuditCard />
     </div>

@@ -1,0 +1,102 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useAppConfirm } from "../components/shared/AppConfirmDialog";
+import { bluetoothControlIssue, canChangeBluetooth, describeBluetoothFailure, parseBluetoothControlStatus, type BluetoothControlStatus } from "../lib/bluetoothControl";
+import { MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
+import { showError, showWarning } from "../utils/toast";
+import { requestDestructiveCapability } from "./destructiveAuthz";
+
+export default function useBluetoothControl(isAdmin: boolean | null | undefined) {
+  const confirm = useAppConfirm();
+  const [status, setStatus] = useState<BluetoothControlStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(true);
+  const mounted = useRef(false);
+  const operating = useRef(false);
+  const reading = useRef(false);
+  const epoch = useRef(0);
+  const lastIssue = useRef<string | null>(null);
+
+  const reportStatus = useCallback((next: BluetoothControlStatus | null, failure?: unknown) => {
+    const issue = bluetoothControlIssue(next);
+    if (issue && issue.key !== lastIssue.current) {
+      void showWarning(failure === undefined ? issue.message : describeBluetoothFailure(failure, issue.message), undefined, { kind: "notification" }).catch(() => undefined);
+    }
+    lastIssue.current = issue?.key ?? null;
+    setStatus(next);
+  }, []);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (reading.current || operating.current) return;
+    reading.current = true;
+    const requestEpoch = epoch.current;
+    if (mounted.current) setRefreshing(true);
+    try {
+      const next = parseBluetoothControlStatus(await invoke<unknown>("bluetooth_control_status"));
+      if (mounted.current && epoch.current === requestEpoch) reportStatus(next);
+    } catch (error) {
+      if (mounted.current && epoch.current === requestEpoch) reportStatus(null, error);
+    } finally {
+      reading.current = false;
+      if (mounted.current && epoch.current === requestEpoch) setRefreshing(false);
+      else if (mounted.current && !operating.current) void refresh();
+    }
+  }, [reportStatus]);
+
+  useEffect(() => {
+    mounted.current = true;
+    void refresh();
+    const onFocus = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    const timer = window.setInterval(onFocus, 2_000);
+    return () => {
+      mounted.current = false;
+      epoch.current += 1;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [refresh]);
+
+  const change = useCallback(async (blocked: boolean) => {
+    if (operating.current) return;
+    if (!canChangeBluetooth(status, isAdmin)) {
+      void showError(isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : "Bluetooth cannot be changed until its current state and local service are verified. WinCommander will check again automatically.", undefined, { kind: "notification" }).catch(() => undefined);
+      return;
+    }
+    operating.current = true;
+    epoch.current += 1;
+    setBusy(true);
+    setRefreshing(false);
+    try {
+      if (blocked && !await confirm({
+        title: "Block Bluetooth for this PC?",
+        description: "This affects every Windows account and stays blocked after restarting. Bluetooth keyboards, mice, headphones and other connected devices will disconnect. Connect a wired keyboard and mouse or use built-in controls before continuing. Paired devices will be remembered.",
+        confirmLabel: "Block Bluetooth",
+        cancelLabel: "Keep current setting",
+      })) return;
+      if (!mounted.current) return;
+      let capabilityToken: string;
+      try {
+        capabilityToken = await requestDestructiveCapability({ command: "bluetooth_control_set", blocked });
+      } catch (error) {
+        if (error === "confirmation failed") return;
+        throw error;
+      }
+      const next = parseBluetoothControlStatus(await invoke<unknown>("bluetooth_control_set", { blocked, capabilityToken }));
+      if (mounted.current) reportStatus(next);
+    } catch (error) {
+      if (mounted.current) {
+        setStatus(null);
+        lastIssue.current = "unavailable";
+        void showError(describeBluetoothFailure(error), undefined, { kind: "notification" }).catch(() => undefined);
+      }
+    } finally {
+      operating.current = false;
+      if (mounted.current) { setBusy(false); void refresh(); }
+    }
+  }, [confirm, isAdmin, refresh, reportStatus, status]);
+
+  return { status, busy, refreshing, change };
+}

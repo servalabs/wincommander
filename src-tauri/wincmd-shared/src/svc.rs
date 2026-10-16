@@ -103,6 +103,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
         "svc.status"
             | "svc.get_settings"
             | "svc.ping"
+            | "svc.bluetooth.status"
+            | "svc.bluetooth.set_blocked"
             | "svc.health"
             | "svc.diagnostics.query"
             | "svc.personal_settings.read"
@@ -146,6 +148,13 @@ pub fn is_known_verb(feature_id: &str) -> bool {
 pub enum MachineSettingId {
     RdpIncoming,
     RdpLock,
+}
+
+/// A machine-wide Bluetooth restriction. Targets are enumerated by the service.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BluetoothSetBlockedRequest {
+    pub blocked: bool,
 }
 
 /// Typed desired value for one [`MachineSettingId`].
@@ -303,6 +312,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
         "svc.ping" => CapabilityClass::ReadOnly,
+        "svc.bluetooth.status" => CapabilityClass::ReadOnly,
+        "svc.bluetooth.set_blocked" => CapabilityClass::Privileged,
         "svc.health" => CapabilityClass::ReadOnly,
         // The service pipe returns only a bounded, context-free diagnostic
         // projection. `commander-svc` still requires an authenticated pipe
@@ -416,6 +427,16 @@ pub fn hello_from_ui(session_token: impl Into<String>) -> crate::Hello {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bluetooth_mutation_requires_privilege_and_a_typed_targetless_request() {
+        assert!(is_known_verb("svc.bluetooth.status"));
+        assert!(is_known_verb("svc.bluetooth.set_blocked"));
+        assert_eq!(classify_verb("svc.bluetooth.status"), CapabilityClass::ReadOnly);
+        assert_eq!(classify_verb("svc.bluetooth.set_blocked"), CapabilityClass::Privileged);
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":true,"path":"arbitrary"})).is_err());
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":"false"})).is_err());
+    }
 
     // ── classify_verb: read-only verbs ───────────────────────────────────────
 

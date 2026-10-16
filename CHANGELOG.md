@@ -5,6 +5,15 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Bluetooth uses a compact dashboard control with automatic state checks and
+  in-app error notifications. Unconfirmed adapter operations retain their
+  recovery evidence and require an explicit retry instead of repeated
+  background calls. Failures report their stage without exposing device details.
+
+- Service changes preview affected dependencies and save settings before applying.
+  A collapsed Service changes view compares snapshots with the current PC;
+  driver settings are excluded from the service profile.
+
 - Setup refreshes recognized Scrub metadata menus for signed-in Windows users,
   so a previous installation path does not keep launching an older scrubber.
   Disabled and unrelated menu commands are preserved; offline accounts finish

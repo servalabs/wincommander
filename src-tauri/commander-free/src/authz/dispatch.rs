@@ -126,6 +126,7 @@ pub const DESTRUCTIVE_COMMANDS: &[(&str, DestructiveAction)] = &[
     ("disk_delete_item", DestructiveAction::DiskDelete),
     ("delete_decoy", DestructiveAction::DecoyDelete),
     ("internet_kill_switch_set", DestructiveAction::KillSwitch),
+    ("bluetooth_control_set", DestructiveAction::KillSwitch),
     ("erase_encrypted_container", DestructiveAction::CryptoErase),
 ];
 
