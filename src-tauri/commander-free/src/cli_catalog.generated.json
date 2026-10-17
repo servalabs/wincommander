@@ -804,6 +804,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Compare\u002dServiceSnapshot",
+      "name": "Compare\u002dServiceSnapshot",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/managers/ServiceSnapshots.tsx"
+      ]
+    },
+    {
       "id": "backend:Connect\u002dMeshVPN",
       "name": "Connect\u002dMeshVPN",
       "transport": "backend\u002dscript",
@@ -5440,6 +5450,14 @@
       ]
     },
     {
+      "id": "backend:Get\u002dServiceChangePlan",
+      "name": "Get\u002dServiceChangePlan",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Get\u002dServiceProfileStatus",
       "name": "Get\u002dServiceProfileStatus",
       "transport": "backend\u002dscript",
@@ -5447,6 +5465,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useDashboardRadar.ts"
+      ]
+    },
+    {
+      "id": "backend:Get\u002dServiceSnapshots",
+      "name": "Get\u002dServiceSnapshots",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/managers/ServiceSnapshots.tsx"
       ]
     },
     {
@@ -6148,6 +6176,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Invoke\u002dServiceChangePlan",
+      "name": "Invoke\u002dServiceChangePlan",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Invoke\u002dSQLiteWALKiller",
       "name": "Invoke\u002dSQLiteWALKiller",
       "transport": "backend\u002dscript",
@@ -6255,6 +6291,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:New\u002dServiceSnapshot",
+      "name": "New\u002dServiceSnapshot",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/managers/ServiceSnapshots.tsx"
+      ]
     },
     {
       "id": "backend:Open\u002dActivationSettings",
@@ -6759,6 +6805,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Set\u002dHostsRecommendedProtection",
+      "name": "Set\u002dHostsRecommendedProtection",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Set\u002dLocalLoginUserHidden",
       "name": "Set\u002dLocalLoginUserHidden",
       "transport": "backend\u002dscript",
@@ -6844,9 +6898,7 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/dashboard/index.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "backend:Set\u002dServiceStartMode",
@@ -6854,9 +6906,7 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/components/tweaks/managers/ServiceManager.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "backend:Set\u002dShredPolicy",
@@ -7140,6 +7190,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Test\u002dBlocklistConnection",
+      "name": "Test\u002dBlocklistConnection",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Test\u002dEdgeInstalled",
       "name": "Test\u002dEdgeInstalled",
       "transport": "backend\u002dscript",
@@ -7182,6 +7240,14 @@
     {
       "id": "backend:Unblock\u002dProtocol",
       "name": "Unblock\u002dProtocol",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "backend:Undo\u002dHostsBlocklistChange",
+      "name": "Undo\u002dHostsBlocklistChange",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,

@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeDevCommand": "bun run tools/dev-server.ts --vite-only"
+  }
+}

@@ -54,7 +54,7 @@ function Get-AllServices {
                 Name           = $s.Name
                 DisplayName    = $s.DisplayName
                 Description    = $s.Description
-                StartMode      = $s.StartMode      # "Auto","Manual","Disabled","Boot","System"
+                StartMode      = $(if ($s.StartMode -eq 'Auto' -and $s.DelayedAutoStart) { 'AutomaticDelayedStart' } else { $s.StartMode })
                 State          = $s.State           # "Running","Stopped","Paused"
                 Status         = $s.Status
                 CanPauseAndContinue = $s.AcceptPause
@@ -69,55 +69,21 @@ function Get-AllServices {
 }
 
 function Set-ServiceStartMode {
-    param(
-        [string]$Name,
-        [ValidateSet("Automatic","Manual","Disabled","AutomaticDelayedStart")]
-        [string]$StartMode
-    )
-    Assert-IsAdmin
-    try {
-        if ($StartMode -eq "AutomaticDelayedStart") {
-            # PowerShell Set-Service exposes only Automatic/Manual/Disabled; use sc.exe for delayed.
-            $null = & sc.exe config $Name start= delayed-auto 2>$null
-            if ($LASTEXITCODE -ne 0) { throw "sc.exe failed with code $LASTEXITCODE" }
-        } else {
-            Set-Service -Name $Name -StartupType $StartMode -ErrorAction Stop
-        }
-        @{ success = $true; name = $Name; startMode = $StartMode }
-    } catch {
-        @{ error = $true; message = $_.Exception.Message }
-    }
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$StartMode, [Parameter(Mandatory)][string]$PlanId)
+    Invoke-ServiceChangePlan -PlanId $PlanId -ExpectedAction 'SetStartMode' -ExpectedName $Name -ExpectedMode $StartMode
 }
 
 function Start-ServiceByName {
-    param([string]$Name)
-    Assert-IsAdmin
-    try {
-        Start-Service -Name $Name -ErrorAction Stop
-        @{ success = $true }
-    } catch { @{ error = $true; message = $_.Exception.Message } }
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$PlanId)
+    Invoke-ServiceChangePlan -PlanId $PlanId -ExpectedAction 'Start' -ExpectedName $Name
 }
 
 function Stop-ServiceByName {
-    param([string]$Name)
-    Assert-IsAdmin
-    try {
-        Stop-Service -Name $Name -Force -ErrorAction Stop
-        @{ success = $true }
-    } catch { @{ error = $true; message = $_.Exception.Message } }
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$PlanId)
+    Invoke-ServiceChangePlan -PlanId $PlanId -ExpectedAction 'Stop' -ExpectedName $Name
 }
 
 function Restart-ServiceByName {
-    param([string]$Name)
-    Assert-IsAdmin
-    try {
-        Restart-Service -Name $Name -Force -ErrorAction Stop
-        @{ success = $true }
-    } catch { @{ error = $true; message = $_.Exception.Message } }
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$PlanId)
+    Invoke-ServiceChangePlan -PlanId $PlanId -ExpectedAction 'Restart' -ExpectedName $Name
 }
-
-# Bulk apply happens via the existing Set-ServicesManual command
-# (tweaks/maintenance) — exposed in the panel's System Maintenance card
-# as "Optimize Services". Don't add a second one here.
-# The $Global:WincmdServiceRecommendations map above is still used as a
-# read-only "★ Recommended" hint in the per-row dropdown.

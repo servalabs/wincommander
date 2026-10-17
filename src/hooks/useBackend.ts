@@ -1012,9 +1012,13 @@ export interface AppManifest {
 
 export interface BlocklistStatus {
   applied: string[];
+  checkedAt?: string;
+  undo?: import('../lib/hostsProtection').HostsUndoStatus;
+  telemetryPolicy?: import('../lib/hostsProtection').TelemetryPolicy;
   available: Array<{
     name: string;
     entries: number;
+    verification?: import('../lib/hostsProtection').HostsVerification;
   }>;
 }
 
@@ -2188,8 +2192,11 @@ export function useBackend() {
     openUpdatePage: (url?: string) => execute("Open-UpdatePage", url ? { Url: url } : {}),
 
     // Hosts File Blocklist Management
-    addBlocklistToHosts: (blocklistName: string) => execute("Add-BlocklistToHosts", { BlocklistName: blocklistName }),
-    removeBlocklistFromHosts: (blocklistName: string) => execute("Remove-BlocklistFromHosts", { BlocklistName: blocklistName }),
+    addBlocklistToHosts: (blocklistName: string) => execute<import('../lib/hostsProtection').HostsChangeReceipt>("Add-BlocklistToHosts", { BlocklistName: blocklistName }),
+    removeBlocklistFromHosts: (blocklistName: string) => execute<import('../lib/hostsProtection').HostsChangeReceipt>("Remove-BlocklistFromHosts", { BlocklistName: blocklistName }),
+    undoHostsBlocklistChange: () => execute<import('../lib/hostsProtection').HostsChangeReceipt>("Undo-HostsBlocklistChange"),
+    setHostsRecommendedProtection: (enabled: boolean) => execute<import('../lib/hostsProtection').HostsChangeReceipt>("Set-HostsRecommendedProtection", { Enabled: enabled }),
+    testBlocklistConnection: () => execute<import('../lib/hostsProtection').ConnectionCheck>("Test-BlocklistConnection"),
 
     // New Tweaks
     invokeSystemRepair: () => execute("Invoke-SystemRepair"),
@@ -2243,7 +2250,6 @@ export function useBackend() {
     disableUSBWriteProtect: () => execute("Disable-USBWriteProtect"),
     enableUSBStorageLockdown: () => execute("Enable-USBStorageLockdown"),
     disableUSBStorageLockdown: () => execute("Disable-USBStorageLockdown"),
-    setServicesManual: () => execute("Set-ServicesManual"),
     getProcessIntelligence: () => execute<{ processes: ProcessIntelligenceEntry[] }>("Get-ProcessIntelligence"),
 
     getPrivacyShieldStatus: () => execute<{

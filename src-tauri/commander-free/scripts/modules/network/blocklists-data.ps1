@@ -4779,18 +4779,14 @@ function Get-HardcodedBlocklists {
 '@
 
                 'telemetry-blocklist' = @'
-0.0.0.0 sentry.io
+# Scope reviewed 2026-10-16; excludes shared security, update and configuration endpoints.
 0.0.0.0 api.sentry.io
 0.0.0.0 browser.sentry-cdn.com
-0.0.0.0 segment.io
 0.0.0.0 api.segment.io
-0.0.0.0 amplitude.com
 0.0.0.0 api.amplitude.com
 0.0.0.0 logx.optimizely.com
-0.0.0.0 datadoghq.com
 0.0.0.0 browser-intake-datadoghq.com
 0.0.0.0 bam.nr-data.net
-0.0.0.0 mixpanel.com
 0.0.0.0 api.mixpanel.com
 0.0.0.0 app-measurement.com
 0.0.0.0 crashlytics.com
@@ -4799,17 +4795,9 @@ function Get-HardcodedBlocklists {
 0.0.0.0 api.branch.io
 0.0.0.0 telemetry.discordapp.net
 0.0.0.0 telemetry.microsoft.com
-0.0.0.0 v10.events.data.microsoft.com
-0.0.0.0 v20.events.data.microsoft.com
 0.0.0.0 watson.telemetry.microsoft.com
 0.0.0.0 oca.telemetry.microsoft.com
-0.0.0.0 self.events.data.microsoft.com
 0.0.0.0 diagtracksw.vortex.data.microsoft.com
-0.0.0.0 mobile.events.data.microsoft.com
-0.0.0.0 officeclient.microsoft.com
-0.0.0.0 tlu.dl.delivery.mp.microsoft.com
-0.0.0.0 settings-win.data.microsoft.com
-0.0.0.0 winatp-gw-cus.microsoft.com
 0.0.0.0 telemetry.nvidia.com
 0.0.0.0 events.gfe.nvidia.com
 0.0.0.0 telemetry.gfe.nvidia.com
@@ -4818,17 +4806,11 @@ function Get-HardcodedBlocklists {
 0.0.0.0 stats.g.doubleclick.net
 0.0.0.0 ads-serve.brave.com
 0.0.0.0 t.appsflyer.com
-0.0.0.0 browser.pipe.aria.microsoft.com
-0.0.0.0 dmd.metaservices.microsoft.com
-0.0.0.0 ris.api.iris.microsoft.com
-0.0.0.0 teams.events.data.microsoft.com
 0.0.0.0 telecommand.telemetry.microsoft.com
 0.0.0.0 vortex-win.data.microsoft.com
-0.0.0.0 watson.events.data.microsoft.com
 0.0.0.0 activity.windows.com
 0.0.0.0 outlookads.live.com
 0.0.0.0 watson.microsoft.com
-0.0.0.0 umwatsonc.events.data.microsoft.com
 0.0.0.0 ceuswatcab01.blob.core.windows.net
 0.0.0.0 ceuswatcab02.blob.core.windows.net
 0.0.0.0 eaus2watcab01.blob.core.windows.net
@@ -4836,25 +4818,9 @@ function Get-HardcodedBlocklists {
 0.0.0.0 weus2watcab01.blob.core.windows.net
 0.0.0.0 weus2watcab02.blob.core.windows.net
 0.0.0.0 events-sandbox.data.microsoft.com
-0.0.0.0 events.data.microsoft.com
-0.0.0.0 v10c.events.data.microsoft.com
 0.0.0.0 v10.vortex-win.data.microsoft.com
-0.0.0.0 eu-v10.events.data.microsoft.com
-0.0.0.0 eu-v20.events.data.microsoft.com
 0.0.0.0 au.vortex-win.data.microsoft.com
-0.0.0.0 au-v10.events.data.microsoft.com
-0.0.0.0 au-v20.events.data.microsoft.com
 0.0.0.0 uk.vortex-win.data.microsoft.com
-0.0.0.0 uk-v20.events.data.microsoft.com
-0.0.0.0 us-v10.events.data.microsoft.com
-0.0.0.0 us-v20.events.data.microsoft.com
-0.0.0.0 us4-v20.events.data.microsoft.com
-0.0.0.0 us5-v20.events.data.microsoft.com
-0.0.0.0 pipe.dev.trafficmanager.net
-0.0.0.0 in-v10.events.data.microsoft.com
-0.0.0.0 in-v20.events.data.microsoft.com
-0.0.0.0 jp-v10.events.data.microsoft.com
-0.0.0.0 jp-v20.events.data.microsoft.com
 0.0.0.0 p3a.brave.com
 0.0.0.0 p2a.brave.com
 0.0.0.0 p3a-json.brave.com
@@ -4865,11 +4831,6 @@ function Get-HardcodedBlocklists {
 0.0.0.0 star-randsrv.bsg.brave.com
 0.0.0.0 vortex.data.microsoft.com
 0.0.0.0 visualstudio-devdiv-c2s.msedge.net
-0.0.0.0 az667904.vo.msecnd.net
-0.0.0.0 scus-breeziest-in.cloudapp.net
-0.0.0.0 nw-umwatson.events.data.microsoft.com
-0.0.0.0 sa.iobit.com
-0.0.0.0 asc.iobit.com
 '@
         
                 'cloud-upload'        = @'

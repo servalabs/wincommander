@@ -16,7 +16,9 @@ import WCSwitch from "../../components/shared/WCSwitch";
 import PortGuardSection from "./PortGuardSection";
 import WifiGuardSection from "./WifiGuardSection";
 import { NetworkMaintenanceTools } from "./NetworkMaintenanceTools";
-import { showSuccess, showError } from "../../utils/toast";
+import { TelemetryProtectionDetails } from "./TelemetryProtectionDetails";
+import { requireHostsChangeReceipt } from "../../lib/hostsProtection";
+import { showSuccess, showError, showWarning } from "../../utils/toast";
 import { BLOCKLISTS, blocklistBackendId } from "../../registry/features";
 import { DNS_CATEGORIES, DNS_CATEGORY_DEFAULT_IDS, buildControldSlug, parseControldSlug } from "../../registry/dnsCategories";
 import { blocklistLogos, companyLogos, software } from "@/assets/network";
@@ -1010,11 +1012,14 @@ function NetworkSecurityControls() {
         getBlocklistStatus,
         addBlocklistToHosts,
         removeBlocklistFromHosts,
+        undoHostsBlocklistChange,
+        setHostsRecommendedProtection,
     } = useBackend();
 
     const [status, setStatus] = useState<BlocklistStatus | null>(networkBlocklistStatus);
     const [isScanning, setIsScanning] = useState(!networkBlocklistStatus);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [statusError, setStatusError] = useState<string | null>(null);
 
     const blocklistInfo: Record<string, { description: string }> = Object.fromEntries(
         BLOCKLISTS.map((b) => [blocklistBackendId(b), { description: b.description }])
@@ -1035,13 +1040,18 @@ function NetworkSecurityControls() {
         try {
             const result = await getBlocklistStatus();
             if (result.success && result.data) {
+                setStatusError(null);
                 const data = result.data;
                 if (!Array.isArray(data.applied)) data.applied = [];
                 setStatus(data);
             } else {
+                setStatus(null);
+                setStatusError(result.error || 'Protection could not be verified. Refresh to try again.');
                 showError(result.error || 'Failed to fetch blocklist status');
             }
         } catch {
+            setStatus(null);
+            setStatusError('Protection could not be verified. Refresh to try again.');
             showError('An unexpected error occurred while scanning');
         } finally {
             if (!silent) setIsScanning(false);
@@ -1055,14 +1065,14 @@ function NetworkSecurityControls() {
             const result = enabled
                 ? await addBlocklistToHosts(name)
                 : await removeBlocklistFromHosts(name);
-            if (result.success) {
-                showSuccess(`${name} blocklist ${enabled ? 'applied' : 'removed'} successfully`);
-                await loadStatus(true);
-                refreshNetwork(true, true);
-            } else {
-                showError(result.error || `Failed to ${enabled ? 'apply' : 'remove'} blocklist`);
-            }
+            const receipt = requireHostsChangeReceipt(result);
+            showSuccess(`${name} blocklist ${enabled ? 'applied' : 'removed'} and verified. Undo is available in Hosts Protection.`);
+            if (receipt.dnsWarning) showWarning(receipt.dnsWarning);
+        } catch (cause) {
+            showError(cause instanceof Error ? cause.message : 'The blocking change failed.');
         } finally {
+            await loadStatus(true);
+            void refreshNetwork(true, true);
             setActionLoading(null);
         }
     };
@@ -1075,24 +1085,36 @@ function NetworkSecurityControls() {
         if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setActionLoading('all');
         try {
-            for (const item of group1) {
-                const isCurrentlyApplied = status?.applied?.includes(item.name);
-                if (enabled && !isCurrentlyApplied) {
-                    await addBlocklistToHosts(item.name);
-                } else if (!enabled && isCurrentlyApplied) {
-                    await removeBlocklistFromHosts(item.name);
-                }
-            }
+            const receipt = requireHostsChangeReceipt(await setHostsRecommendedProtection(enabled));
+            if (receipt.dnsWarning) showWarning(receipt.dnsWarning);
             showSuccess(enabled ? 'Standard blocklists enabled' : 'Standard blocklists disabled');
-            await loadStatus(true);
-            refreshNetwork(true, true);
+        } catch (cause) {
+            showError(cause instanceof Error ? cause.message : 'Some blocklists could not be verified.');
         } finally {
+            await loadStatus(true);
+            void refreshNetwork(true, true);
             setActionLoading(null);
         }
     };
 
-    const allApplied = group1.length > 0 && group1.every(a => status?.applied?.includes(a.name));
+    const allApplied = group1.length > 0 && group1.every(a => status?.applied?.includes(a.name) && a.verification?.state === 'verified');
     const anyLoading = actionLoading !== null;
+
+    const undoLastChange = async () => {
+        if (needsElevation || anyLoading) return;
+        setActionLoading('undo');
+        try {
+            const receipt = requireHostsChangeReceipt(await undoHostsBlocklistChange());
+            showSuccess('Last WinCom blocking change undone and verified.');
+            if (receipt.dnsWarning) showWarning(receipt.dnsWarning);
+        } catch (cause) {
+            showError(cause instanceof Error ? cause.message : 'Undo failed.');
+        } finally {
+            await loadStatus(true);
+            void refreshNetwork(true, true);
+            setActionLoading(null);
+        }
+    };
 
     if (!visibility.isVisible({ capability: ["network"] })) return null;
 
@@ -1133,6 +1155,8 @@ function NetworkSecurityControls() {
                 )}
             >
                 {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
+                {statusError && <p role="alert" className="text-xs text-[var(--warn)]">{statusError}</p>}
+                {status?.undo?.available && <Button small minimal icon="undo" disabled={anyLoading || isScanning || needsElevation} onClick={() => void undoLastChange()}>Undo last blocking change</Button>}
                 <div className="blocklists-container">
                         {isScanning ? (
                             <div className="scanning-overlay"><div className="loader-spinner" /></div>
@@ -1148,8 +1172,8 @@ function NetworkSecurityControls() {
                                         </div>
                                         <div className="blocklists-grid four-columns">
                                             {group1.map(item => (
+                                                <div key={item.name} className="flex min-w-0 flex-col gap-2">
                                                 <BlocklistItem
-                                                    key={item.name}
                                                     name={item.name}
                                                     description={blocklistInfo[item.name]?.description || 'No description available'}
                                                     entryCount={item.entries}
@@ -1159,6 +1183,8 @@ function NetworkSecurityControls() {
                                                     disabled={anyLoading || needsElevation}
                                                     logos={BRAND_LOGOS[item.name]}
                                                 />
+                                                {item.name === 'telemetry-blocklist' && <TelemetryProtectionDetails status={status} disabled={anyLoading || needsElevation} onRepair={() => void handleToggle(item.name, true)} />}
+                                                </div>
                                             ))}
                                         </div>
                                     </div>

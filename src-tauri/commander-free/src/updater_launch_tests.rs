@@ -7,6 +7,13 @@ use tauri::{
 use tauri_plugin_updater::UpdaterExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// Public test-only minisign key and signature over the two-byte `MZ` fixture
+// below, signed for version 99.0.0. The updater now verifies bytes during
+// install, so the fixture must pass signature validation to exercise the
+// Windows installer-launch failure path.
+const TEST_UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhCQUU5OERFNUREMkMwNjgKUldSb3dOSmQzcGl1aTZodUh5bTJBcmpJVVNVTVIza2QwbktYajdaZHZPdGpoVUkxWktNMnVZV3oK";
+const TEST_UPDATE_SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSb3dOSmQzcGl1aTUrYjdTYkVqQXMxNkRsV3FmTktBZk1FVWE0OW1NclZxVm5EdDR4a1RqWm5TdzQzL2hFWlg5UUlzTUVGVDFSdkZ3TUpYV1grTmIwNmdPYXBYMHZMMmdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMTM3ODI0CWZpbGU6cGF5bG9hZC5leGUJdmVyc2lvbjo5OS4wLjAKOEJCMDJyVmN2Zjl3ZFVteFRBMjZpSWdpU3RnMFNTZmNnR1BTK2RyWGVpYVNlSTdYRGErdjcvZUZ2SEZpL05icnFLUHd0dDl6ZVpjenBjWmNKU0lTREE9PQo=";
+
 struct LiveUiResource;
 impl Resource for LiveUiResource {}
 
@@ -40,7 +47,7 @@ async fn installer_launch_failure_keeps_app_resources_available_for_retry() {
         let manifest = serde_json::json!({
             "version": "99.0.0",
             "url": "http://127.0.0.1/unused.exe",
-            "signature": "unused: the fixture exercises install, not download",
+            "signature": TEST_UPDATE_SIGNATURE,
         })
         .to_string();
         let server = tokio::spawn(async move {
@@ -60,7 +67,8 @@ async fn installer_launch_failure_keeps_app_resources_available_for_retry() {
         context.config_mut().plugins.0.insert(
             "updater".into(),
             serde_json::json!({
-                "pubkey": "unused",
+                "pubkey": TEST_UPDATER_PUBLIC_KEY,
+                "requireSignedVersion": true,
                 "dangerousInsecureTransportProtocol": true,
             }),
         );

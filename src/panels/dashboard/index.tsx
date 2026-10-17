@@ -5,6 +5,7 @@ import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { useLiveMetrics } from "../../context/LiveMetricsContext";
 import useVisibility from "../../hooks/useVisibility";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
+import { useServiceChanges } from "../../hooks/useServiceChanges";
 import { runOperation } from "../../context/OperationContext";
 import SovereigntyRadar from "../../components/dashboard/SovereigntyRadar";
 import ViewToggle from "../../components/dashboard/ViewToggle";
@@ -87,6 +88,7 @@ function compareVersions(a: string | null | undefined, b: string | null | undefi
 }
 
 export default function DashboardPanel() {
+  const { changeServices, dialog: serviceChangeDialog } = useServiceChanges();
   const containerRef = useRef<HTMLDivElement>(null);
   const windowScale = 1; // Handled globally by AppShell
   const {
@@ -626,7 +628,8 @@ export default function DashboardPanel() {
       };
     } else if (f.id === 'services-profile') {
       fn = async () => {
-        const res = await executeBackendCommand('Set-ServicesManual', { MachineWide: machineWide });
+        const res = await changeServices({ action: 'Profile', machineWide });
+        if (!res) throw new Error('Service changes cancelled. No service settings were changed.');
         const failureMessage = getMaintenanceFailureMessage("Apply Recommended Service Profile", res);
         if (failureMessage) throw new Error(failureMessage);
         const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.services;
@@ -672,7 +675,7 @@ export default function DashboardPanel() {
       }
     }
     return fn ? { label: f.label, fn: wrap(fn) } : null;
-  }, [trackFindingFix, toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen]);
+  }, [trackFindingFix, toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen, changeServices]);
 
   // Run a set of findings through the operation overlay, then re-read state so
   // the radar, score, and toggles update. Used by both Fix-all and per-item Fix.
@@ -1095,6 +1098,7 @@ export default function DashboardPanel() {
           once-per-session startup auto-trigger. updateAvailable is always true
           here since this dialog only opens when combinedUpdateFinding already
           exists (Free phase available/staged/ready or a Pro upgrade). */}
+      {serviceChangeDialog}
       <UpdateFlowDialog
         isOpen={updateFlowOpen}
         onClose={() => setUpdateFlowOpen(false)}

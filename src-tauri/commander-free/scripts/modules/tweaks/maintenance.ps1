@@ -197,6 +197,7 @@ function Get-ServiceProfileStatus {
         foreach ($name in $targets[$mode]) {
             $service = Get-Service -Name $name -ErrorAction SilentlyContinue
             if (-not $service) { continue }
+            if (([int]$service.ServiceType -band 0xF) -ne 0) { continue }
             $checked++
             $expected = if ($mode -eq 'manual') { 'Manual' } else { 'Disabled' }
             if ($service.StartType -ne $expected -or ($mode -eq 'disable' -and $service.Status -ne 'Stopped')) { $drift++ }
@@ -206,90 +207,9 @@ function Get-ServiceProfileStatus {
 }
 
 function Set-ServicesManual {
-    Assert-IsAdmin
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $targets = Get-ServiceProfileTargets
-    $manualServices = $targets.manual
-    $disableServices = $targets.disable
-    $manualTouched = 0; $manualAlreadyOK = 0; $manualMissing = 0
-    $manualTouchedNames = New-Object System.Collections.Generic.List[string]
-    $manualFailed = New-Object System.Collections.Generic.List[hashtable]
-
-    foreach ($svcName in $manualServices) {
-        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if (-not $svc) { $manualMissing++; continue }
-        if ($svc.StartType -eq 'Manual') { $manualAlreadyOK++; continue }
-        try {
-            Set-Service -Name $svcName -StartupType Manual -ErrorAction Stop
-            if ((Get-Service -Name $svcName -ErrorAction Stop).StartType -ne 'Manual') {
-                throw 'Windows did not retain the Manual startup setting.'
-            }
-            $manualTouched++
-            $manualTouchedNames.Add($svcName)
-        }
-        catch {
-            $manualFailed.Add(@{ name = $svcName; error = $_.Exception.Message })
-        }
-    }
-
-    $disableTouched = 0; $disableAlreadyOK = 0; $disableMissing = 0
-    $disableTouchedNames = New-Object System.Collections.Generic.List[string]
-    $disableFailed = New-Object System.Collections.Generic.List[hashtable]
-
-    foreach ($svcName in $disableServices) {
-        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if (-not $svc) { $disableMissing++; continue }
-        if ($svc.StartType -eq 'Disabled' -and $svc.Status -eq 'Stopped') { $disableAlreadyOK++; continue }
-
-        $stopErr = $null
-        if ($svc.Status -ne 'Stopped') {
-            try { Stop-Service -Name $svcName -Force -ErrorAction Stop }
-            catch { $stopErr = $_.Exception.Message }
-        }
-        try {
-            Set-Service -Name $svcName -StartupType Disabled -ErrorAction Stop
-            $actual = Get-Service -Name $svcName -ErrorAction Stop
-            if ($actual.StartType -ne 'Disabled') { throw 'Windows did not retain the Disabled startup setting.' }
-            if ($actual.Status -ne 'Stopped' -and -not $stopErr) { $stopErr = 'Windows still reports the service running.' }
-            if ($stopErr) {
-                # Disable succeeded but stop failed — still counts as touched but record the warning.
-                $disableTouched++
-                $disableTouchedNames.Add($svcName)
-                $disableFailed.Add(@{ name = $svcName; error = "stop-failed: $stopErr" })
-            } else {
-                $disableTouched++
-                $disableTouchedNames.Add($svcName)
-            }
-        }
-        catch {
-            $disableFailed.Add(@{ name = $svcName; error = $_.Exception.Message })
-        }
-    }
-
-    $sw.Stop()
-
-    return @{
-        status   = 'done'
-        durationMs = [int]$sw.ElapsedMilliseconds
-        manual   = @{
-            total        = $manualServices.Count
-            touched      = $manualTouched
-            touchedNames = @($manualTouchedNames)
-            alreadyOK    = $manualAlreadyOK
-            missing      = $manualMissing
-            failed       = @($manualFailed)
-        }
-        disable  = @{
-            total        = $disableServices.Count
-            touched      = $disableTouched
-            touchedNames = @($disableTouchedNames)
-            alreadyOK    = $disableAlreadyOK
-            missing      = $disableMissing
-            failed       = @($disableFailed)
-        }
-    }
+    param([Parameter(Mandatory)][string]$PlanId)
+    Invoke-ServiceChangePlan -PlanId $PlanId -ExpectedAction 'Profile'
 }
-
 function Invoke-SystemRepair {
     Assert-IsAdmin
     try {

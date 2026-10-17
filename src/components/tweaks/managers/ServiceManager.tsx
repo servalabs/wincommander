@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button, Tag, Spinner, InputGroup, HTMLSelect } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
-import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
+import { executeBackendCommand } from "../../../hooks/useBackend";
+import { useServiceChanges } from "../../../hooks/useServiceChanges";
+import ServiceSnapshots from "./ServiceSnapshots";
 import { useAppState } from "../../../context/AppContext";
-import { runOperation } from "../../../context/OperationContext";
 import { showSuccess, showError } from "../../../utils/toast";
-import { formatMaintenanceSuccess, getMaintenanceFailureMessage } from "../../../utils/maintenance";
 import { enabledRowsFirst } from "./systemManagerSort";
 import "./SystemManagers.css";
 import { AnimatedList, AnimatedTableRow, staggerDelay } from "../../shared/AnimatedList";
@@ -26,7 +26,8 @@ const START_MODES = ["Automatic", "AutomaticDelayedStart", "Manual", "Disabled"]
 
 export default function ServiceManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     const { appSettings, patchAppSettings } = useAppState();
-    const { setServicesManual } = useBackend();
+    const { changeServices, busy, dialog } = useServiceChanges();
+    const [snapshotRevision, setSnapshotRevision] = useState(0);
     // Collapsed by default + lazy fetch — see StartupManager comment.
     const [isOpen, setIsOpen] = useState(false);
     const [rows, setRows] = useState<ServiceRow[]>([]);
@@ -36,48 +37,6 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
     const [showOnlyRecommended, setShowOnlyRecommended] = useState(false);
     const [applyingRecommended, setApplyingRecommended] = useState(false);
     const embeddedScanKey = useRef<number | undefined>(undefined);
-
-    // "Apply Recommended Tweaks" is the granular Service Manager's
-    // one-shot mode — calls the same Set-ServicesManual backend command
-    // that used to live as a button in the System Maintenance card.
-    // Moved here so the one-shot and the per-row controls are in the
-    // same panel.
-    const applyRecommended = useCallback(async () => {
-        setApplyingRecommended(true);
-        let captured: any = null;
-        let failureMessage: string | null = null;
-        const wrapped = async () => {
-            const r = await setServicesManual();
-            captured = r;
-            failureMessage = getMaintenanceFailureMessage("Apply Recommended Service Profile", r);
-            if (failureMessage) throw new Error(failureMessage);
-            return r;
-        };
-        try {
-            const operation = await runOperation(
-                "Apply Recommended Service Profile",
-                [{ label: "Optimizing services...", fn: wrapped }],
-                { mode: "sequential", accent: "neutral" },
-            );
-            if (operation.anyError) {
-                showError(failureMessage || "Apply Recommended Service Profile failed.");
-                return;
-            }
-            const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.["services"];
-            await patchAppSettings({
-                ideal: { tweaks: { maintenanceRuns: {
-                    services: { lastRunAt: new Date().toISOString(), runCount: (previous?.runCount ?? 0) + 1 },
-                } } },
-            });
-            showSuccess(formatMaintenanceSuccess("Apply Recommended Service Profile", captured));
-            refresh();
-        } catch (error) {
-            showError(error instanceof Error ? error.message : "Apply Recommended Service Profile failed.");
-        } finally {
-            setApplyingRecommended(false);
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [setServicesManual, appSettings?.ideal?.tweaks?.maintenanceRuns, patchAppSettings]);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -98,33 +57,38 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
         if (isOpen && rows.length === 0 && !loading) void refresh();
     }, [embedded, isOpen, loading, refresh, rows.length, scanKey]);
 
-    const setMode = useCallback(async (svc: ServiceRow, mode: string) => {
-        setPending(prev => new Set(prev).add(svc.Name));
-        const res = await executeBackendCommand<{ success?: boolean; message?: string }>("Set-ServiceStartMode", {
-            Name: svc.Name, StartMode: mode,
-        });
-        setPending(prev => { const n = new Set(prev); n.delete(svc.Name); return n; });
-        if (res.success && res.data?.success !== false) {
-            showSuccess(`${svc.DisplayName || svc.Name} → ${mode}`);
-            refresh();
-        } else {
-            showError(res.error || res.data?.message || `Could not change ${svc.Name}`);
-        }
-    }, [refresh]);
+    const applyRecommended = useCallback(async () => {
+        setApplyingRecommended(true);
+        try {
+            const result = await changeServices({ action: "Profile" });
+            if (!result) return;
+            setSnapshotRevision(value => value + 1);
+            void refresh();
+            if (!result.success) { showError(result.error || "Service profile failed."); return; }
+            const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.services;
+            await patchAppSettings({ ideal: { tweaks: { maintenanceRuns: {
+                services: { lastRunAt: new Date().toISOString(), runCount: (previous?.runCount ?? 0) + 1 },
+            } } } });
+            showSuccess(result.data?.message || "Service settings verified.");
+        } catch (error) {
+            showError(error instanceof Error ? error.message : "Could not record the service profile result.");
+        } finally { setApplyingRecommended(false); }
+    }, [changeServices, refresh, appSettings?.ideal?.tweaks?.maintenanceRuns, patchAppSettings]);
 
-    const startStop = useCallback(async (svc: ServiceRow) => {
+    const changeRow = useCallback(async (svc: ServiceRow, mode?: string) => {
         setPending(prev => new Set(prev).add(svc.Name));
-        const cmd = svc.State === "Running" ? "Stop-ServiceByName" : "Start-ServiceByName";
-        const res = await executeBackendCommand<{ success?: boolean; message?: string }>(cmd, { Name: svc.Name });
-        setPending(prev => { const n = new Set(prev); n.delete(svc.Name); return n; });
-        if (res.success && res.data?.success !== false) {
-            showSuccess(`${svc.State === "Running" ? "Stopped" : "Started"} ${svc.Name}`);
-            refresh();
-        } else {
-            showError(res.error || res.data?.message || `Could not change state of ${svc.Name}`);
-        }
-    }, [refresh]);
-
+        try {
+            const result = await changeServices({
+                action: mode ? "SetStartMode" : svc.State === "Running" ? "Stop" : "Start",
+                name: svc.Name, startMode: mode,
+            });
+            if (!result) return;
+            setSnapshotRevision(value => value + 1);
+            void refresh();
+            if (result.success) showSuccess(result.data?.message || "Service settings verified.");
+            else showError(result.error || "Could not change this service.");
+        } finally { setPending(prev => { const next = new Set(prev); next.delete(svc.Name); return next; }); }
+    }, [changeServices, refresh]);
     const filtered = useMemo(() => {
         const q = filter.trim().toLowerCase();
         const matches = rows.filter(r => {
@@ -142,7 +106,7 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
             <span className="system-manager-caption">Windows services, live state, startup mode, stop/start ability, and recommendations.</span>
             <div className="system-manager-actions">
                 <Button small intent="primary" icon="confirm"
-                    loading={applyingRecommended}
+                    loading={applyingRecommended} disabled={busy}
                     onClick={(e) => { e.stopPropagation(); applyRecommended(); }}
                     title="Apply WinCommander's recommended start mode (Manual / Disabled) to a curated set of services">
                     Apply Recommended Tweaks
@@ -198,14 +162,14 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
                                 <HTMLSelect
                                     aria-label={`Startup mode for ${svc.DisplayName}`}
                                     value={svc.StartMode === "Auto" ? "Automatic" : svc.StartMode}
-                                    onChange={e => setMode(svc, e.currentTarget.value)}
-                                    disabled={isPending}
+                                    onChange={e => void changeRow(svc, e.currentTarget.value)}
+                                    disabled={isPending || busy}
                                     options={START_MODES.map(m => ({ label: svc.Recommended === m ? `${m} ★` : m, value: m }))}
                                     fill
                                 />
-                                <Button small loading={isPending} disabled={!svc.CanStop && svc.State === "Running"}
+                                <Button small loading={isPending} disabled={busy || (!svc.CanStop && svc.State === "Running")}
                                     aria-label={`${svc.State === "Running" ? "Stop" : "Start"} ${svc.DisplayName}`}
-                                    onClick={() => startStop(svc)}>
+                                    onClick={() => void changeRow(svc)}>
                                     {svc.State === "Running" ? "Stop" : "Start"}
                                 </Button>
                             </div>
@@ -213,6 +177,8 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
                     );
                 })}
             </AnimatedList>
+            <ServiceSnapshots revision={snapshotRevision} disabled={busy} />
+            {dialog}
         </>
     );
 

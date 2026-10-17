@@ -28,6 +28,8 @@
 //           never built the Pro sidecar at all).
 //   --frontend-only: preserve native processes and start only Vite. Mounted
 //           or unverifiable Vault state selects this mode automatically.
+//   --prepare-only: finish native preparation without starting Vite/Tauri.
+//   --vite-only: prepared desktop hook; start Vite without repeating preparation.
 //   WINCOMMANDER_DEV_FREE_ONLY=1: selected by tools/dev.ps1 when a public
 //           checkout has no private Pro sibling. This lets `bun run dev`
 //           start the Free desktop instead of failing before Vite starts.
@@ -55,6 +57,8 @@ const PRE_CLEANED = process.argv.includes("--precleaned");
 // multi-user bootstrap if a desktop already owns that server.
 const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wincommander");
 const FRONTEND_ONLY = process.argv.includes("--frontend-only");
+const PREPARE_ONLY = process.argv.includes("--prepare-only");
+const VITE_ONLY = process.argv.includes("--vite-only");
 
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
@@ -110,13 +114,25 @@ function desktopDevWindowIsRunning(): boolean {
 }
 
 async function main(): Promise<void> {
+  if (PREPARE_ONLY && (VITE_ONLY || FRONTEND_ONLY)) {
+    throw new Error("--prepare-only cannot be combined with a frontend-only mode.");
+  }
   assertSharedAssets(ROOT);
+  // The supported desktop launcher completed native preparation before Tauri's
+  // frontend deadline began. Its hook only owns the long-running Vite child.
+  if (VITE_ONLY) {
+    startVite();
+    return;
+  }
   const inspection = FRONTEND_ONLY ? null : spawnSync(WINDOWS_POWERSHELL, [
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
     "tools/dev-vault-state.ps1", "-InspectOnly",
   ], { cwd: ROOT, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 4096 });
   const vaultState = inspection ? readDevelopmentVaultState(inspection.stdout ?? "", inspection.status) : null;
   const frontendOnly = FRONTEND_ONLY || vaultState?.state !== "free";
+  if (PREPARE_ONLY && frontendOnly) {
+    throw new Error("Native development preparation requires verified unmounted Vaults. Existing processes were preserved. Run bun run dev:server for the preserved frontend; backend replacement remains pending.");
+  }
   if (frontendOnly) {
     console.log("[dev-server] frontend only: " + (FRONTEND_ONLY ? "explicit selection." : vaultState?.state === "mounted"
       ? "A Vault or pending Vault cleanup is protected." : "Mounted Vault state could not be verified."));
@@ -172,11 +188,22 @@ async function main(): Promise<void> {
   // Free also persists account preferences through the authenticated service.
   // Pro is optional; the service must be ready before either desktop starts.
   await syncDevelopmentService(FREE_ONLY, args => run("[service]", WINDOWS_POWERSHELL, args));
-  console.log("[dev-server] SYSTEM settings service verified — starting vite.");
+  console.log(PREPARE_ONLY
+    ? "[dev-server] SYSTEM settings service verified — native preparation ready."
+    : "[dev-server] SYSTEM settings service verified — starting vite.");
 
   freeVitePort();
   }
 
+  if (PREPARE_ONLY) {
+    console.log("[dev-server] Native preparation complete; the desktop launcher can now start Tauri and Vite.");
+    return;
+  }
+
+  startVite();
+}
+
+function startVite(): void {
   // vite is long-running/foreground — its exit code becomes this script's.
   const vite = spawn("bun", ["x", "vite"], { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });
 
@@ -185,6 +212,11 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  vite.on("error", (error: Error) => {
+    console.error("[dev-server] Vite could not start:", error.message);
+    process.exit(1);
+  });
 
   vite.on("exit", (code) => {
     process.exit(code ?? 0);
