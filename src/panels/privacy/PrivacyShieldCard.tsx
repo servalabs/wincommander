@@ -14,6 +14,7 @@ import useVisibility from "../../hooks/useVisibility";
 import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } from "../../hooks/useShieldQuota";
 import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
+import { createPrivacyShieldPollGate, privacyShieldReadinessLabel, privacyShieldProtectionReady, privacyShieldRuntimeSetupNeeded } from "../../lib/privacyShieldReadiness";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode, type PrivacyShieldMode } from "../../lib/privacyShieldMode";
 import {
     resolveFleetPrivacyShieldControl,
@@ -130,7 +131,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, []);
 
     const [privacyShieldRunning, _setShieldRunning] = useState<boolean | null>(_shieldRunningCache);
-    const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); };
+    const [protectionReady, setProtectionReady] = useState(false);
+    const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); if (val !== true) setProtectionReady(false); };
     const [activeShieldMode, setActiveShieldMode] = useState<PrivacyShieldMode | null>(null);
     const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
     const [cameraMessage, setCameraMessage] = useState<string | null>(null);
@@ -301,17 +303,23 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // keep a single setInterval alive across the component lifetime.
     // The check function is held in a ref so handleToggle can call it
     // imperatively too.
+    const statusPollGate = useRef(createPrivacyShieldPollGate());
     const checkStatusRef = useRef<() => Promise<void>>(async () => {});
     checkStatusRef.current = async () => {
+        const generation = statusPollGate.current.begin();
+        if (generation === null) return;
         try {
             const shield = await executeBackendCommand<{
                 running: boolean;
+                protectionReady?: boolean;
                 activeMode?: PrivacyShieldMode | null;
                 cameraAvailable?: boolean;
                 cameraMessage?: string;
             }>("Get-PrivacyShieldStatus");
+            if (!statusPollGate.current.isCurrent(generation)) return;
             if (shield.success && shield.data && typeof shield.data.running === "boolean") {
                 setPrivacyShieldRunning(shield.data.running);
+                setProtectionReady(privacyShieldProtectionReady(shield.data));
                 setActiveShieldMode(shield.data.running
                     && (shield.data.activeMode === "notify_only" || shield.data.activeMode === "blur_notify")
                     ? shield.data.activeMode
@@ -343,6 +351,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     privacyClass: "local_sensitive", context: { health: "unknown" } });
             }
         } catch {
+            if (!statusPollGate.current.isCurrent(generation)) return;
             // A failed probe is also unknown state, not evidence that the last
             // observed running/camera value is still current.
             setPrivacyShieldRunning(null);
@@ -353,6 +362,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 lifecycle: "verified", outcome: "failed", errorCode: "PSH.STATUS.UNAVAILABLE",
                 severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
                 privacyClass: "local_sensitive", context: { health: "unknown" } });
+        } finally {
+            statusPollGate.current.finish();
         }
     };
     const checkStatus = useCallback(() => checkStatusRef.current(), []);
@@ -501,6 +512,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             return;
         }
         if (targetState && quota && !quota.is_unlimited && quota.minutes_remaining <= 0) { openShieldPaywall(); return; }
+        statusPollGate.current.invalidate();
+        setProtectionReady(false);
         setLocalLoading(true);
         const action = targetState ? "start" : "stop";
         const startedAt = Date.now();
@@ -550,7 +563,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     } } } }).catch(reportSettingsWriteFailure);
                 } else {
                     const err = (res.error || "").toLowerCase();
-                    if (err.includes("python is required") || err.includes("missing python dependency")) setAiRuntimeInstalled(false);
+                    if (privacyShieldRuntimeSetupNeeded(err)) { setAiRuntimeInstalled(false); setShowAiRuntimeDetails(true); }
                     else if (err.includes('camera') || err.includes('webcam') || err.includes('cap.read') || err.includes('videocapture') || err.includes('no camera') || err.includes('no webcam')) {
                         setCameraAvailable(false);
                         setCameraMessage(res.error || "No camera detected — Privacy Shield requires a webcam.");
@@ -576,6 +589,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         } catch (e) { recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
+            statusPollGate.current.invalidate();
+            setProtectionReady(false);
             setLocalLoading(false);
             // Reconcile against the actual process state right away so the
             // button label updates the moment the start/stop returns,
@@ -611,7 +626,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             title={isAdvanced ? "Physical Privacy" : "Screen privacy"}
             headerRight={headerRight}
             className="physical-privacy-card"
-            armed={privacyShieldRunning === true}
+            armed={privacyShieldRunning === true && protectionReady}
         >
             <div className="flex flex-col gap-5">
                 <div className="physical-shield-head">
@@ -621,7 +636,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             the (i) icon, the latter lives in the advanced disclosure
                             below (it's Pro-gated and rarely touched). */}
                         <div className="flex items-center gap-2">
-                            <div className={`size-2 rounded-full flex-shrink-0 ${privacyShieldRunning ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />
+                            <div className={`size-2 rounded-full flex-shrink-0 ${privacyShieldRunning && protectionReady ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />
                             <span className="text-sm font-semibold text-[var(--shield-text-primary)]">
                                 Privacy Gaze Shield
                             </span>
@@ -651,9 +666,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         {(privacyShieldRunning || (!hasPaid && quota && !quota.is_unlimited) || cameraAvailable === false) && (
                             <div className="flex flex-wrap items-center gap-1.5">
                                 {privacyShieldRunning && (
-                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded border flex-shrink-0 ${protectionReady ? "bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30" : "bg-[var(--color-warning-dim)] text-[var(--color-warning)] border-[var(--color-warning)]"}`}>{privacyShieldReadinessLabel(privacyShieldRunning, protectionReady)}</span>
                                 )}
-                                {privacyShieldRunning && activeModeConfirmed && (
+                                {privacyShieldRunning && protectionReady && activeModeConfirmed && (
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--shield-inner-bg)] text-[var(--shield-text-subtle)] border border-[var(--shield-inner-border)] flex-shrink-0">
                                         {presentedShieldMode === "notify_only" ? "Notify only" : "Blur + Notify"}
                                     </span>
@@ -663,7 +678,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                         Alert mode unconfirmed
                                     </span>
                                 )}
-                                {privacyShieldRunning && lookingAway && (
+                                {privacyShieldRunning && protectionReady && lookingAway && (
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">{presentedShieldMode === "notify_only" ? "Looking away · notification sent" : "Looking away · visual shield active"}</span>
                                 )}
                                 {!hasPaid && quota && !quota.is_unlimited && (
@@ -841,6 +856,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             <div id="privacy-shield-processing-parameters" className="mt-4 flex flex-col gap-4">
                                 <div className="flex flex-col gap-3 pt-3 border-t border-[var(--shield-inner-border)]">
                                     <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
+                                    <p className="text-[11px] text-[var(--shield-text-muted)]">Saved locally as ordinary screenshot and video files. Cleanup retries while Shield is open after files reach seven days; locked files can remain longer.</p>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
                                         <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />

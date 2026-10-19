@@ -418,6 +418,8 @@ const RISK_OVERRIDES: &[(&str, Risk)] = &[
     // clipboard respectively.
     ("tauri:search_rename_file", Risk::Mutating),
     ("tauri:search_set_file_clipboard", Risk::Mutating),
+    ("tauri:search_copy_path", Risk::Mutating),
+    ("tauri:check_distress_phrase", Risk::Destructive),
     // `export_` writes a new artefact.
     ("tauri:export_evidence_vault", Risk::Mutating),
     ("tauri:export_evidence_affidavit", Risk::Mutating),
@@ -1210,6 +1212,16 @@ mod tests {
             describe(rename).confirmation,
             Some("RUN:tauri:search_rename_file".to_string())
         );
+    }
+
+    #[test]
+    fn emergency_trigger_and_clipboard_write_are_never_read_only() {
+        let catalog = catalog().expect("catalog parses");
+        for (id, risk) in [("tauri:check_distress_phrase", Risk::Destructive), ("tauri:search_copy_path", Risk::Mutating)] {
+            let entry = catalog.commands.iter().find(|entry| entry.id == id).expect("registered handler");
+            assert_eq!(classify_risk(entry), risk);
+            assert_ne!(classify_headless_support(entry), HeadlessSupport::Executable);
+        }
     }
 
     /// The destructive prefix lists are anchored at the start of the name, so

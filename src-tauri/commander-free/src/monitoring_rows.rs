@@ -57,6 +57,34 @@ pub(crate) fn locked_row(
     })
 }
 
+// Preferences describe requested policy, not observed Windows enforcement.
+pub(crate) fn configuration_only_row(locked: bool, configured_count: Option<u64>) -> Value {
+    if locked {
+        return locked_row(
+            "rdp-idle-protection",
+            "RDP idle protections",
+            "sessions",
+            None,
+            "idle-disconnect,session-end-cleanup,incoming-session-policy",
+        );
+    }
+    let mut row = unavailable_row(
+        "rdp-idle-protection",
+        "RDP idle protections",
+        "sessions",
+        true,
+        None,
+        &[
+            "idle-disconnect",
+            "session-end-cleanup",
+            "incoming-session-policy",
+        ],
+        "effective_state_unverified",
+    );
+    row["configuredCount"] = configured_count.map_or(Value::Null, Value::from);
+    row
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn local_row(
     id: &str,
@@ -161,6 +189,20 @@ pub(crate) fn summarize(monitors: &[Value]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_rdp_preferences_never_claim_effective_protection() {
+        for count in [None, Some(0), Some(1), Some(2)] {
+            let row = configuration_only_row(false, count);
+            assert_eq!(row["running"], false);
+            assert_eq!(row["state"], "unavailable");
+            assert_eq!(row["health"], "unavailable");
+            assert!(row["activeCount"].is_null());
+            assert_eq!(row["errorCode"], "effective_state_unverified");
+            assert_eq!(summarize(&[row])["active"], 0);
+        }
+        assert_eq!(configuration_only_row(true, Some(2))["state"], "locked");
+    }
 
     #[test]
     fn locked_rows_never_report_running() {

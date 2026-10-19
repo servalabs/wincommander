@@ -7,14 +7,18 @@ use std::{
     fs::OpenOptions,
     io::{self, Write},
     path::{Component, Path, PathBuf},
-    thread,
-    time::Duration,
 };
+
+#[cfg(not(windows))]
+use std::{thread, time::Duration};
 
 #[cfg(windows)]
 use std::io::{Read, Seek, SeekFrom};
 
 use rand::{rngs::OsRng, RngCore};
+
+#[cfg(windows)]
+mod identity;
 
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -204,6 +208,7 @@ fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(targets)
 }
 
+#[cfg(not(windows))]
 fn remove_empty_directory_with_retries(path: &Path) -> io::Result<()> {
     let mut last_error = None;
     for _ in 0..4 {
@@ -306,7 +311,7 @@ fn set_file_attributes(path: &Path, attributes: u32) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
+fn overwrite_and_delete_file_inner(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -323,6 +328,7 @@ fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .map_err(|error| format!("cannot open file for verified erase: {error}"))?;
+    expected.verify(&file)?;
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
         return Err(format!(
@@ -376,27 +382,41 @@ fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+    let _ancestors = identity::pin_ancestors(path)?;
+    let expected = identity::ObjectPin::capture(path, false, false)?;
+    overwrite_and_delete_expected(path, &expected)
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_expected(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
 
     // Windows refuses a writable handle to a read-only file even when its
     // owner explicitly chose Secure Delete. Clear only that transient DOS
     // attribute; if secure erase cannot complete, restore the exact original
     // attributes so a failed operation does not silently change the file.
-    let original_attributes = original_file_attributes(path)?;
-    let was_readonly = original_attributes & FILE_ATTRIBUTE_READONLY != 0;
-    if was_readonly {
-        set_file_attributes(path, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
-    }
+    let (original_attributes, was_readonly) = {
+        let _name = expected.guard_name(path)?;
+        let original_attributes = original_file_attributes(path)?;
+        let was_readonly = original_attributes & FILE_ATTRIBUTE_READONLY != 0;
+        if was_readonly {
+            set_file_attributes(path, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
+        }
+        (original_attributes, was_readonly)
+    };
 
-    let result = overwrite_and_delete_file_inner(path);
+    let result = overwrite_and_delete_file_inner(path, expected);
     if result.is_err() && was_readonly {
-        let _ = set_file_attributes(path, original_attributes);
+        if let Ok(_name) = expected.guard_name(path) {
+            let _ = set_file_attributes(path, original_attributes);
+        }
     }
     result
 }
 
+#[cfg(not(windows))]
 fn secure_erase_directory(root: &Path) -> Result<(), String> {
     let mut files = Vec::new();
     let mut directories = Vec::new();
@@ -441,6 +461,7 @@ fn secure_erase_directory(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn secure_erase_path(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect erase target '{}': {error}", path.display()))?;
@@ -459,6 +480,7 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(not(windows))]
 fn secure_erase_target(target: PathBuf) -> Result<(), String> {
     secure_erase_path(&target)?;
     match fs::symlink_metadata(&target) {
@@ -477,11 +499,103 @@ fn secure_erase_target(target: PathBuf) -> Result<(), String> {
 /// Executes a complete Explorer selection without UI, PowerShell, elevation,
 /// or a service hand-off. Every target is validated before any erase begins.
 pub fn execute_cli(raw_paths: Vec<String>) -> Result<(), String> {
+    #[cfg(windows)]
+    { execute_prepared(prepare(raw_paths)?) }
+    #[cfg(not(windows))]
+    {
     let targets = validate_selection(&raw_paths)?;
     for initially_validated_target in targets {
         let target = validate_target(&initially_validated_target.to_string_lossy())?;
         secure_erase_target(target)?;
     }
+    Ok(())
+    }
+}
+
+#[cfg(windows)]
+pub struct PreparedSelection {
+    targets: Vec<(PathBuf, Vec<identity::ObjectPin>, identity::ObjectPin)>,
+    name_guards: Vec<fs::File>,
+}
+
+#[cfg(not(windows))]
+pub struct PreparedSelection { targets: Vec<PathBuf> }
+
+#[cfg(not(windows))]
+pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
+    Ok(PreparedSelection { targets: validate_selection(&raw_paths)? })
+}
+
+#[cfg(not(windows))]
+pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
+    for initially_validated_target in selection.targets {
+        let target = validate_target(&initially_validated_target.to_string_lossy())?;
+        secure_erase_target(target)?;
+    }
+    Ok(())
+}
+
+/// Pins approved object identities before the renderer capability is consumed.
+#[cfg(windows)]
+pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
+    let mut targets = Vec::new();
+    let mut name_guards = Vec::new();
+    for initially_validated_target in validate_selection(&raw_paths)? {
+        let ancestors = identity::pin_ancestors(&initially_validated_target)?;
+        let target = validate_target(&initially_validated_target.to_string_lossy())?;
+        let directory = fs::symlink_metadata(&target).map_err(|error| error.to_string())?.is_dir();
+        let pin = identity::ObjectPin::capture(&target, directory, true)?;
+        if !directory { name_guards.push(pin.guard_name(&target)?); }
+        targets.push((target, ancestors, pin));
+    }
+    Ok(PreparedSelection { targets, name_guards })
+}
+
+#[cfg(windows)]
+pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
+    let PreparedSelection { targets, name_guards } = selection;
+    // The caller has consumed authority while these no-delete name guards held.
+    drop(name_guards);
+    for (target, _ancestors, pin) in targets {
+        if pin.is_directory() {
+            secure_erase_directory(&target, pin)?;
+        } else {
+            overwrite_and_delete_expected(&target, &pin)?;
+            // Windows completes handle-based deletion after the last pin closes.
+            drop(pin);
+        }
+        match fs::symlink_metadata(&target) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            _ => return Err("target absence could not be verified after erase".into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_erase_directory(root: &Path, root_pin: identity::ObjectPin) -> Result<(), String> {
+    let mut files = Vec::new();
+    let mut directories = vec![(root.to_path_buf(), root_pin)];
+    let mut cursor = 0;
+    while cursor < directories.len() {
+        let path = &directories[cursor].0;
+        for entry in fs::read_dir(path).map_err(|error| format!("cannot inspect pinned directory: {error}"))? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let child = entry.path();
+            let metadata = fs::symlink_metadata(&child).map_err(|error| error.to_string())?;
+            if has_reparse_point(&child)? { return Err("refused reparse-point tree entry".into()); }
+            if metadata.is_dir() {
+                let pin = identity::ObjectPin::capture(&child, true, true)?;
+                directories.push((child, pin));
+            } else if metadata.is_file() {
+                let pin = identity::ObjectPin::capture(&child, false, false)?;
+                files.push((child, pin));
+            } else { return Err("refused unsupported tree entry".into()); }
+        }
+        cursor += 1;
+    }
+    for (path, pin) in files { overwrite_and_delete_expected(&path, &pin)?; }
+    for (_, pin) in directories.into_iter().rev() { pin.delete_directory()?; }
     Ok(())
 }
 

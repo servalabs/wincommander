@@ -17,6 +17,7 @@ mod attend_watch;
 mod authz;
 mod autostart;
 mod backend;
+mod event_tail;
 mod child_jobs;
 pub mod cli;
 mod ipc_boundary;

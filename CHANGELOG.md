@@ -5,6 +5,19 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Search secure deletion uses the desktop confirmation gate and preserves the
+  approved Windows file identity through execution. Emergency phrase arming
+  requires native confirmation of the current plan.
+- Privacy Shield distinguishes a running process from fresh successful
+  detection, verifies model downloads and reports missing runtime setup.
+  Optional local media cleanup retries during a session and reports failures.
+- Desktop webhooks, document extraction and component downloads apply bounded
+  input handling. Failed HTTP actions no longer report successful delivery.
+- Installer machine-data discovery uses Windows' known-folder location and
+  checks ownership, permissions and existing linked cleanup paths.
+- Local account password-expiry changes use the application's confirmation
+  dialog. Saved RDP preferences are shown separately from verified enforcement.
+
 - Hidden backend commands now rebuild Windows PowerShell's module search path,
   preventing inherited PowerShell 7 modules from breaking permission checks.
 

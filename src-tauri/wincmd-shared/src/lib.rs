@@ -803,6 +803,25 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    #[tokio::test]
+    async fn framing_accepts_exact_nonzero_custom_limit_and_rejects_adjacent_under_limit() {
+        let body = serde_json::to_vec(&Envelope::Bye).unwrap();
+        let length = body.len() as u32;
+        assert!(length > 1);
+        for limit in [0, length - 1, length, length + 1] {
+            let (mut writer, mut reader) = tokio::io::duplex(body.len() + 4);
+            writer.write_u32_le(length).await.unwrap();
+            writer.write_all(&body).await.unwrap();
+            writer.shutdown().await.unwrap();
+            let result = read_envelope_limited(&mut reader, limit).await;
+            if limit < length {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+            } else {
+                assert!(matches!(result.unwrap(), Envelope::Bye));
+            }
+        }
+    }
+
     // ── Phase 9 HMAC helpers ─────────────────────────────────────────
 
     #[test]

@@ -26,7 +26,15 @@ describe("local account password expiry", () => {
     for (const field of ["builtIn", "disabled", "service", "externalIdentity"]) {
       expect(backend).toContain(`${field} = 0`);
     }
-    expect(card).toContain("window.confirm(message)");
+    expect(card).toContain("useAppConfirm");
+    expect(card).not.toContain("window.confirm(");
+    expect(card).toContain("const accepted = await confirmAction({");
+    expect(card).toContain("if (!accepted) return;");
+    expect(card.indexOf("mutationPending.current = true;")).toBeLessThan(card.indexOf("await confirmAction({"));
+    expect(card).toMatch(/finally\s*\{\s*mutationPending\.current = false;\s*setBusy\(false\);/);
+    expect(card.indexOf("if (!accepted) return;")).toBeLessThan(
+      card.indexOf('executeBackendCommand<PasswordExpiryMutation>("Set-LocalPasswordNeverExpires"'),
+    );
     expect(card).toContain("This does not restore each account's previous setting.");
     expect(card).toContain("Windows was rechecked.");
   });

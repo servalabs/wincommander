@@ -162,6 +162,34 @@ function Clear-PrivacyShieldPidMarker {
     Remove-Item -LiteralPath (Get-PrivacyShieldPidMarkerPath) -Force -ErrorAction SilentlyContinue
 }
 
+# Pure predicate kept separate so malformed/stale/reused-PID receipts can be
+# tested without starting Python, opening a camera, or querying user data.
+function Test-PrivacyShieldReadyReceipt {
+    param($Receipt, [int]$ExpectedProcessId, [double]$ProcessStartedAt, [double]$Now)
+    try {
+        return ($Receipt.pid -eq $ExpectedProcessId -and $ExpectedProcessId -gt 0 -and
+            $Receipt.startedAt -ge $ProcessStartedAt -and
+            $Receipt.updatedAt -ge $Receipt.startedAt -and
+            $Receipt.updatedAt -le ($Now + 1) -and ($Now - $Receipt.updatedAt) -le 5 -and
+            $Receipt.ready -eq $true)
+    } catch { return $false }
+}
+
+function Get-PrivacyShieldProtectionReady {
+    param([int]$DetectorProcessId)
+    try {
+        $path = (Get-PrivacyShieldPidMarkerPath) + '.ready.json'
+        $file = Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($file.Length -gt 2048) { return $false }
+        $receipt = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $started = (Get-Process -Id $DetectorProcessId -ErrorAction Stop).StartTime.ToUniversalTime()
+        $epoch = [datetime]::SpecifyKind([datetime]'1970-01-01', [DateTimeKind]::Utc)
+        Test-PrivacyShieldReadyReceipt -Receipt $receipt -ExpectedProcessId $DetectorProcessId `
+            -ProcessStartedAt ($started - $epoch).TotalSeconds `
+            -Now ([datetime]::UtcNow - $epoch).TotalSeconds
+    } catch { return $false }
+}
+
 function Get-PrivacyShieldStatus {
     try {
         $shieldProcessMarker = "--wc-privacy-shield"
@@ -217,7 +245,9 @@ function Get-PrivacyShieldStatus {
         # Server 2025 with a monitoring agent). CIM works on both PS 5.1 and
         # PS 7, so the fallback is not needed.
 
+        $protectionReady = $running -and (Get-PrivacyShieldProtectionReady -DetectorProcessId $processId)
         @{
+            protectionReady = [bool]$protectionReady
             running         = $running
             processId       = $processId
             activeMode      = $activeMode
@@ -227,7 +257,7 @@ function Get-PrivacyShieldStatus {
             cameraPolicyBlockers = @($camera.policyBlockers)
             cameraStatus = $camera.cameraStatus
             cameraPolicyScope = $camera.cameraPolicyScope
-            shieldLifecycle = if ($running) { 'running' } else { 'stopped' }
+            shieldLifecycle = if ($protectionReady) { 'running' } elseif ($running) { 'unverified' } else { 'stopped' }
             isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
@@ -312,28 +342,16 @@ function Start-PrivacyShield {
             return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
 
-        # Check dependencies (Quietly)
-        # Check dependencies (Quietly)
-        $packages = @("mediapipe", "opencv-python", "PyQt6", "numpy", "Pillow")
-        $importMap = @{
-            "opencv-python" = "cv2"
-            "Pillow"        = "PIL"
-        }
-        foreach ($pkg in $packages) {
-            $importName = if ($importMap.ContainsKey($pkg)) { $importMap[$pkg] } else { $pkg.Split('-')[0] }
+        # Starting protection must never silently install or replace shared packages.
+        # The explicit AI runtime setup remains available in the Privacy Shield card.
+        $packages = @("mediapipe", "cv2", "PyQt6", "numpy", "PIL")
+        foreach ($importName in $packages) {
             try {
-                # Just invoke python, silencing output
                 & $pythonExe -c "import $importName" *>$null
-                if ($LASTEXITCODE -ne 0) {
-                    # Pip install can be chatty, silence it completely
-                    & $pythonExe -m pip install $pkg --quiet *>$null
-                }
-                & $pythonExe -c "import $importName" *>$null
-                if ($LASTEXITCODE -ne 0) {
-                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
-                }
+                if ($LASTEXITCODE -ne 0) { throw 'missing_runtime' }
+            } catch {
+                return @{ error = $true; message = "Privacy Shield AI runtime is incomplete. Open AI runtime setup in Privacy Shield, then retry."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
             }
-            catch {}
         }
 
         # Keep the core script in-memory to avoid writing source code to AppData.
@@ -359,6 +377,9 @@ import threading
 import traceback
 import ctypes
 import urllib.request
+import hashlib
+import tempfile
+import re
 from collections import deque
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -373,6 +394,9 @@ CAPTURES_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", 
 EVENTS_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield_events.ndjson")
 PID_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield.pid")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+READY_FILE = PID_FILE + ".ready.json"
+DETECTOR_STARTED_AT = time.time()
+_last_ready_write = 0.0
 
 def log(msg):
     try:
@@ -402,7 +426,28 @@ def write_pid_marker():
     except Exception as e:
         log(f"Could not write detector PID marker: {e}")
 
+def write_ready_receipt(now=None):
+    # Invoked only after a completed inference iteration. A separate timer
+    # could falsely claim health while the detector/camera is hung.
+    global _last_ready_write
+    now = time.time() if now is None else now
+    if now - _last_ready_write < 1:
+        return
+    temporary = READY_FILE + ".tmp"
+    try:
+        with open(temporary, "w", encoding="ascii") as handle:
+            json.dump({"pid": os.getpid(), "startedAt": DETECTOR_STARTED_AT,
+                       "updatedAt": now, "ready": True}, handle)
+        os.replace(temporary, READY_FILE)
+        _last_ready_write = now
+    except OSError:
+        log("Detector readiness receipt unavailable")
+
 def clear_pid_marker():
+    try:
+        os.remove(READY_FILE)
+    except OSError:
+        pass
     try:
         os.remove(PID_FILE)
     except FileNotFoundError:
@@ -459,7 +504,88 @@ OBJ_MODELS = {
 }
 
 FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
-MIN_MODEL_SIZE = 50_000  # 50 KB minimum - guards against empty/corrupt/partial downloads
+# Official versioned MediaPipe assets, SHA-256 observed from the publisher's
+# HTTPS endpoints. Cached bytes are verified too; size alone is not provenance.
+MODEL_SHA256 = {
+    FACE_MODEL_URL: "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    OBJ_MODELS["nano"][1]: "4b59100025bea1235a84c1038879a6cccc9f6c49f5e41144e91e74d99e780993",
+    OBJ_MODELS["medium"][1]: "5d4ebec1029bc9907aeadb9e7b4ac9cb1da6a19d01ad375210a9ae18ba173302",
+}
+MAX_MODEL_BYTES = 32 * 1024 * 1024
+
+def model_matches(path, expected):
+    try:
+        if os.path.islink(path) or os.path.getsize(path) > MAX_MODEL_BYTES:
+            return False
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest() == expected
+    except OSError:
+        return False
+
+class ModelNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise ValueError("model_redirect_refused")
+
+def ensure_verified_model(path, url):
+    expected = MODEL_SHA256.get(url)
+    if expected is None:
+        return False
+    if model_matches(path, expected):
+        return True  # Warm/offline startup requires no network.
+    temporary = None
+    try:
+        opener = urllib.request.build_opener(ModelNoRedirect())
+        with tempfile.NamedTemporaryFile(dir=os.path.dirname(path), delete=False) as handle:
+            temporary = handle.name
+            with opener.open(url, timeout=15) as response:
+                received = 0
+                while True:
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                    if received > MAX_MODEL_BYTES:
+                        raise ValueError("model_too_large")
+                    handle.write(chunk)
+        if not model_matches(temporary, expected):
+            raise ValueError("model_digest_mismatch")
+        os.replace(temporary, path)
+        return True
+    except Exception:
+        log("Model verification or download failed")
+        return False
+    finally:
+        if temporary and os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                log("Model temporary cleanup failed")
+
+def purge_expired_captures(directory, now=None):
+    # Only our timestamped media is owned here. Never traverse links or purge
+    # arbitrary files a user has placed in the folder. Retry each minute.
+    now = time.time() if now is None else now
+    failures = 0
+    try:
+        for entry in os.scandir(directory):
+            if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_(phone_detected|multiple_faces)_(screen\.png|webcam\.avi)", entry.name):
+                continue
+            try:
+                if entry.is_file(follow_symlinks=False) and now - entry.stat(follow_symlinks=False).st_mtime > 7 * 86400:
+                    os.remove(entry.path)
+            except OSError:
+                failures += 1
+    except FileNotFoundError:
+        pass
+    except OSError:
+        failures += 1
+    if failures:
+        log("Capture retention cleanup incomplete")
+        emit_event("retention_cleanup_failed")
+    return failures
 
 # --- Windows Blur API ---
 def enable_window_blur(hwnd: int, opacity: int = 200) -> bool:
@@ -544,45 +670,15 @@ class ShieldWorker(QThread):
         self.face_detector = None
         self.obj_detector = None
 
-    def _is_model_valid(self, path: str) -> bool:
-        """Return True only if the file exists and is large enough to be a real model.
-        Deletes the file if it exists but is suspiciously small (corrupt / partial download)."""
-        if not os.path.exists(path):
-            return False
-        size = os.path.getsize(path)
-        if size < MIN_MODEL_SIZE:
-            log(f"Model file is too small ({size} bytes), likely corrupt - deleting for re-download: {path}")
-            try:
-                os.remove(path)
-            except Exception as e:
-                log(f"Could not remove corrupt model file: {e}")
-            return False
-        return True
-
     def _ensure_models(self):
         os.makedirs(MODELS_DIR, exist_ok=True)
-        if (self.check_gaze or self.check_faces) and not self._is_model_valid(FACE_MODEL_PATH):
-            try:
-                urllib.request.urlretrieve(FACE_MODEL_URL, FACE_MODEL_PATH)
-            except Exception as e:
-                log(f"Failed to download face model: {e}")
-                return False
-        
+        if (self.check_gaze or self.check_faces) and not ensure_verified_model(FACE_MODEL_PATH, FACE_MODEL_URL):
+            return False
         if self.check_phone:
-            # Determine which model to download based on level
-            model_info = OBJ_MODELS.get(self.model_level, OBJ_MODELS["nano"])
-            filename, url = model_info
-            path = os.path.join(MODELS_DIR, filename)
-            
-            # Store path for loading
-            self.obj_model_path = path
-            
-            if not self._is_model_valid(path):
-                try:
-                    urllib.request.urlretrieve(url, path)
-                except Exception as e:
-                    log(f"Failed to download object model ({self.model_level}): {e}")
-                    return False
+            filename, url = OBJ_MODELS.get(self.model_level, OBJ_MODELS["nano"])
+            self.obj_model_path = os.path.join(MODELS_DIR, filename)
+            if not ensure_verified_model(self.obj_model_path, url):
+                return False
         return True
 
     def _init_detectors(self):
@@ -841,8 +937,12 @@ class ShieldWorker(QThread):
                         parts.append("PRESENCE LOST")
                     reason = " & ".join(parts)
 
-            except Exception as e:
-                log(f"Detection loop error: {e}")
+                write_ready_receipt()
+
+            except Exception:
+                log("Detection loop failed; protection readiness will expire")
+                # Do not turn a partial/failed inference into an attentive event.
+                continue
 
             # Capture for each triggered reason (both device and multi-face when both detected)
             if device_triggered and self.capture_on_device and not self._captured_for_device:
@@ -1021,19 +1121,11 @@ class ShieldApp(QObject):
 
         log(f"Shield starting: camera={self.args.camera}, gaze={self.args.check_gaze}, faces={self.args.check_faces}, phone={self.args.check_phone}, model={self.args.model_level}, wake_delay_ms={self.args.wake_delay_ms}, device_multiplier={self.args.device_wake_multiplier}, multi_face_multiplier={self.args.multi_face_wake_multiplier}, buffer_frames={self.args.buffer_frames}")
 
-        # L9: retention purge — captures older than 7d are deleted at session start
-        try:
-            if os.path.isdir(CAPTURES_DIR):
-                _now = time.time()
-                for _fname in os.listdir(CAPTURES_DIR):
-                    _fpath = os.path.join(CAPTURES_DIR, _fname)
-                    try:
-                        if os.path.isfile(_fpath) and (_now - os.stat(_fpath).st_mtime) > 7 * 86400:
-                            os.remove(_fpath)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        purge_expired_captures(CAPTURES_DIR)
+        self._retention_timer = QTimer(self)
+        self._retention_timer.setInterval(60000)
+        self._retention_timer.timeout.connect(lambda: purge_expired_captures(CAPTURES_DIR))
+        self._retention_timer.start()
 
         # Defaults if no flags set (default to basic eye tracker behavior)
         if not (self.args.check_gaze or self.args.check_faces or self.args.check_phone):
@@ -1216,7 +1308,8 @@ if __name__ == "__main__":
             return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
-        @{ success = $true; processId = $process.Id; cameraStatus = 'available'; shieldLifecycle = 'running' }
+        $ready = Get-PrivacyShieldProtectionReady -DetectorProcessId $process.Id
+        @{ success = $true; processId = $process.Id; cameraStatus = 'available'; protectionReady = [bool]$ready; shieldLifecycle = $(if ($ready) { 'running' } else { 'unverified' }) }
     }
     catch {
         @{ error = $true; message = 'Privacy Shield could not start.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'shield_start_failed' }

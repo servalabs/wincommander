@@ -96,6 +96,18 @@ pub(crate) fn execute_trusted_lockdown(app: tauri::AppHandle) {
     });
 }
 
+pub(crate) fn execute_distress_lockdown(app: tauri::AppHandle, plan: super::LockdownPlanSnapshot) {
+    if TRUSTED_LOCKDOWN_EXECUTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        if crate::backend::full_lockdown_with_plan(app, plan).await.is_err() {
+            crate::log_message("error", "[Authz] authorized emergency plan did not complete");
+        }
+        TRUSTED_LOCKDOWN_EXECUTING.store(false, Ordering::SeqCst);
+    });
+}
+
 /// Rust-initiated native confirm for a destructive action, exposed for
 /// command-level fallback when no capability token is supplied. A WebView
 /// script can trigger the dialog but cannot answer it, so it remains a valid

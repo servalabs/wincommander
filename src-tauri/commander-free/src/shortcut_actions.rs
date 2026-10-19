@@ -140,7 +140,7 @@ struct CoercionFiredEvent {
     detected_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DistressPhrase {
     pub label: String,
     pub hash: String,
@@ -149,7 +149,24 @@ pub struct DistressPhrase {
     pub mode: String,
 }
 
-static DISTRESS_REGISTERED: Lazy<Mutex<Vec<DistressPhrase>>> = Lazy::new(|| Mutex::new(Vec::new()));
+#[derive(Default)]
+struct DistressRegistry {
+    phrases: Vec<DistressPhrase>,
+    plan: Option<crate::authz::LockdownPlanSnapshot>,
+}
+static DISTRESS_REGISTERED: Lazy<Mutex<DistressRegistry>> = Lazy::new(|| Mutex::new(DistressRegistry::default()));
+
+fn verify_armed_distress_plan(phrase: Option<&DistressPhrase>) -> Result<crate::authz::LockdownPlanSnapshot, String> {
+    let settings = crate::settings::read_settings()?;
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings)?;
+    let current = crate::authz::full_lockdown_args(&plan);
+    let registered = DISTRESS_REGISTERED.lock().map_err(|_| "emergency authorization unavailable")?;
+    let armed = registered.plan.as_ref().ok_or("emergency phrases are not authorized")?;
+    if crate::authz::full_lockdown_args(armed) != current || phrase.is_some_and(|entry| !registered.phrases.contains(entry)) {
+        return Err("emergency plan changed; re-arm phrases with native confirmation".into());
+    }
+    Ok(armed.clone())
+}
 
 #[derive(Debug, Serialize, Clone)]
 struct DistressFiredEvent {
@@ -284,7 +301,7 @@ fn check_distress_match() -> Option<DistressPhrase> {
     let buffer = KEY_BUFFER.lock().unwrap();
     let buf_str: String = buffer.iter().collect();
     drop(buffer);
-    let registered = DISTRESS_REGISTERED.lock().unwrap().clone();
+    let registered = DISTRESS_REGISTERED.lock().unwrap().phrases.clone();
     if registered.is_empty() {
         return None;
     }
@@ -321,6 +338,10 @@ fn check_distress_match() -> Option<DistressPhrase> {
 }
 
 fn handle_distress_match(phrase: DistressPhrase) {
+    if verify_armed_distress_plan(Some(&phrase)).is_err() {
+        crate::log_message("warn", "Emergency phrase denied: plan requires re-authorization");
+        return;
+    }
     let now = Instant::now();
     {
         // Distress uses its OWN snooze timer (never the coercion one) so a
@@ -396,7 +417,9 @@ fn handle_distress_match(phrase: DistressPhrase) {
         };
         let _ = app.emit("distress-phrase-fired", &payload);
         if phrase.mode == "destroy" {
-            crate::authz::execute_trusted_lockdown(app);
+            if let Ok(plan) = verify_armed_distress_plan(Some(&phrase)) {
+                crate::authz::execute_distress_lockdown(app, plan);
+            }
         }
     }
     crate::log_message("info", "[Distress] trigger fired");
@@ -579,6 +602,7 @@ pub async fn list_lockdown_words() -> Result<Vec<RegisteredPhrase>, String> {
 
 #[tauri::command]
 pub async fn register_distress_phrase(
+    app: tauri::AppHandle,
     mode: String,
     label: String,
     plaintext: String,
@@ -598,7 +622,7 @@ pub async fn register_distress_phrase(
     let length = normalised.chars().count();
     let entry = DistressPhrase {
         label: if label.trim().is_empty() {
-            format!("Phrase #{}", DISTRESS_REGISTERED.lock().unwrap().len() + 1)
+            format!("Phrase #{}", DISTRESS_REGISTERED.lock().unwrap().phrases.len() + 1)
         } else {
             label.trim().to_string()
         },
@@ -607,24 +631,40 @@ pub async fn register_distress_phrase(
         mode,
     };
     {
-        let mut reg = DISTRESS_REGISTERED.lock().unwrap();
-        if reg.iter().any(|r| r.hash == hash) {
+        let reg = DISTRESS_REGISTERED.lock().unwrap();
+        if reg.phrases.iter().any(|r| r.hash == hash) {
             return Err("That phrase is already registered.".into());
         }
-        reg.push(entry.clone());
     }
+    let mut phrases = DISTRESS_REGISTERED.lock().unwrap().phrases.clone();
+    phrases.push(entry.clone());
+    set_distress_phrases(app, phrases).await?;
     Ok(entry)
 }
 
 #[tauri::command]
-pub async fn set_distress_phrases(phrases: Vec<DistressPhrase>) -> Result<(), String> {
-    *DISTRESS_REGISTERED.lock().unwrap() = phrases;
+pub async fn set_distress_phrases(app: tauri::AppHandle, phrases: Vec<DistressPhrase>) -> Result<(), String> {
+    crate::license::require_paid("distress phrase")?;
+    if phrases.len() > 32 || phrases.iter().any(|phrase| {
+        !(6..=BUFFER_MAX).contains(&phrase.length) || phrase.label.len() > 256
+            || phrase.hash.len() != 64 || !phrase.hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !matches!(phrase.mode.as_str(), "decoy" | "destroy" | "reboot_usb")
+    }) {
+        return Err("invalid emergency phrase registration".into());
+    }
+    let unchanged = DISTRESS_REGISTERED.lock().unwrap().phrases == phrases;
+    if unchanged && phrases.is_empty() { return Ok(()); }
+    if unchanged && verify_armed_distress_plan(None).is_ok() {
+        return Ok(());
+    }
+    let plan = crate::authz::confirm_distress_registration(&app, &phrases).await?;
+    *DISTRESS_REGISTERED.lock().unwrap() = DistressRegistry { phrases, plan: Some(plan) };
     Ok(())
 }
 
 #[tauri::command]
 pub async fn list_distress_phrases() -> Result<Vec<DistressPhrase>, String> {
-    Ok(DISTRESS_REGISTERED.lock().unwrap().clone())
+    Ok(DISTRESS_REGISTERED.lock().unwrap().phrases.clone())
 }
 
 /// Check a phrase against the distress registry — returns "decoy"|"destroy" or null.
@@ -635,13 +675,15 @@ pub async fn check_distress_phrase(
     phrase: String,
 ) -> Result<Option<DistressPhraseMatch>, String> {
     let normalised = normalise_phrase(&phrase);
-    for r in DISTRESS_REGISTERED.lock().unwrap().iter() {
+    let phrases = DISTRESS_REGISTERED.lock().unwrap().phrases.clone();
+    for r in phrases.iter() {
         if r.length == normalised.chars().count()
             && hashes_match_ct(&r.hash, &hash_phrase(&normalised))
         {
             let mode = r.mode.clone();
+            let plan = verify_armed_distress_plan(Some(r))?;
             if mode == "destroy" {
-                crate::authz::execute_trusted_lockdown(app);
+                crate::authz::execute_distress_lockdown(app, plan);
             }
             return Ok(Some(DistressPhraseMatch { mode }));
         }

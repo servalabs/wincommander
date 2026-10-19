@@ -220,7 +220,17 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("!macro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
     expect(hooks).toContain("--release-license-seat");
     expect(uninstallHook).toContain("!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
-    expect(hooks).toContain('ReadEnvStr $R5 "ProgramData"');
+    expect(hooks).not.toContain('ReadEnvStr $R5 "ProgramData"');
+    expect(hooks).toContain('WC_MACHINE_DATA_GUARD');
+    expect(hooks).toContain('SHGetFolderPathW');
+    expect(hooks).toContain('-ExpectedMachineDataRoot "$R5"');
+    expect(uninstallHook.indexOf('WC_VALIDATE_CLEANUP_DATA_OR_ABORT')).toBeLessThan(
+      uninstallHook.indexOf('!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT'),
+    );
+    const rootGuard = readFileSync("src-tauri/commander-free/nsis/installer-data-root.ps1", "utf8");
+    expect(rootGuard).toContain("[Environment]::GetFolderPath('CommonApplicationData')");
+    expect(rootGuard).not.toMatch(/\$env:ProgramData/i);
+    expect(rootGuard).not.toContain('[Console]::Out.Write($machineData)');
     expect(hooks).not.toContain('RMDir /r "$R5\\WinCommander"');
     expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(
       hooks.indexOf('wc_remove_machine_data_next:'),

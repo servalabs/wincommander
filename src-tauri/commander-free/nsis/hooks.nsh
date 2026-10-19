@@ -19,6 +19,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
 !define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
+!define WC_MACHINE_DATA_GUARD "${__FILEDIR__}\installer-data-root.ps1"
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
@@ -53,20 +54,33 @@ ${Using:StrFunc} UnStrStr
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-query" "$0" "attempt=${attempt} output=$1"
 !macroend
 
-; NSIS does not provide a built-in $PROGRAMDATA/$COMMONAPPDATA variable. Read
-; the Windows-owned ProgramData path instead of accidentally treating it as an
-; empty string and operating at the root of the current drive.
+!macro WC_READ_MACHINE_DATA_OR_ABORT stage validation
+  ; Windows resolves CSIDL_COMMON_APPDATA through the known-folder system.
+  ; Keep the result UTF-16 in NSIS; command stdout is not a Unicode path channel.
+  StrCpy $R5 ""
+  System::Call 'shell32::SHGetFolderPathW(p 0, i 0x23, p 0, i 0, w .R5) i .r0'
+  ${If} $0 != 0
+  ${OrIf} $R5 == ""
+    Abort "WinCommander could not resolve its Windows machine-data location. Existing data was retained."
+  ${EndIf}
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wincommander-installer-data-root.ps1 "${WC_MACHINE_DATA_GUARD}"
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-installer-data-root.ps1" -ExpectedMachineDataRoot "$R5" ${validation}'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "$0" "Machine-data known-folder/ownership validation failed; data retained"
+    Abort "WinCommander could not verify its machine-data location. Existing data was retained."
+  ${EndIf}
+!macroend
+
 !macro WC_LOAD_PROGRAMDATA_OR_ABORT stage
-  ClearErrors
-  ReadEnvStr $R5 "ProgramData"
-  ${If} ${Errors}
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "missing" "ProgramData environment variable was unavailable"
-    Abort "WinCommander could not locate the machine ProgramData directory."
-  ${EndIf}
-  ${If} $R5 == ""
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "missing" "ProgramData environment variable was empty"
-    Abort "WinCommander could not locate the machine ProgramData directory."
-  ${EndIf}
+  !insertmacro WC_READ_MACHINE_DATA_OR_ABORT "${stage}" ""
+!macroend
+
+!macro WC_VALIDATE_CLEANUP_DATA_OR_ABORT stage
+  !insertmacro WC_READ_MACHINE_DATA_OR_ABORT "${stage}" "-ValidateCleanupTree"
 !macroend
 
 ; A live desktop app holds wincommander-free.exe open, so Windows correctly
@@ -454,6 +468,7 @@ ${Using:StrFunc} UnStrStr
     Goto wc_uninstall_cleanup_done
   ${EndIf}
 
+  !insertmacro WC_VALIDATE_CLEANUP_DATA_OR_ABORT "uninstall-cleanup"
   !insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT
 
   ; An explicit product uninstall removes machine-owned WinCommander components,

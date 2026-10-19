@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Spinner, Switch, Tag } from "@/components/ui/bp";
 import SectionCard from "../shared/SectionCard";
+import { useAppConfirm } from "../shared/AppConfirmDialog";
 import { executeBackendCommand } from "../../hooks/useBackend";
 import { showSuccess } from "../../utils/toast";
 import {
@@ -16,6 +17,8 @@ interface PasswordExpiryMutation {
 }
 
 export default function LocalPasswordExpiryCard() {
+  const confirmAction = useAppConfirm();
+  const mutationPending = useRef(false);
   const [status, setStatus] = useState<LocalPasswordExpiryStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -35,25 +38,36 @@ export default function LocalPasswordExpiryCard() {
   const skipped = useMemo(() => status ? formatSkippedPasswordExpiryAccounts(status.skipped) : null, [status]);
 
   const setNeverExpires = async (enabled: boolean) => {
-    if (!status) return;
-    const message = enabled
-      ? `Set Password never expires for all ${status.totalEligible} eligible local accounts? Domain, disabled, built-in, and service accounts stay unchanged.`
-      : `Make all ${status.totalEligible} eligible local accounts follow the Windows password-age policy again? This does not restore each account's previous setting.`;
-    if (!window.confirm(message)) return;
-
+    if (!status || mutationPending.current) return;
+    mutationPending.current = true;
     setBusy(true);
-    setError(null);
-    const result = await executeBackendCommand<PasswordExpiryMutation>("Set-LocalPasswordNeverExpires", { Enabled: enabled });
-    setBusy(false);
-    if (result.success && result.data) {
-      setStatus(result.data.status);
-      const outcome = result.data.failedCount
-        ? `${result.data.changedCount} account${result.data.changedCount === 1 ? "" : "s"} changed; ${result.data.failedCount} could not be changed.`
-        : `${result.data.changedCount} account${result.data.changedCount === 1 ? "" : "s"} changed and Windows was rechecked.`;
-      showSuccess(outcome);
-    } else {
-      setError(result.error || "Windows could not update local password-expiry settings.");
-      void refresh();
+    try {
+      const message = enabled
+        ? `Set Password never expires for all ${status.totalEligible} eligible local accounts? Domain, disabled, built-in, and service accounts stay unchanged.`
+        : `Make all ${status.totalEligible} eligible local accounts follow the Windows password-age policy again? This does not restore each account's previous setting.`;
+      const accepted = await confirmAction({
+        title: "Change local account password expiry?",
+        description: message,
+        confirmLabel: enabled ? "Set never expires" : "Follow password policy",
+        destructive: true,
+      });
+      if (!accepted) return;
+
+      setError(null);
+      const result = await executeBackendCommand<PasswordExpiryMutation>("Set-LocalPasswordNeverExpires", { Enabled: enabled });
+      if (result.success && result.data) {
+        setStatus(result.data.status);
+        const outcome = result.data.failedCount
+          ? `${result.data.changedCount} account${result.data.changedCount === 1 ? "" : "s"} changed; ${result.data.failedCount} could not be changed.`
+          : `${result.data.changedCount} account${result.data.changedCount === 1 ? "" : "s"} changed and Windows was rechecked.`;
+        showSuccess(outcome);
+      } else {
+        setError(result.error || "Windows could not update local password-expiry settings.");
+        void refresh();
+      }
+    } finally {
+      mutationPending.current = false;
+      setBusy(false);
     }
   };
 

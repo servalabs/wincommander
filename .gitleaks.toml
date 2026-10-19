@@ -1,3 +1,6 @@
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Confirmed false positives: docs prose, test fixtures, demo text, and binary icon data."
 regexTarget = "match"

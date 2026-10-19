@@ -5637,6 +5637,10 @@ pub(crate) async fn run_backend_script_with_timeout(
     let trimmed = stdout.trim();
     let stderr_trimmed = stderr.trim();
 
+    if !output.status.success() {
+        return Err(format!("Backend process failed (exit {})", output.status.code().map(|code| code.to_string()).unwrap_or_else(|| "unknown".into())));
+    }
+
     if trimmed.is_empty() && !stderr_trimmed.is_empty() {
         return Err(format!("Command failed: {}", stderr_trimmed));
     }
@@ -6934,6 +6938,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .map(|meta| meta.len())
                 .unwrap_or(0);
         }
+        let mut tail = crate::event_tail::EventTail::new(offset);
         let mut locally_looking_away = false;
         let mut active_fleet_event_classes = std::collections::BTreeSet::new();
         let mut fleet_episode_id: Option<String> = None;
@@ -6946,6 +6951,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
         ));
         let mut last_activity = std::time::Instant::now();
         let mut ticks: u64 = 0;
+        let mut omission_pending = false;
         loop {
             // Check before reading: a Stop may race an append from Python.
             // Once switched off, no pending sidecar line may create an alert.
@@ -6954,26 +6960,24 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
             {
                 break;
             }
-            if let Ok(bytes) = std::fs::read(&sidecar) {
-                let len = bytes.len() as u64;
-                if len < offset {
-                    // File truncated/rotated (e.g. a new session) — restart.
-                    offset = 0;
-                }
-                if len > offset {
-                    let fresh = String::from_utf8_lossy(&bytes[offset as usize..]).into_owned();
-                    offset = len;
+            let batch = (|| -> std::io::Result<_> {
+                let mut file = std::fs::File::open(&sidecar)?;
+                let len = file.metadata()?.len();
+                let key = crate::event_tail::file_key(&file)?;
+                tail.poll(&mut file, len, key)
+            })();
+            if let Ok(batch) = batch {
+                offset = tail.offset;
+                omission_pending |= batch.dropped;
+                if !batch.lines.is_empty() {
                     last_activity = std::time::Instant::now();
-                    for line in fresh.lines() {
+                    for line in &batch.lines {
                         let line = line.trim();
                         if line.is_empty() {
                             continue;
                         }
                         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-                            crate::flow_bridge::flow_trace(format!(
-                                "shield-reader: unparseable line: {}",
-                                line
-                            ));
+                            omission_pending = true;
                             continue;
                         };
                         match value.get("event").and_then(|e| e.as_str()) {
@@ -7007,8 +7011,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
                                     .clone();
                                 crate::flow_bridge::flow_trace(format!(
-                                    "shield-reader: look_away read (reason='{}') → emit {} bounded event class(es)",
-                                    reason, event_classes.len()
+                                    "shield-reader: look_away read → emit {} bounded event class(es)",
+                                    event_classes.len()
                                 ));
                                 for flow_kind in privacy_shield_flow_kinds_from_reason(reason) {
                                     let _ = app.emit(
@@ -7112,17 +7116,18 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     serde_json::json!({ "lookingAway": false }),
                                 );
                             }
-                            other => {
-                                crate::flow_bridge::flow_trace(format!(
-                                    "shield-reader: ignored event {:?}",
-                                    other
-                                ));
+                            _ => {
+                                omission_pending = true;
                             }
                         }
                     }
                 }
             }
 
+            if omission_pending && ticks.is_multiple_of(200) {
+                crate::flow_bridge::flow_trace("shield-reader: invalid/oversize, unsupported or replaced records omitted");
+                omission_pending = false;
+            }
             // A newer reader exists (shield restarted) → stop so we don't double-emit.
             if SHIELD_READER_GEN.load(Ordering::SeqCst) != my_gen {
                 crate::flow_bridge::flow_trace(format!(
@@ -8122,7 +8127,7 @@ pub(crate) async fn full_lockdown_internal(app: tauri::AppHandle) -> Result<(), 
     .await
 }
 
-async fn full_lockdown_with_plan(
+pub(crate) async fn full_lockdown_with_plan(
     app: tauri::AppHandle,
     plan: crate::authz::LockdownPlanSnapshot,
 ) -> Result<(), String> {

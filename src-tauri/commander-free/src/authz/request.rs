@@ -160,6 +160,36 @@ fn yes_no(value: bool) -> &'static str {
     }
 }
 
+pub(crate) async fn confirm_distress_registration(
+    app: &tauri::AppHandle,
+    phrases: &[crate::shortcut_actions::DistressPhrase],
+) -> Result<LockdownPlanSnapshot, String> {
+    let settings = crate::settings::read_settings()?;
+    let plan = LockdownPlanSnapshot::from_settings(&settings)?;
+    let args = full_lockdown_args(&plan);
+    let summary = phrases.iter().map(|phrase| {
+        let action = match phrase.mode.as_str() {
+            "decoy" => "open the decoy session",
+            "destroy" => "run the irreversible emergency plan shown below",
+            "reboot_usb" => "restart into boot erase media, which can erase an entire disk; verify the separate boot erase target before use",
+            _ => "unknown action",
+        };
+        format!("{}: {} (fingerprint {})", safe_detail(&phrase.label), action, &phrase.hash[..12])
+    }).collect::<Vec<_>>().join("\n");
+    let detail = format!(
+        "Replace the armed emergency phrases with {} phrase(s)? A matching phrase can silently activate the configured emergency action.\n\n{}\n\n{}",
+        phrases.len(), summary, full_lockdown_confirmation(&plan)
+    );
+    if !native_confirm(app, &detail).await {
+        return Err("emergency phrase registration was not confirmed".into());
+    }
+    let current = LockdownPlanSnapshot::from_settings(&crate::settings::read_settings()?)?;
+    if full_lockdown_args(&current) != args {
+        return Err("emergency plan changed during confirmation; confirm again".into());
+    }
+    Ok(plan)
+}
+
 fn listed(values: Option<&Vec<String>>) -> String {
     match values {
         Some(values) if !values.is_empty() => values

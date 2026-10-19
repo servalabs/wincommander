@@ -56,6 +56,7 @@ use tokio::sync::Notify;
 
 const WEBHOOK_PORT: u16 = 47821;
 const MAX_BODY_BYTES: usize = 64 * 1024;
+const MAX_CONNECTIONS: usize = 32;
 const SIGNATURE_HEADER: &str = "X-Wincmd-Signature";
 
 // ── Route registry ──────────────────────────────────────────────────
@@ -191,6 +192,7 @@ async fn run_server(addr: SocketAddr, shutdown: std::sync::Arc<Notify>) -> Resul
         .await
         .map_err(|e| format!("bind {}: {}", addr, e))?;
     crate::log_message("info", &format!("[WebhookServer] listening on {}", addr));
+    let connections = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
 
     loop {
         tokio::select! {
@@ -206,8 +208,13 @@ async fn run_server(addr: SocketAddr, shutdown: std::sync::Arc<Notify>) -> Resul
                         continue;
                     }
                 };
+                let Ok(permit) = connections.clone().try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
                 let io = TokioIo::new(stream);
                 tauri::async_runtime::spawn(async move {
+                    let _permit = permit;
                     // Per-connection 5s read timeout. Hard cap so a
                     // half-open client can't hold a slot forever.
                     let serve = hyper::server::conn::http1::Builder::new()
@@ -231,18 +238,19 @@ async fn handle(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    // Read body with a hard byte cap. http_body_util's `collect()`
-    // pulls the full body — we only need to reject when it overflows.
-    let body_bytes = match req.into_body().collect().await {
-        Ok(b) => {
-            let bytes = b.to_bytes();
-            if bytes.len() > MAX_BODY_BYTES {
+    let mut body = req.into_body();
+    let mut body_bytes = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(_) => return Ok(reply(StatusCode::BAD_REQUEST, "body read failed")),
+        };
+        if let Some(data) = frame.data_ref() {
+            if !append_body(&mut body_bytes, data) {
                 return Ok(reply(StatusCode::PAYLOAD_TOO_LARGE, "body too large"));
             }
-            bytes
         }
-        Err(_) => return Ok(reply(StatusCode::BAD_REQUEST, "body read failed")),
-    };
+    }
 
     // Look up the route. Lock release ASAP so the long verify+fire
     // doesn't block the registry.
@@ -290,6 +298,14 @@ fn reply(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
+fn append_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
+}
+
 // ── HMAC verify ─────────────────────────────────────────────────────
 
 fn verify_hmac(secret: &str, body: &[u8], signature_hex: &str) -> bool {
@@ -314,6 +330,17 @@ fn verify_hmac(secret: &str, body: &[u8], signature_hex: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_budget_rejects_before_accumulating_and_preserves_admitted_bytes() {
+        let mut body = vec![0; MAX_BODY_BYTES - 1];
+        assert!(!append_body(&mut body, &[1, 2]));
+        assert_eq!(body.len(), MAX_BODY_BYTES - 1);
+        assert!(append_body(&mut body, &[1]));
+        assert_eq!(body.len(), MAX_BODY_BYTES);
+        assert!(!append_body(&mut body, &[2]));
+        assert!(append_body(&mut body, &[]));
+    }
 
     #[test]
     fn hmac_verify_accepts_matching_signature() {

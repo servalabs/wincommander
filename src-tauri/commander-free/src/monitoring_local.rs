@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
-use crate::monitoring_rows::{local_row, locked_row};
+use crate::monitoring_rows::{configuration_only_row, local_row, locked_row};
 
 pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
     let mut rows = Vec::with_capacity(8);
@@ -17,7 +17,7 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
     // This is a dashboard probe, not an install or remediation operation. A
     // stuck WMI/PowerShell check must become an unavailable row promptly and
     // the helper kills its process tree at this deadline.
-    let shield_status = crate::backend::run_backend_script_with_timeout(
+    let mut shield_status = crate::backend::run_backend_script_with_timeout(
         app,
         "Get-PrivacyShieldStatus".to_string(),
         HashMap::new(),
@@ -29,6 +29,7 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         .ok()
         .and_then(privacy_shield_issue_code);
     let shield_issue = shield_issue_code.is_some();
+    shield_status = shield_status.map(shield_protection_status);
     rows.push(local_row(
         "privacy-shield",
         "Privacy Gaze Shield",
@@ -157,39 +158,18 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         None,
     ));
 
-    let (rdp_enabled, rdp_count) = crate::settings::read_settings()
-        .ok()
-        .map(|settings| {
-            let tracking = &settings.ideal.privacy.tracking;
-            let tweaks = &settings.ideal.tweaks.rdp;
-            let count = [
-                tracking.rdp_idle_disconnect_enabled.unwrap_or(false),
-                tweaks.incoming_idle_timeout_enabled.unwrap_or(false),
-            ]
-            .into_iter()
-            .filter(|enabled| *enabled)
-            .count() as u64;
-            (count > 0, count)
-        })
-        .unwrap_or((false, 0));
-    rows.push(local_row(
-        "rdp-idle-protection",
-        "RDP idle protections",
-        "sessions",
-        true,
-        !paid,
-        None,
-        &[
-            "idle-disconnect",
-            "session-end-cleanup",
-            "incoming-session-policy",
-        ],
-        Ok(json!({ "running": rdp_enabled, "activeCount": rdp_count })),
-        None,
-        Some(rdp_count),
-        false,
-        None,
-    ));
+    let rdp_count = crate::settings::read_settings().ok().map(|settings| {
+        let tracking = &settings.ideal.privacy.tracking;
+        let tweaks = &settings.ideal.tweaks.rdp;
+        [
+            tracking.rdp_idle_disconnect_enabled.unwrap_or(false),
+            tweaks.incoming_idle_timeout_enabled.unwrap_or(false),
+        ]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count() as u64
+    });
+    rows.push(configuration_only_row(!paid, rdp_count));
 
     if paid {
         let print_status = crate::print_log::get_print_audit_status()
@@ -237,6 +217,16 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
     rows
 }
 
+fn shield_protection_status(mut status: Value) -> Value {
+    if status.is_object() {
+        // Process presence still permits Stop, but is not inference readiness.
+        let ready = status.get("protectionReady").and_then(Value::as_bool) == Some(true);
+        let process_running = status.get("running").and_then(Value::as_bool) == Some(true);
+        status["running"] = Value::Bool(process_running && ready);
+    }
+    status
+}
+
 fn bool_status(result: Result<bool, String>) -> Result<Value, String> {
     result.map(|running| json!({ "running": running }))
 }
@@ -255,6 +245,12 @@ fn running(result: &Result<Value, String>) -> bool {
 /// not cross the dashboard boundary.
 fn privacy_shield_issue_code(status: &Value) -> Option<&'static str> {
     match status.get("cameraStatus").and_then(Value::as_str) {
+        Some("available")
+            if status.get("running").and_then(Value::as_bool) == Some(true)
+                && status.get("protectionReady").and_then(Value::as_bool) != Some(true) =>
+        {
+            Some("detector_readiness_unverified")
+        }
         Some("available") => None,
         Some("hardware_unavailable") => Some("camera_hardware_unavailable"),
         Some("windows_camera_policy_denied") => Some("windows_camera_policy_denied"),
@@ -268,6 +264,52 @@ fn privacy_shield_issue_code(status: &Value) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shield_dashboard_requires_readiness_and_does_not_panic_on_scalar_status() {
+        for value in [
+            Value::Null,
+            json!(true),
+            json!(42),
+            json!("invalid"),
+            json!([]),
+        ] {
+            assert_eq!(shield_protection_status(value.clone()), value);
+        }
+        for ready in [Value::Null, json!(false), json!("true")] {
+            assert_eq!(
+                shield_protection_status(json!({"running":true,"protectionReady":ready}))
+                    ["running"],
+                false
+            );
+        }
+        assert_eq!(
+            shield_protection_status(json!({"running":true,"protectionReady":true}))["running"],
+            true
+        );
+        assert_eq!(
+            shield_protection_status(json!({"running":false,"protectionReady":true}))["running"],
+            false
+        );
+    }
+
+    #[test]
+    fn live_process_without_fresh_inference_is_not_ready() {
+        for ready in [Value::Null, Value::Bool(false)] {
+            assert_eq!(
+                privacy_shield_issue_code(
+                    &json!({"cameraStatus":"available", "running":true,"protectionReady":ready})
+                ),
+                Some("detector_readiness_unverified")
+            );
+        }
+        assert_eq!(
+            privacy_shield_issue_code(
+                &json!({"cameraStatus":"available", "running":true,"protectionReady":true})
+            ),
+            None
+        );
+    }
 
     #[test]
     fn bool_status_preserves_monitor_failure() {

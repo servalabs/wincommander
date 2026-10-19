@@ -26,6 +26,8 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[path = "pro_download_policy.rs"]
+mod download_policy;
 #[path = "../../runtime-support/pro_update_guard.rs"]
 pub(crate) mod update_guard;
 #[path = "pro_update_process.rs"]
@@ -111,6 +113,35 @@ fn validate_update_url(url: &str, field: &str) -> Result<(), String> {
         )),
         None => Err(format!("validation:{} url has no host", field)),
     }
+}
+
+fn pro_update_http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(crate::net::doh_resolver())
+        .build()
+        .map_err(|error| format!("network:Pro update client: {error}"))
+}
+
+async fn read_pro_response(
+    mut response: reqwest::Response,
+    limit: usize,
+    stage: &str,
+) -> Result<Vec<u8>, String> {
+    download_policy::check_content_length(response.content_length(), limit)
+        .map_err(|error| format!("{stage}:{error}"))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("{stage}:body read failed: {error}"))?
+    {
+        download_policy::append_body_chunk(&mut body, &chunk, limit)
+            .map_err(|error| format!("{stage}:{error}"))?;
+    }
+    Ok(body)
 }
 
 /// Where Pro lives once installed. Downloaded sidecars are machine-wide
@@ -608,7 +639,7 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     // as the license/update hosts that were observed to be ISP-DNS-blocked,
     // so route through the same system-DNS-first/Cloudflare-DoH-fallback
     // resolver license.rs and updater.rs already use (see net.rs).
-    let client = crate::net::doh_http_client().map_err(|e| format!("network:{}", e))?;
+    let client = pro_update_http_client(15)?;
     let resp = client
         .get(&manifest_url)
         .send()
@@ -622,10 +653,9 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     if !resp.status().is_success() {
         return Err(format!("http_error:HTTP {}", resp.status()));
     }
-    let manifest = resp
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("parse:{}", e))?;
+    let bytes = read_pro_response(resp, download_policy::MAX_MANIFEST_BYTES, "parse").await?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("parse:{error}"))?;
     check_pro_release_minimum(manifest.get("version").and_then(serde_json::Value::as_str))?;
     Ok(manifest)
 }
@@ -1413,34 +1443,44 @@ async fn install_pro_binary_machine(
     let temporary = update_replace::StagedFile::new(&install_path);
     let tmp_path = &temporary.0;
 
-    // DoH-aware resolver (same ISP-DNS-block exposure as the manifest fetch
-    // above and the license/update hosts in license.rs/updater.rs). We build
-    // our own client rather than calling `doh_http_client()` directly because
-    // that helper hardcodes a request timeout sized for small JSON calls,
-    // not a multi-hundred-MB binary download that needs the full
-    // `DOWNLOAD_TIMEOUT_SECS` window.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .dns_resolver(crate::net::doh_resolver())
-        .build()
-        .map_err(|e| format!("download:http client: {}", e))?;
-
-    let resp = client
+    let client = pro_update_http_client(DOWNLOAD_TIMEOUT_SECS)?;
+    let mut resp = client
         .get(&download_url)
         .send()
         .await
-        .map_err(|e| format!("download:GET failed: {}", e))?;
+        .map_err(|error| format!("download:GET failed: {error}"))?;
     if !resp.status().is_success() {
         return Err(format!("download:HTTP {}", resp.status()));
     }
-    let bytes = resp
-        .bytes()
+    download_policy::check_content_length(resp.content_length(), download_policy::MAX_BINARY_BYTES)
+        .map_err(|error| format!("download:{error}"))?;
+    let mut f = tokio::fs::File::create(&tmp_path)
         .await
-        .map_err(|e| format!("download:body read failed: {}", e))?;
-
-    // 3. Verify SHA-256 before touching disk.
+        .map_err(|error| format!("disk:tmp create: {error}"))?;
+    let mut total = 0;
     let mut h = Sha256::new();
-    h.update(&bytes);
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|error| format!("download:body read failed: {error}"))?
+    {
+        total = download_policy::checked_body_size(
+            total,
+            chunk.len(),
+            download_policy::MAX_BINARY_BYTES,
+        )
+        .map_err(|error| format!("download:{error}"))?;
+        h.update(&chunk);
+        f.write_all(&chunk)
+            .await
+            .map_err(|error| format!("disk:tmp write: {error}"))?;
+    }
+    f.sync_all()
+        .await
+        .map_err(|error| format!("disk:tmp fsync: {error}"))?;
+    drop(f);
+
+    // Only verified staging can reach version checks or installed-image replacement.
     let actual = h
         .finalize()
         .iter()
@@ -1452,18 +1492,6 @@ async fn install_pro_binary_machine(
             expected_sha256, actual
         ));
     }
-
-    // 4. Write to .tmp, fsync, rename atomically.
-    let mut f = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(|e| format!("disk:tmp create: {}", e))?;
-    f.write_all(&bytes)
-        .await
-        .map_err(|e| format!("disk:tmp write: {}", e))?;
-    f.sync_all()
-        .await
-        .map_err(|e| format!("disk:tmp fsync: {}", e))?;
-    drop(f);
 
     if let Err(error) = verify_pro_package_version(&tmp_path, pro_version.as_deref()) {
         let _ = std::fs::remove_file(&tmp_path);

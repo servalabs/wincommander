@@ -8,6 +8,17 @@ use zip::ZipArchive;
 use crate::error::{Result, SearchError};
 use crate::types::DocProps;
 
+const MAX_ARCHIVE_ENTRIES: usize = 4096;
+const MAX_CONTENT_PARTS: usize = 256;
+const MAX_EXPANDED_BYTES: usize = 16 * 1024 * 1024;
+const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_XML_DEPTH: usize = 128;
+const EXTRACTION_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn quota_error() -> SearchError {
+    SearchError::Extract("Office document exceeds the bounded extraction budget".into())
+}
+
 /// Returns true for OOXML parts that carry real user-authored text.
 /// Excludes styles, themes, fonts, settings, numbering, etc.
 fn is_content_part(name: &str) -> bool {
@@ -26,30 +37,40 @@ fn is_content_part(name: &str) -> bool {
 pub fn extract_office(path: &Path) -> Result<(String, DocProps)> {
     let file = std::fs::File::open(path)?;
     let mut archive = ZipArchive::new(file).map_err(|e| SearchError::Extract(e.to_string()))?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(quota_error());
+    }
+    let deadline = std::time::Instant::now() + EXTRACTION_TIME;
+    let mut expanded = 0usize;
+    let mut parts = 0usize;
 
     let mut text = String::new();
     for i in 0..archive.len() {
+        if std::time::Instant::now() >= deadline {
+            return Err(quota_error());
+        }
         let mut entry = archive
             .by_index(i)
             .map_err(|e| SearchError::Extract(e.to_string()))?;
         let name = entry.name().to_owned();
         // Only extract content-carrying parts; skip styles/themes/settings/etc.
         if is_content_part(&name) {
-            // Cap decompressed size (audit M2): a zip bomb (tiny compressed,
-            // huge decompressed) dropped into a watched folder that the
-            // background crawler auto-indexes would otherwise expand unbounded
-            // in memory. Bound the read; skip an oversize part rather than
-            // accumulate gigabytes. The 50 MB on-disk cap does not bound this.
-            const MAX_OOXML_PART_BYTES: u64 = 64 * 1024 * 1024;
+            parts += 1;
+            if parts > MAX_CONTENT_PARTS || entry.size() > (MAX_EXPANDED_BYTES - expanded) as u64 {
+                return Err(quota_error());
+            }
             let mut xml_bytes = Vec::new();
             let read = entry
                 .by_ref()
-                .take(MAX_OOXML_PART_BYTES + 1)
+                .take((MAX_EXPANDED_BYTES - expanded + 1) as u64)
                 .read_to_end(&mut xml_bytes)?;
-            if read as u64 > MAX_OOXML_PART_BYTES {
-                continue;
+            expanded = expanded.checked_add(read).filter(|total| *total <= MAX_EXPANDED_BYTES)
+                .ok_or_else(quota_error)?;
+            let part_text = extract_xml_text_bounded(&xml_bytes, deadline, MAX_OUTPUT_BYTES.saturating_sub(text.len()))?;
+            if part_text.len() >= MAX_OUTPUT_BYTES.saturating_sub(text.len()) {
+                return Err(quota_error());
             }
-            text.push_str(&extract_xml_text(&xml_bytes));
+            text.push_str(&part_text);
             text.push('\n');
         }
     }
@@ -146,7 +167,7 @@ fn parse_core_xml(bytes: &[u8]) -> DocProps {
     props
 }
 
-fn extract_xml_text(bytes: &[u8]) -> String {
+fn extract_xml_text_bounded(bytes: &[u8], deadline: std::time::Instant, max_output: usize) -> Result<String> {
     let mut reader = XmlReader::from_reader(bytes);
     // KT: Word/PowerPoint routinely split one word across several <w:t>/<a:t>
     // runs (rsid, spell-check, formatting boundaries). Pushing a space after
@@ -159,20 +180,32 @@ fn extract_xml_text(bytes: &[u8]) -> String {
     reader.config_mut().trim_text(false);
     let mut out = String::new();
     let mut buf = Vec::new();
+    let mut depth = 0usize;
     loop {
+        if std::time::Instant::now() >= deadline || out.len() > max_output {
+            return Err(quota_error());
+        }
         match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(_)) => {
+                depth += 1;
+                if depth > MAX_XML_DEPTH { return Err(quota_error()); }
+            }
             Ok(XmlEvent::Text(e)) => {
                 // quick-xml 0.41 dropped BytesText::unescape(): decode the raw
                 // bytes (charset) then unescape XML entities separately.
                 let decoded = e.xml10_content();
                 if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                    if unescaped.len() > max_output.saturating_sub(out.len()) { return Err(quota_error()); }
                     out.push_str(&unescaped);
                 }
             }
-            Ok(XmlEvent::End(e)) => match e.name().as_ref() {
+            Ok(XmlEvent::End(e)) => {
+                depth = depth.saturating_sub(1);
+                match e.name().as_ref() {
                 "w:p" | "a:p" => out.push('\n'),
                 "w:tc" => out.push(' '),
                 _ => {}
+                }
             },
             Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
                 "w:tab" => out.push(' '),
@@ -184,7 +217,8 @@ fn extract_xml_text(bytes: &[u8]) -> String {
         }
         buf.clear();
     }
-    out
+    if out.len() > max_output { return Err(quota_error()); }
+    Ok(out)
 }
 
 /// Extract text from .xlsx spreadsheets via calamine.
@@ -242,6 +276,60 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn xml_budget_accepts_exact_output_and_refuses_overflow_or_expired_time() {
+        let deadline = std::time::Instant::now() + EXTRACTION_TIME;
+        assert_eq!(extract_xml_text_bounded(b"<t>abc</t>", deadline, 3).unwrap(), "abc");
+        assert!(extract_xml_text_bounded(b"<t>abcd</t>", deadline, 3).is_err());
+        assert!(extract_xml_text_bounded(b"<t>abc</t>", std::time::Instant::now(), 10).is_err());
+    }
+
+    #[test]
+    fn xml_depth_budget_refuses_deep_input() {
+        let xml = format!("{}text{}", "<t>".repeat(MAX_XML_DEPTH + 1), "</t>".repeat(MAX_XML_DEPTH + 1));
+        assert!(extract_xml_text_bounded(xml.as_bytes(), std::time::Instant::now() + EXTRACTION_TIME, 10).is_err());
+    }
+
+    fn make_content_parts(count: usize, part_bytes: usize) -> NamedTempFile {
+        make_raw_content_parts(count, &format!("<t>{}</t>", "x".repeat(part_bytes)))
+    }
+
+    fn make_raw_content_parts(count: usize, content: &str) -> NamedTempFile {
+        let file = NamedTempFile::with_suffix(".docx").unwrap();
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(file.path()).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for index in 0..count {
+            archive.start_file(format!("word/header{index}.xml"), options).unwrap();
+            archive.write_all(content.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
+        file
+    }
+
+    #[test]
+    fn aggregate_part_budget_accepts_boundary_and_refuses_one_more() {
+        let accepted = make_content_parts(MAX_CONTENT_PARTS, 1);
+        assert_eq!(extract_office(accepted.path()).unwrap().0.len(), MAX_CONTENT_PARTS * 2);
+        let refused = make_content_parts(MAX_CONTENT_PARTS + 1, 1);
+        assert!(extract_office(refused.path()).is_err());
+    }
+
+    #[test]
+    fn aggregate_expansion_is_bounded_across_individually_small_parts() {
+        let content = format!("<!--{}--><t>x</t>", "x".repeat(MAX_EXPANDED_BYTES / 2));
+        let document = make_raw_content_parts(2, &content);
+        assert!(extract_office(document.path()).is_err());
+    }
+
+    #[test]
+    fn output_budget_includes_paragraph_separators() {
+        let accepted = make_content_parts(1, MAX_OUTPUT_BYTES - 1);
+        assert_eq!(extract_office(accepted.path()).unwrap().0.len(), MAX_OUTPUT_BYTES);
+        let refused = make_content_parts(1, MAX_OUTPUT_BYTES);
+        assert!(extract_office(refused.path()).is_err());
+    }
 
     /// Build a minimal valid .docx in memory: a zip with word/document.xml
     /// containing a `<w:t>known words</w:t>` element.

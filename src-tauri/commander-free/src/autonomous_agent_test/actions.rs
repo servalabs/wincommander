@@ -7,12 +7,19 @@ use super::parser::Request;
 use super::result::{failed, passed, sha256, ResultEnvelope};
 
 pub(super) async fn execute(app: tauri::AppHandle, request: &Request) -> ResultEnvelope {
-    let facts = match request.scenario {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(request.deadline_ms);
+    let facts = if request.scenario == Scenario::PrivacyShieldStartStop {
+        privacy_start_stop().await
+    } else {
+        tokio::time::timeout_at(deadline, async {
+            match request.scenario {
         Scenario::FleetPreflight => fleet_preflight(),
         Scenario::FleetCheckinReadback => fleet_checkin_readback().await,
         Scenario::ClipboardGuardSyntheticMarker => clipboard_marker(app, request).await,
         Scenario::PrivacyShieldStatus => privacy_status(app).await,
-        Scenario::PrivacyShieldStartStop => privacy_start_stop(app).await,
+        Scenario::PrivacyShieldStartStop => unreachable!(),
+            }
+        }).await.unwrap_or(Err("deadline_exceeded_outcome_unknown"))
     };
     match facts {
         Ok(facts) => passed(request, facts),
@@ -79,18 +86,47 @@ async fn clipboard_marker(app: tauri::AppHandle, request: &Request) -> Result<Va
 
 async fn privacy_status(app: tauri::AppHandle) -> Result<Value, &'static str> {
     let result = run_privacy(app, "Get-PrivacyShieldStatus").await?;
-    Ok(json!({ "statusObserved": true, "statusHash": sha256(&result.to_string()) }))
+    let running = privacy_running(&result)?;
+    Ok(json!({ "statusObserved": true, "running": running,
+        "protectionReady": result.get("protectionReady").and_then(Value::as_bool).unwrap_or(false),
+        "statusHash": sha256(&result.to_string()) }))
 }
 
-async fn privacy_start_stop(app: tauri::AppHandle) -> Result<Value, &'static str> {
-    run_privacy(app.clone(), "Start-PrivacyShield").await?;
-    let status = run_privacy(app.clone(), "Get-PrivacyShieldStatus").await?;
-    run_privacy(app, "Stop-PrivacyShield").await?;
-    Ok(json!({ "startStopObserved": true, "runningStatusHash": sha256(&status.to_string()) }))
+async fn privacy_start_stop() -> Result<Value, &'static str> {
+    // The generic backend cannot yet prove a cancelled Start has settled before Stop.
+    Err("privacy_lifecycle_settlement_unavailable")
+}
+fn privacy_running(value: &Value) -> Result<bool, &'static str> {
+    value.get("running").and_then(Value::as_bool).ok_or("privacy_status_schema_invalid")
+}
+
+fn validate_privacy_result(value: Value) -> Result<Value, &'static str> {
+    if value.get("error").is_some_and(|error| error != &Value::Null && error != &Value::Bool(false))
+        || value.get("ok").and_then(Value::as_bool) == Some(false)
+        || value.get("success").and_then(Value::as_bool) == Some(false)
+        || matches!(value.get("status").and_then(Value::as_str), Some("error" | "failed"))
+    { return Err("privacy_semantic_failure"); }
+    if !value.is_object() { return Err("privacy_status_schema_invalid"); }
+    Ok(value)
 }
 
 async fn run_privacy(app: tauri::AppHandle, command: &str) -> Result<Value, &'static str> {
     crate::backend::run_backend_script(app, command.into(), HashMap::new())
         .await
         .map_err(|_| "privacy_handler_failed")
+        .and_then(validate_privacy_result)
+}
+
+#[cfg(test)]
+mod privacy_result_tests {
+    use super::*;
+    #[test]
+    fn error_payload_is_never_an_observation() {
+        for value in [json!({"error":true}),json!({"error":"denied"}),json!({"ok":false}),json!({"success":false}),json!({"status":"failed"}),json!(null)] {
+            assert!(validate_privacy_result(value).is_err());
+        }
+        assert!(validate_privacy_result(json!({"running":false})).is_ok());
+        assert!(privacy_running(&json!({})).is_err());
+        assert_eq!(privacy_running(&json!({"running":false})), Ok(false));
+    }
 }

@@ -12,7 +12,7 @@ pub(super) struct Request {
     pub(super) run_id: String,
     pub(super) scenario: Scenario,
     pub(super) fixture_id: String,
-    deadline_ms: u64,
+    pub(super) deadline_ms: u64,
     pub(super) capability: fleet_proto::AutonomousTestCapability,
 }
 

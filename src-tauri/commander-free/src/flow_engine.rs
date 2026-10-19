@@ -3786,7 +3786,11 @@ async fn execute_action(
             // Raw arbitrary-URL HTTP is a paid, non-in-app action type; gate real
             // execution on the entitlement (same reasoning as ShellAction above).
             crate::license::require_paid("flows")?;
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| "HTTP client initialization failed".to_string())?;
             let mut request = match method.as_str() {
                 "GET" => client.get(url),
                 "POST" => client.post(url),
@@ -3808,8 +3812,8 @@ async fn execute_action(
             request
                 .send()
                 .await
-                .map(|_| ())
-                .map_err(|e| format!("HTTP request failed: {}", e))
+                .map_err(|_| "HTTP request failed; remote outcome may be unknown".to_string())
+                .and_then(|response| http_action_outcome(response.status().as_u16()))
         }
 
         ActionBlock::NotifyAction {
@@ -3900,6 +3904,27 @@ async fn execute_action(
                     errors.join("; ")
                 ))
             }
+        }
+    }
+}
+
+fn http_action_outcome(status: u16) -> Result<(), String> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("HTTP action returned status {status}; completion was not acknowledged"))
+    }
+}
+
+#[cfg(test)]
+mod http_outcome_tests {
+    #[test]
+    fn only_success_status_is_an_acknowledgement() {
+        for status in [200, 201, 204, 299] {
+            assert!(super::http_action_outcome(status).is_ok());
+        }
+        for status in [100, 301, 307, 400, 401, 403, 429, 500, 503] {
+            assert!(super::http_action_outcome(status).is_err());
         }
     }
 }
