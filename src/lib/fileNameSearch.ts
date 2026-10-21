@@ -17,6 +17,24 @@ export interface SearchResponse {
   results: SearchResult[];
   total: number;
   query: string;
+  has_more?: boolean;
+  incomplete?: boolean;
+}
+
+/** Null clears metadata after a reset or failed request. Older providers only
+ * expose total, while current providers report the verified visible-page size. */
+export function fileSearchPageStatus(response: SearchResponse | null, limit: number) {
+  return {
+    resultsIncomplete: response?.incomplete === true,
+    hasMore: response !== null && (response.incomplete === true
+      || (response.has_more ?? response.total > limit)),
+  };
+}
+
+export function requireCompleteEmptySearch(response: SearchResponse, visibleCount = response.results.length): void {
+  if (response.incomplete && visibleCount === 0) {
+    throw new Error("Filename search is incomplete. Choose a specific folder or narrow your search and try again.");
+  }
 }
 
 // Empty set = "All". Files / Folders are mutually exclusive (file vs folder
@@ -177,8 +195,11 @@ export function isEngineMissingError(error: string | null): boolean {
     || lower.includes("ipc not found");
 }
 
-/** A timed-out autocomplete request is transient load, not a user-facing
- * search failure. The shortcut retries on the next settled input state. */
-export function isSearchTimeoutError(error: unknown): boolean {
-  return String(error).toLowerCase().includes("search took too long");
+/** Preserve engine failures instead of treating an unavailable index as empty. */
+export function formatFileSearchError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.toLowerCase().includes("search took too long")) {
+    return "Filename search did not respond in time. Try searching again.";
+  }
+  return message;
 }
