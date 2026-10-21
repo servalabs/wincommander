@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { personalVaultSyncError, personalVaultSyncSetupMessage, validatePersonalVaultSyncFolders } from "./personalVaultSyncFeedback";
+import { personalVaultSyncError, personalVaultSyncOutcomeUnknown, personalVaultSyncSetupMessage, validatePersonalVaultSyncFolders } from "./personalVaultSyncFeedback";
 
 test("confirmed new sync setup explains the remaining device connection step", () => {
   expect(personalVaultSyncSetupMessage("V:\\Sync")).toContain("Connect your other device");
@@ -34,4 +34,23 @@ test("failed installation, retained configuration and unknown completion need di
   expect(personalVaultSyncError("vault_request_timeout")).toContain("before submitting another request");
   expect(personalVaultSyncError("service operation did not confirm before its deadline; refresh vault state before retrying")).toContain("before submitting another request");
   expect(personalVaultSyncError("private path C:\\Users\\secret; token=private")).not.toContain("secret");
+});
+
+test("a status timeout asks for readback without claiming setup failed or succeeded", () => {
+  const message = personalVaultSyncError("service reply timed out", "status");
+  expect(message).toContain("checking this Vault’s sync folders");
+  expect(message).toContain("Refresh");
+  expect(message).not.toContain("could not be set up");
+  expect(personalVaultSyncError("vault_broker_rejected", "status")).toContain("could not confirm this Vault’s sync folders");
+  expect(personalVaultSyncError("private-profile-path secret-api-key", "status")).not.toContain("secret-api-key");
+});
+
+test("uncertain writes cannot be treated as safe retries, while a definitive denial remains distinct", () => {
+  for (const failure of ["vault_request_timeout", "vault_operation_unconfirmed", "service reply timed out",
+    new Error("service operation did not confirm before its deadline; refresh vault state before retrying")]) {
+    expect(personalVaultSyncOutcomeUnknown(failure)).toBe(true);
+    expect(personalVaultSyncError(failure)).toContain("before submitting another request");
+  }
+  expect(personalVaultSyncOutcomeUnknown("vault_not_authorized")).toBe(false);
+  expect(personalVaultSyncError("vault_not_authorized", "status")).toContain("owned and mounted by this Windows account");
 });

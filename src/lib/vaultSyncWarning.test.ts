@@ -64,7 +64,7 @@ describe("post-mount Syncthing warning", () => {
     expect(unavailable).not.toContain("still stopped");
   });
 
-  it("only presents a modal after readback and closing the initiating mount dialog", () => {
+  it("reports warnings only after readback while Quick Mount stays usable", () => {
     const source = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
     const expectBefore = (body: string, before: string, after: string) => {
       expect(body).toContain(before);
@@ -83,10 +83,10 @@ describe("post-mount Syncthing warning", () => {
     const sidebar = source("src/components/RightSidebar.tsx");
     const quickFleet = sidebar.slice(sidebar.indexOf("const handleFleetVaultMount"), sidebar.indexOf("const nextFreeLetter"));
     expectBefore(quickFleet, "if (!confirmed || !vaultMountResultConfirmed", "notifyPolicyMountSyncWarning(result)");
-    expect(quickFleet).toContain("setQmOpen(false);\n                    window.setTimeout(() => notifyPolicyMountSyncWarning(result), 350)");
+    expect(quickFleet).not.toContain("setQmOpen(false)");
     const quickPersonal = sidebar.slice(sidebar.indexOf("const handleQmMount"));
     expectBefore(quickPersonal, "const observationError = confirmedMountObservationError", "notifyPersonalMountSyncWarning(r)");
-    expect(quickPersonal).toContain("setQmOpen(false);\n                    window.setTimeout(() => notifyPersonalMountSyncWarning(r), 350)");
+    expect(quickPersonal.slice(0, quickPersonal.indexOf("// Safe Paste requests"))).not.toContain("setQmOpen(false)");
     expect(source("src/hooks/useBackend.ts")).not.toContain("notifyPersonalMountSyncWarning");
     expect(source("src/hooks/useVaultAccess.ts")).not.toContain("notifyPolicyMountSyncWarning");
   });

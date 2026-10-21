@@ -6,7 +6,8 @@ const source = readFileSync("src/components/RightSidebar.tsx", "utf8");
 describe("Fleet Vault quick mount", () => {
   test("saved Explorer preference gates manual buttons and the Fleet automatic opening path", () => {
     expect(source).toContain("!explorerPreference.enabled && qmMountedTarget");
-    expect(source).toContain("!explorerPreference.enabled && !qmMountedTarget && fleetExplorerTarget");
+    expect(source).toContain("!explorerPreference.enabled && fleetExplorerTarget");
+    expect(source).toContain("qmMountedTarget.drive, quickMountSlots[qmSelectedIdx]?.filePath, qmMountedTarget");
     expect(source).toContain("quickMountExplorerTargetForDrive(await refreshVault(true), result.drive_letter)");
     expect(source).toContain("await openQuickMountTarget(target, true)");
     expect(source).not.toContain("void openVaultDrive(drive)");

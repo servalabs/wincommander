@@ -14,6 +14,9 @@ const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const VAULT_MUTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 // Explicit setup prepares its prerequisite (180s), enrolls (120s), then resumes (120s).
 const SYNCTHING_ENROLLMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(440);
+// Management launches one authenticated account broker (120s maximum), then
+// validates its receipt. It cannot use a five-second page-probe deadline.
+const SYNCTHING_MANAGEMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 #[cfg(windows)]
 const PIPE_CONNECT_RETRY_DELAYS: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(50),
@@ -50,6 +53,7 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         }
         "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
         "svc.vault.enroll_personal_syncthing" => SYNCTHING_ENROLLMENT_TIMEOUT,
+        "svc.vault.manage_personal_syncthing" => SYNCTHING_MANAGEMENT_TIMEOUT,
         _ => SVC_TRANSPORT_TIMEOUT,
     }
 }
@@ -64,6 +68,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
+            | "svc.vault.manage_personal_syncthing"
             | "svc.vault.release_orphaned_drive_letters"
     )
 }
@@ -189,7 +194,7 @@ async fn call_via_with_timeout(
     let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
         reply
             .verify_and_unwrap(&session_token)
-            .map_err(|e| format!("service reply signature check failed: {e}"))?
+            .map_err(|e| unverified_management_reply(feature_id, format!("service reply signature check failed: {e}")))?
     } else {
         reply
     };
@@ -206,7 +211,7 @@ async fn call_via_with_timeout(
             Ok(response.result)
         }
         wincmd_shared::Envelope::Response(_) => {
-            Err("service reply did not match the request".to_string())
+            Err(unverified_management_reply(feature_id, "service reply did not match the request".to_string()))
         }
         wincmd_shared::Envelope::Error(error) if error.request_id == request_id => {
             // `error.message` already respects the service's privacy boundary
@@ -221,9 +226,20 @@ async fn call_via_with_timeout(
             ))
         }
         wincmd_shared::Envelope::Error(_) => {
-            Err("service reply did not match the request".to_string())
+            Err(unverified_management_reply(feature_id, "service reply did not match the request".to_string()))
         }
-        _ => Err("service returned an unexpected reply".to_string()),
+        _ => Err(unverified_management_reply(feature_id, "service returned an unexpected reply".to_string())),
+    }
+}
+
+#[cfg(windows)]
+fn unverified_management_reply(feature_id: &str, fallback: String) -> String {
+    // A malformed receipt cannot prove whether a written folder mutation ran.
+    // Keep authoritative, matching service ErrorReply handling above unchanged.
+    if feature_id == "svc.vault.manage_personal_syncthing" {
+        "vault_operation_unconfirmed".into()
+    } else {
+        fallback
     }
 }
 
@@ -403,6 +419,8 @@ fn zeroize_json(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("svc_client_sync_tests.rs");
 
     #[test]
     fn clears_signed_mount_payload_after_pipe_write() {

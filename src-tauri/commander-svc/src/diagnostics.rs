@@ -17,6 +17,10 @@ use wincmd_shared::vault_access::{
     VaultMountReason, VaultMountResult, VaultMountState, VaultPresentation,
 };
 
+#[path = "vault_sync_diagnostics.rs"]
+mod vault_sync;
+pub(crate) use vault_sync::{record_sync_broker_failure, record_sync_terminal};
+
 const EVENT_FILE: &str = "service-diagnostic-events.log";
 const MATERIAL_FILE: &str = "service-diagnostics.material";
 const MAX_EVENT_BYTES: usize = 16 * 1024;

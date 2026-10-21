@@ -633,6 +633,9 @@ fn process_broker_reply(
             Ok(BrokerReply::Finished(Ok(response.result)))
         }
         Envelope::Error(error) if error.request_id == request_id => {
+            if error.kind == "feature_failed" {
+                crate::diagnostics::record_sync_broker_failure(request_id, &error.message);
+            }
             if let Some(code) = native_mount_diagnostic(&error.message) {
                 crate::diagnostics::record_vault_failure(
                     &format!("VLT-{request_id}"),
