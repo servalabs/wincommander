@@ -752,6 +752,7 @@ export const UI_AUDIT_ARRAY_COMMANDS = [
   "list_canaries",
   "list_decoys",
   "search_content",
+  "take_safe_paste_requests",
   "vault_list_authorized_entries",
 ] as const;
 
@@ -792,6 +793,8 @@ export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
 export function uiAuditDirectResponse(command: string): unknown {
   if (command.startsWith("plugin:")) return null;
   switch (command) {
+    case "take_safe_paste_requests":
+      return [];
     case "startup_pin_is_configured":
       return false;
     case "is_dev_build":

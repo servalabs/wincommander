@@ -7279,6 +7279,14 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:adopt_current_state",
+      "name": "adopt_current_state",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:advisor_build_context",
       "name": "advisor_build_context",
       "transport": "tauri",

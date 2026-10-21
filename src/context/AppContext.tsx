@@ -1124,7 +1124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, [seedFromCachedSettings, isDecoyMode]);
 
     const writeSettings = useCallback(async (prepare: (latest: AppSettings | null) => {
-        command: 'patch_settings_cmd' | 'set_settings' | 'update_current_state' | 'import_settings_cmd';
+        command: 'patch_settings_cmd' | 'adopt_current_state' | 'set_settings' | 'update_current_state' | 'import_settings_cmd';
         args: Record<string, unknown>;
     }, options?: {
         admit?: (latest: AppSettings | null) => boolean;
@@ -1224,6 +1224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const settingsWriter = useMemo(() => ({
         read: readSettingsSnapshot,
         patch: patchSettingsSnapshot,
+        adopt: (patch: SettingsPatch) => writeSettings(() => ({ command: 'adopt_current_state', args: { patch } })),
         replace: (settings: AppSettings) => writeSettings(() => ({ command: 'set_settings', args: { settings } })),
         updateCurrent: (probe: Record<string, unknown>) => writeSettings(() => ({ command: 'update_current_state', args: { probe } })),
         import: (json: string) => writeSettings(() => ({ command: 'import_settings_cmd', args: { json } })),

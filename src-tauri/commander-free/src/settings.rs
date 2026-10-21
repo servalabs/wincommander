@@ -2879,6 +2879,17 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
         elevated,
         crate::paths::current_user_install_uses_local_datastore(),
     )?;
+    write_settings_under_lease(settings, elevated, machine_writer.is_some())
+}
+
+fn write_settings_under_lease(
+    settings: &AppSettings,
+    elevated: bool,
+    machine_writer: bool,
+) -> Result<(), String> {
+    if is_decoy_mode() {
+        return Err("Settings are read-only in decoy mode.".to_string());
+    }
     let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
     let cached_silent = SETTINGS_CACHE
         .lock()
@@ -2895,7 +2906,7 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     let (machine, user) = split_settings_value(value)?;
     let machine_changed = machine_settings_changed(&stored_machine, &machine)?;
-    if machine_changed && machine_writer.is_none() {
+    if machine_changed && !machine_writer {
         return Err("Administrator privileges are required to change machine settings.".into());
     }
     legacy_migration::before_persistence(&machine, &user)?;
@@ -3035,20 +3046,41 @@ fn mutate_settings_with(
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,
     notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
 ) -> Result<AppSettings, String> {
+    mutate_settings_from(
+        prepare,
+        paid,
+        || {
+            let cached = SETTINGS_CACHE
+                .lock()
+                .map_err(|_| "Settings cache lock poisoned".to_string())?
+                .clone();
+            match cached {
+                Some(cached) => Ok(cached),
+                None => load_settings_from_store(),
+            }
+        },
+        persist,
+        notify,
+    )
+}
+
+fn mutate_settings_from(
+    prepare: impl FnOnce(&AppSettings) -> Result<AppSettings, String>,
+    paid: bool,
+    load: impl FnOnce() -> Result<AppSettings, String>,
+    persist: impl FnOnce(&AppSettings) -> Result<(), String>,
+    notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
+) -> Result<AppSettings, String> {
     let transaction = SETTINGS_TRANSACTION_GATE
         .lock()
         .map_err(|_| "Settings transaction lock poisoned".to_string())?;
     if is_decoy_mode() {
         return Err("Settings are read-only in decoy mode.".to_string());
     }
-    let cached = SETTINGS_CACHE
-        .lock()
-        .map_err(|_| "Settings cache lock poisoned".to_string())?
-        .clone();
-    let settings = match cached {
-        Some(cached) => cached,
-        None => load_settings_from_store()?,
-    };
+    let settings = load().map_err(|error| {
+        invalidate_cache_locked();
+        error
+    })?;
     let mut updated = prepare(&settings)?;
     updated.last_seen_at = now_iso8601();
     let old_json = if paid {
@@ -3078,6 +3110,9 @@ fn mutate_settings_with(
 
 #[path = "settings_local_write.rs"]
 mod local_write;
+
+#[path = "settings_adoption.rs"]
+mod adoption;
 
 #[path = "settings_fleet_enrollment.rs"]
 pub(crate) mod fleet_enrollment;
@@ -3271,6 +3306,16 @@ pub async fn patch_settings_cmd(patch: serde_json::Value) -> Result<serde_json::
 fn patch_settings_cmd_sync(patch: serde_json::Value) -> Result<serde_json::Value, String> {
     let updated = local_write::apply(local_write::Mutation::Patch(patch))?;
     serde_json::to_value(updated).map_err(|e| format!("Serialization error: {e}"))
+}
+
+#[tauri::command]
+pub async fn adopt_current_state(patch: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        serde_json::to_value(adoption::apply(patch)?)
+            .map_err(|error| format!("Serialization error: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Settings task failed: {error}"))?
 }
 
 /// Get a single setting value by dot-path (e.g., "privacy.telemetry.windowsDisabled").

@@ -6,6 +6,7 @@ export type SettingsUpdater = SettingsPatch | ((latest: AppSettings | null) => S
 export interface SettingsWriter {
   read: () => Promise<AppSettings>;
   patch: (patch: SettingsUpdater) => Promise<AppSettings>;
+  adopt: (patch: SettingsPatch) => Promise<AppSettings>;
   replace: (settings: AppSettings) => Promise<AppSettings>;
   updateCurrent: (probe: Record<string, unknown>) => Promise<AppSettings>;
   import: (json: string) => Promise<AppSettings>;

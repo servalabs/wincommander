@@ -11,6 +11,12 @@ use tauri::AppHandle;
 #[path = "backend_paid_args.rs"]
 mod backend_paid_args;
 
+#[path = "backend_receipt.rs"]
+mod receipt;
+
+#[path = "backend_process.rs"]
+mod process;
+
 #[path = "backend_fix_scope.rs"]
 mod fix_scope;
 
@@ -34,7 +40,7 @@ pub enum CommandTier {
 
 /// Full risk profile for a backend command (mirrors TypeScript ToggleDef).
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandEntry {
     pub command: &'static str,
     pub tier: CommandTier,
@@ -65,7 +71,38 @@ fn command_registry() -> &'static Mutex<Vec<CommandEntry>> {
 /// P2/P3 call this from their init paths before first command dispatch.
 pub fn register_commands(entries: Vec<CommandEntry>) {
     if let Ok(mut reg) = command_registry().lock() {
-        reg.extend(entries);
+        if let Err(error) = insert_command_entries(&mut reg, entries) {
+            crate::log_message("error", &format!("[Backend] {error}"));
+        }
+    }
+}
+
+fn insert_command_entries(
+    registry: &mut Vec<CommandEntry>,
+    entries: Vec<CommandEntry>,
+) -> Result<(), String> {
+    let mut conflict = None;
+    for entry in entries {
+        if registry.iter().any(|existing| existing == &entry) {
+            continue;
+        }
+        if registry
+            .iter()
+            .any(|existing| existing.command == entry.command)
+        {
+            conflict.get_or_insert_with(|| {
+                format!(
+                    "Conflicting command registration; preserving first registration: {}",
+                    entry.command
+                )
+            });
+        }
+        // Preserve first-registration routing and all other incoming entries.
+        registry.push(entry);
+    }
+    match conflict {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -1788,6 +1825,63 @@ mod command_tier_tests {
     use super::*;
 
     #[test]
+    fn identical_registrations_are_idempotent() {
+        let entry = CommandEntry {
+            command: "Example-Read",
+            tier: CommandTier::Free,
+            needs_admin: false,
+            irreversible: false,
+            reduces_security: false,
+            defender_flagged: false,
+        };
+        let mut registry = vec![entry.clone()];
+        insert_command_entries(&mut registry, vec![entry.clone(), entry.clone()]).unwrap();
+        assert_eq!(registry, vec![entry]);
+    }
+
+    #[test]
+    fn conflicting_metadata_preserves_first_tier_and_other_paid_entries() {
+        let paid = CommandEntry {
+            command: "Example-Paid",
+            tier: CommandTier::Paid,
+            needs_admin: true,
+            irreversible: false,
+            reduces_security: false,
+            defender_flagged: false,
+        };
+        let free = CommandEntry {
+            tier: CommandTier::Free,
+            ..paid.clone()
+        };
+        let other = CommandEntry {
+            command: "Example-Other-Paid",
+            ..paid.clone()
+        };
+        let mut registry = vec![paid.clone()];
+        assert!(insert_command_entries(&mut registry, vec![free.clone(), other.clone()]).is_err());
+        assert_eq!(registry, vec![paid.clone(), free.clone(), other.clone()]);
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.command == paid.command)
+                .unwrap()
+                .tier,
+            CommandTier::Paid
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.command == other.command)
+                .unwrap()
+                .tier,
+            CommandTier::Paid
+        );
+        // Repeated initialization adds neither identical nor previously conflicting metadata twice.
+        insert_command_entries(&mut registry, vec![paid, free, other]).unwrap();
+        assert_eq!(registry.len(), 3);
+    }
+
+    #[test]
     fn dismount_all_encryption_volumes_is_paid_without_a_contiguous_literal() {
         // Regression test: this command is a strings-grep forbidden token
         // (tools/strings-grep-forbidden.txt), so it must never sit as a
@@ -2934,6 +3028,10 @@ fn get_settings_sync_patch(
     result: Option<&serde_json::Value>,
 ) -> Option<serde_json::Value> {
     use serde_json::json;
+    // Callers retain their error JSON, but failure must never become saved applied state.
+    if result.is_some_and(receipt::is_explicit_failure) {
+        return None;
+    }
     if matches!(
         command,
         "Disable-RecallSnapshots"
@@ -3781,6 +3879,33 @@ fn diagnostic_tracing_result_succeeded(
 #[cfg(test)]
 mod settings_sync_patch_tests {
     use super::*;
+
+    #[test]
+    fn explicit_failure_never_becomes_saved_telemetry_state() {
+        for command in ["Disable-Telemetry", "Enable-Telemetry"] {
+            for result in [
+                serde_json::json!({"error": true, "message": "access denied"}),
+                serde_json::json!({"success": false}),
+                serde_json::json!({"ok": false}),
+                serde_json::json!({"status": "failed"}),
+                serde_json::json!({"status": "partial"}),
+                serde_json::json!({"status": "blocked"}),
+            ] {
+                assert!(get_settings_sync_patch(command, &HashMap::new(), Some(&result)).is_none());
+            }
+            let status = if command.starts_with("Disable-") {
+                "disabled"
+            } else {
+                "enabled"
+            };
+            assert!(get_settings_sync_patch(
+                command,
+                &HashMap::new(),
+                Some(&serde_json::json!({"status": status}))
+            )
+            .is_some());
+        }
+    }
 
     #[test]
     fn dashboard_privacy_fixes_require_verified_matching_receipts_before_sync() {
@@ -5544,93 +5669,18 @@ pub(crate) async fn run_backend_script_with_timeout(
         cmd.env("WINCMD_EXE_PATH", exe_path);
     }
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn PowerShell ({}): {}", ps_exe, e))?;
 
-    // Write script to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(full_script.as_bytes()) {
-            crate::log_message(
-                "error",
-                &format!("[Backend] Failed to write script to stdin: {}", e),
-            );
-            return Err(format!("Failed to write to stdin: {}", e));
-        }
-    }
-
-    // KT: A 90-second timeout used to sit here but was removed because it
-    // killed legitimately slow commands (winget installs, Privacy Shield's
-    // first-run pip install of mediapipe/opencv/PyQt6). Removing it entirely
-    // traded that premature-kill bug for a worse one: a genuinely wedged
-    // child (a stalled download, a UAC prompt nothing will answer in silent
-    // mode, a hung installer) now blocks forever with no recovery -- and
-    // since concurrent installs are independent OS processes (see
-    // AppInstallerPanel's parallel runOperation), one wedged install stalls
-    // the whole batch's completion signal even though its siblings already
-    // finished. 20 minutes is long enough that no legitimate install or
-    // cleanup should ever hit it, but bounded so a wedged process eventually
-    // gets killed and reported instead of hanging the batch indefinitely.
     const BACKEND_SCRIPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
-    let child_pid = child.id();
-    let wait_task = tokio::task::spawn_blocking(move || child.wait_with_output());
-
-    let command_timeout = timeout_override.unwrap_or(BACKEND_SCRIPT_TIMEOUT);
-    let output_res = match tokio::time::timeout(command_timeout, wait_task).await {
-        Ok(joined) => joined,
-        Err(_) => {
-            // spawn_blocking can't be cancelled from here -- the blocking
-            // thread is still parked inside wait_with_output(). Kill the
-            // process tree directly (/T also takes out children such as a
-            // winget.exe launched under the PowerShell host) so that call
-            // unblocks and frees the thread instead of leaking it, and so
-            // the wedged process actually stops running.
-            crate::log_message(
-                "error",
-                &format!(
-                    "[Backend] Command '{}' timed out after {}s — killing pid {}",
-                    command,
-                    command_timeout.as_secs(),
-                    child_pid
-                ),
-            );
-            let _ = tokio::task::spawn_blocking(move || {
-                let mut kill_cmd = Command::new("taskkill");
-                kill_cmd.args(["/F", "/T", "/PID", &child_pid.to_string()]);
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x08000000;
-                    kill_cmd.creation_flags(CREATE_NO_WINDOW);
-                }
-                kill_cmd.output()
-            })
-            .await;
-            return Err(format!(
-                "Command '{}' timed out after {} seconds and was terminated.",
-                command,
-                command_timeout.as_secs()
-            ));
-        }
-    };
-
-    let output = match output_res {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => {
-            crate::log_message(
-                "error",
-                &format!("[Backend] PowerShell execution error ({}): {}", command, e),
-            );
-            return Err(format!("Failed to read output: {}", e));
-        }
-        Err(e) => {
-            crate::log_message(
-                "error",
-                &format!("[Backend] Task join error ({}): {}", command, e),
-            );
-            return Err(format!("Task join error: {}", e));
-        }
-    };
+    let output = process::wait_for_script(
+        child,
+        full_script,
+        &command,
+        timeout_override.unwrap_or(BACKEND_SCRIPT_TIMEOUT),
+    )
+    .await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -5647,7 +5697,7 @@ pub(crate) async fn run_backend_script_with_timeout(
             crate::log_message(
                 "debug",
                 &format!(
-                    "[Backend] Command '{}' completed successfully (JSON).",
+                    "[Backend] Command '{}' returned JSON.",
                     command
                 ),
             );
@@ -5721,8 +5771,11 @@ pub(crate) async fn run_backend_script_with_timeout(
         crate::native_notify::clear_pending_notifications(&app);
     }
 
-    // After successful execution, sync toggle state to settings.json
-    if let Ok(ref res) = result {
+    // A parsed receipt still isn't success when the process or receipt explicitly failed.
+    let successful_result = result.as_ref().ok().filter(|value| {
+        output.status.success() && !receipt::is_explicit_failure(value)
+    });
+    if let Some(res) = successful_result {
         if let Some(inner_patch) = get_settings_sync_patch(&command, &params, Some(res)) {
             // Write to BOTH ideal (user's intent) and current (OS actually changed)
             let patch = serde_json::json!({

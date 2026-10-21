@@ -43,7 +43,7 @@ fn apply_with(
     mutate_settings_with(|current| prepare(current, mutation), paid, persist, notify)
 }
 
-fn prepare(current: &AppSettings, mutation: Mutation) -> Result<AppSettings, String> {
+pub(super) fn prepare(current: &AppSettings, mutation: Mutation) -> Result<AppSettings, String> {
     let candidate = match mutation {
         Mutation::Patch(patch) => {
             if !patch.is_object() {

@@ -25,7 +25,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
-use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +54,14 @@ use crate::settings_host;
 use crate::vault_access::VaultAccessStore;
 use crate::vault_mount::VaultMountBroker;
 
+#[path = "service_peer_identity.rs"]
+mod service_peer_identity;
+pub(crate) use service_peer_identity::{capture_authenticated_pipe_peer, AuthenticatedPipePeer};
+
+#[path = "service_peer_privileges.rs"]
+mod service_peer_privileges;
+use service_peer_privileges::{caller_has_vault_policy_capability_token, token_is_privileged};
+
 #[path = "service_peer_query.rs"]
 mod service_peer_query;
 
@@ -65,25 +72,13 @@ mod vault_inventory_contract;
 mod vault_create_staging;
 
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, LocalFree, HANDLE},
+    Foundation::{LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    Security::{
-        AllocateAndInitializeSid, CheckTokenMembership, DuplicateToken, EqualSid, FreeSid,
-        GetTokenInformation, LookupAccountNameW, RevertToSelf, SecurityIdentification,
-        TokenSessionId, TokenStatistics, TokenUser, PSECURITY_DESCRIPTOR, PSID,
-        SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_STATISTICS,
-        TOKEN_USER,
-    },
+    Security::PSECURITY_DESCRIPTOR,
     System::{
-        Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient},
         RemoteDesktop::{
             WTSActive, WTSConnectState, WTSFreeMemory, WTSQuerySessionInformationW,
             WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
-        },
-        SystemServices::{DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID},
-        Threading::{
-            GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
-            PROCESS_QUERY_LIMITED_INFORMATION,
         },
     },
 };
@@ -108,45 +103,6 @@ const PERSONAL_VAULT_CONTAINER_UNWRITABLE: &str = "vault_container_not_writable"
 const PERSONAL_VAULT_SESSION_ABSENT: &str = "vault_session_unavailable";
 const PERSONAL_VAULT_DRIVER_STOPPED: &str = "vault_driver_unavailable";
 const PERSONAL_VAULT_UNAUTHORIZED: &str = "vault_not_authorized";
-
-pub(crate) struct AuthenticatedPipePeer {
-    client_pid: u32,
-    token: HANDLE,
-    session_id: u32,
-    caller_sid: String,
-    authentication_id: (u32, i32),
-}
-
-unsafe impl Send for AuthenticatedPipePeer {}
-unsafe impl Sync for AuthenticatedPipePeer {}
-
-impl Drop for AuthenticatedPipePeer {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.token) };
-    }
-}
-
-impl AuthenticatedPipePeer {
-    pub(crate) fn client_pid(&self) -> u32 {
-        self.client_pid
-    }
-
-    pub(crate) fn token(&self) -> HANDLE {
-        self.token
-    }
-
-    pub(crate) fn session_id(&self) -> u32 {
-        self.session_id
-    }
-
-    pub(crate) fn caller_sid(&self) -> &str {
-        &self.caller_sid
-    }
-
-    pub(crate) fn authentication_id(&self) -> (u32, i32) {
-        self.authentication_id
-    }
-}
 
 fn is_vault_management_verb(verb: &str) -> bool {
     matches!(
@@ -3864,288 +3820,6 @@ fn clear_action_is_failing(events: &[QueuedClipboardEvent]) -> bool {
 
 // ── Peer-SID classifier ──────────────────────────────────────────────────────
 
-/// Capture one authenticated token directly from the connected named-pipe
-/// client. The token remains owned for the whole connection, so later Vault
-/// authorization and broker launch cannot race a reused process ID.
-pub(crate) fn capture_authenticated_pipe_peer(
-    pipe_handle: HANDLE,
-) -> Result<AuthenticatedPipePeer> {
-    unsafe {
-        let mut client_pid = 0u32;
-        if GetNamedPipeClientProcessId(pipe_handle, &mut client_pid) == 0 || client_pid == 0 {
-            anyhow::bail!("GetNamedPipeClientProcessId failed");
-        }
-        if ImpersonateNamedPipeClient(pipe_handle) == 0 {
-            anyhow::bail!("ImpersonateNamedPipeClient failed");
-        }
-        let mut token = std::ptr::null_mut();
-        let opened = OpenThreadToken(
-            GetCurrentThread(),
-            TOKEN_QUERY | TOKEN_DUPLICATE,
-            1,
-            &mut token,
-        ) != 0;
-        let reverted = RevertToSelf() != 0;
-        if !reverted {
-            if opened {
-                CloseHandle(token);
-            }
-            // Returning to Tokio while still impersonating an untrusted
-            // client would corrupt the service's authority. Fail-stop.
-            std::process::abort();
-        }
-        if !opened {
-            anyhow::bail!("OpenThreadToken failed");
-        }
-
-        let result = (|| {
-            let session_id = token_session_id(token)
-                .ok_or_else(|| anyhow::anyhow!("token session unavailable"))?;
-            let caller_sid =
-                token_sid(token).ok_or_else(|| anyhow::anyhow!("token SID unavailable"))?;
-            let authentication_id = token_authentication_id(token)
-                .ok_or_else(|| anyhow::anyhow!("token authentication ID unavailable"))?;
-            let process_token = open_verified_client_process_token(
-                client_pid,
-                &caller_sid,
-                session_id,
-                authentication_id,
-            )?;
-            Ok(AuthenticatedPipePeer {
-                client_pid,
-                token: process_token,
-                session_id,
-                caller_sid,
-                authentication_id,
-            })
-        })();
-        CloseHandle(token);
-        result
-    }
-}
-
-fn open_verified_client_process_token(
-    client_pid: u32,
-    expected_sid: &str,
-    expected_session_id: u32,
-    expected_authentication_id: (u32, i32),
-) -> Result<HANDLE> {
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, client_pid);
-        if process.is_null() {
-            anyhow::bail!("OpenProcess for pipe client failed");
-        }
-        let mut process_token = std::ptr::null_mut();
-        let opened =
-            OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &mut process_token) != 0;
-        CloseHandle(process);
-        if !opened {
-            anyhow::bail!("OpenProcessToken for pipe client failed");
-        }
-
-        let matches = token_sid(process_token).as_deref() == Some(expected_sid)
-            && token_session_id(process_token) == Some(expected_session_id)
-            && token_authentication_id(process_token) == Some(expected_authentication_id);
-        if !matches {
-            CloseHandle(process_token);
-            anyhow::bail!("pipe and process token identities differ");
-        }
-        Ok(process_token)
-    }
-}
-
-fn token_session_id(token: HANDLE) -> Option<u32> {
-    let mut session_id = 0u32;
-    let mut returned = 0u32;
-    let ok = unsafe {
-        GetTokenInformation(
-            token,
-            TokenSessionId,
-            &mut session_id as *mut _ as *mut _,
-            std::mem::size_of::<u32>() as u32,
-            &mut returned,
-        ) != 0
-    };
-    ok.then_some(session_id)
-}
-
-fn token_sid(token: HANDLE) -> Option<String> {
-    let mut size = 0u32;
-    unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size) };
-    let mut buffer = vec![0u8; size as usize];
-    let ok = size != 0
-        && unsafe {
-            GetTokenInformation(token, TokenUser, buffer.as_mut_ptr() as _, size, &mut size)
-        } != 0;
-    let sid = ok.then(|| unsafe {
-        crate::vault_access::sid_to_string((buffer.as_ptr() as *const TOKEN_USER).read().User.Sid)
-    })?;
-    use zeroize::Zeroize;
-    buffer.zeroize();
-    sid
-}
-
-fn token_authentication_id(token: HANDLE) -> Option<(u32, i32)> {
-    let mut statistics = TOKEN_STATISTICS::default();
-    let mut returned = 0u32;
-    let ok = unsafe {
-        GetTokenInformation(
-            token,
-            TokenStatistics,
-            &mut statistics as *mut _ as *mut _,
-            std::mem::size_of::<TOKEN_STATISTICS>() as u32,
-            &mut returned,
-        ) != 0
-    };
-    ok.then_some((
-        statistics.AuthenticationId.LowPart,
-        statistics.AuthenticationId.HighPart,
-    ))
-}
-
-fn token_is_privileged(token: HANDLE) -> Result<bool> {
-    unsafe {
-        // CheckTokenMembership accepts an impersonation token, not a primary
-        // token. Duplicate the exact authenticated peer token; never reopen
-        // a process by PID on the live connection path.
-        let mut membership_token: HANDLE = std::ptr::null_mut();
-        if DuplicateToken(token, SecurityIdentification, &mut membership_token) == 0 {
-            anyhow::bail!("DuplicateToken failed");
-        }
-        let _guard_membership_token = HandleGuard(membership_token);
-        if is_admin_token(membership_token)? {
-            return Ok(true);
-        }
-        is_local_system_token(membership_token)
-    }
-}
-
-fn caller_has_vault_policy_capability_token(token: HANDLE) -> Result<bool> {
-    unsafe {
-        let mut membership_token = std::ptr::null_mut();
-        if DuplicateToken(token, SecurityIdentification, &mut membership_token) == 0 {
-            anyhow::bail!("DuplicateToken failed");
-        }
-        let _membership_token = HandleGuard(membership_token);
-        let name = std::ffi::OsStr::new(VAULT_POLICY_ADMIN_GROUP)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let mut sid_len = 0u32;
-        let mut domain_len = 0u32;
-        let mut use_type = 0i32 as SID_NAME_USE;
-        LookupAccountNameW(
-            std::ptr::null(),
-            name.as_ptr(),
-            std::ptr::null_mut(),
-            &mut sid_len,
-            std::ptr::null_mut(),
-            &mut domain_len,
-            &mut use_type,
-        );
-        if sid_len == 0 {
-            return Ok(false);
-        }
-        let mut sid = vec![0u8; sid_len as usize];
-        let mut domain = vec![0u16; domain_len as usize + 1];
-        if LookupAccountNameW(
-            std::ptr::null(),
-            name.as_ptr(),
-            sid.as_mut_ptr() as PSID,
-            &mut sid_len,
-            domain.as_mut_ptr(),
-            &mut domain_len,
-            &mut use_type,
-        ) == 0
-        {
-            return Ok(false);
-        }
-        let mut member = 0;
-        if CheckTokenMembership(membership_token, sid.as_mut_ptr() as PSID, &mut member) == 0 {
-            return Ok(false);
-        }
-        Ok(member != 0)
-    }
-}
-
-unsafe fn is_admin_token(token: HANDLE) -> Result<bool> {
-    let mut admin_sid: PSID = std::ptr::null_mut();
-    // SECURITY_NT_AUTHORITY + SECURITY_BUILTIN_DOMAIN_RID + DOMAIN_ALIAS_RID_ADMINS
-    let nt_authority = SECURITY_NT_AUTHORITY;
-    let result = AllocateAndInitializeSid(
-        &nt_authority,
-        2,
-        SECURITY_BUILTIN_DOMAIN_RID as u32,
-        DOMAIN_ALIAS_RID_ADMINS as u32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        &mut admin_sid,
-    );
-    if result == 0 {
-        anyhow::bail!("AllocateAndInitializeSid (Admins) failed");
-    }
-    let _sid_guard = SidGuard(admin_sid);
-
-    let mut is_member: windows_sys::core::BOOL = 0;
-    let ok = CheckTokenMembership(token, admin_sid, &mut is_member);
-    if ok == 0 {
-        anyhow::bail!("CheckTokenMembership failed");
-    }
-    Ok(is_member != 0)
-}
-
-unsafe fn is_local_system_token(token: HANDLE) -> Result<bool> {
-    // Query TOKEN_USER to get the user SID from the token.
-    let mut needed: u32 = 0;
-    // First call: get required buffer size.
-    GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
-
-    let mut buf = vec![0u8; needed as usize];
-    let ok = GetTokenInformation(
-        token,
-        TokenUser,
-        buf.as_mut_ptr() as *mut _,
-        needed,
-        &mut needed,
-    );
-    if ok == 0 {
-        anyhow::bail!("GetTokenInformation(TokenUser) failed");
-    }
-
-    let token_user = &*(buf.as_ptr() as *const TOKEN_USER);
-    let user_sid = token_user.User.Sid;
-
-    // Build LocalSystem SID (S-1-5-18) for comparison.
-    let mut system_sid: PSID = std::ptr::null_mut();
-    let nt_authority = SECURITY_NT_AUTHORITY;
-    let result = AllocateAndInitializeSid(
-        &nt_authority,
-        1,
-        18u32, // SECURITY_LOCAL_SYSTEM_RID
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        &mut system_sid,
-    );
-    if result == 0 {
-        anyhow::bail!("AllocateAndInitializeSid (LocalSystem) failed");
-    }
-    let _sid_guard = SidGuard(system_sid);
-
-    let equal = EqualSid(user_sid, system_sid) != 0;
-    Ok(equal)
-}
-
-// ── SECURITY_ATTRIBUTES builder ──────────────────────────────────────────────
-
 /// Holds the SECURITY_DESCRIPTOR allocated by
 /// `ConvertStringSecurityDescriptorToSecurityDescriptorW`.  The raw pointer is
 /// valid for the lifetime of this struct and freed on drop via `LocalFree`.
@@ -4199,22 +3873,6 @@ fn build_security_attributes() -> Result<SecurityAttributes> {
 }
 
 // ── RAII guards ──────────────────────────────────────────────────────────────
-
-struct HandleGuard(HANDLE);
-impl Drop for HandleGuard {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
-struct SidGuard(PSID);
-impl Drop for SidGuard {
-    fn drop(&mut self) {
-        unsafe { FreeSid(self.0) };
-    }
-}
-
-// ── Shared test fixtures (used by both `tests` and `integration` below) ────
 
 #[cfg(test)]
 mod test_support {
