@@ -10080,6 +10080,16 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:open_disk_item",
+      "name": "open_disk_item",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:open_event_log",
       "name": "open_event_log",
       "transport": "tauri",
@@ -10107,7 +10117,6 @@
         "src/components/EverythingSearchBar.tsx",
         "src/components/MetadataScrubberDialog.tsx",
         "src/components/dashboard/RecentDownloadsCard.tsx",
-        "src/components/tweaks/managers/StartupManager.tsx",
         "src/panels/runtime\u002dvisibility/index.tsx",
         "src/panels/search\u002dfiles/index.tsx"
       ]

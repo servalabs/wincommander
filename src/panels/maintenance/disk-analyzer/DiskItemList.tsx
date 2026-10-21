@@ -19,7 +19,7 @@ export default function DiskItemList({ items, total, selected, focused, large, d
     useEffect(() => setVisibleCount(150), [items]);
     const focusedIndex = focused ? items.findIndex(item => item.fullPath === focused.fullPath || item.isDir && diskPathContains(item.fullPath, focused.fullPath)) : -1;
     const shownCount = Math.max(visibleCount, focusedIndex + 1);
-    return <div className={`da-item-list${large ? " da-item-list-large" : ""}`} aria-label={large ? "Large files and folders" : "Folder contents"}>
+    return <div className={`da-item-list${large ? " da-item-list-large" : ""}`} aria-label={large ? "Large files" : "Folder contents"}>
         {items.slice(0, shownCount).map((item, index) => {
             const percent = diskPercent(item.size, total);
             const largeItem = item as LargeDiskItem;

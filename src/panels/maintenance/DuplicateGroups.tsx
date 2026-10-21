@@ -1,0 +1,67 @@
+import { useMemo, useState } from "react";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { CheckboxControl } from "../../components/ui/bp";
+import { Icon, type IconName } from "../../components/ui/icon";
+import type { DuplicateGroup } from "../../hooks/useBackend";
+import { formatBytes } from "./routineCleanerHelpers";
+import type { useFileHygiene } from "./useFileHygiene";
+import "./DuplicateGroups.css";
+
+type Tools = ReturnType<typeof useFileHygiene>;
+const TYPES: { id: string; label: string; icon: IconName; extensions: string[] }[] = [
+  { id: "images", label: "Images", icon: "media", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic"] },
+  { id: "video", label: "Video", icon: "video", extensions: ["mp4", "mkv", "mov", "avi", "wmv", "webm"] },
+  { id: "audio", label: "Audio", icon: "music", extensions: ["mp3", "wav", "flac", "m4a", "ogg", "aac"] },
+  { id: "documents", label: "Documents", icon: "document", extensions: ["pdf", "doc", "docx", "txt", "md", "rtf", "xls", "xlsx", "csv"] },
+  { id: "archives", label: "Archives", icon: "compressed", extensions: ["zip", "rar", "7z", "tar", "gz", "iso"] },
+];
+const fileType = (name: string) => TYPES.find((type) => type.extensions.includes(name.split(".").pop()?.toLowerCase() ?? ""));
+
+export function DuplicateGroups({ tools }: { tools: Tools }) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [visibleCount, setVisibleCount] = useState(50);
+  const groups = tools.duplicateScan?.groups;
+  const filtered = useMemo(() => (groups ?? []).filter((group) =>
+    (category === "all" || group.files.some((file) => (fileType(file.name)?.id ?? "other") === category)) &&
+    group.files.some((file) => `${file.name} ${file.path}`.toLowerCase().includes(query.trim().toLowerCase())),
+  ), [category, groups, query]);
+  return <section className="duplicate-workspace" aria-label="Discovered duplicate groups">
+    <div className="duplicate-filters">
+      <label><Icon icon="search" size={14} /><input aria-label="Search duplicate files and locations" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(50); }} placeholder="Search file names or locations" /></label>
+      <select aria-label="Duplicate file type" value={category} onChange={(event) => { setCategory(event.target.value); setVisibleCount(50); }}>
+        <option value="all">All file types</option>{TYPES.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}<option value="other">Other</option>
+      </select>
+      <span>{filtered.length} of {groups?.length ?? 0} groups</span>
+    </div>
+    {filtered.slice(0, visibleCount).map((group) => <DuplicateGroupRows key={group.id} group={group} tools={tools} />)}
+    {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : "No identical file groups were found in the returned scan."}</p>}
+    {filtered.length > visibleCount && <Button size="sm" variant="outline" onClick={() => setVisibleCount((count) => count + 50)}>Show more groups ({filtered.length - visibleCount} remaining)</Button>}
+  </section>;
+}
+
+function DuplicateGroupRows({ group, tools }: { group: DuplicateGroup; tools: Tools }) {
+  const [visibleCount, setVisibleCount] = useState(50);
+  const selectedCount = group.files.filter((file) => tools.selected.has(file.id)).length;
+  const retainedId = tools.retainedFileId(group);
+  return <details className="duplicate-group" open>
+    <summary>
+      <Icon icon={fileType(group.files[0]?.name ?? "")?.icon ?? "document"} size={20} />
+      <span className="duplicate-group-heading"><strong>{group.files[0]?.name}</strong><small>{group.files.length} identical copies · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
+      {selectedCount > 0 && <Badge tone="accent">{selectedCount} selected</Badge>}<Icon icon="chevron-down" size={14} />
+    </summary>
+    <div className="duplicate-members">
+      {group.files.slice(0, visibleCount).map((file) => {
+        const retained = retainedId === file.id;
+        return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
+          <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${file.path}`} onChange={() => tools.select(file.id)} />
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small>{file.path}</small></span>
+          <span className="duplicate-member-size">{formatBytes(file.size)}</span>
+          {retained ? <Badge tone="success">Keep this copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${file.path}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep this copy</Button>}
+        </div>;
+      })}
+      {group.files.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({group.files.length - visibleCount} remaining)</Button>}
+    </div>
+  </details>;
+}

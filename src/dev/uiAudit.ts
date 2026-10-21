@@ -1,3 +1,5 @@
+import { diskAnalyzerAuditResponse } from "./diskAnalyzerAudit";
+import { fileHygieneAuditResponse } from "./fileHygieneAudit";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from "../lib/decoyFakeData";
 import { modulesForPersona } from "../types/modules";
@@ -1036,29 +1038,9 @@ export function uiAuditDirectResponse(command: string): unknown {
         cancelled: false,
       };
     case "run_disk_scan":
-      return {
-        scanRoot: "C:\\Audit",
-        totalSize: 40_802_189_312,
-        freeSpace: 496_068_722_688,
-        driveCapacity: 1_099_511_627_776,
-        fileCount: 8_421,
-        folderCount: 614,
-        wiztreeFound: true,
-      };
     case "get_disk_children":
-      return [
-        { name: "Cases", fullPath: "C:\\Audit\\Cases", size: 19_327_352_832, allocated: 19_341_262_848, isDir: true, lastModified: "2026-08-01T22:20:00Z", fileCount: 3_216, folderCount: 188 },
-        { name: "Downloads", fullPath: "C:\\Audit\\Downloads", size: 9_663_676_416, allocated: 9_671_524_352, isDir: true, lastModified: "2026-08-01T21:48:00Z", fileCount: 804, folderCount: 37 },
-        { name: "AppData", fullPath: "C:\\Audit\\AppData", size: 6_442_450_944, allocated: 6_451_462_144, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 4_288, folderCount: 389 },
-        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0 },
-      ];
     case "get_large_disk_items":
-      return [
-        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
-        { name: "case-archive.zip", fullPath: "C:\\Audit\\Cases\\case-archive.zip", size: 2_576_980_377, allocated: 2_577_006_592, isDir: false, lastModified: "2026-08-01T20:12:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
-        { name: "capture-session.mkv", fullPath: "C:\\Audit\\Cases\\capture-session.mkv", size: 1_395_864_576, allocated: 1_395_867_648, isDir: false, lastModified: "2026-08-01T18:52:00Z", fileCount: 1, folderCount: 0, itemType: "Video", cleanupHint: "Large media file", risk: "review" },
-        { name: "BrowserCache", fullPath: "C:\\Audit\\AppData\\BrowserCache", size: 754_974_720, allocated: 756_023_296, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 944, folderCount: 48, itemType: "Folder", cleanupHint: "Cache candidate", risk: "temporary" },
-      ];
+      return diskAnalyzerAuditResponse(command);
     case "registry_cleaner_scan":
       return { entries: [{ id: "registry-audit-clsid", classId: "{00000000-0000-0000-0000-AUDIT000001}", serverKind: "InprocServer32", missingServer: "C:\\Audit\\Missing\\audit-shell.dll", hive: "HKCU" }], skippedEntries: 1 };
     case "explorer_context_menu_scan":
@@ -1288,6 +1270,6 @@ export function installUiAuditMocks(): void {
         },
       };
     }
-    return uiAuditDirectResponse(command);
+    return fileHygieneAuditResponse(command, args) ?? diskAnalyzerAuditResponse(command, args) ?? uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });
 }

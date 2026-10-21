@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import useBackend, { type RoutineCleanerCategory, type RoutineCleanerCleanResult, type RoutineCleanerScan } from "../../hooks/useBackend";
-import { getRecommendedItemIds, getScanAfterClean, getSelectedItems, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
+import { getRecommendedItemIds, getScanAfterClean, getSelectedItems, ROUTINE_CLEANER_CATEGORIES, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
 import { recordMaintenanceOperation } from "../../hooks/useMaintenanceHistory";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
 
@@ -71,7 +71,7 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
     try {
       const cleanResult = await routineCleanerClean(selectedItems.map((item) => item.id));
       setResult(cleanResult);
-      recordMaintenanceOperation({ tool: "cleanup", title: scanScope === "projects" ? "Project artifact cleanup" : "Application cache cleanup", outcome: cleanResult.cancelled ? "cancelled" : cleanResult.errors.length ? "partial" : "completed", affectedItems: cleanResult.itemsCleaned, bytesRecovered: cleanResult.bytesRecovered });
+      recordMaintenanceOperation({ tool: "cleanup", title: scanScope === "projects" ? "Project artifact cleanup" : "Application cache cleanup", outcome: cleanResult.cancelled ? "cancelled" : cleanResult.errors.length ? "partial" : "completed", affectedItems: cleanResult.itemsCleaned, bytesRecovered: cleanResult.bytesRecovered, detail: "Logical data removed; free space not measured." });
       if (cleanResult.cancelled) { setScan(null); setSelectedIds(new Set()); return; }
       const failedIds = new Set(cleanResult.errors.map((item) => item.id));
       const cleanedIds = selectedItems.map((item) => item.id).filter((id) => !failedIds.has(id));
@@ -125,6 +125,9 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
     cleanSelected,
     cancel,
     toggleItem,
+    toggleCategorySelection: (category: RoutineCleanerCategory) => {
+      if (operation === "idle") setSelectedIds((current) => toggleRoutineCategorySelection(scan?.items ?? [], current, category));
+    },
     selectRecommended,
     clearSelection: () => { if (operation === "idle") setSelectedIds(new Set()); },
   };

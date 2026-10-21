@@ -17,6 +17,7 @@ import type { RoutineCleanerCategory, RoutineCleanerCleanResult } from "../../ho
 import { showError, showSuccess } from "../../utils/toast";
 import { formatBytes, getRoutineCleanerCategories } from "./routineCleanerHelpers";
 import { RoutineCleanerPreview } from "./RoutineCleanerPreview";
+import { CleanupReviewItems } from "./CleanupReviewItems";
 import { type useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -69,7 +70,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
     {result && <CleanResult result={result} />}
     <RoutineCleanerPreview cleaner={cleaner} onRequestClean={() => setConfirmOpen(true)} />
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and process approximately {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))} of logical data. Actual free-space changes can differ. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and process approximately {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))} of logical data. Actual free-space changes can differ. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><CleanupReviewItems items={selectedItems.map((item) => ({ id: item.id, path: item.path, detail: `${item.label} · ${formatBytes(item.bytes)} · ${item.fileCount.toLocaleString()} files${item.truncated ? " · partial estimate" : ""}${item.operation === "vacuum" ? " · database optimization" : ""}` }))} /><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
   </div>;
 }

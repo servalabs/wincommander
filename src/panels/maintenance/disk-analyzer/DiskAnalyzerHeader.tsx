@@ -1,13 +1,14 @@
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Button, Icon, Spinner } from "@/components/ui/bp";
-import { diskBreadcrumbs, formatDiskBytes } from "@/lib/diskAnalyzer";
+import { diskBreadcrumbs, diskScopeTotals, formatDiskBytes, normalizeDiskPath } from "@/lib/diskAnalyzer";
 import { showError } from "@/utils/toast";
 import type { DiskAnalyzer } from "./useDiskAnalyzer";
 
-export default function DiskAnalyzerHeader({ analyzer, mode, onMode }: { analyzer: DiskAnalyzer; mode: "space" | "large"; onMode: (mode: "space" | "large") => void }) {
+export default function DiskAnalyzerHeader({ analyzer, mode }: { analyzer: DiskAnalyzer; mode: "space" | "large" }) {
     const { scanning, meta, stale, deleting, loadingPath, history, historyIndex, currentPath } = analyzer;
     const busy = scanning || deleting || loadingPath;
     const crumbs = meta ? diskBreadcrumbs(meta.scanRoot, currentPath) : [];
+    const scope = mode === "space" ? diskScopeTotals(analyzer.rows) : { size: meta?.totalSize ?? 0, files: meta?.fileCount ?? 0, folders: meta?.folderCount ?? 0 };
     async function browse() {
         try {
             const selected = await openFolderDialog({ directory: true, multiple: false, title: "Choose a drive or folder to analyze" });
@@ -22,19 +23,19 @@ export default function DiskAnalyzerHeader({ analyzer, mode, onMode }: { analyze
                     onChange={event => analyzer.setScanPath(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void analyzer.startScan(); }} />
                 <Button minimal small icon="more" title="Choose folder" aria-label="Choose folder" disabled={busy} onClick={browse} />
             </div>
-                <Button intent="primary" icon={meta ? "refresh" : "search"} disabled={busy || !analyzer.scanPath.trim()} loading={scanning} onClick={() => void analyzer.startScan()}>{meta ? "Analyze again" : "Analyze"}</Button>
+                {mode === "large" && <label className="da-minimum-size">Minimum size<select aria-label="Minimum file size" value={analyzer.minSize} disabled={busy || analyzer.largeLoading} onChange={event => void analyzer.changeMinSize(Number(event.target.value))}>{[16, 50, 100, 500, 1024, 5120].map(size => <option key={size} value={size * 1024 * 1024}>{size >= 1024 ? `${size / 1024} GiB` : `${size} MiB`}</option>)}</select></label>}
+                <Button intent="primary" icon={meta ? "refresh" : "search"} disabled={busy || !analyzer.scanPath.trim()} onClick={() => void analyzer.startScan()}>{meta ? "Analyze again" : "Analyze"}</Button>
                 {scanning && <Button intent="danger" minimal disabled={analyzer.cancelling} onClick={() => void analyzer.cancelScan()}>{analyzer.cancelling ? "Stopping…" : "Stop scan"}</Button>}
             </div>
         </header>
-        <div className="da-workspace-tabs" aria-label="Storage view">
-            <button type="button" aria-pressed={mode === "space"} className={mode === "space" ? "active" : ""} disabled={deleting} onClick={() => onMode("space")}><Icon icon="heatmap" size={15} />Disk usage</button>
-            <button type="button" aria-pressed={mode === "large"} className={mode === "large" ? "active" : ""} disabled={deleting} onClick={() => onMode("large")}><Icon icon="document" size={15} />Large files</button>
-            <span>Sizes are logical file sizes</span>
+        <div className="da-scope-caption"><span>Sizes are logical file sizes · Allocated disk size is unavailable.</span>
+            {meta && !stale && <span title={mode === "space" ? currentPath : meta.scanRoot}>{mode === "space" ? "Current folder" : "Searched location"}: {mode === "space" ? currentPath : meta.scanRoot}</span>}
         </div>
-        {meta && !stale && <div className="da-metrics" aria-label="Scan summary">
-            <div><small>Scanned content</small><strong>{formatDiskBytes(meta.totalSize)}</strong></div>
-            <div><small>Files</small><strong>{meta.fileCount.toLocaleString()}</strong></div>
-            <div><small>Folders</small><strong>{meta.folderCount.toLocaleString()}</strong></div>
+        {meta && !stale && normalizeDiskPath(analyzer.scanPath) !== normalizeDiskPath(meta.scanRoot) && <div className="da-scan-notice" role="status"><Icon icon="info-sign" size={15} /><span>Showing the last analyzed location above. Analyze the newly chosen location to update these results.</span></div>}
+        {meta && !stale && !scanning && <div className="da-metrics" aria-label="Scan summary">
+            <div><small>{mode === "space" ? "Current folder content" : "Scanned content"}</small><strong>{formatDiskBytes(scope.size)}</strong></div>
+            <div><small>Files</small><strong>{scope.files.toLocaleString()}</strong></div>
+            <div><small>Folders</small><strong>{scope.folders.toLocaleString()}</strong></div>
             <div><small>Volume free space</small><strong>{meta.driveCapacity > 0 ? formatDiskBytes(meta.freeSpace) : "Unavailable"}</strong></div>
             <div><small>Volume capacity</small><strong>{meta.driveCapacity > 0 ? formatDiskBytes(meta.driveCapacity) : "Unavailable"}</strong></div>
         </div>}

@@ -289,7 +289,7 @@ describe("redesign surface copy guardrails", () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
     const cleanupPanel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
-    expect(cleanupGrid).toContain("{isLowImpactTab && (");
+    expect(cleanupGrid).toMatch(/\{isLowImpactTab &&\s*(?:\(\s*)?<div[^>]+data-cleanup-summary="true"/);
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");
@@ -382,7 +382,7 @@ describe("redesign surface copy guardrails", () => {
     const network = await read("src/panels/network/NetworkMaintenanceTools.tsx");
 
     const tweaks = await read("src/panels/tweaks/index.tsx");
-    expect(startupDrivers).toContain("<StartupManager embedded scanKey={managerScanKey} />");
+    expect(startupDrivers).toContain("<StartupManager embedded scanKey={managerScanKey} reviewEntries={tools.startup?.entries} />");
     expect(startupDrivers).toContain("<DriverHealthSection embedded hideActions scanKey={driverScanKey} />");
     expect(startupDrivers).toContain('showAllDrivers ? "Hide all drivers" : "Show all drivers"');
     expect(startupDrivers).toContain('tools.drivers?.drivers.slice(0, 200)');

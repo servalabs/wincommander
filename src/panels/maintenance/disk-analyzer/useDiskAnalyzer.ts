@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import useBackend from "@/hooks/useBackend";
 import { recordMaintenanceOperation } from "@/hooks/useMaintenanceHistory";
 import { showError, showSuccess } from "@/utils/toast";
-import { independentDiskSelection, type DiskNode, type DiskScanMeta, type LargeDiskItem } from "@/lib/diskAnalyzer";
+import { independentDiskSelection, type DiskNode, type DiskScanMeta, type LargeDiskItem, type LargeDiskResult } from "@/lib/diskAnalyzer";
 
 interface AnalyzerSession {
     scanning: boolean;
@@ -10,6 +10,7 @@ interface AnalyzerSession {
     meta: DiskScanMeta | null;
     rows: DiskNode[];
     largeItems: LargeDiskItem[];
+    largeResult: LargeDiskResult | null;
     currentPath: string;
     history: string[];
     historyIndex: number;
@@ -21,7 +22,7 @@ interface AnalyzerSession {
 }
 
 let session: AnalyzerSession = {
-    scanning: false, scanPath: "C:\\", meta: null, rows: [], largeItems: [],
+    scanning: false, scanPath: "C:\\", meta: null, rows: [], largeItems: [], largeResult: null,
     currentPath: "", history: [], historyIndex: -1, stale: false,
     deleting: false, loadingPath: false, largeLoading: false, minSize: 100 * 1024 * 1024,
 };
@@ -69,15 +70,15 @@ export function useDiskAnalyzer() {
         const path = session.scanPath;
         navigationRequest++;
         largeRequest++;
-        update({ scanning: true, meta: null, rows: [], largeItems: [], currentPath: "", history: [], historyIndex: -1, stale: false, loadingPath: false, largeLoading: false });
+        update({ scanning: true, meta: null, rows: [], largeItems: [], largeResult: null, currentPath: "", history: [], historyIndex: -1, stale: false, loadingPath: false, largeLoading: false });
         scanTask = (async () => {
             try {
                 const meta = await backendRef.current.runDiskScan(path);
-                const [rows, largeItems] = await Promise.all([
+                const [rows, largeResult] = await Promise.all([
                     backendRef.current.getDiskChildren(meta.scanRoot),
-                    backendRef.current.getLargeDiskItems(session.minSize, 300, true),
+                    backendRef.current.getLargeDiskItems(session.minSize, 5000, false),
                 ]);
-                update({ meta, rows, largeItems, currentPath: meta.scanRoot, history: [meta.scanRoot], historyIndex: 0 });
+                update({ meta, rows, largeItems: largeResult.items, largeResult, currentPath: meta.scanRoot, history: [meta.scanRoot], historyIndex: 0 });
                 recordMaintenanceOperation({ tool: "disk-analysis", title: "Storage analyzed", outcome: meta.cancelled ? "cancelled" : meta.complete === false ? "partial" : "completed", affectedItems: meta.fileCount, detail: "Logical sizes only; no files changed." });
             } catch (error) { showError(String(error)); recordMaintenanceOperation({ tool: "disk-analysis", title: "Storage analysis failed", outcome: "failed" }); }
             finally { update({ scanning: false }); scanTask = null; }
@@ -101,13 +102,13 @@ export function useDiskAnalyzer() {
 
     async function changeMinSize(next: number) {
         if (session.scanning || session.deleting || session.stale) return;
-        update({ minSize: next, largeItems: [] }); setSelected(new Set()); setFocused(null);
+        update({ minSize: next, largeItems: [], largeResult: null }); setSelected(new Set()); setFocused(null);
         if (!session.meta) return;
         const request = ++largeRequest;
         update({ largeLoading: true });
         try {
-            const largeItems = await backendRef.current.getLargeDiskItems(next, 300, true);
-            if (request === largeRequest) update({ largeItems });
+            const largeResult = await backendRef.current.getLargeDiskItems(next, 5000, false);
+            if (request === largeRequest) update({ largeItems: largeResult.items, largeResult });
         } catch (error) { showError(String(error)); }
         finally { if (request === largeRequest) update({ largeLoading: false }); }
     }
@@ -140,11 +141,12 @@ export function useDiskAnalyzer() {
         if (removed) {
             // Every aggregate and parent size is from the previous scan, so require a fresh scan.
             update({ stale: true, rows: [], largeItems: [] });
-            showSuccess(`Deleted ${removed} item${removed === 1 ? "" : "s"}. Scan again to refresh disk usage.`);
+            showSuccess(`Deleted ${removed} item${removed === 1 ? "" : "s"}. Refreshing disk usage…`);
         }
         if (failed.length) showError(`Could not delete ${failed.length} item${failed.length === 1 ? "" : "s"}: ${failed.slice(0, 3).join(", ")}`);
         recordMaintenanceOperation({ tool: "disk-analysis", title: "Selected files deleted", outcome: failed.length ? removed ? "partial" : "failed" : "completed", affectedItems: removed, detail: failed.length ? `${failed.length} files could not be deleted.` : "Analyze again to measure current storage. Physical space recovered was not measured." });
         update({ deleting: false });
+        if (removed) await startScan();
     }
 
     async function cancelScan() {
@@ -154,8 +156,8 @@ export function useDiskAnalyzer() {
     }
 
     async function openInExplorer(item: DiskNode) {
-        const path = item.isDir ? item.fullPath : item.fullPath.replace(/[\\/][^\\/]+$/, "\\");
-        try { await backendRef.current.openPath(path); } catch (error) { showError(String(error)); }
+        if (!session.meta || session.stale || session.scanning) return;
+        try { await backendRef.current.openDiskItem(session.meta.scanId, item.entryId); } catch (error) { showError(String(error)); }
     }
 
     return { ...state, selected, focused, confirmItems, progress, cancelling,

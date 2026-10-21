@@ -3,6 +3,7 @@
 
 mod safety;
 mod scan;
+mod verified_file;
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -22,6 +23,8 @@ struct CachedFile {
     group_id: String,
     bytes: u64,
     modified: Option<SystemTime>,
+    hash: [u8; 32],
+    identity: Option<(u32, u64)>,
 }
 
 struct Cache {
@@ -68,6 +71,7 @@ pub struct DuplicateScan {
     pub scanned_files: usize,
     pub cancelled: bool,
     pub truncated: bool,
+    pub skipped_entries: usize,
 }
 
 #[derive(Serialize)]
@@ -106,7 +110,7 @@ pub async fn duplicate_finder_remove(
         return Err("invalid duplicate selection".into());
     }
     let selected: HashSet<String> = file_ids.into_iter().collect();
-    let candidates = {
+    let (candidates, keepers) = {
         let guard = cache()
             .lock()
             .map_err(|_| "duplicate cache lock poisoned".to_string())?;
@@ -134,13 +138,20 @@ pub async fn duplicate_finder_remove(
                 );
             }
         }
-        selected
+        let candidates = selected
             .iter()
             .filter_map(|id| guard.files.get(id).cloned())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        let keepers = guard
+            .files
+            .iter()
+            .filter(|(id, _)| !selected.contains(*id))
+            .map(|(_, file)| file.clone())
+            .collect::<Vec<_>>();
+        (candidates, keepers)
     };
     CANCELLED.store(false, Ordering::Release);
-    tokio::task::spawn_blocking(move || safety::remove_files(candidates, &CANCELLED))
+    tokio::task::spawn_blocking(move || safety::remove_files(candidates, keepers, &CANCELLED))
         .await
         .map_err(|error| format!("duplicate removal task failed: {error}"))
 }
@@ -151,37 +162,4 @@ pub fn duplicate_finder_cancel() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hashes_after_size_candidates_and_keeps_one() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a"), b"same").unwrap();
-        std::fs::write(dir.path().join("b"), b"same").unwrap();
-        std::fs::write(dir.path().join("c"), b"nope").unwrap();
-        let (scan, files, groups) = scan::scan_roots(
-            &[std::fs::canonicalize(dir.path()).unwrap()],
-            &AtomicBool::new(false),
-        );
-        assert_eq!(scan.groups.len(), 1);
-        assert_eq!(scan.groups[0].files.len(), 2);
-        let members = groups.values().next().unwrap();
-        assert_eq!(members.len(), 2);
-        assert!(safety::retains_live_member(
-            members,
-            &HashSet::from([members[0].clone()]),
-            &files
-        ));
-        assert!(!safety::retains_live_member(
-            members,
-            &HashSet::from_iter(members.iter().cloned()),
-            &files
-        ));
-    }
-
-    #[test]
-    fn rejects_empty_root_list() {
-        assert!(safety::validate_roots(Vec::new()).is_err());
-    }
-}
+mod tests;

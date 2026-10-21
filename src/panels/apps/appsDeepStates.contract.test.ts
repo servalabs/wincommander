@@ -9,7 +9,7 @@ describe("apps populated-state interaction contracts", () => {
     const review = readFileSync("src/panels/apps/components/ApplicationReviewResults.tsx", "utf8");
     expect(debloat).toContain("<ApplicationReviewResults");
     expect(review).toContain('type="checkbox" checked={props.selected.has(item.id)}');
-    expect(review).toContain("disabled={props.removing}");
+    expect(review).toContain("disabled={props.removing || !!item.removalUnavailable}");
     expect(review).toContain('aria-label={`Select ${item.label} for removal`}');
     expect(review).toContain('aria-expanded={detailId === item.id}');
   });

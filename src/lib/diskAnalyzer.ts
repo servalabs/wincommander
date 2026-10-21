@@ -1,4 +1,5 @@
 export interface DiskNode {
+    entryId: number;
     name: string;
     fullPath: string;
     size: number;
@@ -16,6 +17,7 @@ export interface LargeDiskItem extends DiskNode {
 }
 
 export interface DiskScanMeta {
+    scanId: string;
     scanRoot: string;
     totalSize: number;
     freeSpace: number;
@@ -31,7 +33,7 @@ export interface DiskScanMeta {
 
 export function formatDiskBytes(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
     return `${(bytes / 1024 ** index).toFixed(index >= 2 ? 1 : 0)} ${units[index]}`;
 }
@@ -71,7 +73,25 @@ export function diskNodeColor(node: DiskNode, index = 0): string {
     return `var(${colors[index % colors.length]})`;
 }
 
-export type LargeDiskFilter = "all" | "review" | "videos" | "archives" | "installers" | "folders";
+export interface LargeDiskResult {
+    items: LargeDiskItem[];
+    matchedCount: number;
+    matchedSize: number;
+    resultLimit: number;
+    limited: boolean;
+    minimumSize: number;
+    scanId: string;
+}
+
+export function diskScopeTotals(rows: DiskNode[]) {
+    return rows.reduce((totals, item) => ({
+        size: totals.size + item.size,
+        files: totals.files + (item.isDir ? item.fileCount : 1),
+        folders: totals.folders + (item.isDir ? item.folderCount + 1 : 0),
+    }), { size: 0, files: 0, folders: 0 });
+}
+
+export type LargeDiskFilter = "all" | "review" | "videos" | "archives" | "installers" | "documents" | "images" | "audio";
 export type DiskSort = "size" | "name" | "modified";
 
 export function diskModifiedTime(value: string): number {
@@ -88,10 +108,10 @@ export function formatDiskModified(value: string): string {
 
 export function filterLargeDiskItems(items: LargeDiskItem[], filter: LargeDiskFilter, search: string, sort: DiskSort): LargeDiskItem[] {
     const query = search.trim().toLowerCase();
-    const types: Partial<Record<LargeDiskFilter, string>> = { videos: "video", archives: "archive", installers: "installer" };
+    const types: Partial<Record<LargeDiskFilter, string>> = { videos: "video", archives: "archive", installers: "installer", documents: "document", images: "image", audio: "audio" };
     return items.filter(item => (!query || `${item.name} ${item.fullPath}`.toLowerCase().includes(query)) &&
         (filter === "all" || (filter === "review" && ["review", "high", "danger"].includes(item.risk)) ||
-            (filter === "folders" && item.isDir) || item.itemType.toLowerCase() === types[filter]))
+            item.itemType.toLowerCase() === types[filter]))
         .sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : sort === "modified" ?
             diskModifiedTime(b.lastModified) - diskModifiedTime(a.lastModified) : b.size - a.size);
 }

@@ -11,7 +11,6 @@ import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/Mai
 import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
-import FileStatsPanel from "./FileStatsPanel";
 import "./MaintenanceStorage.css";
 import { getMaintenanceSessionValue, primeMaintenanceSessionValue, useMaintenanceSessionState } from "./maintenanceSessionState";
 import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds } from "./routineCleanerHelpers";
@@ -36,7 +35,7 @@ export default function MaintenancePanel() {
     };
   }, [setActiveTab, setWindowsOpen]);
   useMaintenanceReviewPreload();
-  return <div className="panel-container flex flex-col gap-4">
+  return <div className="panel-container maintenance-panel flex flex-col gap-4">
     <PanelHeader panelId="maintenance" title="System Maintenance" description="Understand your storage, review cleanable data, and keep your system in order." />
     <div className="maintenance-workspace-shell">
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
@@ -45,7 +44,6 @@ export default function MaintenancePanel() {
         {active.id === "cleanup" && <StorageAndFileTools windowsOpen={windowsOpen} setWindowsOpen={setWindowsOpen} />}
         {(active.id === "analysis" || active.id === "large") && <div className="maintenance-analysis-workspace">
           <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog key={active.id} inline isOpen onClose={() => {}} initialMode={active.id === "large" ? "large" : "space"} /></div></CardContent></Card>
-          {active.id === "analysis" && <div className="maintenance-file-stats-slot"><FileStatsPanel /></div>}
         </div>}
         {active.id === "duplicates" && <FileHygieneTools />}
         {active.id === "registry" && <RegistryAndHygieneTools />}

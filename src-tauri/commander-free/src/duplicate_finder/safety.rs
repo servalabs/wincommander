@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) fn remove_files(
     files: Vec<CachedFile>,
+    keepers: Vec<CachedFile>,
     cancelled: &AtomicBool,
 ) -> super::DuplicateRemoveResult {
     let mut result = super::DuplicateRemoveResult {
@@ -19,19 +20,28 @@ pub(super) fn remove_files(
             result.cancelled = true;
             break;
         }
-        match validated_file(&file) {
-            Ok(path) => match fs::metadata(&path)
-                .and_then(|meta| fs::remove_file(&path).map(|_| meta.len()))
-            {
-                Ok(bytes) => {
+        let keeper = keepers
+            .iter()
+            .filter(|keeper| keeper.group_id == file.group_id)
+            .find_map(|keeper| super::verified_file::open_verified(keeper, false, cancelled).ok());
+        let Some(_keeper_guard) = keeper else {
+            result
+                .errors
+                .push("refused removal: no unchanged verified copy could be retained".into());
+            continue;
+        };
+        match super::verified_file::open_verified(&file, true, cancelled) {
+            Ok(handle) => match super::verified_file::delete_verified(handle, &file) {
+                Ok(()) => {
                     result.files_removed += 1;
-                    result.bytes_recovered = result.bytes_recovered.saturating_add(bytes);
+                    result.bytes_recovered = result.bytes_recovered.saturating_add(file.bytes);
                 }
                 Err(error) => result.errors.push(error.to_string()),
             },
             Err(error) => result.errors.push(error),
         }
     }
+    result.cancelled |= cancelled.load(Ordering::Acquire);
     result
 }
 
@@ -63,7 +73,7 @@ pub(super) fn validate_roots(roots: Vec<String>) -> Result<Vec<PathBuf>, String>
         .collect()
 }
 
-fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
+pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
     let meta = fs::symlink_metadata(&file.path).map_err(|error| error.to_string())?;
     if !meta.is_file()
         || is_link_or_reparse(&meta)
@@ -75,6 +85,17 @@ fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
     let path = fs::canonicalize(&file.path).map_err(|error| error.to_string())?;
     if !path.starts_with(&file.root) || is_inside_system_root(&path) {
         return Err("refused file outside its scanned safe root".into());
+    }
+    let mut ancestor = file.path.parent();
+    while let Some(parent) = ancestor {
+        let metadata = fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
+        if is_link_or_reparse(&metadata) {
+            return Err("refused linked duplicate parent folder".into());
+        }
+        if parent == file.root {
+            break;
+        }
+        ancestor = parent.parent();
     }
     Ok(path)
 }

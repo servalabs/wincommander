@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { CheckboxControl } from "../../components/ui/bp";
@@ -21,6 +21,7 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: { cleaner: Ro
   const focusedItem = visibleItems.find((item) => item.id === focusedId);
   const selectedBytes = selectedItems.reduce((sum, item) => sum + item.bytes, 0);
   const isBusy = operation !== "idle";
+  const isCategorySelected = !!visibleCategory?.items.length && visibleCategory.items.every((item) => selectedIds.has(item.id));
   if (!scan) return null;
 
   return <div className="maintenance-cache-workspace">
@@ -42,13 +43,12 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: { cleaner: Ro
         </button>)}
       </nav>
       <section className="maintenance-cache-results" aria-label={`${visibleCategory?.label ?? "Cache"} targets`}>
-        <div className="maintenance-cache-results-header"><div><strong>{visibleCategory?.label}</strong><p>{visibleCategory?.description}</p></div><span>{formatBytes((visibleCategory?.items ?? []).filter((item) => selectedIds.has(item.id)).reduce((sum, item) => sum + item.bytes, 0))} selected</span></div>
+        <div className="maintenance-cache-results-header"><div><strong>{visibleCategory?.label}</strong><p>{visibleCategory?.description}</p></div><span>{formatBytes((visibleCategory?.items ?? []).filter((item) => selectedIds.has(item.id)).reduce((sum, item) => sum + item.bytes, 0))} selected</span><Button size="sm" variant="ghost" aria-pressed={isCategorySelected} aria-label={`${isCategorySelected ? "Deselect" : "Select"} all ${visibleCategory?.label ?? "cache"} targets`} disabled={isBusy || !visibleCategory?.items.length} onClick={() => { if (visibleCategory) cleaner.toggleCategorySelection(visibleCategory.id); }}>{isCategorySelected ? "Deselect category" : "Select category"}</Button></div>
         <label className="maintenance-cache-search"><Icon icon="search" size={14} /><input aria-label="Filter cache targets" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name or location" /></label>
         <div className="maintenance-cache-targets">
-          {visibleItems.map((item) => <ItemRow key={item.id} item={item} selected={selectedIds.has(item.id)} focused={focusedItem?.id === item.id} disabled={isBusy} onToggle={cleaner.toggleItem} onDetails={() => setFocusedId(focusedId === item.id ? undefined : item.id)} />)}
+          {visibleItems.map((item) => <Fragment key={item.id}><ItemRow item={item} selected={selectedIds.has(item.id)} focused={focusedItem?.id === item.id} disabled={isBusy} onToggle={cleaner.toggleItem} onDetails={() => setFocusedId(focusedId === item.id ? undefined : item.id)} />{focusedItem?.id === item.id && <CacheItemDetail item={item} />}</Fragment>)}
           {!visibleItems.length && <div className="maintenance-cache-empty"><Icon icon="confirm" size={28} /><strong>{query ? "No matching targets" : "No cleanable data found"}</strong><p>{query ? "Try another name or location." : "This category has no cache targets in the current scan."}</p></div>}
         </div>
-        {focusedItem && <CacheItemDetail item={focusedItem} />}
       </section>
     </div>
     <footer className="maintenance-selection-bar">

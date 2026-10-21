@@ -184,10 +184,10 @@ describe("UI audit fixture", () => {
     expect(routineCleaner.totalBytes).toBe(routineCleaner.items.reduce((sum, item) => sum + item.bytes, 0));
     expect(routineCleaner.totalFiles).toBe(routineCleaner.items.reduce((sum, item) => sum + item.fileCount, 0));
     const diskScan = uiAuditDirectResponse("run_disk_scan") as { scanRoot: string; totalSize: number; fileCount: number; folderCount: number };
-    expect(diskScan).toMatchObject({ scanRoot: "C:\\Audit", fileCount: 8_421, folderCount: 614 });
+    expect(diskScan).toMatchObject({ scanRoot: "C:\\Audit", fileCount: 6, folderCount: 3 });
     expect(diskScan.totalSize).toBeGreaterThan(10 * 1024 ** 3);
     const diskChildren = uiAuditDirectResponse("get_disk_children") as Array<{ fullPath: string; size: number; isDir: boolean }>;
-    const largeDiskItems = uiAuditDirectResponse("get_large_disk_items") as Array<{ fullPath: string; itemType: string; cleanupHint: string; risk: string }>;
+    const largeDiskItems = (uiAuditDirectResponse("get_large_disk_items") as { items: Array<{ fullPath: string; itemType: string; cleanupHint: string; risk: string }> }).items;
     expect(diskChildren.length).toBeGreaterThan(3);
     expect(new Set(diskChildren.map((item) => item.isDir))).toEqual(new Set([true, false]));
     expect(largeDiskItems.length).toBeGreaterThan(3);

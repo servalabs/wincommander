@@ -65,10 +65,12 @@ pub(super) fn walk_dir(
     acc: &mut WalkAccum,
     cancelled: &AtomicBool,
     depth: usize,
+    entry_id: u64,
 ) -> DiskNode {
     let full_path = dir.to_string_lossy().into_owned();
     acc.children_by_dir.insert(full_path.clone(), Vec::new());
     let mut node = DiskNode {
+        entry_id,
         name: dir
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -144,7 +146,8 @@ pub(super) fn walk_dir(
             if acc.publish {
                 progress::FOLDERS.fetch_add(1, Ordering::Relaxed);
             }
-            let child = walk_dir(&path, acc, cancelled, depth + 1);
+            let entry_id = acc.visited;
+            let child = walk_dir(&path, acc, cancelled, depth + 1, entry_id);
             node.file_count = node.file_count.saturating_add(child.file_count);
             node.folder_count = node
                 .folder_count
@@ -158,6 +161,7 @@ pub(super) fn walk_dir(
                 progress::BYTES.fetch_add(metadata.len(), Ordering::Relaxed);
             }
             DiskNode {
+                entry_id: acc.visited,
                 name: entry.file_name().to_string_lossy().into_owned(),
                 full_path: path.to_string_lossy().into_owned(),
                 size: metadata.len(),
@@ -191,6 +195,7 @@ fn add_large(node: &DiskNode, acc: &mut WalkAccum) {
         return;
     }
     acc.large.push(LargeDiskItem {
+        entry_id: node.entry_id,
         name: node.name.clone(),
         full_path: node.full_path.clone(),
         size: node.size,
@@ -217,7 +222,7 @@ mod tests {
         let mut acc = WalkAccum::new();
         acc.publish = false;
         acc.limit = limit;
-        let node = walk_dir(path, &mut acc, &AtomicBool::new(cancelled), 0);
+        let node = walk_dir(path, &mut acc, &AtomicBool::new(cancelled), 0, 0);
         (node, acc)
     }
 
@@ -232,6 +237,26 @@ mod tests {
         assert_eq!(root.allocated, None);
         assert_eq!(acc.skipped_entries, 0);
         assert!(!acc.truncated);
+    }
+
+    #[test]
+    fn every_scanned_entry_has_a_distinct_backend_id_including_nested_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("nested")).unwrap();
+        fs::write(temp.path().join("first"), b"1234").unwrap();
+        fs::write(temp.path().join("nested/second"), b"56789").unwrap();
+        let (root, acc) = scan(temp.path(), MAX_ENTRIES, false);
+        let ids: Vec<_> = acc
+            .children_by_dir
+            .values()
+            .flatten()
+            .map(|item| item.entry_id)
+            .collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(root.entry_id, 0);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(unique.len(), 3);
+        assert!(!ids.contains(&0));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RoutineCleanerItem, RoutineCleanerScan } from "../../hooks/useBackend";
-import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems } from "./routineCleanerHelpers";
+import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
 
 const items: RoutineCleanerItem[] = [
   { id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false },
@@ -20,6 +20,14 @@ test("recommended selection excludes opt-in targets", () => {
 
 test("selected item helper ignores IDs absent from the latest scan", () => {
   expect(getSelectedItems(items, new Set(["system-1", "expired-id"])).map((item) => item.id)).toEqual(["system-1"]);
+});
+
+test("category selection preserves other categories and clears only after the whole category is selected", () => {
+  const partial = new Set(["system-1", "browser-1"]);
+  const selected = toggleRoutineCategorySelection(items, partial, "system");
+  expect([...selected].sort()).toEqual(["browser-1", "system-1", "system-2"]);
+  expect([...toggleRoutineCategorySelection(items, selected, "system")]).toEqual(["browser-1"]);
+  expect([...partial]).toEqual(["system-1", "browser-1"]);
 });
 
 test("clean reconciliation retains failed items and recomputes preview totals", () => {

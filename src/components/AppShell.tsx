@@ -46,7 +46,7 @@ export default function AppShell({
   const previousPanelRef = useRef<PanelId>(activePanel);
   const scale = useDashboardScale(containerRef);
   const isDashboard = activePanel === "dashboard";
-  const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup";
+  const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup" || activePanel === "maintenance";
   const { clearSearch } = useSearchQuery();
   const { personalSettingsStatus, retryPersonalSettingsRecovery } = useAppState();
 

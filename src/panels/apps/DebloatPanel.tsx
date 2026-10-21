@@ -42,7 +42,7 @@ export default function DebloatPanel() {
   const filteredItems = useMemo(() => {
     const q = searchQuery.toLowerCase();
     return items.filter(item => {
-      const matchSearch = !q || item.label.toLowerCase().includes(q) || item.id.toLowerCase().includes(q);
+      const matchSearch = !q || [item.label, item.id, item.publisher, item.version].some(value => value?.toLowerCase().includes(q));
       return matchSearch && matchesFilter(item, activeFilter);
     });
   }, [items, searchQuery, activeFilter]);
@@ -70,7 +70,7 @@ export default function DebloatPanel() {
   }, [items]);
 
   const handleRecommended = useCallback(() => {
-    setSelected(new Set(items.filter(i => i.recommended).map(i => i.id)));
+    setSelected(new Set(items.filter(i => i.recommended && !i.removalUnavailable).map(i => i.id)));
     setHeroActive(true);
   }, [items]);
 
@@ -84,9 +84,9 @@ export default function DebloatPanel() {
   }, []);
 
   const selectGroup = useCallback((category: string) => {
-    const ids = items.filter(i => i.category === category).map(i => i.id);
+    const ids = filteredItems.filter(i => i.category === category && !i.removalUnavailable).map(i => i.id);
     setSelected(prev => new Set([...prev, ...ids]));
-  }, [items]);
+  }, [filteredItems]);
 
   const clearSelection = useCallback(() => {
     setSelected(new Set());
@@ -94,7 +94,7 @@ export default function DebloatPanel() {
   }, []);
 
   const handleRemove = useCallback(async () => {
-    const targets = items.filter(i => selected.has(i.id));
+    const targets = items.filter(i => selected.has(i.id) && !i.removalUnavailable);
     if (!targets.length) return;
     const preview = targets.slice(0, 5).map((item) => item.label).join(", ");
     const remainder = targets.length > 5 ? ` and ${targets.length - 5} more` : "";
@@ -177,7 +177,7 @@ export default function DebloatPanel() {
       <div className="debloat-toolbar">
         <InputGroup
           leftIcon="search"
-          placeholder="Filter items…"
+          placeholder="Search applications or publishers…"
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           small

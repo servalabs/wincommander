@@ -15,23 +15,8 @@ import type { DuplicateRemoveResult, EmptyFolderRemoveResult } from "../../hooks
 import { getDuplicateSelectedBytes } from "../../lib/maintenanceSelection";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
-
-// Extension → icon glyph, mirrors the file-type iconography the Disk Space
-// Analyzer uses so duplicate rows read consistently with the rest of Maintenance.
-const EXT_ICONS: Record<string, IconName> = {
-  jpg: "media", jpeg: "media", png: "media", gif: "media", webp: "media", bmp: "media", svg: "media", heic: "media",
-  mp4: "video", mkv: "video", mov: "video", avi: "video", wmv: "video", webm: "video",
-  mp3: "music", wav: "music", flac: "music", m4a: "music", ogg: "music", aac: "music",
-  zip: "compressed", rar: "compressed", "7z": "compressed", tar: "compressed", gz: "compressed", iso: "compressed",
-  pdf: "document", doc: "document", docx: "document", txt: "document", md: "document", rtf: "document",
-  xls: "th", xlsx: "th", csv: "th",
-  exe: "application", msi: "application", appx: "application",
-  js: "code", ts: "code", tsx: "code", jsx: "code", py: "code", rs: "code", html: "code", css: "code", json: "code",
-};
-function fileIconFor(name: string): IconName {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return EXT_ICONS[ext] ?? "document";
-}
+import { DuplicateGroups } from "./DuplicateGroups";
+import { CleanupReviewItems } from "./CleanupReviewItems";
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
@@ -76,6 +61,9 @@ export function FileHygieneTools() {
     if (tools.tool !== "duplicates" || !tools.duplicateScan) return 0;
     return tools.duplicateScan.groups.reduce((sum, group) => sum + group.reclaimableBytes, 0);
   }, [tools.tool, tools.duplicateScan]);
+  const selectedReview = tools.tool === "duplicates"
+    ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
+    : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
 
   return (
     <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
@@ -111,15 +99,16 @@ export function FileHygieneTools() {
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
                 <>
-                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} removable</Badge>
+                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} potential duplicate data</Badge>
                   <Badge tone="neutral">{count} group{count === 1 ? "" : "s"}</Badge>
                 </>
               ) : (
                 <Badge tone="accent">{count} empty folder{count === 1 ? "" : "s"}</Badge>
               )}
               <Badge tone="neutral">{scannedCount.toLocaleString()} {tools.tool === "duplicates" ? "files" : "folders"} inspected</Badge>
-              {truncated && <Badge tone="warning">truncated</Badge>}
+              {truncated && <Badge tone="warning">Partial results · scan limit reached</Badge>}
               {cancelled && <Badge tone="warning">cancelled</Badge>}
+              {tools.tool === "duplicates" && !!tools.duplicateScan?.skippedEntries && <Badge tone="warning">Partial scope · {tools.duplicateScan.skippedEntries.toLocaleString()} unreadable or changed entries</Badge>}
               <Button size="sm" variant="outline" className="ml-auto" onClick={() => void tools.scan()} disabled={tools.busy} title={scanLabel} aria-label={scanLabel}>
                 <Icon icon="refresh" className={tools.busy ? "animate-spin" : undefined} /> Rescan
               </Button>
@@ -132,6 +121,7 @@ export function FileHygieneTools() {
             <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Smart select copies" : "Select all empty folders"}</Button>
             <Button size="sm" variant="ghost" disabled={tools.busy || !tools.selected.size} onClick={tools.clearSelection}>Clear selection</Button>
           </div>}
+          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Copies are verified by file contents, not names. Scans inspect at most 100,000 files; inaccessible or linked locations are skipped. Potential duplicate data is logical file size, not measured free space. Keep one copy in each group.</p>}
           {/* Exactly one scan entry point per state: none of these four
               branches can render at the same time as another. */}
           {!tools.roots.length && (
@@ -158,23 +148,7 @@ export function FileHygieneTools() {
 
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
-              <div className="flex flex-col gap-3">
-                {tools.duplicateScan.groups.map((group) => (
-                  <div key={group.id} className="rounded-[var(--r)] border border-[var(--border)] p-3 transition-colors hover:border-[var(--border-strong)]">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-dim)]"><Icon icon="duplicate" size={12} />{group.files.length} identical files</span>
-                      <Badge tone="warning">{formatBytes(group.reclaimableBytes)} removable</Badge>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      {group.files.map((file) => <div key={file.id} className="flex items-center gap-1">
-                        <div className="min-w-0 flex-1"><SelectionRow checked={tools.selected.has(file.id)} disabled={tools.busy || tools.retainedFileId(group) === file.id} onClick={() => tools.select(file.id)} icon={fileIconFor(file.name)} label={file.name} detail={file.path} retained={tools.retainedFileId(group) === file.id} /></div>
-                        {tools.retainedFileId(group) !== file.id && <Button size="sm" variant="ghost" disabled={tools.busy} onClick={() => tools.keepFile(group.id, file.id)}>Keep this</Button>}
-                      </div>)}
-                    </div>
-                  </div>
-                ))}
-                {!count && <SharedEmptyState icon="confirm" title="No duplicate file groups found" hint="No identical groups were returned within the completed scan scope." />}
-              </div>
+              <DuplicateGroups tools={tools} />
               <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
             </>
           )}
@@ -194,7 +168,8 @@ export function FileHygieneTools() {
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>Remove selected items?</AlertDialogTitle><AlertDialogDescription>The backend will revalidate every selection and refuse changed, linked, protected, or out-of-root targets.</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogHeader><AlertDialogTitle>Permanently remove {selectedReview.length} selected items?</AlertDialogTitle><AlertDialogDescription>{tools.tool === "duplicates" ? `${formatBytes(selectedBytes)} of logical duplicate data selected. At least one unchanged, content-verified copy must remain per group. ` : "Only folders still empty are removed. "}The backend revalidates every selection. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+          <CleanupReviewItems items={selectedReview} />
           <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => { setConfirmOpen(false); void tools.remove(); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -235,7 +210,7 @@ function SelectionActionBar({ count, bytesLabel, onRemove, disabled }: { count: 
   );
 }
 
-function SelectionRow({ checked, disabled = false, onClick, icon, label, detail, retained = false }: { checked: boolean; disabled?: boolean; onClick: () => void; icon?: IconName; label: string; detail: string; retained?: boolean }) {
+function SelectionRow({ checked, disabled = false, onClick, icon, label, detail }: { checked: boolean; disabled?: boolean; onClick: () => void; icon?: IconName; label: string; detail: string }) {
   return (
     <div className={`flex w-full items-start gap-3 rounded-[var(--r)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] ${disabled ? "cursor-default opacity-70" : "cursor-pointer"}`}>
       <CheckboxControl checked={checked} disabled={disabled} ariaLabel={`${checked ? "Deselect" : "Select"} ${label}`} onChange={onClick} />
@@ -243,7 +218,6 @@ function SelectionRow({ checked, disabled = false, onClick, icon, label, detail,
       <span className="min-w-0">
         <span className="flex items-center gap-2">
           <span className="block text-sm text-[var(--text)]">{label}</span>
-          {retained && <Badge tone="neutral">retained</Badge>}
         </span>
         <span className="block break-all font-mono text-[11px] text-[var(--text-mute)]">{detail}</span>
       </span>

@@ -1,4 +1,4 @@
-.disk-analyzer-dialog { width: min(96vw, 1420px) !important; max-height: 94vh; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 0; }
+.disk-analyzer-dialog { width: min(96vw, 1420px) !important; max-height: 94vh; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 0; container-type: inline-size; }
 .disk-analyzer-inline { min-width: 0; width: 100%; }
 .disk-analyzer-inline .da-workspace { overflow: visible; border: 0; border-radius: 0; }
 .disk-analyzer-inline .da-workspace-header { padding: 14px 18px; gap: 16px; }
@@ -19,10 +19,6 @@
 .da-scan-controls { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
 .da-location-input { display: flex; align-items: center; gap: 7px; border: 1px solid var(--color-border); background: var(--color-bg-tertiary); border-radius: 8px; padding: 3px 6px 3px 10px; color: var(--color-text-secondary); }
 .da-location-input input { width: clamp(100px, 17vw, 250px); min-width: 0; background: transparent; border: 0; color: var(--color-text-primary); padding: 6px 0; font-size: 12px; }
-.da-workspace-tabs { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--color-border); padding: 0 26px; }
-.da-workspace-tabs > button { display: inline-flex; align-items: center; gap: 8px; padding: 12px 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--color-text-muted); font-size: 12px; cursor: pointer; }
-.da-workspace-tabs > button.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
-.da-workspace-tabs > span { margin-left: auto; font-size: 10px; color: var(--color-text-muted); }
 .da-metrics { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); gap: 12px; padding: 18px 26px; background: var(--color-bg-tertiary); border-bottom: 1px solid var(--color-border); }
 .da-metrics > div { display: flex; flex-direction: column; gap: 5px; }
 .da-metrics small { font-size: 10px; color: var(--color-text-muted); }
@@ -138,7 +134,6 @@
 .da-sr-bar { height: 100%; border-radius: inherit; background: var(--color-accent); }
 @media (min-width: 1001px) and (min-height: 650px) {
     .maintenance-analysis-scroll .da-workspace-header { padding: 10px 18px; }
-    .maintenance-analysis-scroll .da-workspace-tabs > button { padding: 7px 12px; }
     .maintenance-analysis-scroll .da-metrics { padding: 8px 18px; }
     .maintenance-analysis-scroll .da-location-nav { padding: 5px 17px; }
     .maintenance-analysis-scroll .da-pane-toolbar { min-height: 42px; padding-top: 6px; padding-bottom: 6px; }
@@ -155,7 +150,7 @@
     .maintenance-analysis-scroll .da-chart-caption { flex-shrink: 0; }
     .maintenance-analysis-scroll .da-details-empty { display: none; }
 }
-@media (max-width: 1000px) {
+@container (max-width: 1000px) {
     .da-workspace-header { align-items: flex-start; gap: 16px; padding: 20px; flex-direction: column; }
     .da-scan-controls { justify-content: flex-start; width: 100%; }
     .da-location-input { flex: 1; }
@@ -169,13 +164,11 @@
     .da-item-size small { display: none; }
     .da-explorer-large { grid-template-columns: 1fr; }
 }
-@media (max-width: 760px) {
+@container (max-width: 760px) {
     .da-explorer { grid-template-columns: 1fr; }
     .da-folders { border-right: 0; }
     .da-item-list { min-height: 150px; max-height: 320px; }
     .da-chart-wrap, .da-chart { min-height: 300px; }
-    .da-workspace-tabs { padding: 0 12px; }
-    .da-workspace-tabs > span { display: none; }
     .da-metrics { padding: 14px; gap: 14px; grid-template-columns: repeat(3, 1fr); }
     .da-metrics strong { font-size: 16px; }
     .da-pane-toolbar { min-height: 50px; }
@@ -185,4 +178,12 @@
     .da-selection-bar small { max-width: 180px; line-height: 1.5; }
     .da-large-options { padding: 12px; }
     .da-empty-features { justify-content: center; }
+    .maintenance-analysis-scroll > .disk-analyzer-inline .da-workspace { height: auto; }
+    .maintenance-analysis-scroll .da-explorer:not(.da-explorer-large) { overflow: visible; }
+    .maintenance-analysis-scroll .da-chart { height: 300px; min-height: 300px; }
 }
+.da-scope-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 18px; padding: 8px 18px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font-size: 10px; line-height: 1.5; }
+.da-scope-caption > span { overflow-wrap: anywhere; min-width: 0; }
+.da-minimum-size { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: 11px; }
+.da-minimum-size select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+@container (max-width: 760px) { .da-details-actions { flex-wrap: wrap; } .da-pane-toolbar { flex-wrap: wrap; } .da-selection-bar { flex-wrap: wrap; gap: 10px; } }

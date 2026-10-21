@@ -3,7 +3,7 @@ import type { DiskNode } from "./diskAnalyzer";
 import { loadDiskChartTree } from "./diskChartTree";
 import { diskSunburst } from "./diskAnalyzerLayout";
 
-const folder: DiskNode = { name: "Project", fullPath: "C:\\Project", size: 100, allocated: null, isDir: true, lastModified: "", fileCount: 1, folderCount: 1 };
+const folder: DiskNode = { entryId: 1, name: "Project", fullPath: "C:\\Project", size: 100, allocated: null, isDir: true, lastModified: "", fileCount: 1, folderCount: 1 };
 const child: DiskNode = { ...folder, name: "Cache", fullPath: "C:\\Project\\Cache" };
 
 describe("asynchronous disk chart expansion", () => {

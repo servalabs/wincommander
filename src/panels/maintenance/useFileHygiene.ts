@@ -77,7 +77,7 @@ export function useFileHygiene() {
         : await backend.emptyFolderCleanerRemove(ids);
       setResult(next);
       hasReturnedResult = true;
-      recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: next.cancelled ? "cancelled" : next.errors.length ? "partial" : "completed", affectedItems: "filesRemoved" in next ? next.filesRemoved : next.foldersRemoved, bytesRecovered: "bytesRecovered" in next ? next.bytesRecovered : undefined });
+      recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: next.cancelled ? "cancelled" : next.errors.length ? "partial" : "completed", affectedItems: "filesRemoved" in next ? next.filesRemoved : next.foldersRemoved, bytesRecovered: "bytesRecovered" in next ? next.bytesRecovered : undefined, detail: "bytesRecovered" in next ? "Logical file bytes removed; free space not measured." : undefined });
       // Removal results don't identify successful IDs; only a new scan can reconcile failures.
       setDuplicateScan(undefined);
       setEmptyScan(undefined);

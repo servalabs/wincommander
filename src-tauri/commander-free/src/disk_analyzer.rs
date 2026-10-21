@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+mod explorer;
+mod large;
 mod progress;
 mod walker;
 
@@ -16,6 +18,7 @@ use walker::{walk_dir, WalkAccum};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskNode {
+    pub entry_id: u64,
     pub name: String,
     pub full_path: String,
     pub size: u64,
@@ -29,6 +32,7 @@ pub struct DiskNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LargeDiskItem {
+    pub entry_id: u64,
     pub name: String,
     pub full_path: String,
     pub size: u64,
@@ -45,6 +49,7 @@ pub struct LargeDiskItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanMeta {
+    pub scan_id: String,
     pub scan_root: String,
     pub total_size: u64,
     pub free_space: u64,
@@ -234,6 +239,8 @@ pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
     if walker::is_link(&metadata) {
         return Err("Choose a real folder rather than a link or reparse point.".into());
     }
+    explorer::reject_link_components(&root)?;
+    let root = explorer::display_path(fs::canonicalize(root).map_err(|error| error.to_string())?);
     let scan_guard = progress::ScanGuard::begin()?;
     *cache()
         .lock()
@@ -242,7 +249,7 @@ pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
     // Walk on a blocking-friendly task — recursive read_dir is sync.
     let result = tokio::task::spawn_blocking(move || {
         let mut acc = WalkAccum::new();
-        let root_node = walk_dir(&root_clone, &mut acc, &progress::CANCELLED, 0);
+        let root_node = walk_dir(&root_clone, &mut acc, &progress::CANCELLED, 0, 0);
         (acc, root_node, scan_guard)
     })
     .await
@@ -255,7 +262,8 @@ pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
     let (free, capacity) = drive_free_and_total(&root);
 
     let meta = ScanMeta {
-        scan_root: path,
+        scan_id: uuid::Uuid::new_v4().to_string(),
+        scan_root: root.to_string_lossy().into_owned(),
         total_size: root_node.size,
         free_space: free,
         drive_capacity: capacity,
@@ -297,26 +305,6 @@ pub async fn get_disk_children(path: String) -> Result<Vec<DiskNode>, String> {
         Some(v) => Ok(v.clone()),
         None => Err("No scan data. Run a scan first.".into()),
     }
-}
-
-#[tauri::command]
-pub async fn get_large_disk_items(
-    min_size_bytes: Option<u64>,
-    limit: Option<usize>,
-    include_dirs: Option<bool>,
-) -> Result<Vec<LargeDiskItem>, String> {
-    let guard = cache().lock().map_err(|e| format!("cache lock: {}", e))?;
-    let min = min_size_bytes.unwrap_or(MIN_LARGE_BYTES);
-    let inc_dirs = include_dirs.unwrap_or(true);
-    let lim = limit.unwrap_or(500);
-    let out: Vec<LargeDiskItem> = guard
-        .large_items
-        .iter()
-        .filter(|i| i.size >= min && (inc_dirs || !i.is_dir))
-        .take(lim)
-        .cloned()
-        .collect();
-    Ok(out)
 }
 
 /// Lowercased, separator-normalized path string for case-insensitive Windows
@@ -486,6 +474,20 @@ pub async fn disk_delete_item(
         *guard = ScanCache::empty();
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn open_disk_item(scan_id: String, item_id: u64) -> Result<(), String> {
+    explorer::open_disk_item(scan_id, item_id).await
+}
+
+#[tauri::command]
+pub async fn get_large_disk_items(
+    min_size_bytes: Option<u64>,
+    limit: Option<usize>,
+    include_dirs: Option<bool>,
+) -> Result<large::LargeDiskResult, String> {
+    large::get_large_disk_items(min_size_bytes, limit, include_dirs).await
 }
 
 #[cfg(test)]

@@ -69,6 +69,17 @@ export function getSelectedItems(items: RoutineCleanerItem[], selectedIds: Set<s
   return items.filter((item) => selectedIds.has(item.id));
 }
 
+export function toggleRoutineCategorySelection(items: RoutineCleanerItem[], selectedIds: Set<string>, category: RoutineCleanerCategory): Set<string> {
+  const categoryItems = items.filter((item) => item.category === category);
+  const deselect = categoryItems.every((item) => selectedIds.has(item.id));
+  const next = new Set(selectedIds);
+  for (const item of categoryItems) {
+    if (deselect) next.delete(item.id);
+    else next.add(item.id);
+  }
+  return next;
+}
+
 export function getScanAfterClean(scan: RoutineCleanerScan, cleanedIds: string[]): RoutineCleanerScan {
   const cleaned = new Set(cleanedIds);
   const items = scan.items.filter((item) => !cleaned.has(item.id));

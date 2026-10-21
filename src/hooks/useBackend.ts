@@ -93,6 +93,7 @@ export interface DuplicateGroup {
 
 export interface DuplicateScan {
   groups: DuplicateGroup[];
+  skippedEntries: number;
   scannedFiles: number;
   cancelled: boolean;
   truncated: boolean;
@@ -2338,8 +2339,8 @@ export function useBackend() {
     getStartupItems: () => execute<{ items: StartupItem[] }>("Get-StartupItems"),
     disableStartupItem: (name: string, location: string) =>
       execute("Disable-StartupItem", { Name: name, Location: location }),
-    enableStartupItem: (name: string) =>
-      execute("Enable-StartupItem", { Name: name }),
+    enableStartupItem: (name: string, location?: string) =>
+      execute("Enable-StartupItem", { Name: name, ...(location ? { Location: location } : {}) }),
     optimizeStartup: (aggressive: boolean) =>
       execute<{ DisabledCount: number; RamSavedMB: number }>("Invoke-OptimizeStartup", { Aggressive: aggressive }),
 
@@ -2458,15 +2459,16 @@ export function useBackend() {
     // ── Disk Space Analyzer ────────────────────────────────────────────
     /** Scan a folder natively. Byte totals describe logical file lengths, not physical allocation. */
     runDiskScan: (path: string) =>
-      invoke<{ scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean; complete: boolean; skippedEntries: number; skippedLinks: number; truncated: boolean; cancelled: boolean; sizeBasis: "logical"; allocatedSizeAvailable: boolean }>("run_disk_scan", { path }),
+      invoke<{ scanId: string; scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean; complete: boolean; skippedEntries: number; skippedLinks: number; truncated: boolean; cancelled: boolean; sizeBasis: "logical"; allocatedSizeAvailable: boolean }>("run_disk_scan", { path }),
     cancelDiskScan: () => invoke<void>("cancel_disk_scan"),
     getDiskScanProgress: () => invoke<{ running: boolean; filesScanned: number; foldersScanned: number; bytesScanned: number; skippedEntries: number; cancelled: boolean }>("get_disk_scan_progress"),
     /** Fetch sorted children of a folder from the in-memory scan cache. */
     getDiskChildren: (path: string) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
-    /** Fetch a flat list of the largest files/folders from the latest native scan. */
-    getLargeDiskItems: (minSizeBytes: number, limit: number = 200, includeDirs: boolean = true) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
+      invoke<Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
+    /** Threshold matches from the scanned scope, with an explicit result limit. */
+    getLargeDiskItems: (minSizeBytes: number, limit: number = 5000, includeDirs: boolean = false) =>
+      invoke<{ items: Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>; matchedCount: number; matchedSize: number; resultLimit: number; limited: boolean; minimumSize: number; scanId: string }>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
+    openDiskItem: (scanId: string, itemId: number) => invoke<void>("open_disk_item", { scanId, itemId }),
     /** Permanently delete a verified file and invalidate the scan cache. Folder deletion is refused. */
     diskDeleteItem: async (path: string) => {
       const capabilityToken = await requestDestructiveCapability(
@@ -2575,7 +2577,7 @@ export function useBackend() {
     // Apps: Teams & APPX Debloat
     removeTeams: () => execute("Remove-MicrosoftTeams"),
     getTeamsStatus: () => execute<{ installed: boolean }>("Get-TeamsStatus"),
-    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean; iconData?: string | null }[] }>("Get-InstalledAppxInventory"),
+    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean; version?: string; publisher?: string; iconData?: string | null }[] }>("Get-InstalledAppxInventory"),
     getDebloatWindowsIconData: () => execute<{ icons: Record<string, string | null> }>("Get-DebloatWindowsIconData"),
     removeAppxByName: (name: string) => execute("Remove-AppxByName", { Name: name }),
     restoreAppxByName: (name: string) => execute("Restore-AppxByName", { Name: name }),

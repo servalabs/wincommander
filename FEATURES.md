@@ -84,6 +84,8 @@ the backend and private component before execution.
 - Maintenance workspaces for cache cleanup, large files, duplicates, disk
   analysis, startup, registry hygiene, and local operation history. Cache
   categories show searchable targets, selection totals, and item details.
+  The Maintenance rail remains visible while results scroll; its Privacy
+  cleanup link opens the existing user-scoped trace-cleaning workspace.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
 - Explicit project-folder inspection through a native picker for supported
@@ -93,8 +95,19 @@ the backend and private component before execution.
   chart depth, navigation history, progress, and cancellation. Partial scans
   identify skipped entries and scan limits; charts show logical file sizes,
   not measured physical allocation or guaranteed reclaimable space.
+- Large Files uses a selected minimum file size, type filters, search, and
+  sorting. Results disclose the backend display limit and incomplete scans.
+  Folder exploration and Open in Explorer are separate from confirmed file
+  deletion; recursive folder deletion is unavailable in the analyzer.
 - Duplicate Smart Select and an explicit copy-to-keep preference, with
-  backend retention checks and a refreshed scan after removal.
+  backend content and identity rechecks, retention checks, and a refreshed
+  scan after removal. Repeated paths and hard links are not counted as extras.
+- Startup review includes enabled/disabled filters, available publisher and
+  launcher details, and exact-entry enable/disable controls. Startup delay
+  and memory savings are not inferred from a running process's memory use.
+- Application selection reveals available publisher, version, installed size
+  and location beside the scrollable results. Unavailable metadata is labeled;
+  protected or ambiguous program targets cannot be selected for removal.
 - Local display history retains up to 100 supported maintenance results in
   the current application profile. It is clearable and is not an evidence
   receipt or a measurement of physical space recovered.

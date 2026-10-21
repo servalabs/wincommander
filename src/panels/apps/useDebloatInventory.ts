@@ -4,6 +4,12 @@ import useBackend from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { DebloatItem } from "./types";
 import { isSystemCritical, getFriendlyName, getCategoryForStoreId, RECOMMENDED_IDS } from "./debloatLists";
+import { programRemovalUnavailable } from "./applicationReview";
+
+interface AppxInventoryEntry {
+  name?: string; Name?: string; iconData?: string | null; IconData?: string | null;
+  publisher?: string; version?: string; packageFullName?: string; isProvisioned?: boolean;
+}
 
 export interface UseDebloatInventoryResult {
   items: DebloatItem[];
@@ -46,12 +52,15 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
       try {
         const res = await getInstalledAppxInventory();
         if (cancelled) return;
-        const rawList: any[] = Array.isArray(res.data)
-          ? (res.data as any[])
-          : ((res.data as any)?.apps ?? []);
+        const rawList: AppxInventoryEntry[] = Array.isArray(res.data) ? res.data : res.data?.apps ?? [];
         if (res.success) {
           const normalized = rawList
-            .map((a: any) => ({ name: (a.name ?? a.Name ?? "") as string, iconData: (a.iconData ?? a.IconData ?? null) as string | null }))
+            .map(a => ({ name: a.name ?? a.Name ?? "", iconData: a.iconData ?? a.IconData ?? null,
+              publisher: typeof a.publisher === "string" ? a.publisher : undefined,
+              version: typeof a.version === "string" ? a.version : undefined,
+              packageFullName: typeof a.packageFullName === "string" ? a.packageFullName : undefined,
+              isProvisioned: a.isProvisioned === true,
+            }))
             .filter(a => a.name && !isSystemCritical(a.name));
           setStoreItems(normalized.map(a => ({
             id: a.name,
@@ -59,6 +68,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
             source: "store" as const,
             category: getCategoryForStoreId(a.name),
             iconData: a.iconData,
+            publisher: a.publisher, version: a.version, packageFullName: a.packageFullName, isProvisioned: a.isProvisioned,
             recommended: RECOMMENDED_IDS.has(a.name),
             remove: async () => {
               const r = await removeAppxByName(a.name);
@@ -98,15 +108,19 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
         const res = await getBcuApplicationList();
         if (cancelled) return;
         if (res.success && res.data) {
+          const applications = res.data.apps;
           setProgramItems(
-            res.data.apps
+            applications
               .filter(a => a.uninstallerKind !== "StoreApp")
               .map(a => ({
-                id: a.displayName,
+                id: `program:${a.registryPath}:${a.registryKeyName}:${a.displayName}`,
                 label: a.displayName,
                 source: "program" as const,
                 category: "Programs",
                 sizeKB: a.estimatedSizeKB,
+                publisher: a.publisher, version: a.displayVersion,
+                installDate: a.installDate, installLocation: a.installLocation,
+                removalUnavailable: programRemovalUnavailable(a, applications),
                 iconData: a.iconData ?? null,
                 recommended: false,
                 remove: async () => {

@@ -40,8 +40,8 @@ export function AppBrowserCacheCard() {
     <Card className="maintenance-storage-card maintenance-app-cache-card">
       <CardHeader className="flex-row items-start gap-3">
         <div className="min-w-0">
-          <CardTitle>Application caches</CardTitle>
-          <CardDescription>Browser caches, developer tools, applications, and game launchers. Review targets before cleaning.</CardDescription>
+          <CardTitle>Deep Cleanup</CardTitle>
+          <CardDescription>Inspect supported browser, app and developer caches or choose a project folder for build artifacts. Privacy history is reviewed separately in Privacy cleanup.</CardDescription>
         </div>
         <RoutineCleanerHeaderActions cleaner={cleaner} />
       </CardHeader>

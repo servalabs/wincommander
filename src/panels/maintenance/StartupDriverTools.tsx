@@ -69,7 +69,7 @@ export function StartupDriverTools() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div id="maintenance-manager-panel-startup" role="tabpanel" aria-labelledby="maintenance-manager-tab-startup" hidden={managerTab !== "startup"}>
-          <StartupManager embedded scanKey={managerScanKey} />
+          <StartupManager embedded scanKey={managerScanKey} reviewEntries={tools.startup?.entries} />
           {tools.startup && <section className="startup-impact-section" aria-label="Signature and launch-impact review">
             <button type="button" className="startup-impact-section__toggle" aria-expanded={isStartupImpactOpen} onClick={() => setIsStartupImpactOpen((open) => !open)}>
               <span className="startup-impact-section__heading"><span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</span><span className="text-xs text-[var(--text-mute)]">Unsigned or unverifiable launchers</span></span>

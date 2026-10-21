@@ -158,8 +158,8 @@ export default function SystemCleanupPanel() {
         <div className="panel-container cleanup-panel">
             <PanelHeader
                 panelId="cleanup"
-                title="System Cleanup"
-                description="Find and clear the traces Windows keeps about you — then schedule recurring cleanups."
+                title="Privacy cleanup"
+                description="Review Windows and browser traces for the selected account or stated machine scope. Deep Cleanup in Maintenance handles storage and application caches."
             />
             {isInvestigator && (
                 <div

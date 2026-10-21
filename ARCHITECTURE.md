@@ -74,7 +74,11 @@ of authorization and evidence workflows.
 
 The native disk walker skips reparse points and bounds traversal to 128 levels
 and two million entries. Progress and partial-result metadata accompany its
-process-local scan cache. The routine cleaner uses one owner per overlapping
+process-local scan cache. Large-file threshold queries count all scanned
+matches before returning at most 5,000 files. Explorer actions resolve a
+current scan identifier and entry identifier in the backend, then validate
+the path and reject links; the frontend supplies no executable to launch.
+The routine cleaner uses one owner per overlapping
 target. Its project picker discovers supported artifacts within the selected
 root; admission and mutation recheck plain path components and existing
 handle-based identity constraints before deletion.
@@ -279,6 +283,9 @@ excludes security and audit-history cleaning from the Free binary.
 The Maintenance tool rail separates cache review, large files, duplicates,
 analysis, startup, hygiene, and history. Deep cleanup presents the app cache
 workspace and a separate Windows-storage disclosure (`ReclaimSpaceCard.tsx`).
+Maintenance owns its content scroller so the tool rail stays visible. Privacy
+cleanup links to the existing System Cleanup panel and its Windows account
+scope; it does not introduce another cleanup engine or System Optimization.
 Windows-owned storage uses `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`;
 app-owned regenerable data uses `routine_cleaner` with the overlapping `system`
 category withheld (`APP_CACHE_CLEANUP_CATEGORIES`). Project-only results carry

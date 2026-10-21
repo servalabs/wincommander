@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { diskBreadcrumbs, diskModifiedTime, diskPathContains, filterLargeDiskItems, formatDiskBytes, independentDiskSelection, type DiskNode, type LargeDiskItem } from "./diskAnalyzer";
+import { diskBreadcrumbs, diskScopeTotals, diskModifiedTime, diskPathContains, filterLargeDiskItems, formatDiskBytes, independentDiskSelection, type DiskNode, type LargeDiskItem } from "./diskAnalyzer";
 import { diskArcPath, diskSunburst, diskTreemap, type DiskChartNode } from "./diskAnalyzerLayout";
 
 function node(fullPath: string, size: number, isDir = false): DiskNode {
-    return { name: fullPath.split("\\").pop()!, fullPath, size, isDir, allocated: null, lastModified: "", fileCount: 0, folderCount: 0 };
+    return { entryId: 1, name: fullPath.split("\\").pop()!, fullPath, size, isDir, allocated: null, lastModified: "", fileCount: 0, folderCount: 0 };
 }
 
 describe("disk selection accounting", () => {
@@ -54,7 +54,7 @@ test("large-file search combines type filters and size sorting", () => {
     ];
     expect(filterLargeDiskItems(items, "videos", "videos", "size").map(item => item.size)).toEqual([500, 100]);
     expect(filterLargeDiskItems(items, "review", "downloads", "name").map(item => item.name)).toEqual(["archive.zip"]);
-    expect(formatDiskBytes(1024 ** 3)).toBe("1.0 GB");
+    expect(formatDiskBytes(1024 ** 3)).toBe("1.0 GiB");
 });
 
 test("backend Unix-second modification times sort chronologically", () => {
@@ -67,4 +67,10 @@ test("backend Unix-second modification times sort chronologically", () => {
 test("higher risk filter includes the backend high-risk classification", () => {
     const item: LargeDiskItem = { ...node("C:\\Windows\\large.log", 500), itemType: "Temp / log", cleanupHint: "", risk: "high" };
     expect(filterLargeDiskItems([item], "review", "", "size")).toEqual([item]);
+});
+
+test("current folder metrics count immediate files plus descendants without retaining scan-root counts", () => {
+    const folder = { ...node("C:\\Root\\Nested", 200, true), fileCount: 3, folderCount: 2 };
+    expect(diskScopeTotals([folder, node("C:\\Root\\file", 100)])).toEqual({ size: 300, files: 4, folders: 3 });
+    expect(diskScopeTotals([])).toEqual({ size: 0, files: 0, folders: 0 });
 });

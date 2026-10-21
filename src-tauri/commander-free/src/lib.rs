@@ -2779,6 +2779,7 @@ pub fn run() {
             disk_analyzer::get_disk_scan_progress,
             disk_analyzer::get_disk_children,
             disk_analyzer::get_large_disk_items,
+            disk_analyzer::open_disk_item,
             disk_analyzer::disk_delete_item,
             // ── Preview-first routine cache/database cleaner ──
             routine_cleaner::routine_cleaner_scan,
