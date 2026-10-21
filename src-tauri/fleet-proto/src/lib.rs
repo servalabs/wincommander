@@ -329,6 +329,12 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
     },
     CommandMeta {
+        catalog_id: "velociraptor.collect.sensitive_files",
+        action_class: ActionClass::Safe,
+        summary: "Run an administrator-authorized metadata-only sensitive-file discovery",
+        payload_schema: Some(r#"{"type":"object","properties":{"run_id":{"type":"string","maxLength":36}},"required":["run_id"],"additionalProperties":false}"#),
+    },
+    CommandMeta {
         catalog_id: "dns.cache.clear",
         action_class: ActionClass::Safe,
         summary: "Clear the local DNS resolver cache",
