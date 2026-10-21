@@ -20,11 +20,12 @@ describe("buildSearchQuery — text + filters combine (the core fix)", () => {
     // sent the backend only "assets*" and filtered the raw hits client-side —
     // silently dropping matching folders whenever the first page of raw
     // Everything results happened to be all files.
-    expect(q).toBe("folder: size:>100mb dm:thisweek assets*");
+    expect(q).toBe("folder: size:>100mb dm:thisweek *assets*");
   });
 
-  it("text alone (no filters) still normalizes to a trailing-wildcard token", () => {
-    expect(buildSearchQuery("report 2024", new Set(), "any", "any")).toBe("report*2024*");
+  it("matches a name containing the text, including text after a prefix", () => {
+    expect(buildSearchQuery("parth", new Set(), "any", "any")).toBe("*parth*");
+    expect(buildSearchQuery("report 2024", new Set(), "any", "any")).toBe("*report*2024*");
   });
 
   it("filters alone (no text) still produce their tokens with no dangling text token", () => {

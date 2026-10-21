@@ -88,10 +88,11 @@ export const FILE_TYPE_EXTENSIONS: Record<Exclude<SearchType, "files" | "folders
   code: ["js", "ts", "tsx", "jsx", "py", "rs", "go", "java", "cpp", "cs", "html", "css", "json", "yml", "yaml", "ps1", "bat", "cmd", "c", "h", "hpp", "sh", "sql", "toml", "xml", "vue", "svelte", "kt", "swift", "rb", "php", "lua"],
 };
 
-// Normalize separators to * and add trailing * for prefix matching
+// ES treats a bare trailing wildcard as a prefix match; search within names.
 export function normalizeQuery(raw: string): string {
   const n = raw.trim().replace(/[\s\-,.]+/g, "*");
-  return n.endsWith("*") ? n : `${n}*`;
+  const trailing = n.endsWith("*") ? n : `${n}*`;
+  return trailing.startsWith("*") ? trailing : `*${trailing}`;
 }
 
 // Known installed-app directory fragments (lowercased)
