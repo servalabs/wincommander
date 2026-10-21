@@ -1,12 +1,14 @@
 import { useEffect, useRef } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Card, CardContent } from "../../components/ui/card";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { SystemHygieneTools } from "./SystemHygieneTools";
 import { StartupDriverTools } from "./StartupDriverTools";
 import { AppBrowserCacheCard, RoutineCacheCleanupCard, WindowsStorageCard } from "./ReclaimSpaceCard";
+import { FileHygieneTools } from "./FileHygieneTools";
+import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/MaintenanceWorkspaceNav";
+import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
 import FileStatsPanel from "./FileStatsPanel";
@@ -17,53 +19,41 @@ import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds } from "./routineCl
 const APP_CACHE_SESSION_KEY = `routine-cleaner.${[...APP_CACHE_CLEANUP_CATEGORIES].sort().join("-")}`;
 
 export default function MaintenancePanel() {
-  const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-tab", "files");
-  const visibleTab = ["files", "registry", "startup"].includes(activeTab) ? activeTab : "files";
-  const diskCleanupRef = useRef<HTMLDivElement>(null);
-  const diskAnalyzerRef = useRef<HTMLDivElement>(null);
+  const [windowsOpen, setWindowsOpen] = useMaintenanceSessionState("maintenance.windows-storage-open", false);
+  const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-workspace", "cleanup");
+  const active = MAINTENANCE_WORKSPACES.find((item) => item.id === activeTab) ?? MAINTENANCE_WORKSPACES[0];
   useEffect(() => {
-    if (activeTab !== visibleTab) setActiveTab(visibleTab);
-  }, [activeTab, setActiveTab, visibleTab]);
-  useEffect(() => {
-    const openStorage = (target: "cleanup" | "analyzer") => {
-      setActiveTab("files");
-      window.setTimeout(() => (target === "cleanup" ? diskCleanupRef : diskAnalyzerRef).current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
-    };
-    const openCleanup = () => openStorage("cleanup");
-    const openAnalyzer = () => openStorage("analyzer");
-    const openStorageTab = () => setActiveTab("files");
+    const openCleanup = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
+    const openStorage = () => setActiveTab("cleanup");
+    const openAnalyzer = () => setActiveTab("analysis");
     window.addEventListener("open-disk-cleanup", openCleanup);
     window.addEventListener("open-disk-space-analyzer", openAnalyzer);
-    window.addEventListener("open-maintenance-storage", openStorageTab);
+    window.addEventListener("open-maintenance-storage", openStorage);
     return () => {
       window.removeEventListener("open-disk-cleanup", openCleanup);
       window.removeEventListener("open-disk-space-analyzer", openAnalyzer);
-      window.removeEventListener("open-maintenance-storage", openStorageTab);
+      window.removeEventListener("open-maintenance-storage", openStorage);
     };
-  }, [setActiveTab]);
-
+  }, [setActiveTab, setWindowsOpen]);
   useMaintenanceReviewPreload();
-
-  return (
-    <div className="panel-container flex flex-col gap-4">
-      <PanelHeader
-        panelId="maintenance"
-        title="System Maintenance"
-        description="Reclaim space and review startup and drivers. Windows repair, security, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
-      />
-
-      <Tabs value={visibleTab} onValueChange={setActiveTab}>
-        <TabsList className="w-full flex-wrap justify-start">
-          <TabsTrigger value="files">Storage &amp; files</TabsTrigger>
-          <TabsTrigger value="registry">Registry &amp; cleanup</TabsTrigger>
-          <TabsTrigger value="startup">Startup &amp; drivers</TabsTrigger>
-        </TabsList>
-        <TabsContent value="files"><StorageAndFileTools cleanupRef={diskCleanupRef} analyzerRef={diskAnalyzerRef} /></TabsContent>
-        <TabsContent value="registry"><RegistryAndHygieneTools /></TabsContent>
-        <TabsContent value="startup"><StartupDriverTools /></TabsContent>
-      </Tabs>
+  return <div className="panel-container flex flex-col gap-4">
+    <PanelHeader panelId="maintenance" title="System Maintenance" description="Understand your storage, review cleanable data, and keep your system in order." />
+    <div className="maintenance-workspace-shell">
+      <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
+      <section className="maintenance-workspace-main" aria-label={active.label}>
+        {active.id !== "analysis" && active.id !== "large" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
+        {active.id === "cleanup" && <StorageAndFileTools windowsOpen={windowsOpen} setWindowsOpen={setWindowsOpen} />}
+        {(active.id === "analysis" || active.id === "large") && <div className="maintenance-analysis-workspace">
+          <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog key={active.id} inline isOpen onClose={() => {}} initialMode={active.id === "large" ? "large" : "space"} /></div></CardContent></Card>
+          {active.id === "analysis" && <div className="maintenance-file-stats-slot"><FileStatsPanel /></div>}
+        </div>}
+        {active.id === "duplicates" && <FileHygieneTools />}
+        {active.id === "registry" && <RegistryAndHygieneTools />}
+        {active.id === "startup" && <StartupDriverTools />}
+        {active.id === "history" && <MaintenanceHistoryPanel />}
+      </section>
     </div>
-  );
+  </div>;
 }
 
 function useMaintenanceReviewPreload() {
@@ -114,23 +104,13 @@ function useMaintenanceReviewPreload() {
     });
   }, [backend]);
 }
-function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.RefObject<HTMLDivElement | null>; analyzerRef: React.RefObject<HTMLDivElement | null> }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <RoutineCacheCleanupCard />
-      <div className="maintenance-storage-workspace">
-        <div ref={cleanupRef} className="min-w-0"><WindowsStorageCard /></div>
-        <AppBrowserCacheCard />
-      </div>
-      <div className="maintenance-analysis-workspace">
-      <Card className="maintenance-analysis-card">
-        <CardHeader><CardTitle>Disk space analyser</CardTitle><CardDescription>Inspect disk usage and large items before taking action. This remains an analysis tool and does not delete files automatically.</CardDescription></CardHeader>
-        <CardContent ref={analyzerRef} className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen={true} onClose={() => {}} initialMode="space" /></div></CardContent>
-      </Card>
-      <div className="maintenance-file-stats-slot"><FileStatsPanel /></div>
-      </div>
-    </div>
-  );
+function StorageAndFileTools({ windowsOpen, setWindowsOpen }: { windowsOpen: boolean; setWindowsOpen: (open: boolean) => void }) {
+  return <div className="flex flex-col gap-4">
+    <AppBrowserCacheCard />
+    <details className="maintenance-secondary-scope" open={windowsOpen} onToggle={(event) => setWindowsOpen(event.currentTarget.open)}><summary>Windows storage &amp; routine maintenance</summary>
+      <div className="flex flex-col gap-4 pt-4"><WindowsStorageCard /><RoutineCacheCleanupCard /></div>
+    </details>
+  </div>;
 }
 
 function RegistryAndHygieneTools() {

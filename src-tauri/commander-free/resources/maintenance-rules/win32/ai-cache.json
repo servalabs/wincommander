@@ -1,0 +1,14 @@
+{
+  "$schema": "../schema/rules.schema.json",
+  "type": "apps",
+  "apps": [
+    {
+      "id": "huggingface-xet-shards",
+      "name": "Hugging Face upload shard cache",
+      "paths": ["${HOME}/.cache/huggingface/xet"],
+      "childSubdir": "shard-cache",
+      "minAgeDays": 7,
+      "description": "Completed-upload deduplication shards only. Preserves downloaded models, datasets, tokens, assets, and resumable upload staging. Close upload tools before cleaning."
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { Icon, type IconName } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import SharedEmptyState from "../../components/shared/EmptyState";
 import type { DuplicateRemoveResult, EmptyFolderRemoveResult } from "../../hooks/useBackend";
+import { getDuplicateSelectedBytes } from "../../lib/maintenanceSelection";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
 
@@ -34,7 +35,7 @@ function fileIconFor(name: string): IconName {
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
-    ? `Removed ${result.filesRemoved} files and recovered ${formatBytes(result.bytesRecovered)}.`
+    ? `Removed ${result.filesRemoved} files (${formatBytes(result.bytesRecovered)} logical data).`
     : `Removed ${result.foldersRemoved} empty folders.`;
   if (result.cancelled) return { tone: "warning" as const, title: "Removal cancelled", message: `${summary} Cancelled before finishing.` };
   if (result.errors.length) return { tone: "warning" as const, title: "Completed with issues", message: `${summary} ${result.errors.length} item${result.errors.length === 1 ? "" : "s"} could not be removed.` };
@@ -66,10 +67,9 @@ export function FileHygieneTools() {
   const cancelled = tools.tool === "duplicates" ? tools.duplicateScan?.cancelled : tools.emptyScan?.cancelled;
   const selectedBytes = useMemo(() => {
     if (tools.tool !== "duplicates" || !tools.duplicateScan) return 0;
-    const files = tools.duplicateScan.groups.flatMap((group) => group.files);
-    return files.filter((file) => tools.selected.has(file.id)).reduce((sum, file) => sum + file.size, 0);
+    return getDuplicateSelectedBytes(tools.duplicateScan.groups, tools.selected);
   }, [tools.tool, tools.duplicateScan, tools.selected]);
-  // Aggregate reclaimable bytes across every group, not just the selected
+  // Aggregate removable bytes across every group, not just the selected
   // ones — this is the "total scan findings" figure surfaced immediately
   // after a scan completes, before the user selects anything.
   const totalReclaimableBytes = useMemo(() => {
@@ -111,7 +111,7 @@ export function FileHygieneTools() {
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
                 <>
-                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} reclaimable</Badge>
+                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} removable</Badge>
                   <Badge tone="neutral">{count} group{count === 1 ? "" : "s"}</Badge>
                 </>
               ) : (
@@ -127,6 +127,11 @@ export function FileHygieneTools() {
           )}
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {hasScan && <div className="flex flex-wrap items-center gap-2">
+            {tools.tool === "duplicates" && <label className="text-xs text-[var(--text-dim)]">Keep <select aria-label="Duplicate copy retention preference" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.keepPolicy} disabled={tools.busy} onChange={(event) => tools.changeKeepPolicy(event.target.value as "first" | "shortest-path")}><option value="first">First verified copy</option><option value="shortest-path">Copy at shortest path</option></select></label>}
+            <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Smart select copies" : "Select all empty folders"}</Button>
+            <Button size="sm" variant="ghost" disabled={tools.busy || !tools.selected.size} onClick={tools.clearSelection}>Clear selection</Button>
+          </div>}
           {/* Exactly one scan entry point per state: none of these four
               branches can render at the same time as another. */}
           {!tools.roots.length && (
@@ -158,28 +163,29 @@ export function FileHygieneTools() {
                   <div key={group.id} className="rounded-[var(--r)] border border-[var(--border)] p-3 transition-colors hover:border-[var(--border-strong)]">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-dim)]"><Icon icon="duplicate" size={12} />{group.files.length} identical files</span>
-                      <Badge tone="warning">{formatBytes(group.reclaimableBytes)} reclaimable</Badge>
+                      <Badge tone="warning">{formatBytes(group.reclaimableBytes)} removable</Badge>
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      {group.files.map((file, index) => (
-                        <SelectionRow key={file.id} checked={tools.selected.has(file.id)} disabled={index === 0} onClick={() => tools.select(file.id)} icon={fileIconFor(file.name)} label={file.name} detail={file.path} retained={index === 0} />
-                      ))}
+                      {group.files.map((file) => <div key={file.id} className="flex items-center gap-1">
+                        <div className="min-w-0 flex-1"><SelectionRow checked={tools.selected.has(file.id)} disabled={tools.busy || tools.retainedFileId(group) === file.id} onClick={() => tools.select(file.id)} icon={fileIconFor(file.name)} label={file.name} detail={file.path} retained={tools.retainedFileId(group) === file.id} /></div>
+                        {tools.retainedFileId(group) !== file.id && <Button size="sm" variant="ghost" disabled={tools.busy} onClick={() => tools.keepFile(group.id, file.id)}>Keep this</Button>}
+                      </div>)}
                     </div>
                   </div>
                 ))}
-                {!count && <SharedEmptyState icon="confirm" title="No duplicate file groups found" hint="Every file across the chosen folders is unique." />}
+                {!count && <SharedEmptyState icon="confirm" title="No duplicate file groups found" hint="No identical groups were returned within the completed scan scope." />}
               </div>
-              <SelectionActionBar count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} to reclaim` : undefined} onRemove={() => setConfirmOpen(true)} />
+              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
             </>
           )}
 
           {tools.tool === "empty" && tools.emptyScan && (
             <>
               <div className="flex flex-col gap-2">
-                {tools.emptyScan.folders.map((folder) => <SelectionRow key={folder.id} checked={tools.selected.has(folder.id)} onClick={() => tools.select(folder.id)} icon="folder-close" label={folder.name} detail={folder.path} />)}
-                {!count && <SharedEmptyState icon="confirm" title="No empty folders found" hint="Every folder across the chosen folders is in use." />}
+                {tools.emptyScan.folders.map((folder) => <SelectionRow key={folder.id} checked={tools.selected.has(folder.id)} disabled={tools.busy} onClick={() => tools.select(folder.id)} icon="folder-close" label={folder.name} detail={folder.path} />)}
+                {!count && <SharedEmptyState icon="confirm" title="No empty folders found" hint="No empty folders were returned within the completed scan scope." />}
               </div>
-              <SelectionActionBar count={tools.selected.size} onRemove={() => setConfirmOpen(true)} />
+              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} onRemove={() => setConfirmOpen(true)} />
             </>
           )}
         </CardContent>
@@ -205,7 +211,7 @@ export function FileHygieneTools() {
                 <div key={root} className="flex min-w-0 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
                   <Icon icon="folder-close" size={14} className="shrink-0 text-[var(--text-mute)]" />
                   <span className="min-w-0 flex-1 break-all font-mono text-xs text-[var(--text-dim)]" title={root}>{root}</span>
-                  <Button size="icon" variant="ghost" onClick={() => tools.removeRoot(root)} title={`Remove ${root}`} aria-label={`Remove ${root}`}>
+                  <Button size="icon" variant="ghost" disabled={tools.busy} onClick={() => tools.removeRoot(root)} title={`Remove ${root}`} aria-label={`Remove ${root}`}>
                     <Icon icon="cross" size={14} />
                   </Button>
                 </div>
@@ -219,12 +225,12 @@ export function FileHygieneTools() {
 }
 
 // Keeps the destructive action visible after a long page-level results list.
-function SelectionActionBar({ count, bytesLabel, onRemove }: { count: number; bytesLabel?: string; onRemove: () => void }) {
+function SelectionActionBar({ count, bytesLabel, onRemove, disabled }: { count: number; bytesLabel?: string; onRemove: () => void; disabled: boolean }) {
   if (!count) return null;
   return (
     <div className="sticky bottom-0 z-[var(--z-sticky)] flex flex-wrap items-center justify-end gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 shadow-[var(--shadow)]">
       {bytesLabel && <span className="text-xs text-[var(--text-mute)]">{bytesLabel}</span>}
-      <Button variant="danger" onClick={onRemove}>Remove {count} selected</Button>
+      <Button variant="danger" disabled={disabled} onClick={onRemove}>Remove {count} selected</Button>
     </div>
   );
 }

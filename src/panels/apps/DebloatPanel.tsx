@@ -1,17 +1,14 @@
 // src/panels/apps/DebloatPanel.tsx
-import { Button, Checkbox, Icon, InputGroup, Spinner } from "@/components/ui/bp";
+import { Button, Checkbox, InputGroup } from "@/components/ui/bp";
 import { useCallback, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { runOperation } from "../../context/OperationContext";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
-import AppIcon from "./components/AppIcon";
 import { CATEGORY_ORDER } from "./debloatLists";
 import { DebloatItem } from "./types";
 import { useDebloatInventory } from "./useDebloatInventory";
-// staggerDelay caps per-item delay — large groups won't animate for seconds.
-import { staggerDelay } from "../../components/shared/AnimatedList";
-import { DURATION_S, EASE } from "../../components/shared/motion";
+import ApplicationReviewResults from "./components/ApplicationReviewResults";
+import { recordMaintenanceOperation } from "../../hooks/useMaintenanceHistory";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const FILTER_CHIPS = [
@@ -28,50 +25,6 @@ function matchesFilter(item: DebloatItem, filter: string): boolean {
   if (filter === "Programs") return item.source === "program";
   if (filter === "Windows extras") return item.source === "windows";
   return item.category === filter;
-}
-
-function SourceBadge({ source }: { source: DebloatItem["source"] }) {
-  const { label, color, border } = source === "store"
-    ? { label: "ST",  color: "#5bd6c7", border: "rgba(55,182,166,.5)" }
-    : source === "program"
-    ? { label: "PR",  color: "#a78bff", border: "rgba(139,92,246,.5)" }
-    : { label: "WIN", color: "#f0a93b", border: "rgba(214,164,24,.5)" };
-  return (
-    <span style={{ color, borderColor: border, fontFamily: "var(--font-mono)", fontSize: "8px", padding: "1px 4px", borderRadius: "3px", border: "1px solid", flexShrink: 0 }}>
-      {label}
-    </span>
-  );
-}
-
-function DebloatChip({ item, selected, onToggle, removing }: {
-  item: DebloatItem; selected: boolean; onToggle: (id: string) => void; removing: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={`debloat-chip${selected ? " is-selected" : ""}`}
-      onClick={() => onToggle(item.id)}
-      aria-pressed={selected}
-      aria-label={`${selected ? "Deselect" : "Select"} ${item.label}`}
-      disabled={removing}
-    >
-      <span className="debloat-chip-check" aria-hidden="true">
-        {selected && <Icon icon="tick" size={10} />}
-      </span>
-      {/* Real brand icon alongside the source badge — SourceBadge alone was
-          the only visual identity (a generic 2-3 letter text chip). Reuses
-          the same resolver the app catalog uses; falls back to a category
-          glyph when no bundled asset matches. */}
-      <AppIcon id={item.id} category={item.category} iconData={item.iconData} size={22} preferNative />
-      <span className="debloat-chip-name" title={item.id}>{item.label}</span>
-      {item.riskNote && (
-        <span title={item.riskNote} style={{ flexShrink: 0, cursor: "help" }}>
-          <Icon icon="warning-sign" size={10} className="text-[var(--color-warning)]" />
-        </span>
-      )}
-      <SourceBadge source={item.source} />
-    </button>
-  );
 }
 
 export default function DebloatPanel() {
@@ -184,6 +137,7 @@ export default function DebloatPanel() {
         })),
         { mode: "sequential", accent: "neutral", failFast: false }
       );
+      recordMaintenanceOperation({ tool: "applications", title: "Remove selected applications", outcome: result.anyError ? (succeeded.size ? "partial" : "failed") : "completed", affectedItems: succeeded.size });
       setSelected(result.anyError ? failed : new Set());
       setHeroActive(false);
       if (result.anyError) {
@@ -206,7 +160,7 @@ export default function DebloatPanel() {
         <Button
           icon="endorsed"
           intent={heroActive ? "none" : "success"}
-          text={heroActive ? `${selected.size} selected — review below then Remove` : "⚡ Recommended Debloat"}
+          text={heroActive ? `${selected.size} selected — review below then Remove` : "Recommended selection"}
           small
           onClick={handleRecommended}
           disabled={removing || loading}
@@ -256,101 +210,16 @@ export default function DebloatPanel() {
         />
       </div>
 
-      {/* Grid */}
-      <div className="debloat-grid-scroll">
-        {loading && items.length === 0 ? (
-          <div className="flex items-center justify-center py-8 gap-2">
-            <Spinner size={18} />
-            <span className="text-xs text-[var(--color-text-muted)] font-mono">Scanning…</span>
-          </div>
-        ) : (
-          <>
-            {errors.store && (
-              <div className="debloat-group-error">
-                <Icon icon="warning-sign" size={12} />
-                Store apps: {errors.store}
-              </div>
-            )}
-            {grouped.map(([category, groupItems]) => (
-              <div key={category} className="debloat-group">
-                <div className="debloat-cath">
-                  <span>{category.toUpperCase()}</span>
-                  {category === "Programs" && !bcuInstalled ? (
-                    <button
-                      className="debloat-install-prompt"
-                      onClick={installBcu}
-                      disabled={bcuInstalling}
-                    >
-                      {bcuInstalling ? "Installing…" : "Install engine to scan →"}
-                    </button>
-                  ) : (
-                    <button className="debloat-select-all" onClick={() => selectGroup(category)}>
-                      select all
-                    </button>
-                  )}
-                </div>
-                {errors.programs && category === "Programs" && (
-                  <div className="debloat-group-error text-xs">{errors.programs}</div>
-                )}
-                {/* AnimatePresence lets removed chips collapse instead of snapping
-                    away. motion.div uses grid-template-rows trick (no reflow) for
-                    height; opacity on the outer handles the cross-fade.
-                    No success flourish on removal — enter/exit only per DN-07. */}
-                <div className="debloat-grid">
-                  <AnimatePresence initial={false}>
-                    {groupItems.map((item, idx) => (
-                      // Outer: opacity fade (compositor-safe, no reflow).
-                      // Inner: grid-template-rows 0fr→1fr for height collapse
-                      // without triggering layout on every animation frame.
-                      <motion.div
-                        key={item.id}
-                        initial={{ opacity: 0, gridTemplateRows: "0fr" }}
-                        animate={{
-                          opacity: 1,
-                          gridTemplateRows: "1fr",
-                          transition: {
-                            opacity: { delay: staggerDelay(idx), duration: DURATION_S.normal, ease: EASE.enter },
-                            gridTemplateRows: { delay: staggerDelay(idx), duration: DURATION_S.normal, ease: EASE.enter },
-                          },
-                        }}
-                        exit={{
-                          opacity: 0,
-                          gridTemplateRows: "0fr",
-                          transition: {
-                            opacity: { duration: DURATION_S.fast, ease: EASE.exit },
-                            gridTemplateRows: { duration: DURATION_S.fast, ease: EASE.exit },
-                          },
-                        }}
-                        style={{ display: "grid", overflow: "hidden" }}
-                      >
-                        {/* min-height:0 child required by the grid-template-rows trick. */}
-                        <div style={{ minHeight: 0 }}>
-                          <DebloatChip
-                            item={item}
-                            selected={selected.has(item.id)}
-                            onToggle={toggleItem}
-                            removing={removing}
-                          />
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
-              </div>
-            ))}
-            {!loading && grouped.length === 0 && (
-              <div className="text-center text-xs text-[var(--color-text-muted)] py-6">
-                {searchQuery ? "No items match your search." : "Nothing to remove — system is clean."}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      <ApplicationReviewResults
+        groups={grouped} selected={selected} removing={removing} loading={loading}
+        bcuInstalled={bcuInstalled} bcuInstalling={bcuInstalling} errors={errors}
+        onToggle={toggleItem} onSelectGroup={selectGroup} onInstallBcu={() => void installBcu()}
+      />
 
       {/* Selection bar */}
       {selected.size > 0 && (
         <div className="debloat-selbar">
-          <span className="debloat-selbar-count">▣ {selected.size} selected</span>
+          <span className="debloat-selbar-count">{selected.size} selected</span>
           <span style={{ flex: 1 }} />
           <Checkbox
             checked={restorePoint}

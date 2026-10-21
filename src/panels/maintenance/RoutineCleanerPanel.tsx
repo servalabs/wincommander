@@ -12,7 +12,6 @@ import {
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
-import { Chip } from "../../components/ui/chip";
 import { Icon } from "../../components/ui/icon";
 import type { RoutineCleanerCategory, RoutineCleanerCleanResult } from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
@@ -32,7 +31,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
   const isRunning = operation !== "idle";
   const categoryOptions = getRoutineCleanerCategories(allowedCategories);
-  const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+  const scanLabel = scan && cleaner.scanScope !== "projects" ? "Rescan application caches" : "Scan application caches";
 
   useEffect(() => {
     if (error) void showError(error);
@@ -40,7 +39,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
 
   useEffect(() => {
     if (result && !result.cancelled && !result.errors.length) {
-      void showSuccess(`Recovered ${formatBytes(result.bytesRecovered)} from ${result.filesCleaned.toLocaleString()} files.`);
+      void showSuccess(`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`);
     }
   }, [result]);
 
@@ -51,15 +50,10 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
 
   return <div className="maintenance-routine-cleaner flex min-h-0 flex-1 flex-col gap-4">
     <div className="flex flex-wrap items-start gap-2">
-      {/* Chips share the surface-2 bar background with their inactive state,
-          so the row reads as one tab bar with a single accent-soft "active"
-          pill — the same visual language as TabsList/TabsTrigger (see
-          src/components/ui/tabs.tsx) — even though selection here stays
-          multi-select (cleaner.setCategory toggles membership, unlike a
-          true single-value Tabs root). */}
       <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--r)] bg-[var(--surface-2)] p-1">
-        {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Chip>)}
+        {categoryOptions.map((category) => <Button size="sm" variant={categories.includes(category.id) ? "outline" : "ghost"} key={category.id} aria-pressed={categories.includes(category.id)} disabled={isRunning} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Button>)}
       </div>
+      <Button size="sm" variant="outline" onClick={() => void cleaner.scanProjects()} disabled={isRunning}><Icon icon="folder-open" /> Choose project folder</Button>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
     </div>
     {!scan && (
@@ -75,7 +69,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
     {result && <CleanResult result={result} />}
     <RoutineCleanerPreview cleaner={cleaner} onRequestClean={() => setConfirmOpen(true)} />
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and attempt to recover {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))}. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and process approximately {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))} of logical data. Actual free-space changes can differ. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
   </div>;
 }
@@ -84,7 +78,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
 export function RoutineCleanerHeaderActions({ cleaner }: { cleaner: RoutineCleaner }) {
   const { categories, operation, scan } = cleaner;
   const isRunning = operation !== "idle";
-  const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+  const scanLabel = scan && cleaner.scanScope !== "projects" ? "Rescan application caches" : "Scan application caches";
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -93,8 +87,8 @@ export function RoutineCleanerHeaderActions({ cleaner }: { cleaner: RoutineClean
           <Icon icon="stop" />
         </Button>
       )}
-      <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
+      <Button size="sm" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
+        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} /> {operation === "scanning" ? "Scanning…" : scan && cleaner.scanScope !== "projects" ? "Scan again" : "Scan caches"}
       </Button>
     </div>
   );
@@ -123,9 +117,9 @@ function CacheScanIdleState({ isScanning, onScan, disabled, label }: { isScannin
 }
 
 function CleanResult({ result }: { result: RoutineCleanerCleanResult }) {
-  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`Recovered ${formatBytes(result.bytesRecovered)} before cancellation.`} />;
+  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data before cancellation.`} />;
   if (result.errors.length) return <ResultNotice tone="warning" title="Cleaning completed with issues" message={`${result.itemsCleaned} targets cleaned; ${result.errors.length} target${result.errors.length === 1 ? "" : "s"} could not be completed.`} />;
-  return <ResultNotice tone="success" title="Cleaning complete" message={`Recovered ${formatBytes(result.bytesRecovered)} from ${result.filesCleaned.toLocaleString()} files.`} />;
+  return <ResultNotice tone="success" title="Cleaning complete" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`} />;
 }
 
 function ResultNotice({ tone, title, message }: { tone: "success" | "warning" | "danger"; title: string; message: string }) {

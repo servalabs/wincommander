@@ -19,6 +19,7 @@ import {
   useCleanupScan,
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
+import PrivacyTraceWorkspace from "./PrivacyTraceWorkspace";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -594,9 +595,12 @@ export default function CleanupCategoryGrid({
               {tierMeta.description}
             </span>
           </div>
-          <div className="cleanup-category-grid">
-            {activeSysCats.map((cat) => renderCard(cat))}
-            {activeUserCats.map((cat) => renderUserCard(cat))}
+          <PrivacyTraceWorkspace
+            categories={[...activeSysCats, ...activeUserCats]}
+            getState={(cat) => cat.scopeAware ? userCardData(cat) : cardDataMap[cat.id] ?? { count: -1, items: [], loading: false }}
+            renderCategory={(cat) => cat.scopeAware ? renderUserCard(cat) : renderCard(cat)}
+          />
+          <div className="cleanup-category-grid mt-4">
             {cleanCardPacks.map((pack, index) => (
               <div
                 key={`clean-pack-${index}`}

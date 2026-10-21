@@ -84,16 +84,16 @@ describe("redesign surface copy guardrails", () => {
 
     expect(vault).not.toContain("DiskCleanupGranular");
     expect(vault).not.toContain("DiskSpaceAnalyzerDialog");
-    expect(maintenance).toContain("<DiskSpaceAnalyzerDialog inline");
+    expect(maintenance).toMatch(/<DiskSpaceAnalyzerDialog\b[^>]*\binline\b/);
     expect(apps).not.toContain("RoutineCleanerPanel");
     expect(maintenance).not.toContain('TabsTrigger value="updates"');
 
-    // Both engines render side by side in one grid (2026-07): they used to
-    // clean the same nine Windows paths through two different backends, so
-    // ReclaimSpaceCard keeps them reading from one deduped category source
-    // instead of independently re-scanning the same paths twice.
+    // Windows-owned storage and application caches retain distinct execution
+    // owners even when their workspace presentation changes.
     expect(reclaim).toContain("<DiskCleanupGranular />");
     expect(reclaim).toContain("APP_CACHE_CLEANUP_CATEGORIES");
+    expect(maintenance).toContain("<WindowsStorageCard />");
+    expect(maintenance).toContain("<AppBrowserCacheCard />");
     expect(maintenance).not.toContain("<DiskCleanupGranular />");
   });
 
@@ -253,7 +253,10 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).toContain("const cleanCardPacks = packCleanCards(");
     expect(cleanupGrid).toContain("cleanCardPacks.map((pack, index) => (");
     expect(cleanupGrid).toContain('className="grid h-[168px] grid-cols-1 grid-rows-4 gap-1"');
-    expect(cleanupGrid).toContain('className="cleanup-category-grid"');
+    expect(cleanupGrid).toMatch(/className="[^"]*\bcleanup-category-grid\b[^"]*"/);
+    expect(cleanupGrid).toContain("<PrivacyTraceWorkspace");
+    expect(cleanupGrid).toContain("categories={[...activeSysCats, ...activeUserCats]}");
+    expect(cleanupGrid).toContain("cat.scopeAware ? userCardData(cat)");
     expect(cleanupGrid).not.toContain("cleanCardsOpen");
   });
 
@@ -423,9 +426,16 @@ describe("redesign surface copy guardrails", () => {
   test("Disk Space Analyzer keeps scan session state outside the mounted panel", async () => {
     const analyzer = await read("src/panels/maintenance/DiskSpaceAnalyzerDialog.tsx");
 
-    expect(analyzer).toContain("diskAnalyzerSession");
-    expect(analyzer).toContain("subscribeDiskAnalyzerSession");
-    expect(analyzer).toContain("persistDiskAnalyzerSession");
+    const hook = await read("src/panels/maintenance/disk-analyzer/useDiskAnalyzer.ts");
+    const moduleState = hook.slice(0, hook.indexOf("export function useDiskAnalyzer()"));
+
+    expect(analyzer).toContain("useDiskAnalyzer()");
+    expect(moduleState).toContain("let session: AnalyzerSession");
+    expect(moduleState).toContain("let scanTask: Promise<void> | null");
+    expect(moduleState).toContain("const listeners = new Set<() => void>()");
+    expect(hook).toContain("useSyncExternalStore(subscribe, getSession)");
+    expect(hook).not.toContain("const [scanning, setScanning]");
+    expect(hook).not.toContain("const [deleting, setDeleting]");
   });
 
   test("Packages and Apps keeps search, filters, and batch actions in one responsive toolbar", async () => {

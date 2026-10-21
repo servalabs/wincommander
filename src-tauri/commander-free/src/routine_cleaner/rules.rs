@@ -61,8 +61,7 @@ struct AppRules {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 struct AppTarget {
-    #[serde(rename = "id")]
-    _id: String,
+    id: String,
     name: String,
     paths: Vec<String>,
     child_subdir: Option<String>,
@@ -85,6 +84,7 @@ struct RecursivePathMatch {
 
 const SYSTEM_RULES: &str = include_str!("../../resources/maintenance-rules/win32/system.json");
 const APPS_RULES: &str = include_str!("../../resources/maintenance-rules/win32/apps.json");
+const AI_RULES: &str = include_str!("../../resources/maintenance-rules/win32/ai-cache.json");
 const GAMING_RULES: &str = include_str!("../../resources/maintenance-rules/win32/gaming.json");
 const GPU_RULES: &str = include_str!("../../resources/maintenance-rules/win32/gpu-cache.json");
 
@@ -151,12 +151,24 @@ pub(super) fn build_targets(categories: &HashSet<String>) -> Result<Vec<ScanTarg
         }
     }
 
-    if categories.contains("applications") {
-        add_app_targets(&mut targets, APPS_RULES, "applications", &variables)?;
+    if ["applications", "developers", "ai"]
+        .iter()
+        .any(|category| categories.contains(*category))
+    {
+        add_app_targets(
+            &mut targets,
+            APPS_RULES,
+            "applications",
+            &variables,
+            categories,
+        )?;
+    }
+    if categories.contains("ai") {
+        add_app_targets(&mut targets, AI_RULES, "ai", &variables, categories)?;
     }
     if categories.contains("gaming") {
-        add_app_targets(&mut targets, GAMING_RULES, "gaming", &variables)?;
-        add_app_targets(&mut targets, GPU_RULES, "gaming", &variables)?;
+        add_app_targets(&mut targets, GAMING_RULES, "gaming", &variables, categories)?;
+        add_app_targets(&mut targets, GPU_RULES, "gaming", &variables, categories)?;
         super::steam_rules::add_targets(&mut targets, &variables)?;
     }
     if categories.contains("browsers") {
@@ -176,9 +188,18 @@ fn add_app_targets(
     source: &str,
     category: &str,
     variables: &HashMap<&'static str, String>,
+    categories: &HashSet<String>,
 ) -> Result<(), String> {
     let rules: AppRules = parse_rules(source, category)?;
     for app in rules.apps {
+        let category = if category == "applications" {
+            super::app_categories::app_category(&app.id)
+        } else {
+            category
+        };
+        if !categories.contains(category) {
+            continue;
+        }
         for raw in app.paths {
             let base = resolve_path(&raw, variables)?;
             for expanded in expand_rule_paths(
@@ -451,6 +472,10 @@ fn reject_reparse_components(path: &Path) -> Result<(), String> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows volume prefix is not a filesystem path until its root separator is appended.
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(&current).map_err(|error| {
             format!("routine cleaner recursive rule path component is unavailable: {error}")
         })?;
@@ -507,6 +532,29 @@ fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn accepts_plain_canonical_windows_paths_with_the_verbatim_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temp.path()).unwrap();
+        assert!(validate_recursive_containment(&canonical, &canonical));
+    }
+
+    #[test]
+    fn selected_categories_never_expand_an_unrelated_apps_paths() {
+        let source = r#"{"apps":[{"id":"npm","name":"npm","paths":["${UNKNOWN}/cache"]}]}"#;
+        let mut targets = Vec::new();
+        add_app_targets(
+            &mut targets,
+            source,
+            "applications",
+            &HashMap::new(),
+            &HashSet::from(["ai".into()]),
+        )
+        .unwrap();
+        assert!(targets.is_empty());
+    }
+
     fn canonical_fixture_path(path: &Path) -> PathBuf {
         let canonical = fs::canonicalize(path).unwrap();
         #[cfg(windows)]
@@ -537,6 +585,10 @@ mod tests {
     fn embedded_rule_files_parse() {
         assert!(parse_rules::<SystemRules>(SYSTEM_RULES, "system").is_ok());
         assert!(parse_rules::<AppRules>(APPS_RULES, "apps").is_ok());
+        let ai: AppRules = parse_rules(AI_RULES, "ai").unwrap();
+        assert_eq!(ai.apps.len(), 1);
+        assert_eq!(ai.apps[0].child_subdir.as_deref(), Some("shard-cache"));
+        assert_eq!(ai.apps[0].paths, vec!["${HOME}/.cache/huggingface/xet"]);
     }
 
     #[test]

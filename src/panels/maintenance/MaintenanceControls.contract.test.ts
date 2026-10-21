@@ -14,7 +14,7 @@ describe("Maintenance multi-row control accessibility", () => {
       Bun.file("src/components/tweaks/managers/ServiceManager.tsx").text(),
       Bun.file("src/panels/runtime-visibility/index.tsx").text(),
       Bun.file("src/panels/maintenance/MalwareCenter.tsx").text(),
-      Bun.file("src/panels/maintenance/DiskSpaceAnalyzerDialog.tsx").text(),
+      Promise.all(["DiskSpaceAnalyzerDialog.tsx", "disk-analyzer/DiskAnalyzerHeader.tsx", "disk-analyzer/DiskItemList.tsx", "disk-analyzer/DiskItemDetails.tsx"].map(path => Bun.file(`src/panels/maintenance/${path}`).text())).then(parts => parts.join("\n")),
     ]);
 
     expect(registry).toContain("ariaLabel={`Select ${title}: ${currentPath}`}");
@@ -48,12 +48,12 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(malware).toContain("aria-label={`Delete ${entry.threatLabel}`}");
     expect(malware).toContain("aria-label={`Quarantine ${finding.threatLabel}`}");
 
-    expect(diskAnalyzer).toContain('aria-pressed={viewMode === "space"}');
-    expect(diskAnalyzer).toContain('aria-pressed={spaceViewStyle === "treemap"}');
-    expect(diskAnalyzer).toContain("aria-pressed={largeFilter === id}");
-    expect(diskAnalyzer).toContain('aria-label={`Open folder containing ${row.name}`}');
-    expect(diskAnalyzer).toContain('aria-label={`Delete ${row.name}`}');
-    expect(diskAnalyzer).toContain('<th className="da-th-del" scope="col">Actions</th>');
+    expect(diskAnalyzer).toContain('aria-pressed={mode === "space"}');
+    expect(diskAnalyzer).toContain('aria-pressed={chartMode === "treemap"}');
+    expect(diskAnalyzer).toContain("aria-pressed={filter === item.id}");
+    expect(diskAnalyzer).toContain('aria-label={`Open ${item.name}`}');
+    expect(diskAnalyzer).toContain('aria-label="Selected item details"');
+    expect(diskAnalyzer).toContain('ariaLabel={`Select ${item.name}');
   });
 
   test("keeps maintenance-specific loading, error, and detail contracts intact", async () => {
@@ -66,7 +66,7 @@ describe("Maintenance multi-row control accessibility", () => {
       Bun.file("src/panels/maintenance/SecurityData.tsx").text(),
       Bun.file("src/panels/maintenance/MalwareCenter.tsx").text(),
       Bun.file("src/panels/maintenance/RegistryTools.tsx").text(),
-      Bun.file("src/panels/maintenance/DiskSpaceAnalyzerDialog.tsx").text(),
+      Promise.all(["DiskSpaceAnalyzerDialog.tsx", "disk-analyzer/DiskAnalyzerHeader.tsx", "disk-analyzer/DiskItemList.tsx", "disk-analyzer/DiskItemDetails.tsx"].map(path => Bun.file(`src/panels/maintenance/${path}`).text())).then(parts => parts.join("\n")),
     ]);
 
     expect(fileStats).toContain('role="table" aria-label="File type statistics"');
@@ -93,9 +93,9 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(malware).toContain('xl:grid-cols-2');
     expect(registry).toContain('Reviewing {tools.tool === "orphans"');
 
-    expect(diskAnalyzer).toContain('aria-label="Folder or drive to analyse"');
-    expect(diskAnalyzer).toContain('aria-label={`Close details for ${infoItem.name}`}');
-    expect(diskAnalyzer).toContain('scope="col">Allocated</th>');
-    expect(diskAnalyzer).toContain('role="status" aria-live="polite"');
+    expect(diskAnalyzer).toContain('aria-label="Drive or folder to analyze"');
+    expect(diskAnalyzer).toContain('aria-label="Selected item details"');
+    expect(diskAnalyzer).toContain('Sizes are logical file sizes');
+    expect(diskAnalyzer).toContain('className="da-scan-notice" role="status"');
   });
 });

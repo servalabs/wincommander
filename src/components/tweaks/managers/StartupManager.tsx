@@ -7,6 +7,8 @@ import { showSuccess, showError } from "../../../utils/toast";
 import { enabledRowsFirst } from "./systemManagerSort";
 import "./SystemManagers.css";
 import { AnimatedList, AnimatedTableRow, staggerDelay } from "../../shared/AnimatedList";
+import { recordMaintenanceOperation } from "../../../hooks/useMaintenanceHistory";
+import "./StartupReview.css";
 
 // Mirrors the PSCustomObject shape returned by Get-StartupItems
 // (src-tauri/commander-free/scripts/modules/tweaks/startup-manager.ps1).
@@ -49,6 +51,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
     const [loading, setLoading] = useState(false);
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [filter, setFilter] = useState("");
+    const [statusFilter, setStatusFilter] = useState("all");
     const embeddedScanKey = useRef<number | undefined>(undefined);
 
     const refresh = useCallback(async () => {
@@ -74,7 +77,8 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
     }, [embedded, isOpen, items.length, loading, refresh, scanKey]);
 
     const handleToggle = useCallback(async (item: StartupItem) => {
-        setPending(prev => new Set(prev).add(item.Name));
+        const identity = `${item.Location}::${item.Name}`;
+        setPending(prev => new Set(prev).add(identity));
         const cmd = item.IsEnabled ? "Disable-StartupItem" : "Enable-StartupItem";
         const res = await executeBackendCommand<{ success?: boolean; message?: string }>(cmd, {
             Name: item.Name,
@@ -82,25 +86,30 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
         });
         setPending(prev => {
             const next = new Set(prev);
-            next.delete(item.Name);
+            next.delete(identity);
             return next;
         });
         if (res.success && res.data?.success !== false) {
+            recordMaintenanceOperation({ tool: "startup", title: item.IsEnabled ? "Disable startup entry" : "Enable startup entry", outcome: "completed", affectedItems: 1 });
             showSuccess(`${item.IsEnabled ? "Disabled" : "Enabled"} ${item.Name}`);
             refresh();
         } else {
+            recordMaintenanceOperation({ tool: "startup", title: "Change startup entry", outcome: "failed", affectedItems: 0 });
             showError(res.error || res.data?.message || "Failed to toggle startup item");
         }
     }, [refresh]);
 
     const filtered = useMemo(() => {
         const q = filter.trim().toLowerCase();
-        const matches = !q ? items : items.filter(i =>
+        const matches = items.filter(i => (statusFilter === "all"
+            || (statusFilter === "enabled" && i.IsEnabled)
+            || (statusFilter === "disabled" && !i.IsEnabled)
+            || (statusFilter === "review" && i.Recommendation === "Disable")) && (!q ||
             i.Name.toLowerCase().includes(q) ||
             (i.Description || "").toLowerCase().includes(q) ||
-            (i.Category || "").toLowerCase().includes(q));
+            (i.Category || "").toLowerCase().includes(q)));
         return enabledRowsFirst(matches, item => item.IsEnabled);
-    }, [items, filter]);
+    }, [items, filter, statusFilter]);
 
     const totalRam = useMemo(
         () => items.filter(i => i.Status === "Running").reduce((s, i) => s + (i.RamUsageMB || 0), 0),
@@ -120,6 +129,14 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
 
     const body = (
         <>
+            <div className="startup-review-summary">
+                <div><strong>{items.filter(item => item.IsEnabled).length}</strong><span>Enabled at sign-in</span></div>
+                <div><strong>{items.filter(item => !item.IsEnabled).length}</strong><span>Disabled entries</span></div>
+                <div><strong>{items.filter(item => item.Recommendation === "Disable").length}</strong><span>Suggested for review</span></div>
+            </div>
+            <div className="startup-review-filters" role="group" aria-label="Filter startup entries">
+                {[["all", "All entries"], ["enabled", "Enabled"], ["disabled", "Disabled"], ["review", "Suggested for review"]].map(([value, label]) => <button type="button" key={value} aria-pressed={statusFilter === value} onClick={() => setStatusFilter(value)}>{label}</button>)}
+            </div>
             <InputGroup
                 aria-label="Search startup items"
                 placeholder="Search startup items..."
@@ -136,7 +153,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
                     </div>
                 )}
                 {filtered.map((item, idx) => {
-                    const isPending = pending.has(item.Name);
+                    const isPending = pending.has(`${item.Location}::${item.Name}`);
                     const commandPath = extractCommandPath(item.Command);
                     const rowKey = item.Location + "::" + item.Name;
                     // "Neutral" backend value is unclear in the UI — relabel to
@@ -193,6 +210,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
                                     >
                                         {item.Command}
                                     </button>
+                                    <details className="startup-review-explanation"><summary>Purpose and impact</summary><p>{item.Description && item.Description !== "Unknown Application" ? item.Description : "Windows starts this entry when you sign in."} Disabling startup prevents automatic launch; it does not uninstall the application. Background syncing, updates, or notifications may stop until you open it. Source: {item.Source}.</p></details>
                                 </div>
                                 <Tag minimal intent={recIntent as any} title={recTip}>{recLabel}</Tag>
                                 <Tag minimal>{item.Status === "Running" ? `${item.RamUsageMB.toFixed(0)} MB` : item.Status}</Tag>

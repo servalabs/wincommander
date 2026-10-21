@@ -5,11 +5,13 @@ const debloat = readFileSync("src/panels/apps/DebloatPanel.tsx", "utf8");
 const packages = readFileSync("src/panels/apps/PackageUpdateTools.tsx", "utf8");
 
 describe("apps populated-state interaction contracts", () => {
-  test("debloat inventory items are keyboard-operable pressed buttons", () => {
-    expect(debloat).toContain('className={`debloat-chip');
-    expect(debloat).toContain("aria-pressed={selected}");
-    expect(debloat).toContain("disabled={removing}");
-    expect(debloat).not.toContain('className={`debloat-chip${selected ? " is-selected" : ""}`}\n      onClick={() => !removing');
+  test("application review exposes native keyboard-operable selection and details", () => {
+    const review = readFileSync("src/panels/apps/components/ApplicationReviewResults.tsx", "utf8");
+    expect(debloat).toContain("<ApplicationReviewResults");
+    expect(review).toContain('type="checkbox" checked={props.selected.has(item.id)}');
+    expect(review).toContain("disabled={props.removing}");
+    expect(review).toContain('aria-label={`Select ${item.label} for removal`}');
+    expect(review).toContain('aria-expanded={detailId === item.id}');
   });
 
   test("package update selections expose their selected state", () => {

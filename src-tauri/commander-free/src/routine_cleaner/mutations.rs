@@ -25,15 +25,26 @@ pub(super) fn clean_items(
             result.cancelled = true;
             break;
         }
+        if item.requires_plain_path
+            && !super::rules::validate_recursive_containment(&item.root, &item.canonical_root)
+        {
+            result.errors.push(RoutineCleanerError {
+                id: item.id,
+                label: item.label,
+                reason: "Project artifact path changed or crosses a link; scan again.".into(),
+            });
+            continue;
+        }
         match item.operation {
             TargetOperation::Delete => {
                 let (files, bytes, errors) = clean_file_group(&item, cancelled);
                 result.files_cleaned += files;
                 result.bytes_recovered = result.bytes_recovered.saturating_add(bytes);
-                if errors.is_empty() {
+                result.cancelled = cancelled.load(Ordering::Acquire);
+                if errors.is_empty() && !result.cancelled {
                     result.items_cleaned += 1;
                     cleaned_ids.push(item.id);
-                } else {
+                } else if !errors.is_empty() {
                     result.errors.push(RoutineCleanerError {
                         id: item.id,
                         label: item.label,
@@ -56,6 +67,7 @@ pub(super) fn clean_items(
             },
         }
     }
+    result.cancelled |= cancelled.load(Ordering::Acquire);
     (result, cleaned_ids)
 }
 
@@ -340,6 +352,7 @@ mod tests {
             label: "Test cache".into(),
             root: root.clone(),
             canonical_root: fs::canonicalize(&root).unwrap(),
+            requires_plain_path: false,
             files: vec![super::super::CachedFile {
                 path: substituted,
                 bytes: 1,

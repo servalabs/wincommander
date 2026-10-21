@@ -5,6 +5,14 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Add category/detail maintenance workspaces, developer and AI-cache groups,
+  explicit project-folder cache review, duplicate selection preferences, and
+  bounded local operation history. Refresh application and privacy review
+  layouts while retaining their existing guarded operations.
+- Add disk-analysis sunburst and treemap depth controls, navigation history,
+  large-file filtering, scan progress/cancellation, and partial-result notices.
+  Label logical sizes explicitly and require a fresh analysis after deletion.
+
 - Hidden backend commands now rebuild Windows PowerShell's module search path,
   preventing inherited PowerShell 7 modules from breaking permission checks.
 

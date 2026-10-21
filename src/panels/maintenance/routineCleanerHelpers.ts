@@ -4,6 +4,9 @@ export const ROUTINE_CLEANER_CATEGORIES: Array<{ id: RoutineCleanerCategory; lab
   { id: "system", label: "System", description: "Temporary files, caches, and diagnostics" },
   { id: "browsers", label: "Browsers", description: "Regenerable browser caches" },
   { id: "applications", label: "Applications", description: "Application cache data" },
+  { id: "developers", label: "Developer tools", description: "Package caches and development tooling" },
+  { id: "projects", label: "Project build artifacts", description: "Review generated caches in an explicitly chosen project folder" },
+  { id: "ai", label: "AI application caches", description: "Regenerable AI application assets" },
   { id: "gaming", label: "Gaming", description: "Launcher and shader caches" },
   { id: "databases", label: "Databases", description: "Safe SQLite optimization targets" },
 ];
@@ -18,6 +21,8 @@ export const ROUTINE_CLEANER_CATEGORIES: Array<{ id: RoutineCleanerCategory; lab
 export const APP_CACHE_CLEANUP_CATEGORIES: RoutineCleanerCategory[] = [
   "browsers",
   "applications",
+  "developers",
+  "ai",
   "gaming",
   "databases",
 ];

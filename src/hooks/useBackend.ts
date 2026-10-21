@@ -40,7 +40,7 @@ export interface AIControlOperationResult {
   requiresReboot?: boolean;
 }
 
-export type RoutineCleanerCategory = "system" | "browsers" | "applications" | "gaming" | "databases";
+export type RoutineCleanerCategory = "system" | "browsers" | "applications" | "gaming" | "databases" | "developers" | "ai" | "projects";
 
 export interface RoutineCleanerItem {
   id: string;
@@ -55,6 +55,7 @@ export interface RoutineCleanerItem {
 }
 
 export interface RoutineCleanerScan {
+  scanRoot?: string | null;
   items: RoutineCleanerItem[];
   totalBytes: number;
   totalFiles: number;
@@ -2388,6 +2389,7 @@ export function useBackend() {
       invoke<RoutineCleanerScan>("routine_cleaner_scan", { categories }),
     routineCleanerClean: (itemIds: string[]) =>
       invoke<RoutineCleanerCleanResult>("routine_cleaner_clean", { itemIds }),
+    routineCleanerScanProjects: () => invoke<RoutineCleanerScan | null>("routine_cleaner_scan_projects"),
     routineCleanerCancel: () => invoke<void>("routine_cleaner_cancel"),
     packageUpdatesInventory: () => invoke<PackageUpdateInventory>("package_updates_inventory"),
     packageUpdatesApply: (updateIds: string[]) => invoke<PackageUpdateResult>("package_updates_apply", { updateIds }),
@@ -2454,16 +2456,18 @@ export function useBackend() {
       invoke<{ summary: string; filesCount: number; spaceRecovered: string; specialOps: number; errors: number; preview: boolean; samplePaths: string[] }>("run_bleachbit_clean", { excludeBrowsers, preview }),
 
     // ── Disk Space Analyzer ────────────────────────────────────────────
-    /** Run WizTree scan for a path. Returns metadata; children fetched via getDiskChildren. */
+    /** Scan a folder natively. Byte totals describe logical file lengths, not physical allocation. */
     runDiskScan: (path: string) =>
-      invoke<{ scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean }>("run_disk_scan", { path }),
+      invoke<{ scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean; complete: boolean; skippedEntries: number; skippedLinks: number; truncated: boolean; cancelled: boolean; sizeBasis: "logical"; allocatedSizeAvailable: boolean }>("run_disk_scan", { path }),
+    cancelDiskScan: () => invoke<void>("cancel_disk_scan"),
+    getDiskScanProgress: () => invoke<{ running: boolean; filesScanned: number; foldersScanned: number; bytesScanned: number; skippedEntries: number; cancelled: boolean }>("get_disk_scan_progress"),
     /** Fetch sorted children of a folder from the in-memory scan cache. */
     getDiskChildren: (path: string) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
-    /** Fetch a flat list of the largest files/folders from the latest WizTree scan. */
+      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
+    /** Fetch a flat list of the largest files/folders from the latest native scan. */
     getLargeDiskItems: (minSizeBytes: number, limit: number = 200, includeDirs: boolean = true) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
-    /** Permanently delete a file or folder and evict it from the scan cache. */
+      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
+    /** Permanently delete a verified file and invalidate the scan cache. Folder deletion is refused. */
     diskDeleteItem: async (path: string) => {
       const capabilityToken = await requestDestructiveCapability(
         { command: "disk_delete_item", path },

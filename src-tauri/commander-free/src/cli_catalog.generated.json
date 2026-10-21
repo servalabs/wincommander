@@ -7693,6 +7693,16 @@
       ]
     },
     {
+      "id": "tauri:cancel_disk_scan",
+      "name": "cancel_disk_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:cancel_paste_monitor_snooze",
       "name": "cancel_paste_monitor_snooze",
       "transport": "tauri",
@@ -8911,6 +8921,16 @@
     {
       "id": "tauri:get_disk_children",
       "name": "get_disk_children",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_disk_scan_progress",
+      "name": "get_disk_scan_progress",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -10573,6 +10593,16 @@
     {
       "id": "tauri:routine_cleaner_scan",
       "name": "routine_cleaner_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:routine_cleaner_scan_projects",
+      "name": "routine_cleaner_scan_projects",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

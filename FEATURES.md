@@ -81,6 +81,23 @@ the backend and private component before execution.
   Dashboard action failures appear in Notifications, with unresolved findings
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
+- Maintenance workspaces for cache cleanup, large files, duplicates, disk
+  analysis, startup, registry hygiene, and local operation history. Cache
+  categories show searchable targets, selection totals, and item details.
+- Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
+  user-managed models, datasets, credentials, and resumable upload staging.
+- Explicit project-folder inspection through a native picker for supported
+  Cargo artifacts and JavaScript/Python caches. Project results are separate
+  from the ordinary cache scan and require manual selection.
+- Disk analysis with synchronized folder results, treemap/sunburst charts,
+  chart depth, navigation history, progress, and cancellation. Partial scans
+  identify skipped entries and scan limits; charts show logical file sizes,
+  not measured physical allocation or guaranteed reclaimable space.
+- Duplicate Smart Select and an explicit copy-to-keep preference, with
+  backend retention checks and a refreshed scan after removal.
+- Local display history retains up to 100 supported maintenance results in
+  the current application profile. It is clearable and is not an evidence
+  receipt or a measurement of physical space recovered.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;
   changes and per-service failures remain actionable.

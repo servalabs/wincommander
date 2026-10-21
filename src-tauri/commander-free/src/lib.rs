@@ -2775,11 +2775,14 @@ pub fn run() {
             backend::is_path_dir,
             // ── Disk Space Analyzer ──
             disk_analyzer::run_disk_scan,
+            disk_analyzer::cancel_disk_scan,
+            disk_analyzer::get_disk_scan_progress,
             disk_analyzer::get_disk_children,
             disk_analyzer::get_large_disk_items,
             disk_analyzer::disk_delete_item,
             // ── Preview-first routine cache/database cleaner ──
             routine_cleaner::routine_cleaner_scan,
+            routine_cleaner::routine_cleaner_scan_projects,
             routine_cleaner::routine_cleaner_clean,
             routine_cleaner::routine_cleaner_cancel,
             // ── Duplicate and empty-folder tools ──

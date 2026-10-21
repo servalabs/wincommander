@@ -330,6 +330,17 @@ It is a partial review aid, not a complete cryptographic bill of materials or
 evidence of deployed protection. It does not run during application startup,
 builds, installation or updates.
 
+## Local maintenance
+
+Local maintenance scans do not establish that every byte on a volume was
+inspected. Protected locations, reparse points, cancellation, and traversal
+limits can produce partial results. Displayed file sizes are logical lengths;
+hard links, compression, sparse files, and filesystem behavior can make actual
+space recovery differ. Supported project cleanup uses a native folder picker,
+backend-owned candidate identifiers, preview, and live path/identity checks.
+It does not accept frontend-supplied deletion paths for project artifacts.
+Local operation history is a clearable display aid, not a trusted audit log.
+
 ## Reporting non-security defects
 
 Use the normal public issue process for public Free bugs that do not disclose a
