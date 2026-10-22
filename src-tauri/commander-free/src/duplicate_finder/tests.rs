@@ -216,7 +216,33 @@ fn hard_links_are_not_reported_as_reclaimable_copies() {
         &AtomicBool::new(false),
     );
     assert_eq!(scan.scanned_files, 1);
+    assert_eq!(scan.hashed_files, 0);
     assert!(scan.groups.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn native_inventory_skips_junctions_without_following_their_target() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("first"), b"same").unwrap();
+    let junction = dir.path().join("cycle");
+    let status = std::process::Command::new("cmd")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+
+    let (scan, _, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+
+    assert_eq!(scan.scanned_files, 1);
+    assert_eq!(scan.skipped_links, 1);
+    assert!(scan.groups.is_empty());
+    std::fs::remove_dir(junction).unwrap();
 }
 
 #[test]

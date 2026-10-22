@@ -1,6 +1,7 @@
 use super::{index::ScanIndex, safety, scope};
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,20 @@ use std::time::{Instant, UNIX_EPOCH};
 const ENUMERATION_BATCH_SIZE: usize = 512;
 const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const SAMPLE_WINDOW_BYTES: u64 = 64 * 1024;
+
+enum InventoryKind {
+    Directory,
+    File,
+    Link,
+    #[cfg(not(windows))]
+    Other,
+}
+
+struct InventoryEntry {
+    path: PathBuf,
+    kind: InventoryKind,
+    size: u64,
+}
 
 pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<ScanIndex, String> {
     let mut index = ScanIndex::new()?;
@@ -82,61 +97,43 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
             scope::update(|state| state.skipped_links += 1);
             continue;
         }
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) => {
-                scope::error(&directory, error);
-                continue;
-            }
-        };
         let mut directories = Vec::new();
         let mut files = Vec::new();
         let mut discovered = 0usize;
-        for entry in entries {
+        let enumerated = enumerate_directory(&directory, cancelled, |entry| {
             if cancelled.load(Ordering::Acquire) {
-                break;
+                return Ok(());
             }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    scope::error(&directory, error);
-                    continue;
+            match entry {
+                Err((path, error)) => scope::error(&path, error),
+                Ok(entry) => {
+                    if matches!(entry.kind, InventoryKind::Link) {
+                        scope::update(|state| state.skipped_links += 1);
+                        return Ok(());
+                    }
+                    let Some(display_path) = entry.path.to_str() else {
+                        scope::error(&directory, "An entry name cannot be decoded safely");
+                        return Ok(());
+                    };
+                    if matches!(entry.kind, InventoryKind::Directory) {
+                        directories.push(display_path.to_owned());
+                    } else if matches!(entry.kind, InventoryKind::File) {
+                        if entry.size > i64::MAX as u64 {
+                            scope::error(&entry.path, "File size exceeds supported range");
+                            return Ok(());
+                        }
+                        files.push((
+                            display_path.to_owned(),
+                            entry.size as i64,
+                            // Collecting a stable Windows identity opens a handle. Most files have no
+                            // same-size peer and cannot be duplicates, so defer that work until the
+                            // candidate stage. The prefix cannot collide with a real volume:file key.
+                            format!("path:{display_path}"),
+                            None,
+                            None,
+                        ));
+                    }
                 }
-            };
-            let path = entry.path();
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(meta) => meta,
-                Err(error) => {
-                    scope::error(&path, error);
-                    continue;
-                }
-            };
-            if safety::is_link_or_reparse(&metadata) {
-                scope::update(|state| state.skipped_links += 1);
-                continue;
-            }
-            let Some(display_path) = path.to_str() else {
-                scope::error(&directory, "An entry name cannot be decoded safely");
-                continue;
-            };
-            if metadata.is_dir() {
-                directories.push(display_path.to_owned());
-            } else if metadata.is_file() {
-                if metadata.len() > i64::MAX as u64 {
-                    scope::error(&path, "File size exceeds supported range");
-                    continue;
-                }
-                let identity = crate::routine_cleaner::file_identity(&path);
-                let identity_key = identity
-                    .map(|(volume, file)| format!("{volume}:{file}"))
-                    .unwrap_or_else(|| display_path.to_string());
-                files.push((
-                    display_path.to_owned(),
-                    metadata.len() as i64,
-                    identity_key,
-                    identity.map(|value| value.0),
-                    identity.map(|value| value.1.to_string()),
-                ));
             }
             if directories.len() + files.len() >= ENUMERATION_BATCH_SIZE {
                 discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
@@ -146,6 +143,10 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
                 });
                 discovered = 0;
             }
+            Ok(())
+        });
+        if let Err(error) = enumerated {
+            scope::error(&directory, error);
         }
         discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
         if discovered > 0 {
@@ -153,6 +154,161 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
         }
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn enumerate_directory(
+    directory: &Path,
+    cancelled: &AtomicBool,
+    mut visit: impl FnMut(Result<InventoryEntry, (PathBuf, String)>) -> Result<(), String>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory).map_err(|error| error.to_string())?;
+    for entry in entries {
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                visit(Err((directory.to_path_buf(), error.to_string())))?;
+                continue;
+            }
+        };
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                visit(Err((path, error.to_string())))?;
+                continue;
+            }
+        };
+        let kind = if safety::is_link_or_reparse(&metadata) {
+            InventoryKind::Link
+        } else if metadata.is_dir() {
+            InventoryKind::Directory
+        } else if metadata.is_file() {
+            InventoryKind::File
+        } else {
+            InventoryKind::Other
+        };
+        visit(Ok(InventoryEntry {
+            path,
+            kind,
+            size: metadata.len(),
+        }))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn enumerate_directory(
+    directory: &Path,
+    cancelled: &AtomicBool,
+    mut visit: impl FnMut(Result<InventoryEntry, (PathBuf, String)>) -> Result<(), String>,
+) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::{
+        Foundation::{
+            GetLastError, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+            ERROR_NOT_SUPPORTED, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
+        },
+        Storage::FileSystem::{
+            FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FIND_FIRST_EX_LARGE_FETCH,
+            WIN32_FIND_DATAW,
+        },
+    };
+
+    struct FindHandle(HANDLE);
+    impl Drop for FindHandle {
+        fn drop(&mut self) {
+            // SAFETY: constructed only after FindFirstFileExW succeeds.
+            unsafe { FindClose(self.0) };
+        }
+    }
+
+    fn find_first(pattern: &[u16], data: &mut WIN32_FIND_DATAW, large_fetch: bool) -> HANDLE {
+        // SAFETY: both buffers remain valid for the Windows call.
+        unsafe {
+            FindFirstFileExW(
+                pattern.as_ptr(),
+                FindExInfoBasic,
+                data as *mut WIN32_FIND_DATAW as *mut c_void,
+                FindExSearchNameMatch,
+                std::ptr::null(),
+                if large_fetch {
+                    FIND_FIRST_EX_LARGE_FETCH
+                } else {
+                    0
+                },
+            )
+        }
+    }
+
+    let mut pattern = directory.to_path_buf();
+    pattern.push("*");
+    let pattern: Vec<u16> = pattern.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut data = WIN32_FIND_DATAW::default();
+    let mut handle = find_first(&pattern, &mut data, true);
+    if handle == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        if matches!(
+            error,
+            ERROR_INVALID_FUNCTION | ERROR_INVALID_PARAMETER | ERROR_NOT_SUPPORTED
+        ) {
+            handle = find_first(&pattern, &mut data, false);
+        }
+    }
+    if handle == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        return if error == ERROR_FILE_NOT_FOUND {
+            match fs::symlink_metadata(directory) {
+                Ok(metadata) if metadata.is_dir() && !safety::is_link_or_reparse(&metadata) => {
+                    Ok(())
+                }
+                Ok(_) => Err("Directory changed before enumeration".into()),
+                Err(metadata_error) => Err(metadata_error.to_string()),
+            }
+        } else {
+            Err(std::io::Error::from_raw_os_error(error as i32).to_string())
+        };
+    }
+    let _handle = FindHandle(handle);
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let name_length = data
+            .cFileName
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(data.cFileName.len());
+        let name = std::ffi::OsString::from_wide(&data.cFileName[..name_length]);
+        if name != "." && name != ".." {
+            let attributes = data.dwFileAttributes;
+            let kind = if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                InventoryKind::Link
+            } else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                InventoryKind::Directory
+            } else {
+                InventoryKind::File
+            };
+            visit(Ok(InventoryEntry {
+                path: directory.join(name),
+                kind,
+                size: (u64::from(data.nFileSizeHigh) << 32) | u64::from(data.nFileSizeLow),
+            }))?;
+        }
+        if unsafe { FindNextFileW(handle, &mut data) } == 0 {
+            let error = unsafe { GetLastError() };
+            return if error == ERROR_NO_MORE_FILES {
+                Ok(())
+            } else {
+                Err(std::io::Error::from_raw_os_error(error as i32).to_string())
+            };
+        }
+    }
 }
 
 fn flush_enumeration_batch(
@@ -196,6 +352,7 @@ fn flush_enumeration_batch(
 pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
     index.connection.execute_batch("CREATE TABLE candidates AS SELECT rowid AS file_row FROM files WHERE size IN (SELECT size FROM files GROUP BY size HAVING count(*)>1); CREATE UNIQUE INDEX candidate_rows ON candidates(file_row);")
         .map_err(|error| error.to_string())?;
+    resolve_candidate_identities(index, cancelled)?;
     let total: usize = index
         .connection
         .query_row("SELECT count(*) FROM candidates", [], |row| {
@@ -272,6 +429,77 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
                 Err(_) => {}
             }
             scope::update(|state| state.hashed_files += 1);
+        }
+    }
+    Ok(())
+}
+
+/// Resolves file identities only after the cheap size filter. This keeps hard-link aliases from
+/// being reported as reclaimable copies without opening every unrelated file in a full-drive scan.
+fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
+    let mut cursor = 0i64;
+    let mut seen = HashSet::new();
+    while !cancelled.load(Ordering::Acquire) {
+        let mut statement = index
+            .connection
+            .prepare(
+                "SELECT f.rowid,f.path FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128",
+            )
+            .map_err(|error| error.to_string())?;
+        let batch = statement
+            .query_map([cursor], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        if batch.is_empty() {
+            break;
+        }
+        for (row, path) in batch {
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            cursor = row;
+            let path = PathBuf::from(path);
+            scope::update(|state| {
+                state.current_path = scope::display_path(&path).unwrap_or_default()
+            });
+            let identity = crate::routine_cleaner::file_identity(&path);
+            if cfg!(windows) && identity.is_none() {
+                index
+                    .connection
+                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
+                    .map_err(|error| error.to_string())?;
+                scope::error(&path, "Stable file identity is unavailable");
+                continue;
+            }
+            let identity_key = identity
+                .map(|(volume, file)| format!("{volume}:{file}"))
+                .unwrap_or_else(|| format!("path:{}", path.to_string_lossy()));
+            if !seen.insert(identity_key.clone()) {
+                index
+                    .connection
+                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
+                    .map_err(|error| error.to_string())?;
+                scope::update(|state| state.scanned_files = state.scanned_files.saturating_sub(1));
+                continue;
+            }
+            if let Err(error) = index.connection.execute(
+                "UPDATE files SET identity=?1,volume=?2,file_index=?3 WHERE rowid=?4",
+                params![
+                    identity_key,
+                    identity.map(|value| value.0),
+                    identity.map(|value| value.1.to_string()),
+                    row
+                ],
+            ) {
+                index
+                    .connection
+                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
+                    .map_err(|delete_error| delete_error.to_string())?;
+                scope::error(&path, format!("Stable file identity changed: {error}"));
+            }
         }
     }
     Ok(())
