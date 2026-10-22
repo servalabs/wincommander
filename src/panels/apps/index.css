@@ -121,6 +121,75 @@
   padding: 0;
 }
 
+/* Debloat is a review workspace: keep its controls and selected-app details
+   inside the available panel height. Install Software deliberately retains the
+   regular page scroll because its catalog is a long-form browsing surface. */
+.apps-panel--debloat,
+.apps-panel--debloat .apps-panel-layout {
+  height: 100%;
+  min-height: 0;
+}
+
+.apps-panel--debloat {
+  overflow: hidden;
+}
+
+/* The application shell normally owns the page scrollbar. When Debloat is
+   selected, transfer that height to its review workspace so only the result,
+   category, and detail panes need to scroll. Install Software never matches
+   this selector and keeps the ordinary page scroll. */
+.app-content:has(.apps-panel--debloat) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-content:has(.apps-panel--debloat) .app-panel-stage,
+.app-content:has(.apps-panel--debloat) .apps-panel--debloat {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.apps-panel--debloat .apps-panel-layout,
+.apps-panel--debloat [data-slot="tabs"],
+.apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
+  overflow: hidden;
+}
+
+.apps-panel--debloat .debloat-panel,
+.apps-panel--debloat .application-review-workspace,
+.apps-panel--debloat .application-review-main,
+.apps-panel--debloat .application-review-results {
+  min-height: 0;
+}
+
+.apps-panel--debloat .debloat-panel,
+.apps-panel--debloat .application-review-workspace,
+.apps-panel--debloat .application-review-results {
+  flex: 1;
+}
+
+.apps-panel--debloat .application-review-main {
+  max-height: none;
+}
+
+.apps-panel--debloat .application-review-categories,
+.apps-panel--debloat .application-review-detail {
+  overflow-y: auto;
+}
+
+.apps-panel--debloat .application-review-detail {
+  max-height: 44%;
+}
+
 .debloat-panel {
   display: flex;
   flex-direction: column;

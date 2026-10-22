@@ -58,8 +58,8 @@ export default function AppsPanel() {
   }, [setActiveTab]);
 
   return (
-    <div className="panel-container apps-panel">
-      <div className="flex flex-col gap-0">
+    <div className={`panel-container apps-panel${activeTab === "debloat" ? " apps-panel--debloat" : ""}`}>
+      <div className="apps-panel-layout flex flex-col gap-0">
         <PanelHeader
           panelId="apps"
           title="Packages & Apps"
