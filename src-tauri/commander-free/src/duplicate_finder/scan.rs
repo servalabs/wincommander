@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
 
+const ENUMERATION_BATCH_SIZE: usize = 512;
+const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
+
 pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<ScanIndex, String> {
     let mut index = ScanIndex::new()?;
     for root in roots {
@@ -83,6 +86,9 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
                 continue;
             }
         };
+        let mut directories = Vec::new();
+        let mut files = Vec::new();
+        let mut discovered = 0usize;
         for entry in entries {
             if cancelled.load(Ordering::Acquire) {
                 break;
@@ -111,13 +117,7 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
                 continue;
             };
             if metadata.is_dir() {
-                index
-                    .connection
-                    .execute(
-                        "INSERT OR IGNORE INTO directories(path,root) VALUES(?1,?2)",
-                        params![display_path, root],
-                    )
-                    .map_err(|error| error.to_string())?;
+                directories.push(display_path.to_owned());
             } else if metadata.is_file() {
                 if metadata.len() > i64::MAX as u64 {
                     scope::error(&path, "File size exceeds supported range");
@@ -127,13 +127,67 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
                 let identity_key = identity
                     .map(|(volume, file)| format!("{volume}:{file}"))
                     .unwrap_or_else(|| display_path.to_string());
-                let inserted = index.connection.execute("INSERT OR IGNORE INTO files(id,path,root,size,identity,volume,file_index) VALUES(lower(hex(randomblob(16))),?1,?2,?3,?4,?5,?6)",
-                    params![display_path, root, metadata.len() as i64, identity_key, identity.map(|value| value.0), identity.map(|value| value.1.to_string())]).map_err(|error| error.to_string())?;
-                scope::update(|state| state.scanned_files += inserted);
+                files.push((
+                    display_path.to_owned(),
+                    metadata.len() as i64,
+                    identity_key,
+                    identity.map(|value| value.0),
+                    identity.map(|value| value.1.to_string()),
+                ));
             }
+            if directories.len() + files.len() >= ENUMERATION_BATCH_SIZE {
+                discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
+                scope::update(|state| {
+                    state.current_path = directory.display().to_string();
+                    state.scanned_files += discovered;
+                });
+                discovered = 0;
+            }
+        }
+        discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
+        if discovered > 0 {
+            scope::update(|state| state.scanned_files += discovered);
         }
     }
     Ok(())
+}
+
+fn flush_enumeration_batch(
+    index: &ScanIndex,
+    root: &str,
+    directories: &mut Vec<String>,
+    files: &mut Vec<(String, i64, String, Option<u32>, Option<String>)>,
+) -> Result<usize, String> {
+    if directories.is_empty() && files.is_empty() {
+        return Ok(0);
+    }
+    let transaction = index
+        .connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    {
+        let mut insert_directory = transaction
+            .prepare("INSERT OR IGNORE INTO directories(path,root) VALUES(?1,?2)")
+            .map_err(|error| error.to_string())?;
+        for path in directories.drain(..) {
+            insert_directory
+                .execute(params![path, root])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    let mut inserted = 0usize;
+    {
+        let mut insert_file = transaction
+            .prepare("INSERT OR IGNORE INTO files(id,path,root,size,identity,volume,file_index) VALUES(lower(hex(randomblob(16))),?1,?2,?3,?4,?5,?6)")
+            .map_err(|error| error.to_string())?;
+        for (path, size, identity, volume, file_index) in files.drain(..) {
+            inserted += insert_file
+                .execute(params![path, root, size, identity, volume, file_index])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(inserted)
 }
 
 pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
@@ -240,6 +294,7 @@ pub(super) fn hash_reader(
 ) -> Result<[u8; 32], String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 128 * 1024];
+    let mut pending_progress = 0u64;
     loop {
         if cancelled.load(Ordering::Acquire) {
             return Err("cancelled".into());
@@ -248,13 +303,22 @@ pub(super) fn hash_reader(
             .read(&mut buffer)
             .map_err(|error| error.to_string())?;
         if read == 0 {
+            if pending_progress > 0 && super::RUNNING.load(Ordering::Acquire) {
+                scope::update(|state| {
+                    state.bytes_hashed = state.bytes_hashed.saturating_add(pending_progress)
+                });
+            }
             return Ok(hasher.finalize().into());
         }
         hasher.update(&buffer[..read]);
         if super::RUNNING.load(Ordering::Acquire) {
-            scope::update(|state| {
-                state.bytes_hashed = state.bytes_hashed.saturating_add(read as u64)
-            });
+            pending_progress = pending_progress.saturating_add(read as u64);
+            if pending_progress >= HASH_PROGRESS_BATCH_BYTES {
+                scope::update(|state| {
+                    state.bytes_hashed = state.bytes_hashed.saturating_add(pending_progress)
+                });
+                pending_progress = 0;
+            }
         }
     }
 }

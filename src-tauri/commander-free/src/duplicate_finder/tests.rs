@@ -1,5 +1,7 @@
 use super::*;
 
+static SERIAL: Mutex<()> = Mutex::new(());
+
 #[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
     let root = tempfile::tempdir().unwrap();
@@ -23,6 +25,33 @@ fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
         .unwrap();
     assert_eq!(files, 2);
     assert!(index.directory.path().join("scan.sqlite").exists());
+}
+
+#[test]
+fn batched_inventory_keeps_every_file_and_nested_folder() {
+    let _serial = SERIAL.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    for index in 0..513 {
+        std::fs::write(root.path().join(format!("root-{index}")), [index as u8]).unwrap();
+    }
+    std::fs::write(nested.join("nested-file"), b"nested").unwrap();
+    let index = index::ScanIndex::new().unwrap();
+    let canonical = std::fs::canonicalize(root.path()).unwrap();
+    let path = canonical.to_str().unwrap();
+    index
+        .connection
+        .execute("INSERT INTO directories(path,root) VALUES(?1,?1)", [path])
+        .unwrap();
+
+    scan::enumerate(&index, &AtomicBool::new(false)).unwrap();
+
+    let files: i64 = index
+        .connection
+        .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(files, 514);
 }
 
 fn scan_fixture(
@@ -50,7 +79,6 @@ fn scan_fixture(
 }
 
 fn fixture_index(roots: &[PathBuf], cancelled: &AtomicBool) -> index::ScanIndex {
-    static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = SERIAL.lock().unwrap();
     scope::begin(roots, Vec::new());
     scan::scan_roots(roots, cancelled).unwrap()
