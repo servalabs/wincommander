@@ -37,7 +37,10 @@ export default function MaintenancePanel() {
   useMaintenanceReviewPreload();
   return <div className={`panel-container maintenance-panel flex flex-col${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
     <div className="maintenance-workspace-shell">
-      <header className="maintenance-workspace-title"><h1>System Maintenance</h1></header>
+      <header className="maintenance-workspace-title">
+        <h1>System Maintenance</h1>
+        <p>Understand your storage, review cleanable data, and keep your system in order.</p>
+      </header>
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
       <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
         {!isAnalysis && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
