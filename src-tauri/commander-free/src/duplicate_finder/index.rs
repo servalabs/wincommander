@@ -56,7 +56,7 @@ impl ScanIndex {
             CREATE TABLE directories(path TEXT PRIMARY KEY, root TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX pending_directories ON directories(done);
             CREATE TABLE files(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, root TEXT NOT NULL, size INTEGER NOT NULL,
-                identity TEXT UNIQUE NOT NULL, volume INTEGER, file_index TEXT, modified TEXT, hash BLOB, group_id TEXT);
+                identity TEXT UNIQUE NOT NULL, volume INTEGER, file_index TEXT, modified TEXT, sample_hash BLOB, hash BLOB, group_id TEXT);
             CREATE INDEX file_sizes ON files(size);
             CREATE TABLE groups(id TEXT PRIMARY KEY, size INTEGER NOT NULL, hash BLOB NOT NULL, count INTEGER NOT NULL);")
             .map_err(|error| error.to_string())?;

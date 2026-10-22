@@ -2,13 +2,14 @@ use super::{index::ScanIndex, safety, scope};
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
 
 const ENUMERATION_BATCH_SIZE: usize = 512;
 const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
+const SAMPLE_WINDOW_BYTES: u64 = 64 * 1024;
 
 pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<ScanIndex, String> {
     let mut index = ScanIndex::new()?;
@@ -205,6 +206,29 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
         state.phase = "hashing".into();
         state.candidate_files = total;
     });
+    sample_candidates(index, cancelled)?;
+    index
+        .connection
+        .execute_batch(
+            "DELETE FROM candidates WHERE file_row NOT IN (
+            SELECT f.rowid FROM files f
+            JOIN candidates c ON f.rowid=c.file_row
+            WHERE f.sample_hash IN (
+                SELECT sampled.sample_hash FROM files sampled
+                JOIN candidates candidate ON sampled.rowid=candidate.file_row
+                WHERE length(sampled.sample_hash)=32
+                GROUP BY sampled.sample_hash HAVING count(*)>1
+            )
+        );",
+        )
+        .map_err(|error| error.to_string())?;
+    let verified_total: usize = index
+        .connection
+        .query_row("SELECT count(*) FROM candidates", [], |row| {
+            super::index::count(row, 0)
+        })
+        .map_err(|error| error.to_string())?;
+    scope::update(|state| state.candidate_files = verified_total);
     let mut cursor = 0i64;
     while !cancelled.load(Ordering::Acquire) {
         let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128").map_err(|error| error.to_string())?;
@@ -253,6 +277,106 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
     Ok(())
 }
 
+fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
+    let mut cursor = 0i64;
+    while !cancelled.load(Ordering::Acquire) {
+        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128").map_err(|error| error.to_string())?;
+        let batch = statement
+            .query_map([cursor], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    super::index::unsigned(row, 2)?,
+                    row.get::<_, Option<u32>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        if batch.is_empty() {
+            break;
+        }
+        for (row, path, size, volume, file_index) in batch {
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            cursor = row;
+            let path = PathBuf::from(path);
+            scope::update(|state| {
+                state.current_path = scope::display_path(&path).unwrap_or_default()
+            });
+            let identity = volume.zip(file_index.and_then(|value| value.parse::<u64>().ok()));
+            match sample_candidate(&path, size, identity, cancelled) {
+                Ok(sample_hash) => {
+                    index
+                        .connection
+                        .execute(
+                            "UPDATE files SET sample_hash=?1 WHERE rowid=?2",
+                            params![sample_hash.as_slice(), row],
+                        )
+                        .map_err(|error| error.to_string())?;
+                }
+                Err(error) if !cancelled.load(Ordering::Acquire) => scope::error(&path, error),
+                Err(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sample_candidate(
+    path: &Path,
+    size: u64,
+    identity: Option<(u32, u64)>,
+    cancelled: &AtomicBool,
+) -> Result<[u8; 32], String> {
+    let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !before.is_file() || safety::is_link_or_reparse(&before) || before.len() != size {
+        return Err("File changed before content comparison".into());
+    }
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let opened = file.metadata().map_err(|error| error.to_string())?;
+    if identity != super::verified_file::handle_identity(&file)?
+        || opened.len() != size
+        || opened.modified().ok() != before.modified().ok()
+    {
+        return Err("File handle identity changed before content comparison".into());
+    }
+    let mut hasher = Sha256::new();
+    let first = size.min(SAMPLE_WINDOW_BYTES);
+    if read_hash_segment(&mut file, &mut hasher, first, cancelled)? != first {
+        return Err("File changed during content comparison".into());
+    }
+    if size <= SAMPLE_WINDOW_BYTES.saturating_mul(2) {
+        let remaining = size.saturating_sub(first);
+        if read_hash_segment(&mut file, &mut hasher, remaining, cancelled)? != remaining {
+            return Err("File changed during content comparison".into());
+        }
+    } else {
+        file.seek(SeekFrom::Start(size - SAMPLE_WINDOW_BYTES))
+            .map_err(|error| error.to_string())?;
+        if read_hash_segment(&mut file, &mut hasher, SAMPLE_WINDOW_BYTES, cancelled)?
+            != SAMPLE_WINDOW_BYTES
+        {
+            return Err("File changed during content comparison".into());
+        }
+    }
+    let finished = file.metadata().map_err(|error| error.to_string())?;
+    let after = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if !after.is_file()
+        || safety::is_link_or_reparse(&after)
+        || after.len() != size
+        || before.modified().ok() != after.modified().ok()
+        || opened.modified().ok() != finished.modified().ok()
+        || finished.len() != size
+        || identity != crate::routine_cleaner::file_identity(path)
+    {
+        return Err("File changed during content comparison".into());
+    }
+    Ok(hasher.finalize().into())
+}
+
 fn hash_candidate(
     path: &Path,
     size: u64,
@@ -297,14 +421,26 @@ pub(super) fn hash_reader(
     cancelled: &AtomicBool,
 ) -> Result<[u8; 32], String> {
     let mut hasher = Sha256::new();
+    read_hash_segment(reader, &mut hasher, u64::MAX, cancelled)?;
+    Ok(hasher.finalize().into())
+}
+
+fn read_hash_segment(
+    reader: &mut impl Read,
+    hasher: &mut Sha256,
+    mut remaining: u64,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
     let mut buffer = [0u8; 128 * 1024];
     let mut pending_progress = 0u64;
-    loop {
+    let mut read_total = 0u64;
+    while remaining > 0 {
         if cancelled.load(Ordering::Acquire) {
             return Err("cancelled".into());
         }
+        let capacity = remaining.min(buffer.len() as u64) as usize;
         let read = reader
-            .read(&mut buffer)
+            .read(&mut buffer[..capacity])
             .map_err(|error| error.to_string())?;
         if read == 0 {
             if pending_progress > 0 && super::RUNNING.load(Ordering::Acquire) {
@@ -312,9 +448,11 @@ pub(super) fn hash_reader(
                     state.bytes_hashed = state.bytes_hashed.saturating_add(pending_progress)
                 });
             }
-            return Ok(hasher.finalize().into());
+            return Ok(read_total);
         }
         hasher.update(&buffer[..read]);
+        read_total = read_total.saturating_add(read as u64);
+        remaining = remaining.saturating_sub(read as u64);
         if super::RUNNING.load(Ordering::Acquire) {
             pending_progress = pending_progress.saturating_add(read as u64);
             if pending_progress >= HASH_PROGRESS_BATCH_BYTES {
@@ -325,4 +463,10 @@ pub(super) fn hash_reader(
             }
         }
     }
+    if pending_progress > 0 && super::RUNNING.load(Ordering::Acquire) {
+        scope::update(|state| {
+            state.bytes_hashed = state.bytes_hashed.saturating_add(pending_progress)
+        });
+    }
+    Ok(read_total)
 }

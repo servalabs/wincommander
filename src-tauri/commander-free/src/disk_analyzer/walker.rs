@@ -67,6 +67,24 @@ pub(super) fn walk_dir(
     depth: usize,
     entry_id: u64,
 ) -> DiskNode {
+    #[cfg(windows)]
+    {
+        return walk_dir_windows(dir, acc, cancelled, depth, entry_id);
+    }
+    #[cfg(not(windows))]
+    {
+        walk_dir_portable(dir, acc, cancelled, depth, entry_id)
+    }
+}
+
+#[cfg(not(windows))]
+fn walk_dir_portable(
+    dir: &Path,
+    acc: &mut WalkAccum,
+    cancelled: &AtomicBool,
+    depth: usize,
+    entry_id: u64,
+) -> DiskNode {
     let full_path = dir.to_string_lossy().into_owned();
     acc.children_by_dir.insert(full_path.clone(), Vec::new());
     let mut node = DiskNode {
@@ -190,6 +208,208 @@ pub(super) fn walk_dir(
     node
 }
 
+#[cfg(windows)]
+fn walk_dir_windows(
+    dir: &Path,
+    acc: &mut WalkAccum,
+    cancelled: &AtomicBool,
+    depth: usize,
+    entry_id: u64,
+) -> DiskNode {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::{
+        Foundation::{
+            GetLastError, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER,
+            ERROR_NOT_SUPPORTED, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
+        },
+        Storage::FileSystem::{
+            FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FIND_FIRST_EX_LARGE_FETCH,
+            WIN32_FIND_DATAW,
+        },
+    };
+
+    struct FindHandle(HANDLE);
+    impl Drop for FindHandle {
+        fn drop(&mut self) {
+            // SAFETY: this wrapper is constructed only with a successful find
+            // handle, and owns it until the corresponding FindClose call.
+            unsafe {
+                FindClose(self.0);
+            }
+        }
+    }
+
+    fn find_first(pattern: &[u16], data: &mut WIN32_FIND_DATAW, large_fetch: bool) -> HANDLE {
+        // SAFETY: `pattern` is a live, null-terminated UTF-16 path and `data`
+        // is a valid output buffer for the duration of the Windows API call.
+        unsafe {
+            FindFirstFileExW(
+                pattern.as_ptr(),
+                FindExInfoBasic,
+                data as *mut WIN32_FIND_DATAW as *mut c_void,
+                FindExSearchNameMatch,
+                std::ptr::null(),
+                if large_fetch {
+                    FIND_FIRST_EX_LARGE_FETCH
+                } else {
+                    0
+                },
+            )
+        }
+    }
+
+    fn format_find_mtime(data: &WIN32_FIND_DATAW) -> String {
+        const WINDOWS_EPOCH_OFFSET_100NS: u64 = 116_444_736_000_000_000;
+        let ticks = (u64::from(data.ftLastWriteTime.dwHighDateTime) << 32)
+            | u64::from(data.ftLastWriteTime.dwLowDateTime);
+        ticks
+            .checked_sub(WINDOWS_EPOCH_OFFSET_100NS)
+            .map(|value| (value / 10_000_000).to_string())
+            .unwrap_or_default()
+    }
+
+    let full_path = dir.to_string_lossy().into_owned();
+    acc.children_by_dir.insert(full_path.clone(), Vec::new());
+    let mut node = DiskNode {
+        entry_id,
+        name: dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| full_path.clone()),
+        full_path: full_path.clone(),
+        size: 0,
+        allocated: None,
+        is_dir: true,
+        last_modified: String::new(),
+        file_count: 0,
+        folder_count: 0,
+    };
+    if cancelled.load(Ordering::Acquire) {
+        return node;
+    }
+    if depth > MAX_DEPTH {
+        acc.truncated = true;
+        acc.skip(false);
+        return node;
+    }
+
+    // Every directory is checked immediately before enumeration. The native
+    // find result is used only for children, so a reparse point cannot make a
+    // recursive scan leave the selected tree.
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if is_link(&metadata) => {
+            acc.skip(true);
+            return node;
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            node.last_modified = format_mtime(metadata.modified().ok());
+        }
+        _ => {
+            acc.skip(false);
+            return node;
+        }
+    }
+
+    let mut pattern = dir.to_path_buf();
+    pattern.push("*");
+    let pattern: Vec<u16> = pattern.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut data = WIN32_FIND_DATAW::default();
+    let mut handle = find_first(&pattern, &mut data, true);
+    if handle == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        if matches!(
+            error,
+            ERROR_INVALID_FUNCTION | ERROR_INVALID_PARAMETER | ERROR_NOT_SUPPORTED
+        ) {
+            handle = find_first(&pattern, &mut data, false);
+        }
+    }
+    if handle == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        if error != ERROR_FILE_NOT_FOUND {
+            acc.skip(false);
+        }
+        return node;
+    }
+    let _handle = FindHandle(handle);
+    let mut children = Vec::new();
+
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+        let name_length = data
+            .cFileName
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(data.cFileName.len());
+        let name = std::ffi::OsString::from_wide(&data.cFileName[..name_length]);
+        if name != "." && name != ".." {
+            if acc.visited >= acc.limit {
+                acc.truncated = true;
+                acc.skip(false);
+                break;
+            }
+            acc.visited += 1;
+            let attributes = data.dwFileAttributes;
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                acc.skip(true);
+            } else {
+                let path = dir.join(&name);
+                let child = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                    if acc.publish {
+                        progress::FOLDERS.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let child = walk_dir_windows(&path, acc, cancelled, depth + 1, acc.visited);
+                    node.file_count = node.file_count.saturating_add(child.file_count);
+                    node.folder_count = node
+                        .folder_count
+                        .saturating_add(child.folder_count)
+                        .saturating_add(1);
+                    child
+                } else {
+                    let size = (u64::from(data.nFileSizeHigh) << 32) | u64::from(data.nFileSizeLow);
+                    node.file_count += 1;
+                    if acc.publish {
+                        progress::FILES.fetch_add(1, Ordering::Relaxed);
+                        progress::BYTES.fetch_add(size, Ordering::Relaxed);
+                    }
+                    DiskNode {
+                        entry_id: acc.visited,
+                        name: name.to_string_lossy().into_owned(),
+                        full_path: path.to_string_lossy().into_owned(),
+                        size,
+                        allocated: None,
+                        is_dir: false,
+                        last_modified: format_find_mtime(&data),
+                        file_count: 0,
+                        folder_count: 0,
+                    }
+                };
+                node.size = node.size.saturating_add(child.size);
+                if !child.is_dir {
+                    add_large(&child, acc);
+                }
+                children.push(child);
+            }
+        }
+
+        if unsafe { FindNextFileW(handle, &mut data) } == 0 {
+            let error = unsafe { GetLastError() };
+            if error != ERROR_NO_MORE_FILES {
+                acc.skip(false);
+            }
+            break;
+        }
+    }
+    children.sort_by_key(|child| std::cmp::Reverse(child.size));
+    acc.children_by_dir.insert(full_path, children);
+    add_large(&node, acc);
+    node
+}
+
 fn add_large(node: &DiskNode, acc: &mut WalkAccum) {
     if node.size < MIN_LARGE_BYTES {
         return;
@@ -235,6 +455,28 @@ mod tests {
         let (root, acc) = scan(temp.path(), MAX_ENTRIES, false);
         assert_eq!((root.size, root.file_count, root.folder_count), (9, 2, 1));
         assert_eq!(root.allocated, None);
+        assert_eq!(acc.skipped_entries, 0);
+        assert!(!acc.truncated);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_enumerator_reports_file_size_and_last_modified() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("example.bin"), b"12345").unwrap();
+
+        let (root, acc) = scan(temp.path(), MAX_ENTRIES, false);
+        let item = acc.children_by_dir[&root.full_path][0].clone();
+        assert_eq!((root.file_count, root.size, item.size), (1, 5, 5));
+        assert!(!item.last_modified.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_enumerator_does_not_mark_an_empty_directory_partial_at_the_entry_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let (root, acc) = scan(temp.path(), 0, false);
+        assert_eq!((root.file_count, root.folder_count, root.size), (0, 0, 0));
         assert_eq!(acc.skipped_entries, 0);
         assert!(!acc.truncated);
     }

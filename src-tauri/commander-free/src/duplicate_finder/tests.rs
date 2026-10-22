@@ -102,6 +102,38 @@ fn hashes_after_size_candidates_and_keeps_one() {
 }
 
 #[test]
+fn only_full_hashes_same_size_files_with_matching_content_samples() {
+    let dir = tempfile::tempdir().unwrap();
+    let duplicate = vec![7u8; 256 * 1024];
+    let distinct = vec![9u8; 256 * 1024];
+    std::fs::write(dir.path().join("a"), &duplicate).unwrap();
+    std::fs::write(dir.path().join("b"), &duplicate).unwrap();
+    std::fs::write(dir.path().join("c"), &distinct).unwrap();
+    let (scan, _, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    assert_eq!(scan.groups.len(), 1);
+    assert_eq!(scan.hashed_files, 2);
+}
+
+#[test]
+fn full_hash_rejects_files_that_match_only_at_the_sampled_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = vec![7u8; 256 * 1024];
+    let mut second = first.clone();
+    second[128 * 1024] = 9;
+    std::fs::write(dir.path().join("a"), first).unwrap();
+    std::fs::write(dir.path().join("b"), second).unwrap();
+    let (scan, _, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    assert!(scan.groups.is_empty());
+    assert_eq!(scan.hashed_files, 2);
+}
+
+#[test]
 fn rejects_empty_root_list() {
     assert!(safety::validate_roots(Vec::new()).is_err());
 }
