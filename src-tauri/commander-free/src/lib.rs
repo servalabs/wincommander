@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -689,25 +689,31 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
             });
             return;
         }
-        let _ = overlay.show();
-        force_window_foreground(&overlay);
-
-        let overlay_clone = overlay.clone();
-        tauri::async_runtime::spawn(async move {
-            // 200 ms gives Windows enough time to fully promote the window
-            // to foreground before we re-assert focus and fire the frontend
-            // focus event. 100 ms was occasionally too short on busy systems.
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let _ = overlay_clone.set_focus();
-            let _ = overlay_clone.emit("focus-search-input", ());
-        });
+        // The first instance is built hidden. A second hotkey while its
+        // renderer is loading must not reveal WebView2's unpainted surface.
+        if search_overlay_renderer_ready().load(Ordering::Acquire) {
+            show_search_overlay(&overlay);
+        }
         return;
     }
 
-    if let Ok(overlay) = tauri::WebviewWindowBuilder::new(
+    search_overlay_renderer_ready().store(false, Ordering::Release);
+    let ready = search_overlay_renderer_ready();
+    let ready_for_listener = ready;
+    let app_for_ready = app.clone();
+    let ready_listener = app.once("search-overlay-ready", move |_| {
+        ready_for_listener.store(true, Ordering::Release);
+        if let Some(overlay) = app_for_ready.get_webview_window("search-overlay") {
+            show_search_overlay(&overlay);
+        }
+    });
+
+    if tauri::WebviewWindowBuilder::new(
         app,
         "search-overlay",
-        tauri::WebviewUrl::App("index.html".into()),
+        // The marker routes this window correctly even if WebView2 has not
+        // published its label to JavaScript during a cold dev launch.
+        tauri::WebviewUrl::App("index.html?wc-window=search-overlay".into()),
     )
     .title("Quick Search")
     .decorations(false)
@@ -716,20 +722,47 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
     .always_on_top(true)
     .skip_taskbar(true)
     .resizable(false)
+    .focused(false)
+    .visible(false)
     .inner_size(760.0, 520.0)
     .center()
     .build()
-    {
-        let _ = overlay.show();
-        force_window_foreground(&overlay);
-
-        let overlay_clone = overlay.clone();
+    .is_ok() {
+        let app_for_timeout = app.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let _ = overlay_clone.set_focus();
-            let _ = overlay_clone.emit("focus-search-input", ());
+            // Never expose a blank or black emergency fallback. If a broken
+            // renderer cannot acknowledge in time, remove the hidden window
+            // so the next Ctrl+Space can make a clean attempt.
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            if !search_overlay_renderer_ready().load(Ordering::Acquire) {
+                app_for_timeout.unlisten(ready_listener);
+                if let Some(overlay) = app_for_timeout.get_webview_window("search-overlay") {
+                    let _ = overlay.close();
+                }
+            }
         });
+    } else {
+        app.unlisten(ready_listener);
     }
+}
+
+fn search_overlay_renderer_ready() -> &'static AtomicBool {
+    static READY: OnceLock<AtomicBool> = OnceLock::new();
+    READY.get_or_init(|| AtomicBool::new(false))
+}
+
+fn show_search_overlay(overlay: &tauri::WebviewWindow) {
+    let _ = overlay.show();
+    force_window_foreground(overlay);
+
+    let overlay_clone = overlay.clone();
+    tauri::async_runtime::spawn(async move {
+        // 200 ms gives Windows enough time to fully promote the window before
+        // focus is re-asserted and the renderer receives its focus cue.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = overlay_clone.set_focus();
+        let _ = overlay_clone.emit("focus-search-input", ());
+    });
 }
 
 fn open_search_files_panel(app: &tauri::AppHandle, query: &str) {

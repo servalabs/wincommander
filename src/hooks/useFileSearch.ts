@@ -67,6 +67,10 @@ export function useFileSearch(): FileSearchState {
   const [sizeFilter, setSizeFilterState] = useState<SizeFilter>("any");
   const [dateFilter, setDateFilterState] = useState<DateFilter>("any");
   const [resultsQuery, setResultsQuery] = useState<string | null>(null);
+  // A privacy-status update can land between setQuery() and React's next
+  // render. Keep the newest text outside that render cycle so recovery does
+  // not replay the previous (often empty) query and cancel the new debounce.
+  const queryRef = useRef("");
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tauri invokes cannot be cancelled once sent.  A broad earlier query can
@@ -153,14 +157,16 @@ export function useFileSearch(): FileSearchState {
   }, [dateFilter, searchTypes, sizeFilter, privacy.revision]);
 
   repeatCurrentSearch.current = () => {
-    if (query.trim() || searchTypes.size > 0 || sizeFilter !== "any" || dateFilter !== "any") {
-      void performSearch(query, resultLimit);
+    const currentQuery = queryRef.current;
+    if (currentQuery.trim() || searchTypes.size > 0 || sizeFilter !== "any" || dateFilter !== "any") {
+      void performSearch(currentQuery, resultLimit);
     }
   };
 
   const setQuery = useCallback((value: string) => {
     // Invalidate in-flight work immediately, not after the debounce delay.
     runIdRef.current += 1;
+    queryRef.current = value;
     setQueryState(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => performSearch(value, resultLimit), 300);
@@ -173,6 +179,7 @@ export function useFileSearch(): FileSearchState {
 
   const clear = useCallback(() => {
     cancelPendingFileSearch(debounceRef, runIdRef);
+    queryRef.current = "";
     setQueryState("");
     setResults([]);
     setTotalCount(0);
@@ -194,7 +201,10 @@ export function useFileSearch(): FileSearchState {
     // Clear potentially sensitive query text when a private mount changes.
     // An initial successful policy check can instead finish a query typed
     // during startup, without requiring the user to type it again.
-    if (previousPrivateRoots.current) setQueryState("");
+    if (previousPrivateRoots.current) {
+      queryRef.current = "";
+      setQueryState("");
+    }
     else repeatCurrentSearch.current();
     previousPrivateRoots.current = (privacy.status?.privateRoots.length ?? 0) > 0;
   }, [privacy.revision, privacy.status?.privateRoots.length]);

@@ -1220,7 +1220,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       )}
 
       {!privacy.status && (
-        <div className="esb-error" role="status">Checking volume privacy. Search results are hidden until this check completes.</div>
+        <div className="esb-status" role="status">Preparing search…</div>
       )}
 
       {sectionLabel && primary.length > 0 && (
