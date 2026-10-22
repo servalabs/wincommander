@@ -697,6 +697,17 @@ html.light .tech-grid.armed {
     cursor: wait;
 }
 
+.privacy-connectivity-toggles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.privacy-connectivity-toggles .killswitch-toggle {
+    width: 100%;
+    margin-top: 0;
+}
+
 /* ── Network identity strip ──────────────────────────────────────────
    Live Public IP + DNS readouts; hosted below the Internet toggle. */
 .radar-control-strip {

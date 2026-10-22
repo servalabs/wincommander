@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Default, Serialize)]
@@ -35,6 +35,26 @@ pub(super) fn snapshot() -> DuplicateProgress {
         .map(|guard| guard.clone())
         .unwrap_or_default()
 }
+
+/// Returns an ordinary Explorer-readable path for progress UI. Canonicalized
+/// Windows paths use the extended `\\?\` namespace internally, which is not a
+/// useful location to show a person or paste into Explorer.
+pub(super) fn display_path(path: &Path) -> Option<String> {
+    let raw = path.to_string_lossy().replace('/', "\\");
+    let display = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() < 3 || bytes[1] != b':' || bytes[2] != b'\\' {
+            return None;
+        }
+        rest.to_owned()
+    } else {
+        raw
+    };
+    (!display.contains('?') && !display.contains('\u{FFFD}')).then_some(display)
+}
+
 pub(super) fn begin(roots: &[PathBuf], excluded: Vec<String>) {
     update(|state| {
         *state = DuplicateProgress {
@@ -43,20 +63,42 @@ pub(super) fn begin(roots: &[PathBuf], excluded: Vec<String>) {
             phase: "enumerating".into(),
             scope_roots: roots
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|path| {
+                    display_path(path).unwrap_or_else(|| "Unavailable scan location".into())
+                })
                 .collect(),
             excluded_volumes: excluded,
             ..Default::default()
         }
     });
 }
-pub(super) fn error(path: &std::path::Path, error: impl std::fmt::Display) {
+pub(super) fn error(path: &Path, error: impl std::fmt::Display) {
     update(|state| {
         state.skipped_entries += 1;
         if state.errors.len() < 20 {
-            state.errors.push(format!("{}: {error}", path.display()));
+            let path = display_path(path).unwrap_or_else(|| "Unavailable scan location".into());
+            state.errors.push(format!("{path}: {error}"));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_path;
+    use std::path::Path;
+
+    #[test]
+    fn displays_extended_drive_paths_as_explorer_paths() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\Program Files")),
+            Some(r"C:\Program Files".into())
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\folder")),
+            Some(r"\\server\share\folder".into())
+        );
+        assert_eq!(display_path(Path::new(r"\\?\Volume{test}")), None);
+    }
 }
 pub(super) fn finish(cancelled: bool) {
     update(|state| {

@@ -10,7 +10,7 @@ export default function BluetoothControl() {
   const canChange = canChangeBluetooth(status, systemInfo?.isAdmin);
   const nextBlocked = !status?.blocked;
   const description = systemInfo?.isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : bluetoothControlDescription(status);
-  const label = busy ? "Changing Bluetooth policy…" : refreshing && !status ? "Checking Bluetooth policy…" : bluetoothControlLabel(status);
+  const label = busy ? "Updating Bluetooth…" : refreshing && !status ? "Checking Bluetooth…" : bluetoothControlLabel(status);
 
   return (
     <button

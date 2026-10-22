@@ -61,7 +61,9 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
             .execute("UPDATE directories SET done=1 WHERE path=?1", [&directory])
             .map_err(|error| error.to_string())?;
         let directory = PathBuf::from(directory);
-        scope::update(|state| state.current_path = directory.display().to_string());
+        scope::update(|state| {
+            state.current_path = scope::display_path(&directory).unwrap_or_default()
+        });
         if protected.iter().any(|path| directory.starts_with(path))
             || directory.starts_with(&temporary)
         {
@@ -138,7 +140,7 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
             if directories.len() + files.len() >= ENUMERATION_BATCH_SIZE {
                 discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
                 scope::update(|state| {
-                    state.current_path = directory.display().to_string();
+                    state.current_path = scope::display_path(&directory).unwrap_or_default();
                     state.scanned_files += discovered;
                 });
                 discovered = 0;
@@ -228,7 +230,9 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
             }
             cursor = row;
             let path = PathBuf::from(path);
-            scope::update(|state| state.current_path = path.display().to_string());
+            scope::update(|state| {
+                state.current_path = scope::display_path(&path).unwrap_or_default()
+            });
             let identity = volume.zip(file_index.and_then(|value| value.parse::<u64>().ok()));
             match hash_candidate(&path, size, identity, cancelled) {
                 Ok((hash, modified)) => {

@@ -23,6 +23,12 @@ export function formatSize(sizeKB: number | undefined) {
   return sizeKB >= 1024 * 1024 ? `${(sizeKB / 1024 / 1024).toFixed(1)} GiB` : sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MiB` : `${sizeKB.toFixed(0)} KiB`;
 }
 
+function conciseInstallDate(value: string | undefined): string {
+  if (!value) return "Unavailable";
+  const compact = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  return compact ? `${compact[1]}-${compact[2]}-${compact[3]}` : /^\d{4}-\d{2}-\d{2}/.exec(value)?.[0] ?? value;
+}
+
 export default function ApplicationReviewResults(props: Props) {
   const [category, setCategory] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -63,13 +69,13 @@ export default function ApplicationReviewResults(props: Props) {
           <div><dt>Version</dt><dd>{detail.version || "Unavailable"}</dd></div>
           <div><dt>Reported size</dt><dd>{detail.sizeKB && Number.isFinite(detail.sizeKB) && detail.sizeKB > 0 ? formatSize(detail.sizeKB) : "Unavailable"}</dd></div>
           <div><dt>Type</dt><dd>{detail.source === "program" ? "Desktop application" : detail.source === "store" ? "Store package" : "Windows component"}</dd></div>
-          {detail.installDate && <div><dt>Installed</dt><dd>{detail.installDate}</dd></div>}
-          {detail.installLocation && <div className="application-review-metadata-wide"><dt>Location</dt><dd>{detailLocation ?? "Unavailable"}</dd></div>}
+          <div><dt>Installed</dt><dd title={detail.installDate}>{conciseInstallDate(detail.installDate)}</dd></div>
+          <div className="application-review-metadata-location"><dt>Location</dt><dd title={detailLocation ?? undefined}>{detailLocation ?? "Unavailable"}</dd></div>
+          <div className="application-review-metadata-package"><dt>Package identifier</dt><dd title={detail.packageFullName || detail.id}>{detail.packageFullName || detail.id}</dd></div>
         </dl>
         {detail.riskNote && <p>{detail.riskNote}</p>}
         {detail.isProvisioned && <p>Windows also provisions this package for new user accounts. Removal may affect more than the current account.</p>}
         <div className="application-review-detail-actions"><span>{detail.removalUnavailable || (props.selected.has(detail.id) ? "Selected for removal — review and confirm below." : "Removal requires review and confirmation.")}</span><button type="button" disabled={props.removing || !!detail.removalUnavailable} onClick={() => props.onToggle(detail.id)}>{props.selected.has(detail.id) ? "Keep application" : "Select for removal"}</button></div>
-        <details className="application-review-package-id"><summary>Package identifier</summary><p>{detail.packageFullName || detail.id}</p></details>
       </aside>}
     </div>
   </div>;

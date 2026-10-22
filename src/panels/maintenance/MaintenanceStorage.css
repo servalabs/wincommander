@@ -10,6 +10,8 @@
   border-radius: var(--r-lg);
   background: var(--surface);
 }
+.maintenance-workspace-title { flex: 0 0 auto; padding: 0.7rem 0.8rem 0.35rem; background: var(--surface); }
+.maintenance-workspace-title h1 { color: var(--text); font-size: 1.05rem; font-weight: 600; letter-spacing: -0.02em; }
 .maintenance-workspace-nav {
   display: flex;
   flex: 0 0 auto;

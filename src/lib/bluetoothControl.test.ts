@@ -6,11 +6,11 @@ const allowed: BluetoothControlStatus = {
 };
 
 describe("Bluetooth machine policy presentation", () => {
-  it("describes confirmed policy without claiming the physical radio is ON", () => {
-    expect(bluetoothControlLabel(null)).toBe("Bluetooth policy unknown");
-    expect(bluetoothControlLabel(allowed)).toBe("Bluetooth policy allowed");
+  it("uses familiar on/off wording while keeping the policy limit in its description", () => {
+    expect(bluetoothControlLabel(null)).toBe("Bluetooth unavailable");
+    expect(bluetoothControlLabel(allowed)).toBe("Bluetooth ON");
     expect(bluetoothControlDescription(allowed)).toContain("Windows radio settings and other restrictions still apply");
-    expect(bluetoothControlLabel({ ...allowed, blocked: true, state: "blocked" })).toBe("Bluetooth policy blocked");
+    expect(bluetoothControlLabel({ ...allowed, blocked: true, state: "blocked" })).toBe("Bluetooth OFF");
     expect(bluetoothControlDescription({ ...allowed, blocked: true, state: "blocked" })).toContain("Windows confirms");
   });
 
@@ -18,7 +18,7 @@ describe("Bluetooth machine policy presentation", () => {
     for (const blocked of [true, false]) {
       const pending = { ...allowed, state: "pending" as const, blocked };
       expect(parseBluetoothControlStatus(pending)).toEqual(pending);
-      expect(bluetoothControlLabel(pending)).toBe("Bluetooth policy pending");
+      expect(bluetoothControlLabel(pending)).toBe("Bluetooth updating…");
       expect(bluetoothControlDescription(pending)).toContain("has not confirmed");
     }
   });
@@ -30,7 +30,7 @@ describe("Bluetooth machine policy presentation", () => {
       expect(canChangeBluetooth(status, true)).toBe(false);
       expect(canChangeBluetooth({ ...status, canChange: true }, true)).toBe(false);
     }
-    expect(bluetoothControlLabel({ ...allowed, state: "unsupported", canChange: false })).toContain("unsupported");
+    expect(bluetoothControlLabel({ ...allowed, state: "unsupported", canChange: false })).toBe("Bluetooth unavailable");
     expect(bluetoothControlDescription({ ...allowed, state: "externally_managed", canChange: false })).toContain("administrator");
     expect(bluetoothControlDescription({ ...allowed, state: "legacy_recovery_required", canChange: false })).toContain("Windows Device Manager");
   });
