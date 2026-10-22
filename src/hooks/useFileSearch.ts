@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { buildSearchQuery, isSearchTimeoutError, sfAppSortScore } from "@/lib/fileNameSearch";
+import { buildSearchQuery, fileSearchPageStatus, formatFileSearchError, sfAppSortScore } from "@/lib/fileNameSearch";
 import type { DateFilter, SearchResponse, SearchResult, SearchType, SizeFilter } from "@/lib/fileNameSearch";
 import { DEFAULT_RESULT_LIMIT, nextResultLimit, normalizeResultLimit } from "@/lib/searchSelection";
 import { refreshSearchPrivacy, useSearchPrivacy } from "./useSearchPrivacy";
@@ -30,6 +30,7 @@ export interface FileSearchState {
   totalCount: number;
   resultLimit: number;
   canShowMore: boolean;
+  resultsIncomplete: boolean;
   /** Raw query string the current `results` were fetched for — null until
    *  the first search lands. Rows are STALE while this ≠ `query` (debounce
    *  window); Enter must re-search then, not open a stale row. */
@@ -60,6 +61,7 @@ export function useFileSearch(): FileSearchState {
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [resultLimit, setResultLimit] = useState<number>(DEFAULT_RESULT_LIMIT);
+  const [pageStatus, setPageStatus] = useState(() => fileSearchPageStatus(null, DEFAULT_RESULT_LIMIT));
   // Multi-select set. Empty = "All". See SearchType for membership semantics.
   const [searchTypes, setSearchTypes] = useState<Set<SearchType>>(() => new Set());
   const [sizeFilter, setSizeFilterState] = useState<SizeFilter>("any");
@@ -92,6 +94,8 @@ export function useFileSearch(): FileSearchState {
     if (!effectiveQuery && !hasActiveFilters) {
       if (!isCurrent()) return;
       setResults([]);
+      setPageStatus(fileSearchPageStatus(null, limit));
+      setTotalCount(0);
       setHasSearched(false);
       setError(null);
       setResultsQuery(q);
@@ -128,16 +132,18 @@ export function useFileSearch(): FileSearchState {
         setResults(sorted);
         setRowsRevision(privacy.revision);
         setTotalCount(resp.total);
+        setPageStatus(fileSearchPageStatus(resp, limit));
         setHasSearched(true);
         setResultsQuery(q);
       }
     } catch (err) {
       if (isCurrent()) {
-        // A live-search request can expire while Everything drains a prior
-        // autocomplete request. It is not an invalid filter and should not
-        // turn the panel into an error state; the next settled input retries.
-        setError(isSearchTimeoutError(err) ? null : String(err));
+        // A failed engine request cannot establish that the file is absent.
+        // Keep the error visible so the panel never presents it as no matches.
+        setError(formatFileSearchError(err));
         setResults([]);
+        setTotalCount(0);
+        setPageStatus(fileSearchPageStatus(null, limit));
         setHasSearched(true);
         setResultsQuery(q);
       }
@@ -170,6 +176,7 @@ export function useFileSearch(): FileSearchState {
     setQueryState("");
     setResults([]);
     setTotalCount(0);
+    setPageStatus(fileSearchPageStatus(null, DEFAULT_RESULT_LIMIT));
     setIsSearching(false);
     setHasSearched(false);
     setError(null);
@@ -180,6 +187,7 @@ export function useFileSearch(): FileSearchState {
     cancelPendingFileSearch(debounceRef, runIdRef);
     setResults([]);
     setTotalCount(0);
+    setPageStatus(fileSearchPageStatus(null, DEFAULT_RESULT_LIMIT));
     setIsSearching(false);
     setError(null);
     setResultsQuery(null);
@@ -221,6 +229,8 @@ export function useFileSearch(): FileSearchState {
       debounceRef.current = setTimeout(() => performSearch(query, resultLimit, types, size, date), 120);
     } else {
       setResults([]);
+      setTotalCount(0);
+      setPageStatus(fileSearchPageStatus(null, resultLimit));
       setHasSearched(false);
       setError(null);
     }
@@ -253,7 +263,8 @@ export function useFileSearch(): FileSearchState {
     hasSearched,
     totalCount,
     resultLimit,
-    canShowMore: nextResultLimit(resultLimit) !== null && totalCount > resultLimit,
+    canShowMore: rowsRevision === privacy.revision && nextResultLimit(resultLimit) !== null && pageStatus.hasMore,
+    resultsIncomplete: rowsRevision === privacy.revision && pageStatus.resultsIncomplete,
     resultsQuery,
     searchTypes,
     sizeFilter,

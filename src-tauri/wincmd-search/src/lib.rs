@@ -15,6 +15,7 @@ pub mod error;
 pub mod extract;
 pub mod filters;
 pub mod index;
+mod indexing;
 pub mod query;
 mod read_only;
 pub mod reconcile;
@@ -36,8 +37,8 @@ use backend::{ForensicBackend, SemanticBackend};
 use chunk::chunk_doc;
 use crawler::{build_globset, collect_files};
 use error::{Result, SearchError};
-use extract::extract_text;
 use index::ContentIndex;
+use indexing::index_file;
 use query::merge_hits;
 use types::{ContentHit, ContentQuery, FileMeta, IndexConfig, IndexStatus};
 use watch::{watch_roots, FsEventAction};
@@ -157,24 +158,8 @@ impl SearchEngine {
                 status.pending_docs = status.pending_docs.saturating_sub(1);
                 continue;
             }
-            match extract_text(meta.clone()) {
-                Ok(doc) => {
-                    if !(self.path_policy)(&doc.meta.path) {
-                        let mut status = self.status.lock().unwrap();
-                        status.pending_docs = status.pending_docs.saturating_sub(1);
-                        continue;
-                    }
-                    if let Err(e) =
-                        self.ci
-                            .upsert(&mut writer, &doc.meta, &doc.title, &doc.body, &doc.props)
-                    {
-                        self.status.lock().unwrap().last_error = Some(e.to_string());
-                    }
-                }
-                Err(e) if e.is_per_file_skip() => { /* no extractor or malformed file — skip */ }
-                Err(e) => {
-                    self.status.lock().unwrap().last_error = Some(e.to_string());
-                }
+            if let Err(e) = index_file(&self.ci, &mut writer, meta, &self.path_policy) {
+                self.status.lock().unwrap().last_error = Some(e.to_string());
             }
             let mut s = self.status.lock().unwrap();
             s.pending_docs = s.pending_docs.saturating_sub(1);
@@ -258,24 +243,8 @@ impl SearchEngine {
                     s.pending_docs = s.pending_docs.saturating_sub(1);
                     continue;
                 }
-                match extract_text(meta.clone()) {
-                    Ok(doc) => {
-                        if !path_policy(&doc.meta.path) {
-                            let mut s = status.lock().unwrap();
-                            s.pending_docs = s.pending_docs.saturating_sub(1);
-                            continue;
-                        }
-                        if let Err(e) =
-                            ci.upsert(&mut writer, &doc.meta, &doc.title, &doc.body, &doc.props)
-                        {
-                            status.lock().unwrap().last_error = Some(e.to_string());
-                        }
-                    }
-                    Err(e) if e.is_per_file_skip() => { /* no extractor or malformed file — skip */
-                    }
-                    Err(e) => {
-                        status.lock().unwrap().last_error = Some(e.to_string());
-                    }
+                if let Err(e) = index_file(&ci, &mut writer, meta, &path_policy) {
+                    status.lock().unwrap().last_error = Some(e.to_string());
                 }
                 let mut s = status.lock().unwrap();
                 s.pending_docs = s.pending_docs.saturating_sub(1);
@@ -302,33 +271,17 @@ impl SearchEngine {
             // Applies one classified FS action against the shared writer,
             // routing extract/upsert/delete errors into `status.last_error`
             // rather than aborting the drain loop.
-            let apply_action = |w: &mut IndexWriter, action: FsEventAction| {
-                match action {
-                    FsEventAction::Upsert(meta) => {
-                        if !path_policy(&meta.path) {
-                            return;
-                        }
-                        match extract_text(meta.clone()) {
-                            Ok(doc) => {
-                                if !path_policy(&doc.meta.path) {
-                                    return;
-                                }
-                                if let Err(e) =
-                                    ci.upsert(w, &doc.meta, &doc.title, &doc.body, &doc.props)
-                                {
-                                    status.lock().unwrap().last_error = Some(e.to_string());
-                                }
-                            }
-                            Err(e) if e.is_per_file_skip() => { /* no extractor or malformed file — skip */
-                            }
-                            Err(e) => {
-                                status.lock().unwrap().last_error = Some(e.to_string());
-                            }
-                        }
+            let apply_action = |w: &mut IndexWriter, action: FsEventAction| match action {
+                FsEventAction::Upsert(meta) => {
+                    if !path_policy(&meta.path) {
+                        return;
                     }
-                    FsEventAction::Delete(id) => {
-                        ci.delete(w, id);
+                    if let Err(e) = index_file(&ci, w, meta, &path_policy) {
+                        status.lock().unwrap().last_error = Some(e.to_string());
                     }
+                }
+                FsEventAction::Delete(id) => {
+                    ci.delete(w, id);
                 }
             };
 

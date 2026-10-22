@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildContentQueryArgs, contentHitToDisplayRow } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { ContentHit } from "@/types/wincmd-search";
-import { isDirectoryResult, isSearchTimeoutError, sfExtOf } from "@/lib/fileNameSearch";
+import { formatFileSearchError, isDirectoryResult, requireCompleteEmptySearch, sfExtOf } from "@/lib/fileNameSearch";
 import type { SearchResponse, SearchResult } from "@/lib/fileNameSearch";
 import { resolveMotionDisabled } from "@/lib/motionPolicy";
 import { normalizeKey, topPaths } from "@/lib/frecency";
@@ -301,9 +301,10 @@ function synthesizeRow(path: string): BrowseResult {
 }
 
 /** The empty-box list: recency from the index, led by what the user opens. */
-async function fetchBrowse(plan: EverythingPlan, filtered: boolean): Promise<BrowseResult[]> {
-  const resp = await fetchNames(plan, BROWSE_FETCH);
+export async function fetchBrowse(plan: EverythingPlan, filtered: boolean, fetch = fetchNames): Promise<BrowseResult[]> {
+  const resp = await fetch(plan, BROWSE_FETCH);
   const rows: BrowseResult[] = resp.results.filter((r) => !isNoisePath(r.full_path));
+  requireCompleteEmptySearch(resp, rows.length);
   // With chips active the list is a filtered search, not a history — injecting
   // remembered paths there would show rows that contradict the visible filters.
   if (filtered) return rows.slice(0, BROWSE_SHOW);
@@ -326,7 +327,7 @@ const EMPTY_SEARCH_RESPONSE: SearchResponse = { results: [], total: 0, query: ""
 
 /** The typed-query list: exact/prefix name matches first (apps ahead of ties),
  *  then frecency, then shortest name. */
-async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseResult[]> {
+export async function fetchMatches(plan: EverythingPlan, term: string, fetch = fetchNames): Promise<BrowseResult[]> {
   const termLower = term.toLowerCase();
   const boost = appsBoostApplies(plan);
   // The overlay previously launched three es.exe requests on every settled
@@ -334,17 +335,16 @@ async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseR
   // queued behind each other and the 6 s safety timeout surfaced as a bogus
   // "filter isn't indexed" error. The recency page is the useful answer in
   // almost every case; only ask for the expensive recovery pages when it is
-  // genuinely sparse. A timeout is then a silent partial result, never an
-  // alarming user-facing error for a query that remains valid.
-  const sorted = await fetchNames(plan, MATCH_FETCH).catch((error) => {
-    if (isSearchTimeoutError(error)) return EMPTY_SEARCH_RESPONSE;
-    throw error;
-  });
+  // genuinely sparse. The primary request must succeed: its failure is an
+  // unavailable search, not evidence that no files match. Supplemental ranking
+  // requests remain best-effort after a successful primary search.
+  const sorted = await fetch(plan, MATCH_FETCH);
+  requireCompleteEmptySearch(sorted);
   const needsRecovery = sorted.results.length < MATCH_SHOW;
   const [apps, unsorted] = needsRecovery
     ? await Promise.all([
-      boost ? fetchNames(plan, 30, APP_EXT_TOKEN).catch(() => EMPTY_SEARCH_RESPONSE) : Promise.resolve<SearchResponse>(EMPTY_SEARCH_RESPONSE),
-      fetchNames({ ...plan, sort: undefined }, MATCH_FETCH).catch(() => EMPTY_SEARCH_RESPONSE),
+      boost ? fetch(plan, 30, APP_EXT_TOKEN).catch(() => EMPTY_SEARCH_RESPONSE) : Promise.resolve<SearchResponse>(EMPTY_SEARCH_RESPONSE),
+      fetch({ ...plan, sort: undefined }, MATCH_FETCH).catch(() => EMPTY_SEARCH_RESPONSE),
     ])
     : [EMPTY_SEARCH_RESPONSE, EMPTY_SEARCH_RESPONSE];
   // ONE pool, sorted ONCE below — not two independently-sorted arrays
@@ -526,7 +526,9 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
           if (!live()) return;
           setPrimary([]);
           setShowingBrowse(plan.isBrowse);
-          setError(String(err));
+          setError(formatFileSearchError(err));
+          setTotalCount(null);
+          return;
         } finally {
           if (live()) setIsSearching(false);
         }

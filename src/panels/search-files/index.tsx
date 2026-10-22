@@ -117,8 +117,9 @@ export default function SearchFilesPanel() {
 
   const savedResultLimit = appSettings?.app?.fileSearch?.resultLimit;
   const effectiveSavedResultLimit = normalizeResultLimit(savedResultLimit);
+  const appliedSavedResultLimit = useRef<number | null>(null);
   const resultLimitLocked = (appSettings?.policy?.lockedPaths ?? []).some((path) => {
-    const normalized = path.trim();
+    const normalized = path.trim().replace(/(^|\.)result_limit$/, "$1resultLimit");
     return normalized.length > 0 && (
       "app.fileSearch.resultLimit".startsWith(normalized)
       || "fileSearch.resultLimit".startsWith(normalized)
@@ -128,10 +129,11 @@ export default function SearchFilesPanel() {
   // Settings arrive after the panel mounts. Apply the saved/admin-provided
   // value then, rather than leaving this session on the old 200-row default.
   useEffect(() => {
-    if (typeof savedResultLimit === "number" && effectiveSavedResultLimit !== resultLimit) {
-      setResultLimit(effectiveSavedResultLimit);
+    if (typeof savedResultLimit === "number" && (resultLimitLocked || appliedSavedResultLimit.current !== effectiveSavedResultLimit)) {
+      appliedSavedResultLimit.current = effectiveSavedResultLimit;
+      if (effectiveSavedResultLimit !== resultLimit) setResultLimit(effectiveSavedResultLimit);
     }
-  }, [effectiveSavedResultLimit, resultLimit, savedResultLimit, setResultLimit]);
+  }, [effectiveSavedResultLimit, resultLimit, resultLimitLocked, savedResultLimit, setResultLimit]);
 
   const changeResultLimit = useCallback((value: number) => {
     const next = normalizeResultLimit(value);
@@ -465,11 +467,16 @@ export default function SearchFilesPanel() {
             <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Indexed files"} search results`}>
               {activeResultTab === "names" && showNameSection && (
                 <div>
+                {search.resultsIncomplete && !search.isSearching && !search.error && (
+                  <p className="sfp-indexing-note" role="status">
+                    Filename search is incomplete. Choose a specific folder or narrow your search, then try again.
+                  </p>
+                )}
                 <NameResultsSection
                 results={search.results}
                 query={search.query}
                 isSearching={search.isSearching}
-                showNoMatches={search.hasSearched && !search.error && !search.isSearching && search.results.length === 0}
+                showNoMatches={search.hasSearched && !search.error && !search.resultsIncomplete && !search.isSearching && search.results.length === 0}
                 engineMissing={engineMissing}
                 selectedIndex={selected}
                 onSelect={setSelected}
@@ -518,15 +525,13 @@ export default function SearchFilesPanel() {
           <div className="sfp-footer-counts">
             {search.hasSearched && !search.error && (
               <span className="result-count">
-                {search.totalCount > search.resultLimit
-                  ? `Showing ${search.results.length.toLocaleString()} of ${search.totalCount.toLocaleString()} name matches`
-                  : `${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}`}
+                {`Showing ${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}${search.resultsIncomplete ? " · search incomplete" : ""}`}
                 {!content.contentLoading && textContentRows.length > 0 &&
                   ` · ${textContentRows.length.toLocaleString()} indexed matches`}
               </span>
             )}
             {search.canShowMore && (
-              <Button size="sm" variant="ghost" onClick={search.showMore} disabled={search.isSearching}>
+              <Button size="sm" variant="ghost" onClick={search.showMore} disabled={search.isSearching || resultLimitLocked}>
                 Show more
               </Button>
             )}
