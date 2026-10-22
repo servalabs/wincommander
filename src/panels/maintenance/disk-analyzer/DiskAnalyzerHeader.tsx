@@ -3,6 +3,7 @@ import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Button, Icon, Spinner } from "@/components/ui/bp";
 import { diskBreadcrumbs, diskScopeTotals, formatDiskBytes, normalizeDiskPath, type DiskAnalyzerMode } from "@/lib/diskAnalyzer";
 import { showError } from "@/utils/toast";
+import { toExplorerDisplayPath } from "../maintenancePathDisplay";
 import type { DiskAnalyzer } from "./useDiskAnalyzer";
 
 export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analyzer: DiskAnalyzer; mode: DiskAnalyzerMode; children?: ReactNode }) {
@@ -10,6 +11,7 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
     const busy = scanning || deleting || loadingPath;
     const crumbs = meta ? diskBreadcrumbs(meta.scanRoot, currentPath) : [];
     const scope = mode !== "large" ? diskScopeTotals(analyzer.rows) : { size: meta?.totalSize ?? 0, files: meta?.fileCount ?? 0, folders: meta?.folderCount ?? 0 };
+    const displayPath = (path: string) => toExplorerDisplayPath(path) ?? "Location unavailable";
     async function browse() {
         try {
             const selected = await openFolderDialog({ directory: true, multiple: false, title: "Choose a drive or folder to analyze" });
@@ -31,10 +33,10 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
         </header>
         {children}
         {!meta && <div className="da-scope-caption">Sizes are logical file sizes · Allocated disk size is unavailable.</div>}
-        {meta && !stale && normalizeDiskPath(analyzer.scanPath) !== normalizeDiskPath(meta.scanRoot) && <div className="da-scan-notice" role="status"><Icon icon="info-sign" size={15} /><span>Results describe {meta.scanRoot}. Analyze the newly chosen location to update them.</span></div>}
+        {meta && !stale && normalizeDiskPath(analyzer.scanPath) !== normalizeDiskPath(meta.scanRoot) && <div className="da-scan-notice" role="status"><Icon icon="info-sign" size={15} /><span>Results describe {displayPath(meta.scanRoot)}. Analyze the newly chosen location to update them.</span></div>}
         {meta && !stale && !scanning && <details className="da-scope-statistics"><summary aria-label="Scan summary and volume details">
             <span>{scope.files.toLocaleString()} files · {scope.folders.toLocaleString()} folders · <strong>{formatDiskBytes(scope.size)} logical size</strong></span><span>Volume details</span>
-        </summary><div className="da-scope-caption"><span>Allocated disk size is unavailable. Logical sizes do not measure space recovered after deletion.</span><span>{mode !== "large" ? currentPath : meta.scanRoot}</span></div><div className="da-metrics" aria-label="Volume details">
+        </summary><div className="da-scope-caption"><span>Allocated disk size is unavailable. Logical sizes do not measure space recovered after deletion.</span><span>{displayPath(mode !== "large" ? currentPath : meta.scanRoot)}</span></div><div className="da-metrics" aria-label="Volume details">
             <div><small>{mode !== "large" ? "Current folder content" : "Scanned content"}</small><strong>{formatDiskBytes(scope.size)}</strong></div>
             <div><small>Files</small><strong>{scope.files.toLocaleString()}</strong></div>
             <div><small>Folders</small><strong>{scope.folders.toLocaleString()}</strong></div>
@@ -49,9 +51,9 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
             <Button minimal small icon="chevron-right" title="Forward" aria-label="Forward" disabled={busy || historyIndex >= history.length - 1} onClick={() => void analyzer.navigate(history[historyIndex + 1], historyIndex + 1)} />
             <Button minimal small icon="arrow-up" title="Parent folder" aria-label="Parent folder" disabled={busy || crumbs.length < 2} onClick={() => void analyzer.navigate(crumbs[crumbs.length - 2])} />
             <div className="da-crumb-list">{crumbs.map((path, index) => <span key={path}>
-                {index > 0 && <Icon icon="chevron-right" size={11} />}<button type="button" aria-current={index === crumbs.length - 1 ? "location" : undefined} disabled={busy || index === crumbs.length - 1} onClick={() => void analyzer.navigate(path)} title={path}>{index === 0 ? path : path.split("\\").pop()}</button>
+                {index > 0 && <Icon icon="chevron-right" size={11} />}<button type="button" aria-current={index === crumbs.length - 1 ? "location" : undefined} disabled={busy || index === crumbs.length - 1} onClick={() => void analyzer.navigate(path)} title={displayPath(path)}>{index === 0 ? displayPath(path) : displayPath(path).split("\\").pop()}</button>
             </span>)}</div>{loadingPath && <Spinner size={16} />}
-            {meta.complete === false && normalizeDiskPath(currentPath) !== normalizeDiskPath(meta.scanRoot) && <Button minimal small icon="refresh" disabled={busy} title={`Start a fresh scan of ${currentPath}`} onClick={() => void analyzer.startScan(currentPath)}>Rescan folder</Button>}
+            {meta.complete === false && normalizeDiskPath(currentPath) !== normalizeDiskPath(meta.scanRoot) && <Button minimal small icon="refresh" disabled={busy} title={`Start a fresh scan of ${displayPath(currentPath)}`} onClick={() => void analyzer.startScan(currentPath)}>Rescan folder</Button>}
         </nav>}
     </>;
 }

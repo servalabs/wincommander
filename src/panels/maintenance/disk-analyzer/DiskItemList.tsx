@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon, CheckboxControl, Button } from "@/components/ui/bp";
 import { diskNodeColor, diskPathContains, diskPercent, formatDiskBytes, type DiskNode, type LargeDiskItem } from "@/lib/diskAnalyzer";
+import { toExplorerDisplayPath } from "../maintenancePathDisplay";
 
 interface Props {
     items: DiskNode[];
@@ -27,9 +28,9 @@ export default function DiskItemList({ items, total, selected, focused, large, d
             return <div key={item.fullPath} className={`da-item${isFocused ? " active" : ""}${selected.has(item.fullPath) ? " selected" : ""}`}>
                 <span title={item.isDir ? "Explore this folder to select individual files. Directory deletion is unavailable." : undefined}><CheckboxControl checked={selected.has(item.fullPath)} disabled={disabled || item.isDir} ariaLabel={`Select ${item.name}${item.isDir ? ". Folder deletion unavailable" : ""}`} onChange={() => onSelect(item)} /></span>
                 <button type="button" className="da-item-main" disabled={disabled} onClick={() => onFocus(item)}
-                    onDoubleClick={() => item.isDir && onNavigate(item.fullPath)} title={item.fullPath} aria-pressed={isFocused}>
+                    onDoubleClick={() => item.isDir && onNavigate(item.fullPath)} title={toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"} aria-pressed={isFocused}>
                     <Icon icon={item.isDir ? "folder-close" : "document"} size={24} style={{ color: diskNodeColor(item, index) }} />
-                    <span className="da-item-copy"><strong>{item.name}</strong><small>{large ? item.fullPath : item.isDir ? `${item.fileCount.toLocaleString()} files · ${item.folderCount.toLocaleString()} folders` : "File"}</small></span>
+                    <span className="da-item-copy"><strong>{item.name}</strong><small>{large ? toExplorerDisplayPath(item.fullPath) ?? "Location unavailable" : item.isDir ? `${item.fileCount.toLocaleString()} files · ${item.folderCount.toLocaleString()} folders` : "File"}</small></span>
                     <span className="da-item-size"><strong>{formatDiskBytes(item.size)}</strong><small>{percent.toFixed(1)}%</small>
                         <span className="da-item-meter"><span style={{ width: `${percent}%`, background: diskNodeColor(item, index) }} /></span>
                     </span>

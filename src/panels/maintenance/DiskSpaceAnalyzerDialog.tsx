@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Dialog, Icon, Spinner } from "@/components/ui/bp";
 import { filterLargeDiskItems, formatDiskBytes, type DiskAnalyzerMode, type DiskSort, type LargeDiskFilter } from "@/lib/diskAnalyzer";
+import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import DiskAnalyzerTabs from "./disk-analyzer/DiskAnalyzerTabs";
 import DiskFileStatistics from "./disk-analyzer/DiskFileStatistics";
 import DiskAnalyzerHeader from "./disk-analyzer/DiskAnalyzerHeader";
@@ -87,14 +88,14 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
         </div>
         <footer className="da-selection-bar"><div><Icon icon="layers" size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} logical size · Space recovered may differ</small></span></div><div>
             {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
-            <Button intent="danger" icon="trash" disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)}>Review deletion</Button>
+            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
         </div></footer>
     </div>;
     return <>
         {inline ? <div className="disk-analyzer-inline">{content}</div> : <Dialog isOpen={isOpen} onClose={onClose} title="Disk Space Analyzer" icon="search-around" className="disk-analyzer-dialog">{content}</Dialog>}
         <Alert isOpen={analyzer.confirmItems.length > 0} cancelButtonText="Cancel" confirmButtonText={`Delete ${analyzer.confirmItems.length} item${analyzer.confirmItems.length === 1 ? "" : "s"}`} intent="danger" icon="trash" loading={analyzer.deleting} onCancel={() => { if (!analyzer.deleting) analyzer.setConfirmItems([]); }} onConfirm={() => void analyzer.deleteConfirmed()}>
             <p>Permanently delete <strong>{analyzer.confirmItems.length} file{analyzer.confirmItems.length === 1 ? "" : "s"}</strong> ({formatDiskBytes(analyzer.confirmItems.reduce((sum, item) => sum + item.size, 0))} logical size)? This cannot be undone.</p>
-            <ul className="da-confirm-list">{analyzer.confirmItems.map(item => <li key={item.fullPath}>{item.fullPath}</li>)}</ul>
+            <ul className="da-confirm-list">{analyzer.confirmItems.map(item => <li key={item.fullPath}>{toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"}</li>)}</ul>
         </Alert>
     </>;
 }

@@ -3,6 +3,7 @@ import { diskNodeColor, formatDiskBytes, type DiskNode } from "@/lib/diskAnalyze
 import { diskArcPath, diskSunburst, diskTreemap, type DiskChartNode } from "@/lib/diskAnalyzerLayout";
 import { prepareDiskChart, isDiskRemainder, diskChartCoverage } from "@/lib/diskChartDisplay";
 import { useDiskChartSize } from "./useDiskChartSize";
+import { toExplorerDisplayPath } from "../maintenancePathDisplay";
 
 interface Props {
     nodes: DiskChartNode[];
@@ -29,6 +30,7 @@ export default function DiskCharts({ nodes, depth, mode, focused, onFocus, onNav
             : arcs.map(arc => ({ node: arc.node, level: arc.level, drawn: arc.end - arc.start > 0.001, collapsed: false }));
         return diskChartCoverage(display.remainders, shapes, scopePath);
     }, [display.remainders, tiles, arcs, depth, mode, scopePath]);
+    const displayPath = (path: string) => toExplorerDisplayPath(path) ?? "Location unavailable";
     function interaction(node: DiskNode) {
         return {
             role: "button", tabIndex: disabled ? -1 : 0,
@@ -49,7 +51,7 @@ export default function DiskCharts({ nodes, depth, mode, focused, onFocus, onNav
                 const { node, x, y, width, height, level, colorIndex } = tile;
                 const active = focused?.fullPath === node.fullPath;
                 return <g key={node.fullPath} {...interaction(node)} className={`da-chart-item${active ? " active" : ""}`}>
-                    <title>{isDiskRemainder(node) ? `${node.remainder.entryCount.toLocaleString()} entries grouped in Other` : node.fullPath} — {formatDiskBytes(node.size)}</title>
+                    <title>{isDiskRemainder(node) ? `${node.remainder.entryCount.toLocaleString()} entries grouped in Other` : displayPath(node.fullPath)} — {formatDiskBytes(node.size)}</title>
                     <rect x={x + 1} y={y + 1} width={Math.max(0, width - 2)} height={Math.max(0, height - 2)} rx="3"
                         fill={diskNodeColor(node, colorIndex)} fillOpacity={0.25 + level * 0.1} />
                     {width > 65 && height > 24 && <text x={x + 8} y={y + 16} fontSize="11">
@@ -65,7 +67,7 @@ export default function DiskCharts({ nodes, depth, mode, focused, onFocus, onNav
             {arcs.filter(arc => arc.end - arc.start > 0.001).map(arc => {
                 const ring = 174 / depth;
                 return <g key={arc.node.fullPath} {...interaction(arc.node)} className={`da-chart-item${focused?.fullPath === arc.node.fullPath ? " active" : ""}`}>
-                    <title>{isDiskRemainder(arc.node) ? `${arc.node.remainder.entryCount.toLocaleString()} entries grouped in Other` : arc.node.fullPath} — {formatDiskBytes(arc.node.size)}</title>
+                    <title>{isDiskRemainder(arc.node) ? `${arc.node.remainder.entryCount.toLocaleString()} entries grouped in Other` : displayPath(arc.node.fullPath)} — {formatDiskBytes(arc.node.size)}</title>
                     <path d={diskArcPath(arc.start, arc.end, 62 + (arc.level - 1) * ring, 61 + arc.level * ring)}
                         fill={diskNodeColor(arc.node, arc.colorIndex)} fillOpacity={0.42 + arc.level * 0.12} />
                 </g>;
@@ -75,7 +77,7 @@ export default function DiskCharts({ nodes, depth, mode, focused, onFocus, onNav
         </svg>
     );
     return <div className="da-chart-display">{graph}<div className="da-chart-remainders" aria-label="Chart display coverage" role="status">
-        {coverage.length ? <><span>Other · {coverage.length} grouped or collapsed locations:</span>{coverage.map(node => <button type="button" key={node.fullPath} disabled={disabled} onClick={() => onFocus(node)} title={`${node.remainder?.parentPath}: ${node.remainder?.reason}`}>
+        {coverage.length ? <><span>Other · {coverage.length} grouped or collapsed locations:</span>{coverage.map(node => <button type="button" key={node.fullPath} disabled={disabled} onClick={() => onFocus(node)} title={`${displayPath(node.remainder?.parentPath ?? "")}: ${node.remainder?.reason}`}>
             {node.remainder?.entryCount.toLocaleString()} entries · {formatDiskBytes(node.size)}
         </button>)}</> : <span>All scanned items at the chosen depth have chart area. Deeper folder contents are collapsed; zero-size files have no area.</span>}
     </div></div>;
