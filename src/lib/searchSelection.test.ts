@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   areResultsFresh,
   buildSelectionEntries,
+  currentQueryRows,
   extractHighlightTokens,
   highlightName,
   normalizeResultLimit,
@@ -71,6 +72,16 @@ describe("areResultsFresh", () => {
 
   it("is stale before any search has landed", () => {
     expect(areResultsFresh("q!", null, null)).toBe(false);
+  });
+});
+
+describe("currentQueryRows", () => {
+  it("hides a previous query's rows while a shortcut handoff is loading", () => {
+    expect(currentQueryRows("parth", "old query", ["old-result"])).toEqual([]);
+  });
+
+  it("shows rows only after their own query completes", () => {
+    expect(currentQueryRows("parth", "parth", ["current-result"])).toEqual(["current-result"]);
   });
 });
 

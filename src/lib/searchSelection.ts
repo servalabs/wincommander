@@ -54,6 +54,11 @@ export function areResultsFresh(
   return true;
 }
 
+/** Keep a result group off screen until it belongs to the current input. */
+export function currentQueryRows<T>(query: string, rowsQuery: string | null, rows: T[]): T[] {
+  return rowsQuery === query ? rows : [];
+}
+
 // ---------------------------------------------------------------------------
 // File-name match highlighting
 // ---------------------------------------------------------------------------

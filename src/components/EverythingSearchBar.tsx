@@ -1290,16 +1290,14 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             type="button"
             className="esb-open-full-search"
             onClick={() => {
-              // The panel mounts after navigation, so retain the handoff until
-              // its first effect can consume it instead of racing an event. A
-              // DOM event alone stays inside the dedicated shortcut WebView;
-              // the Tauri event reaches the main window that owns the panel.
+              // This must cross the native boundary: a frontend broadcast can
+              // route the hidden main WebView without restoring its window.
               const handoff = query.text.trim();
-              if (handoff) rememberSearchHandoff(handoff);
-              void emit("open-search-files-panel", handoff)
+              void invoke("open_search_files_from_shortcut", { query: handoff })
                 .catch(() => {
-                  // The normal in-window bar has no separate main WebView, so
-                  // preserve its direct route as a resilient fallback.
+                  // The ordinary in-window bar can still navigate locally if
+                  // a development/native command is unavailable.
+                  if (handoff) rememberSearchHandoff(handoff);
                   window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }));
                 })
                 .finally(close);
