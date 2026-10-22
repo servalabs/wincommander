@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Card, CardContent } from "../../components/ui/card";
+import PanelHeader from "../../components/shared/PanelHeader";
 import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { SystemHygieneTools } from "./SystemHygieneTools";
@@ -36,11 +37,12 @@ export default function MaintenancePanel() {
   }, [setActiveTab, setWindowsOpen]);
   useMaintenanceReviewPreload();
   return <div className={`panel-container maintenance-panel flex flex-col${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
+      <PanelHeader
+        panelId="maintenance"
+        title="System Maintenance"
+        description="Understand your storage, review cleanable data, and keep your system in order."
+      />
     <div className="maintenance-workspace-shell">
-      <header className="maintenance-workspace-title">
-        <h1>System Maintenance</h1>
-        <p>Understand your storage, review cleanable data, and keep your system in order.</p>
-      </header>
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
       <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
         {!isAnalysis && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}

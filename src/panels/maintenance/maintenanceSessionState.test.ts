@@ -25,6 +25,8 @@ test("maintenance scan hooks retain their results in the session store", async (
 
   const panel = await read("index.tsx");
   expect(panel).toContain('useMaintenanceSessionState("maintenance.active-workspace"');
+  expect(panel).toContain('<PanelHeader');
+  expect(panel).toContain('title="System Maintenance"');
   expect(panel).toContain("Understand your storage, review cleanable data, and keep your system in order.");
 });
 

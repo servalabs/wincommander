@@ -1,4 +1,4 @@
-.panel-container.maintenance-panel { height: 100%; min-height: 0; overflow: hidden; }
+.panel-container.maintenance-panel { height: 100%; min-height: 0; gap: 16px; overflow: hidden; }
 .maintenance-workspace-shell {
   display: flex;
   flex-direction: column;
@@ -10,9 +10,6 @@
   border-radius: var(--r-lg);
   background: var(--surface);
 }
-.maintenance-workspace-title { flex: 0 0 auto; padding: 0.7rem 0.8rem 0.55rem; background: var(--surface); }
-.maintenance-workspace-title h1 { color: var(--text); font-size: 1.05rem; font-weight: 600; letter-spacing: -0.02em; }
-.maintenance-workspace-title p { margin-top: 0.2rem; color: var(--text-dim); font-size: 0.78rem; }
 .maintenance-workspace-nav {
   display: flex;
   flex: 0 0 auto;
