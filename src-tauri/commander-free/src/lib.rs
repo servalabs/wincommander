@@ -2341,6 +2341,11 @@ pub fn run() {
             // dashboard-mounted JS interval guaranteed.
             updater::init(app.handle());
 
+            // Start the local content-index crawl and file watchers now, not
+            // when the user first opens Search Files. The indexer owns its own
+            // background worker, so this does not delay window startup.
+            file_search::start_background_indexing();
+
             #[cfg(windows)]
             session_instance::set_app_ready(&app.handle().clone());
 

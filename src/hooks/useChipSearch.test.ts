@@ -17,7 +17,7 @@
 // comment on appSortScore in useChipSearch.ts for the reasoning.
 
 import { describe, expect, it } from "bun:test";
-import { appSortScore, fetchBrowse, fetchMatches, isMatchTermTooShort, MIN_MATCH_TERM_LENGTH } from "./useChipSearch";
+import { appSortScore, fetchBrowse, fetchMatchPage, fetchMatches, isMatchTermTooShort, MIN_MATCH_TERM_LENGTH } from "./useChipSearch";
 import type { SearchResult } from "../lib/fileNameSearch";
 import type { EverythingPlan } from "../lib/searchQueryPlan";
 
@@ -90,6 +90,34 @@ describe("filename engine failures", () => {
       results: [], total: 0, query: "", has_more: false, incomplete: false,
     }));
     expect(rows).toEqual([]);
+  });
+});
+
+describe("shortcut match continuation", () => {
+  const plan: EverythingPlan = { tokens: ["parth*"], isBrowse: false };
+
+  it("keeps the compact preview but reports that the full Search Files panel has more matches", async () => {
+    const rows = Array.from({ length: 99 }, (_, index) => file(`parth-${index}.txt`));
+    const page = await fetchMatchPage(plan, "parth", async () => ({
+      results: rows,
+      total: rows.length,
+      query: "parth*",
+      has_more: false,
+    }));
+    expect(page.rows).toHaveLength(10);
+    expect(page.hasMore).toBe(true);
+  });
+
+  it("preserves the provider continuation signal even when the first page has only preview-sized rows", async () => {
+    const rows = Array.from({ length: 10 }, (_, index) => file(`parth-${index}.txt`));
+    const page = await fetchMatchPage(plan, "parth", async () => ({
+      results: rows,
+      total: rows.length,
+      query: "parth*",
+      has_more: true,
+    }));
+    expect(page.rows).toHaveLength(10);
+    expect(page.hasMore).toBe(true);
   });
 });
 
