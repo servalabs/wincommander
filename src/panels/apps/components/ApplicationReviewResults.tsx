@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon, Spinner } from "@/components/ui/bp";
+import { toExplorerDisplayPath } from "@/lib/windowsPathDisplay";
 import AppIcon from "./AppIcon";
 import type { DebloatItem } from "../types";
 import "./ApplicationReviewResults.css";
@@ -29,6 +30,7 @@ export default function ApplicationReviewResults(props: Props) {
   const groups = activeCategory ? props.groups.filter(([name]) => name === activeCategory) : props.groups;
   const allItems = props.groups.flatMap(([, items]) => items);
   const detail = allItems.find(item => item.id === detailId);
+  const detailLocation = toExplorerDisplayPath(detail?.installLocation);
 
   return <div className="application-review-workspace">
     <nav className="application-review-categories" aria-label="Application categories">
@@ -59,14 +61,13 @@ export default function ApplicationReviewResults(props: Props) {
         <dl className="application-review-metadata">
           <div><dt>Publisher</dt><dd>{detail.publisher || "Unavailable"}</dd></div>
           <div><dt>Version</dt><dd>{detail.version || "Unavailable"}</dd></div>
-          <div><dt>Installed size</dt><dd>{detail.sizeKB && Number.isFinite(detail.sizeKB) && detail.sizeKB > 0 ? formatSize(detail.sizeKB) : "Unavailable"}</dd></div>
+          <div><dt>Reported size</dt><dd>{detail.sizeKB && Number.isFinite(detail.sizeKB) && detail.sizeKB > 0 ? formatSize(detail.sizeKB) : "Unavailable"}</dd></div>
           <div><dt>Type</dt><dd>{detail.source === "program" ? "Desktop application" : detail.source === "store" ? "Store package" : "Windows component"}</dd></div>
           {detail.installDate && <div><dt>Installed</dt><dd>{detail.installDate}</dd></div>}
-          {detail.installLocation && <div className="application-review-metadata-wide"><dt>Location</dt><dd>{detail.installLocation}</dd></div>}
+          {detail.installLocation && <div className="application-review-metadata-wide"><dt>Location</dt><dd>{detailLocation ?? "Unavailable"}</dd></div>}
         </dl>
         {detail.riskNote && <p>{detail.riskNote}</p>}
         {detail.isProvisioned && <p>Windows also provisions this package for new user accounts. Removal may affect more than the current account.</p>}
-        {!!detail.sizeKB && Number.isFinite(detail.sizeKB) && detail.sizeKB > 0 && <p className="application-review-size-note">Reported by the installer; actual space freed may differ.</p>}
         <div className="application-review-detail-actions"><span>{detail.removalUnavailable || (props.selected.has(detail.id) ? "Selected for removal — review and confirm below." : "Removal requires review and confirmation.")}</span><button type="button" disabled={props.removing || !!detail.removalUnavailable} onClick={() => props.onToggle(detail.id)}>{props.selected.has(detail.id) ? "Keep application" : "Select for removal"}</button></div>
         <details className="application-review-package-id"><summary>Package identifier</summary><p>{detail.packageFullName || detail.id}</p></details>
       </aside>}

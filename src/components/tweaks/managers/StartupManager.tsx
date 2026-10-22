@@ -61,6 +61,8 @@ export default function StartupManager({ embedded = false, scanKey = 0, reviewEn
     || (statusFilter === "review" && item.Recommendation === "Disable"))
     && matchesStartupSearch(item, startupSignature(item, reviewEntries), filter)), item => item.IsEnabled), [items, filter, statusFilter, reviewEntries]);
   const enabled = items.filter(item => item.IsEnabled).length;
+  const isResultsLoading = loading && !items.length;
+  const isResultsEmpty = !loading && !error && !filtered.length;
   const headerRight = <div className="system-manager-actions"><Tag minimal>{items.length} entries</Tag>{!embedded && <Button minimal icon="refresh" aria-label="Refresh startup items" onClick={event => { event.stopPropagation(); void refresh(); }} loading={loading} disabled={!!pending.size} />}</div>;
   const body = <>
     <div className="startup-review-summary"><div><strong>{items.length}</strong><span>Startup entries</span></div><div><strong>{enabled}</strong><span>Enabled at sign-in</span></div><div><strong>{items.length - enabled}</strong><span>Disabled entries</span></div></div>
@@ -70,9 +72,9 @@ export default function StartupManager({ embedded = false, scanKey = 0, reviewEn
       <InputGroup aria-label="Search startup items" placeholder="Search names, publishers or paths…" leftIcon="search" value={filter} onChange={event => setFilter(event.currentTarget.value)} />
     </div>
     {error && <p role="alert" className="startup-review-error">{error} <button type="button" onClick={() => void refresh()}>Try again</button></p>}
-    <div className="startup-review-results" aria-busy={loading}>
-      {loading && !items.length && <Spinner size={20} />}
-      {!loading && !error && !filtered.length && <p className="system-manager-empty">No startup entries match.</p>}
+    <div className={`startup-review-results${isResultsLoading ? " is-loading" : ""}${isResultsEmpty ? " is-empty" : ""}`} aria-busy={loading}>
+      {isResultsLoading && <Spinner size={20} />}
+      {isResultsEmpty && <p className="system-manager-empty">No startup entries match.</p>}
       {filtered.map(item => <StartupReviewRow key={startupIdentity(item)} item={item} signature={startupSignature(item, reviewEntries)} pending={pending.has(startupIdentity(item))} busy={loading || !!pending.size} onToggle={() => void handleToggle(item)} />)}
     </div>
     <p className="startup-review-footnote">{filtered.length} of {items.length} entries shown · Registry and Startup folders. Services and scheduled tasks have their own views. Removal is not supported here; use Disable to retain the entry.</p>

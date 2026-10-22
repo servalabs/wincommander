@@ -25,6 +25,9 @@
 .startup-review-toolbar .startup-review-filters { margin-bottom: 0; flex: 1; }
 .startup-review-toolbar .bp6-input-group { min-width: 220px; }
 .startup-review-results { border: 1px solid var(--border); border-radius: var(--r-lg); max-height: 55vh; min-height: 140px; overflow: auto; }
+.startup-review-results.is-loading,
+.startup-review-results.is-empty { display: grid; place-items: center; }
+.startup-review-results.is-empty .system-manager-empty { padding: 0; text-align: center; }
 .startup-review-row { background: var(--surface); border-bottom: 1px solid var(--border); }
 .startup-review-row:last-child { border-bottom: 0; }
 .startup-review-row-header { display: grid; grid-template-columns: minmax(140px, 1fr) auto auto auto 24px; gap: 10px; align-items: center; padding: 12px; }

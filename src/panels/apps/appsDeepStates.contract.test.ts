@@ -12,6 +12,9 @@ describe("apps populated-state interaction contracts", () => {
     expect(review).toContain("disabled={props.removing || !!item.removalUnavailable}");
     expect(review).toContain('aria-label={`Select ${item.label} for removal`}');
     expect(review).toContain('aria-expanded={detailId === item.id}');
+    expect(review).toContain('<dt>Reported size</dt>');
+    expect(review).not.toContain('actual space freed may differ');
+    expect(review).toContain('toExplorerDisplayPath(detail?.installLocation)');
   });
 
   test("package update selections expose their selected state", () => {
