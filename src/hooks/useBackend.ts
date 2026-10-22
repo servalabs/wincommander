@@ -10,7 +10,6 @@ import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
-import type { ActivityArea, ActivityScan, ActivityRecordPage, ActivityRemoveResult } from "../types/generated/activity";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -2436,11 +2435,6 @@ export function useBackend() {
       invoke<RoutineCleanerCleanResult>("routine_cleaner_clean", { itemIds }),
     routineCleanerScanProjects: () => invoke<RoutineCleanerScan | null>("routine_cleaner_scan_projects"),
     routineCleanerCancel: () => invoke<void>("routine_cleaner_cancel"),
-    activityScan: (area: ActivityArea) => invoke<ActivityScan>("activity_scan", { area }),
-    activityRecords: (area: ActivityArea, scanId: string, itemId: string, offset: number) =>
-      invoke<ActivityRecordPage>("activity_records", { area, scanId, itemId, offset }),
-    activityRemove: (area: ActivityArea, scanId: string, itemId: string, recordIds: string[], allRecords: boolean) =>
-      invoke<ActivityRemoveResult>("activity_remove", { area, scanId, itemId, recordIds, allRecords }),
     packageUpdatesInventory: () => invoke<PackageUpdateInventory>("package_updates_inventory"),
     packageUpdatesApply: (updateIds: string[]) => invoke<PackageUpdateResult>("package_updates_apply", { updateIds }),
     packageUpdatesCancel: () => invoke<void>("package_updates_cancel"),

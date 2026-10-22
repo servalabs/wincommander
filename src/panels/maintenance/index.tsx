@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { Card, CardContent } from "../../components/ui/card";
-import PanelHeader from "../../components/shared/PanelHeader";
 import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { SystemHygieneTools } from "./SystemHygieneTools";
@@ -10,7 +9,6 @@ import { FileHygieneTools } from "./FileHygieneTools";
 import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/MaintenanceWorkspaceNav";
 import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
-import MaintenanceActivityPanel from "./activity/MaintenanceActivityPanel";
 import "./DiskSpaceAnalyzerDialog.css";
 import "./MaintenanceStorage.css";
 import { getMaintenanceSessionValue, primeMaintenanceSessionValue, useMaintenanceSessionState } from "./maintenanceSessionState";
@@ -37,18 +35,16 @@ export default function MaintenancePanel() {
     };
   }, [setActiveTab, setWindowsOpen]);
   useMaintenanceReviewPreload();
-  return <div className={`panel-container maintenance-panel flex flex-col gap-4${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
-    {!isAnalysis && active.id !== "activity" && <PanelHeader panelId="maintenance" title="System Maintenance" description="Understand your storage, review cleanable data, and keep your system in order." />}
+  return <div className={`panel-container maintenance-panel flex flex-col${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
     <div className="maintenance-workspace-shell">
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
       <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
-        {!isAnalysis && active.id !== "activity" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
+        {!isAnalysis && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
         {active.id === "cleanup" && <StorageAndFileTools windowsOpen={windowsOpen} setWindowsOpen={setWindowsOpen} />}
         {isAnalysis && <div className="maintenance-analysis-workspace">
           <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen onClose={() => {}} initialMode={activeTab === "large" ? "large" : "space"} /></div></CardContent></Card>
         </div>}
         {active.id === "duplicates" && <FileHygieneTools />}
-        {active.id === "activity" && <MaintenanceActivityPanel />}
         {active.id === "registry" && <RegistryAndHygieneTools />}
         {active.id === "startup" && <StartupDriverTools />}
         {active.id === "history" && <MaintenanceHistoryPanel />}

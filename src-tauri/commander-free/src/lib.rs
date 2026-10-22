@@ -21,7 +21,6 @@ mod child_jobs;
 pub mod cli;
 mod ipc_boundary;
 pub use wincmd_shared::command_strings;
-mod activity_bridge;
 mod auth_anomaly;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_agent_test;
@@ -2776,9 +2775,6 @@ pub fn run() {
             backend::is_path_dir,
             // ── Disk Space Analyzer ──
             disk_analyzer::run_disk_scan,
-            activity_bridge::activity_scan,
-            activity_bridge::activity_records,
-            activity_bridge::activity_remove,
             disk_analyzer::cancel_disk_scan,
             disk_analyzer::get_disk_scan_progress,
             disk_analyzer::get_disk_children,

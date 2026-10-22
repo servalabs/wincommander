@@ -1,7 +1,6 @@
 import { diskAnalyzerAuditResponse } from "./diskAnalyzerAudit";
 import { fileHygieneAuditResponse } from "./fileHygieneAudit";
 import { routineCleanerAuditResponse } from "./routineCleanerAudit";
-import { activityAuditResponse } from "./activityAudit";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from "../lib/decoyFakeData";
 import { modulesForPersona } from "../types/modules";
@@ -1259,6 +1258,6 @@ export function installUiAuditMocks(): void {
         },
       };
     }
-    return activityAuditResponse(command, args) ?? fileHygieneAuditResponse(command, args) ?? diskAnalyzerAuditResponse(command, args) ?? uiAuditDirectResponse(command);
+    return fileHygieneAuditResponse(command, args) ?? diskAnalyzerAuditResponse(command, args) ?? uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });
 }

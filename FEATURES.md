@@ -81,21 +81,12 @@ the backend and private component before execution.
   Dashboard action failures appear in Notifications, with unresolved findings
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
-- Maintenance workspaces for cache cleanup, duplicates, disk analysis,
-  browser/application activity, startup, registry hygiene, and local operation
-  history. The tool rail stays visible while content scrolls. System Cleanup
-  retains Windows activity, clipboard, network and credential tools.
-- Browser/application activity groups current-user sources and browser profiles
-  by data type. Available record-level operations require Inspect, selection,
-  review and confirmation; clearing a whole type includes unloaded records.
-  Unsupported stores and missing metadata are labeled unavailable. Browser
-  download records are separate from downloaded files. Sign-in/session data
-  has an additional acknowledgement where removal is supported.
-  Browser Audit, Editor History, Office Document History and Adobe Recent Files
-  no longer duplicate these tools in System Cleanup. Older configured browser
-  and Office timers remain visible for review; moving the cards does not change
-  existing schedules. Locked browser stores require closing the browser before
-  scanning; cleanup always requires the relevant application to be closed.
+- Maintenance workspaces for cache cleanup, duplicates, disk analysis, startup,
+  registry hygiene, and local operation history. Large Files and File Types are
+  tabs within Disk Space Analysis. The compact tab row stays visible while its
+  content scrolls. System Cleanup retains Browser Audit, Editor History, Office
+  Document History, Adobe Recent Files, Windows activity, clipboard, network
+  and credential tools.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
 - Explicit project-folder inspection through a native picker for supported

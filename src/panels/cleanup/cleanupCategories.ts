@@ -471,6 +471,30 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
     },
   },
   {
+    id: 'browserFootprints',
+    label: 'Browser Audit',
+    description: 'Footprint sizes per browser',
+    icon: 'globe',
+    color: '#06b6d4',
+    severity: 'warning',
+    group: 'standard',
+    scopeAware: true,
+    getDataKey: 'getBrowserFootprints',
+    clearDataKey: 'clearBrowserFootprints',
+    extractPreview: (data) => {
+      const browsers = Array.isArray(data?.browsers) ? data.browsers : [];
+      return {
+        count: browsers.length,
+        items: browsers.map((b: any) => {
+          const name = b.browser || b.name || '?';
+          const sizeKB = b.totalSizeKB ?? 0;
+          const sizeMB = (sizeKB / 1024).toFixed(1);
+          return `${name}: ${sizeMB}MB`;
+        }),
+      };
+    },
+  },
+  {
     id: 'prefetchFiles',
     label: 'Prefetch & ReadyBoot',
     description: 'App execution history plus ReadyBoot trace files',
@@ -1122,6 +1146,21 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
     extractPreview: fileNamePreview,
   },
   {
+    id: 'editorHistory',
+    label: 'Editor History',
+    description: 'Recent workspace and local editor history files',
+    icon: 'edit',
+    color: '#7c3aed',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    schedulable: false,
+    getDataKey: 'getEditorHistoryInfo',
+    clearDataKey: 'clearEditorHistory',
+    confirmMessage: 'Clear editor history? This removes recent workspace records and local editor history. This cannot be undone.',
+    extractPreview: fileNamePreview,
+  },
+  {
     id: 'gitActivity',
     label: 'Git Activity',
     description: 'Git credential cache and repository activity records',
@@ -1194,6 +1233,21 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
     getDataKey: 'getGameLauncherLogsInfo',
     clearDataKey: 'clearGameLauncherLogs',
     confirmMessage: 'Clear game launcher logs? This permanently removes local activity and diagnostic log files. This cannot be undone.',
+    extractPreview: fileNamePreview,
+  },
+  {
+    id: 'adobeRecent',
+    label: 'Adobe Recent Files',
+    description: 'Adobe Reader and Acrobat recent-file records',
+    icon: 'document',
+    color: '#dc2626',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    schedulable: false,
+    getDataKey: 'getAdobeRecentInfo',
+    clearDataKey: 'clearAdobeRecent',
+    confirmMessage: 'Clear Adobe recent-file records? This removes recent document and signature-history entries. This cannot be undone.',
     extractPreview: fileNamePreview,
   },
   {
@@ -1358,6 +1412,20 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
     regeneratesNote: 'The BAM service (bam.sys) writes a fresh launch timestamp every time a program runs — normal use repopulates this within seconds.',
     getDataKey: 'getAppLaunchHistoryInfo',
     clearDataKey: 'clearAppLaunchHistory',
+    extractPreview: fileOrEntryPathPreview,
+  },
+  {
+    id: 'officeMru',
+    label: 'Office Document History',
+    description: 'Recently-opened file lists and macro-trust records kept by Microsoft Office',
+    icon: 'key',
+    color: '#0e7490',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    regeneratesNote: 'Office rewrites its MRU and macro-trust records every time a document is opened or a macro is run.',
+    getDataKey: 'getOfficeMruInfo',
+    clearDataKey: 'clearOfficeMru',
     extractPreview: fileOrEntryPathPreview,
   },
   {
@@ -1641,7 +1709,10 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   spotlightCache: 'history-cache',
   photosCache: 'history-cache',
   xboxCache: 'history-cache',
+  editorHistory: 'history-cache',
+  adobeRecent: 'history-cache',
   geolocationCache: 'history-cache',
+  officeMru: 'history-cache',
   explorerSearchHistory: 'history-cache',
   searchPersonalization: 'history-cache',
 
@@ -1659,6 +1730,7 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   proxyCache: 'rebuilds-apps-connectivity',
   p2pUpdateCache: 'rebuilds-apps-connectivity',
 
+  browserFootprints: 'data-accounts-recovery',
   recycleBin: 'data-accounts-recovery',
   wlanProfiles: 'data-accounts-recovery',
   netDrives: 'data-accounts-recovery',
