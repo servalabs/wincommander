@@ -3,9 +3,24 @@ import type { RoutineCleanerItem, RoutineCleanerScan } from "../../hooks/useBack
 import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
 
 const items: RoutineCleanerItem[] = [
-  { id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false },
-  { id: "browser-1", category: "browsers", label: "Cache", path: "C:\\Cache", bytes: 100, fileCount: 1, recommended: false, operation: "delete", truncated: false },
-  { id: "system-2", category: "system", label: "Icons", path: "C:\\Icons", bytes: 50, fileCount: 1, recommended: true, operation: "delete", truncated: false },
+  {
+    description: null,
+    id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false,
+    pathDisplay: "C:\\Temp", entries: [
+      { id: "system-1-file-1", path: "C:\\Temp\\first.tmp", actualSizeBytes: 120, estimatedReclaimBytes: null },
+      { id: "system-1-file-2", path: "C:\\Temp\\second.tmp", actualSizeBytes: 80, estimatedReclaimBytes: null },
+    ], entryCount: 2, entriesLimit: 100, entriesTruncated: false,
+  },
+  {
+    id: "browser-1", category: "browsers", label: "Cache", path: "C:\\Cache", bytes: 100, fileCount: 1, recommended: false, operation: "delete", truncated: false,
+    description: null,
+    pathDisplay: "C:\\Cache", entries: [{ id: "browser-1-file-1", path: "C:\\Cache\\cache.bin", actualSizeBytes: 100, estimatedReclaimBytes: null }], entryCount: 1, entriesLimit: 100, entriesTruncated: false,
+  },
+  {
+    id: "system-2", category: "system", label: "Icons", path: "C:\\Icons", bytes: 50, fileCount: 1, recommended: true, operation: "delete", truncated: false,
+    description: null,
+    pathDisplay: "C:\\Icons", entries: [{ id: "system-2-file-1", path: "C:\\Icons\\cache.db", actualSizeBytes: 50, estimatedReclaimBytes: null }], entryCount: 1, entriesLimit: 100, entriesTruncated: false,
+  },
 ];
 
 test("groups preview items by their backend category", () => {

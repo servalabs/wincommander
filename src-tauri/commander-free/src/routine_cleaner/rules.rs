@@ -16,6 +16,7 @@ pub(super) enum TargetOperation {
 pub(super) struct ScanTarget {
     pub category: String,
     pub label: String,
+    pub description: Option<String>,
     pub path: PathBuf,
     pub operation: TargetOperation,
     pub recommended: bool,
@@ -48,8 +49,7 @@ struct SystemTarget {
     child_subdir: Option<String>,
     min_age_days: Option<u16>,
     recursive_match: Option<RecursivePathMatch>,
-    #[serde(rename = "description")]
-    _description: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -67,8 +67,7 @@ struct AppTarget {
     child_subdir: Option<String>,
     min_age_days: Option<u16>,
     recursive_match: Option<RecursivePathMatch>,
-    #[serde(rename = "description")]
-    _description: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -140,6 +139,7 @@ pub(super) fn build_targets(categories: &HashSet<String>) -> Result<Vec<ScanTarg
                 targets.push(ScanTarget {
                     category: "system".into(),
                     label: rule.subcategory.clone(),
+                    description: rule.description.clone(),
                     path: expanded.path,
                     operation: TargetOperation::Delete,
                     recommended: !rule.needs_admin,
@@ -210,6 +210,7 @@ fn add_app_targets(
                 targets.push(ScanTarget {
                     category: category.into(),
                     label: app.name.clone(),
+                    description: app.description.clone(),
                     path: expanded.path,
                     operation: TargetOperation::Delete,
                     recommended: true,
@@ -583,10 +584,13 @@ mod tests {
 
     #[test]
     fn embedded_rule_files_parse() {
-        assert!(parse_rules::<SystemRules>(SYSTEM_RULES, "system").is_ok());
-        assert!(parse_rules::<AppRules>(APPS_RULES, "apps").is_ok());
+        let system: SystemRules = parse_rules(SYSTEM_RULES, "system").unwrap();
+        assert!(system.clean_targets[0].description.is_some());
+        let apps: AppRules = parse_rules(APPS_RULES, "apps").unwrap();
+        assert!(apps.apps[0].description.is_some());
         let ai: AppRules = parse_rules(AI_RULES, "ai").unwrap();
         assert_eq!(ai.apps.len(), 1);
+        assert!(ai.apps[0].description.is_some());
         assert_eq!(ai.apps[0].child_subdir.as_deref(), Some("shard-cache"));
         assert_eq!(ai.apps[0].paths, vec!["${HOME}/.cache/huggingface/xet"]);
     }

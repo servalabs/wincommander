@@ -58,6 +58,7 @@ pub(super) fn add_targets(
                 targets.push(ScanTarget {
                     category: "databases".into(),
                     label: target.label.clone(),
+                    description: None,
                     path: profile.join(normalize_relative(file)),
                     operation: TargetOperation::Vacuum,
                     recommended: false,

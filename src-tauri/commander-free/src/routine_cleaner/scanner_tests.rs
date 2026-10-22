@@ -5,6 +5,7 @@ fn target(path: std::path::PathBuf) -> ScanTarget {
     ScanTarget {
         category: "developers".into(),
         label: "Test cache".into(),
+        description: Some("A test description from the target rule.".into()),
         path,
         operation: TargetOperation::Delete,
         recommended: false,
@@ -37,6 +38,96 @@ fn overlapping_targets_count_and_cache_each_file_once() {
     .unwrap();
     assert_eq!((scan.total_bytes, scan.total_files), (6, 1));
     assert_eq!(cached.iter().map(|item| item.files.len()).sum::<usize>(), 1);
+    assert_eq!(scan.items[0].entry_count, 1);
+    assert_eq!(scan.items[0].entries.len(), 1);
+    assert!(!scan.items[0].entries_truncated);
+}
+
+#[test]
+fn file_preview_exposes_backend_path_and_actual_logical_size() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cache item.bin");
+    fs::write(&path, b"123456").unwrap();
+    let modified = SystemTime::now()
+        .checked_sub(Duration::from_secs(7200))
+        .unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+
+    let (scan, _) = scan_targets(
+        vec![target(temp.path().to_path_buf())],
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    let preview = &scan.items[0];
+    assert_eq!(preview.path_display.as_deref(), temp.path().to_str());
+    assert_eq!(
+        preview.description.as_deref(),
+        Some("A test description from the target rule.")
+    );
+    assert_eq!(preview.entry_count, 1);
+    assert_eq!(preview.entries.len(), 1);
+    assert_eq!(
+        preview.entries[0].path.as_deref(),
+        fs::canonicalize(&path).unwrap().to_str()
+    );
+    assert_eq!(preview.entries[0].actual_size_bytes, 6);
+    assert_eq!(preview.entries[0].estimated_reclaim_bytes, None);
+}
+
+#[test]
+fn file_preview_limit_is_distinct_from_backend_partial_scan() {
+    let temp = tempfile::tempdir().unwrap();
+    let modified = SystemTime::now()
+        .checked_sub(Duration::from_secs(7200))
+        .unwrap();
+    for index in 0..=MAX_PREVIEW_ENTRIES_PER_TARGET {
+        let path = temp.path().join(format!("cache-{index:03}.bin"));
+        fs::write(&path, b"x").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    let (scan, _) = scan_targets(
+        vec![target(temp.path().to_path_buf())],
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+
+    let preview = &scan.items[0];
+    assert_eq!(preview.entry_count, MAX_PREVIEW_ENTRIES_PER_TARGET + 1);
+    assert_eq!(preview.entries.len(), MAX_PREVIEW_ENTRIES_PER_TARGET);
+    assert!(preview.entries_truncated);
+    assert!(!preview.truncated);
+}
+
+#[test]
+fn vacuum_preview_separates_database_size_from_estimated_reclaim() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("cache.sqlite");
+    let mut database = b"SQLite format 3\0".to_vec();
+    database.extend([0u8; 32]);
+    fs::write(&path, &database).unwrap();
+    fs::write(format!("{}-wal", path.to_string_lossy()), b"waldata").unwrap();
+    let mut vacuum_target = target(path.clone());
+    vacuum_target.operation = TargetOperation::Vacuum;
+
+    let (scan, _) = scan_targets(vec![vacuum_target], &AtomicBool::new(false)).unwrap();
+
+    let item = &scan.items[0];
+    assert_eq!(item.bytes, 7 + database.len() as u64 / 10);
+    assert_eq!(item.entries.len(), 1);
+    assert_eq!(item.entries[0].actual_size_bytes, database.len() as u64);
+    assert_eq!(item.entries[0].estimated_reclaim_bytes, Some(item.bytes));
 }
 
 #[test]

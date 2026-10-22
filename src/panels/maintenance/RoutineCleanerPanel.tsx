@@ -18,6 +18,7 @@ import { showError, showSuccess } from "../../utils/toast";
 import { formatBytes, getRoutineCleanerCategories } from "./routineCleanerHelpers";
 import { RoutineCleanerPreview } from "./RoutineCleanerPreview";
 import { CleanupReviewItems } from "./CleanupReviewItems";
+import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { type useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -33,6 +34,31 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
   const isRunning = operation !== "idle";
   const categoryOptions = getRoutineCleanerCategories(allowedCategories);
   const scanLabel = scan && cleaner.scanScope !== "projects" ? "Rescan application caches" : "Scan application caches";
+  const selectedLogicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
+  const selectedVacuumEstimate = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
+  const reviewEntries = selectedItems.flatMap((item) => {
+    const entries = item.entries ?? [];
+    const entryCount = item.entryCount ?? item.fileCount;
+    const amount = item.operation === "vacuum"
+      ? `${formatBytes(item.bytes)} estimated reclaim`
+      : `${formatBytes(item.bytes)} logical file size`;
+    const limitNotice = item.entriesTruncated
+      ? ` · showing ${entries.length} of ${entryCount} file paths`
+      : "";
+    const partialNotice = item.truncated ? " · scan was partial" : "";
+    return [
+      {
+        id: `target:${item.id}`,
+        path: toExplorerDisplayPath(item.pathDisplay) ?? "Path unavailable",
+        detail: `${item.label} · ${entryCount.toLocaleString()} files counted · ${amount}${limitNotice}${partialNotice}`,
+      },
+      ...entries.map((entry) => ({
+        id: `entry:${item.id}:${entry.id}`,
+        path: toExplorerDisplayPath(entry.path) ?? "Path unavailable",
+        detail: `${item.label} · ${formatBytes(entry.actualSizeBytes)} file size${entry.estimatedReclaimBytes === null ? "" : ` · ${formatBytes(entry.estimatedReclaimBytes)} estimated reclaim`}`,
+      })),
+    ];
+  });
 
   useEffect(() => {
     if (error) void showError(error);
@@ -70,7 +96,16 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
     {result && <CleanResult result={result} />}
     <RoutineCleanerPreview cleaner={cleaner} onRequestClean={() => setConfirmOpen(true)} />
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and process approximately {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))} of logical data. Actual free-space changes can differ. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><CleanupReviewItems items={selectedItems.map((item) => ({ id: item.id, path: item.path, detail: `${item.label} · ${formatBytes(item.bytes)} · ${item.fileCount.toLocaleString()} files${item.truncated ? " · partial estimate" : ""}${item.operation === "vacuum" ? " · database optimization" : ""}` }))} /><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Clean selected cache data?</AlertDialogTitle>
+          <AlertDialogDescription>
+            WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"}. The scan lists {formatBytes(selectedLogicalBytes)} of logical file data{selectedVacuumEstimate ? ` and ${formatBytes(selectedVacuumEstimate)} estimated reclaim from database optimization` : ""}. The database amount is an estimate, not recovered space; actual free-space change can differ. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <CleanupReviewItems items={reviewEntries} />
+        <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
     </AlertDialog>
   </div>;
 }

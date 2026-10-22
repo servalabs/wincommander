@@ -31,6 +31,16 @@ export function diskAnalyzerAuditResponse(command: string, args: Record<string, 
     const groups: Record<string, DiskNode[]> = { [pathKey(ROOT)]: children, [pathKey(`${ROOT}\\Cases`)]: cases, [pathKey(`${ROOT}\\Downloads`)]: downloads, [pathKey(`${ROOT}\\AppData`)]: caches };
     return structuredClone(groups[pathKey(args.path)] ?? []);
   }
+  if (command === "get_disk_file_types") {
+    const scope = pathKey(args.path);
+    const scopedFiles = files.filter(row => pathKey(row.fullPath).startsWith(`${scope}\\`));
+    const category = (name: string) => /\.(jpg|png)$/i.test(name) ? "images" : /\.mkv$/i.test(name) ? "videos" : /\.(zip|iso)$/i.test(name) ? "archives" : "unclassified";
+    return { scanId: SCAN_ID, scopePath: String(args.path ?? ROOT), complete: true,
+      categories: ["images", "videos", "audio", "documents", "code", "archives", "unclassified"].map(type => {
+        const matches = scopedFiles.filter(row => category(row.name) === type);
+        return { category: type, fileCount: matches.length, logicalSize: matches.reduce((sum, row) => sum + row.size, 0) };
+      }) };
+  }
   if (command === "get_large_disk_items") {
     const minimumSize = Number(args.minSizeBytes ?? 100 * MIB);
     const resultLimit = Math.min(5000, Math.max(1, Number(args.limit ?? 5000)));

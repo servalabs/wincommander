@@ -33,10 +33,10 @@ export function DuplicateGroups({ tools }: { tools: Tools }) {
       <select aria-label="Duplicate file type" value={category} onChange={(event) => { setCategory(event.target.value); setVisibleCount(50); }}>
         <option value="all">All file types</option>{TYPES.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}<option value="other">Other</option>
       </select>
-      <span>{filtered.length} of {groups?.length ?? 0} groups</span>
+      <span>{filtered.length} of {groups?.length ?? 0} loaded groups · filters apply to this page</span>
     </div>
-    {filtered.slice(0, visibleCount).map((group) => <DuplicateGroupRows key={group.id} group={group} tools={tools} />)}
-    {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : "No identical file groups were found in the returned scan."}</p>}
+    {filtered.slice(0, visibleCount).map((group) => <DuplicateGroupRows key={`${group.id}:${group.memberOffset}`} group={group} tools={tools} />)}
+    {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : tools.duplicateScan?.cancelled ? "No verified groups are available from this partial scan. Scan again to compare the remaining files." : "No identical file groups were found in the returned scan scope."}</p>}
     {filtered.length > visibleCount && <Button size="sm" variant="outline" onClick={() => setVisibleCount((count) => count + 50)}>Show more groups ({filtered.length - visibleCount} remaining)</Button>}
   </section>;
 }
@@ -48,7 +48,7 @@ function DuplicateGroupRows({ group, tools }: { group: DuplicateGroup; tools: To
   return <details className="duplicate-group" open>
     <summary>
       <Icon icon={fileType(group.files[0]?.name ?? "")?.icon ?? "document"} size={20} />
-      <span className="duplicate-group-heading"><strong>{group.files[0]?.name}</strong><small>{group.files.length} identical copies · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
+      <span className="duplicate-group-heading"><strong>{group.files[0]?.name}</strong><small>{group.fileCount} identical copies · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
       {selectedCount > 0 && <Badge tone="accent">{selectedCount} selected</Badge>}<Icon icon="chevron-down" size={14} />
     </summary>
     <div className="duplicate-members">
@@ -62,6 +62,7 @@ function DuplicateGroupRows({ group, tools }: { group: DuplicateGroup; tools: To
         </div>;
       })}
       {group.files.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({group.files.length - visibleCount} remaining)</Button>}
+      {(group.hasMoreFiles || group.memberOffset > 0) && <div className="flex flex-wrap items-center justify-between gap-2 py-2 text-xs text-[var(--text-dim)]"><span>{group.files.length} copies loaded of {group.fileCount}; original copy repeated for retention. Paging clears selections.</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || group.memberOffset === 0} onClick={() => void tools.loadMembers(group.id, Math.max(0, group.memberOffset - 200))}>Previous copies</Button><Button size="sm" variant="outline" disabled={tools.busy || !group.hasMoreFiles} onClick={() => void tools.loadMembers(group.id, group.memberOffset + 200)}>Next copies</Button></div></div>}
     </div>
   </details>;
 }

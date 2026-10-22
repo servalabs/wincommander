@@ -28,8 +28,8 @@ describe("complete cleanup forensic viewer coverage", () => {
     ].join("\n");
     const scannable = ALL_CATEGORIES.filter((category) => category.getDataKey);
 
-    expect(ALL_CATEGORIES).toHaveLength(84);
-    expect(scannable).toHaveLength(81);
+    expect(ALL_CATEGORIES).toHaveLength(80);
+    expect(scannable).toHaveLength(77);
     for (const category of scannable) {
       expect(new RegExp(`\\b${category.getDataKey}\\s*:`).test(backendSource)).toBe(true);
     }
@@ -45,11 +45,11 @@ describe("complete cleanup forensic viewer coverage", () => {
 
     expect(tierCounts).toEqual({
       "low-impact": 18,
-      "history-cache": 23,
+      "history-cache": 20,
       "rebuilds-apps-connectivity": 13,
-      "data-accounts-recovery": 26,
+      "data-accounts-recovery": 25,
     });
-    expect(Object.values(tierCounts).reduce((total, count) => total + count, 0)).toBe(80);
+    expect(Object.values(tierCounts).reduce((total, count) => total + count, 0)).toBe(76);
     expect(ACTION_CATEGORIES.map((category) => category.id)).toEqual([
       "virtualMemory",
       "unallocatedErase",

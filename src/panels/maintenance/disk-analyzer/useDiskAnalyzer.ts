@@ -65,12 +65,13 @@ export function useDiskAnalyzer() {
         return () => { active = false; clearInterval(timer); };
     }, [state.scanning]);
 
-    async function startScan() {
-        if (scanTask || session.deleting || !session.scanPath.trim()) return;
-        const path = session.scanPath;
+    async function startScan(folder?: string) {
+        const path = folder ?? session.scanPath;
+        if (scanTask || session.deleting || !path.trim()) return;
         navigationRequest++;
         largeRequest++;
-        update({ scanning: true, meta: null, rows: [], largeItems: [], largeResult: null, currentPath: "", history: [], historyIndex: -1, stale: false, loadingPath: false, largeLoading: false });
+        setSelected(new Set()); setFocused(null); setConfirmItems([]);
+        update({ scanPath: path, scanning: true, meta: null, rows: [], largeItems: [], largeResult: null, currentPath: "", history: [], historyIndex: -1, stale: false, loadingPath: false, largeLoading: false });
         scanTask = (async () => {
             try {
                 const meta = await backendRef.current.runDiskScan(path);

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod explorer;
+mod file_types;
 mod large;
+#[cfg(test)]
+mod live_tests;
 mod progress;
 mod walker;
 
@@ -488,6 +491,14 @@ pub async fn get_large_disk_items(
     include_dirs: Option<bool>,
 ) -> Result<large::LargeDiskResult, String> {
     large::get_large_disk_items(min_size_bytes, limit, include_dirs).await
+}
+
+#[tauri::command]
+pub async fn get_disk_file_types(
+    scan_id: String,
+    path: String,
+) -> Result<file_types::DiskFileTypes, String> {
+    file_types::get_disk_file_types(scan_id, path).await
 }
 
 #[cfg(test)]

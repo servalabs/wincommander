@@ -81,7 +81,9 @@ test("maintenance exposes distinct workspaces with review and selection controls
     read("MaintenanceStorage.css"), read("RoutineCleanerPanel.tsx"), read("RoutineCleanerPreview.tsx"),
   ]);
   expect(panel).toContain("<MaintenanceWorkspaceNav");
-  for (const id of ["cleanup", "large", "duplicates", "analysis", "startup", "registry", "history"]) expect(navigation).toContain(`id: "${id}"`);
+  for (const id of ["cleanup", "duplicates", "analysis", "activity", "startup", "registry", "history"]) expect(navigation).toContain(`id: "${id}"`);
+  expect(navigation).not.toContain('id: "large"');
+  expect(await read("disk-analyzer/DiskAnalyzerTabs.tsx")).toContain("Large Files");
   expect(css).toContain(".maintenance-cache-master-detail");
   expect(css).toContain(".maintenance-selection-bar");
   expect(css).toContain("position: sticky");

@@ -115,3 +115,11 @@ export function filterLargeDiskItems(items: LargeDiskItem[], filter: LargeDiskFi
         .sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : sort === "modified" ?
             diskModifiedTime(b.lastModified) - diskModifiedTime(a.lastModified) : b.size - a.size);
 }
+
+export type DiskAnalyzerMode = "space" | "large" | "types";
+export interface DiskFileTypes {
+    scanId: string;
+    scopePath: string;
+    categories: { category: string; fileCount: number; logicalSize: number }[];
+    complete: boolean;
+}

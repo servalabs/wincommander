@@ -59,6 +59,7 @@ pub(super) fn discover(
                 targets.push(ScanTarget {
                     category: "projects".into(),
                     label: (*label).into(),
+                    description: None,
                     path,
                     operation: TargetOperation::Delete,
                     recommended: false,

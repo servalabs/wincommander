@@ -29,7 +29,7 @@ export default function SystemCleanupPanel() {
     //
     //   KT: the active card/detail path passes `clearDisabled` into
     //   CleanupTraceCard and omits TraceDetailDialog.onClear in review
-    //   mode. The remaining bespoke Wi-Fi and Browser Audit viewers
+    //   mode. The remaining bespoke Wi-Fi viewers
     //   retain their existing command handlers and native review-mode gate.
     const { hasPaid, isLoading: entitlementsLoading, isInvestigator } = useEntitlements();
     const { isInstalled: proInstalled } = useProInstall({
@@ -62,7 +62,7 @@ export default function SystemCleanupPanel() {
             }));
         };
 
-    // Most cards use the normalized detail dialog. Wi-Fi and Browser Audit
+    // Most cards use the normalized detail dialog. Wi-Fi
     // retain their bespoke dialogs because they support per-profile erasure.
     const openSharedDetails = (catId: string) => setTraceDetailCatId(catId);
     const detailOpenerMap: Record<string, (() => void) | undefined> = Object.fromEntries(
@@ -87,7 +87,6 @@ export default function SystemCleanupPanel() {
         rdpHistory: () => openSharedDetails('rdpHistory'),
         connectivityHistory: () => openSharedDetails('connectivityHistory'),
         jumpLists: () => openSharedDetails('jumpLists'),
-        browserFootprints: () => openers.handleBrowserFootprints(),
         prefetchFiles: () => openSharedDetails('prefetchFiles'),
         shadowCopies: () => openSharedDetails('shadowCopies'),
         ntfsJournals: () => openSharedDetails('ntfsJournals'),
@@ -158,8 +157,8 @@ export default function SystemCleanupPanel() {
         <div className="panel-container cleanup-panel">
             <PanelHeader
                 panelId="cleanup"
-                title="Privacy cleanup"
-                description="Review Windows and browser traces for the selected account or stated machine scope. Deep Cleanup in Maintenance handles storage and application caches."
+                title="System Cleanup"
+                description="Find and clear the traces Windows keeps about you — then schedule recurring cleanups."
             />
             {isInvestigator && (
                 <div
@@ -484,6 +483,7 @@ function CleanupTabNavigation({
 function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan> }) {
     const { summaryStats, clearAllExcludes, orderedScanCategories, cardDataMap } = scan;
     const scanningCount = orderedScanCategories.filter((cat) => cardDataMap[cat.id]?.loading).length;
+    const excludedCount = orderedScanCategories.filter(cat => clearAllExcludes.has(cat.id)).length;
     return (
         <dl
             className="flex items-center gap-5 flex-wrap px-3 py-2.5 rounded-lg"
@@ -512,7 +512,7 @@ function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan>
                     Excluded
                 </dt>
                 <dd className="order-1 font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
-                    {clearAllExcludes.size}
+                    {excludedCount}
                 </dd>
             </div>
             <div className="flex min-w-[72px] flex-col items-center gap-0.5">

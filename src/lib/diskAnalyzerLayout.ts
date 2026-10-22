@@ -1,6 +1,12 @@
 import type { DiskNode } from "./diskAnalyzer";
 
-export interface DiskChartNode extends DiskNode { children?: DiskChartNode[] }
+export interface DiskRemainder {
+    parentPath: string;
+    directItems: number;
+    entryCount: number;
+    reason: string;
+}
+export interface DiskChartNode extends DiskNode { children?: DiskChartNode[]; remainder?: DiskRemainder }
 export interface DiskTile { x: number; y: number; width: number; height: number; node: DiskChartNode; level: number; colorIndex: number }
 export interface DiskArc { start: number; end: number; level: number; node: DiskChartNode; colorIndex: number }
 

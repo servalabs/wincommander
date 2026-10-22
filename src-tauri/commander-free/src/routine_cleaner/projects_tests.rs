@@ -87,6 +87,7 @@ fn refuses_intermediate_artifact_junctions_even_when_the_target_is_inside_the_pr
     let direct = ScanTarget {
         category: "projects".into(),
         label: "Next cache".into(),
+        description: None,
         path: link.join("cache"),
         operation: TargetOperation::Delete,
         recommended: false,

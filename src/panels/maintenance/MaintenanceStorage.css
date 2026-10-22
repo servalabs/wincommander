@@ -29,6 +29,7 @@
 .maintenance-workspace-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .maintenance-nav-note { margin: auto 0.5rem 0; padding-top: 1rem; color: var(--text-mute); font-size: 0.7rem; line-height: 1.6; }
 .maintenance-workspace-main { min-width: 0; min-height: 0; padding: 1.25rem; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.maintenance-workspace-main--analysis { display: flex; flex-direction: column; padding: 0.75rem; overflow: hidden; }
 .maintenance-workspace-heading { margin-bottom: 1.25rem; }
 .maintenance-workspace-heading h2 { color: var(--text); font-size: 1.35rem; font-weight: 600; letter-spacing: -0.03em; }
 .maintenance-workspace-heading p { margin-top: 0.25rem; color: var(--text-dim); font-size: 0.78rem; }
@@ -78,8 +79,8 @@
 .maintenance-cache-idle__visual { display: grid; place-content: center; width: 5rem; height: 5rem; border: 1px solid var(--border); border-radius: 50%; color: var(--accent); background: var(--surface); box-shadow: 0 0 0 1rem var(--accent-soft); }
 .maintenance-file-hygiene-card { overflow: hidden; }
 .maintenance-file-hygiene-results > [data-slot="card-content"] { max-height: 42rem; overflow: auto; overscroll-behavior: contain; }
-.maintenance-analysis-workspace { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 1rem; }
-.maintenance-analysis-card { display: flex; flex-direction: column; height: min(48rem, 76vh); min-height: 30rem; }
+.maintenance-analysis-workspace { display: flex; min-width: 0; min-height: 0; flex: 1; }
+.maintenance-analysis-card { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .maintenance-analysis-content { display: flex; min-height: 0; flex: 1; padding: 0; }
 .maintenance-analysis-scroll { min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 @container (max-width: 850px) {
@@ -101,7 +102,7 @@
   .maintenance-workspace-nav-item { padding-block: 0.55rem; }
 }
 @container (max-width: 760px) {
-  .maintenance-analysis-card { height: auto; min-height: 0; }
+  .maintenance-analysis-card { min-height: 0; }
   .maintenance-cache-master-detail { grid-template-columns: minmax(0, 1fr); }
   .maintenance-cache-categories { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
   .maintenance-cache-categories button { flex: 0 0 11rem; border-left: 0; border-bottom: 2px solid transparent; }

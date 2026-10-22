@@ -17,6 +17,7 @@ import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
 import { DuplicateGroups } from "./DuplicateGroups";
 import { CleanupReviewItems } from "./CleanupReviewItems";
+import { DuplicateScanStatus } from "./DuplicateScanStatus";
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
@@ -41,7 +42,7 @@ export function FileHygieneTools() {
   useEffect(() => setResultDismissed(false), [tools.result]);
 
   const count = tools.tool === "duplicates"
-    ? tools.duplicateScan?.groups.length ?? 0
+    ? tools.duplicateScan?.totalGroups ?? 0
     : tools.emptyScan?.folders.length ?? 0;
   const hasScan = tools.tool === "duplicates" ? tools.duplicateScan !== undefined : tools.emptyScan !== undefined;
   const scanning = tools.busy && !hasScan;
@@ -59,7 +60,7 @@ export function FileHygieneTools() {
   // after a scan completes, before the user selects anything.
   const totalReclaimableBytes = useMemo(() => {
     if (tools.tool !== "duplicates" || !tools.duplicateScan) return 0;
-    return tools.duplicateScan.groups.reduce((sum, group) => sum + group.reclaimableBytes, 0);
+    return tools.duplicateScan.totalDuplicateBytes;
   }, [tools.tool, tools.duplicateScan]);
   const selectedReview = tools.tool === "duplicates"
     ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
@@ -75,12 +76,13 @@ export function FileHygieneTools() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Icon icon="clean" size={16} className="text-[var(--accent)]" />
-              <CardTitle>Inspect selected folders</CardTitle>
+              <CardTitle>{tools.tool === "duplicates" ? "Duplicate Cleanup" : "Inspect empty folders"}</CardTitle>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} folder{tools.roots.length === 1 ? "" : "s"}</Badge>}
               {tools.roots.length > 0 && <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}><Icon icon="folder-open" /> View selected</Button>}
               <Button size="sm" variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}><Icon icon="folder-open" /> Choose folders</Button>
+              {tools.tool === "duplicates" && <Button size="sm" variant="outline" disabled={tools.busy} onClick={() => void tools.scan("local")}><Icon icon="hard-drive" /> Scan local drives</Button>}
               {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
             </div>
           </div>
@@ -108,7 +110,7 @@ export function FileHygieneTools() {
               <Badge tone="neutral">{scannedCount.toLocaleString()} {tools.tool === "duplicates" ? "files" : "folders"} inspected</Badge>
               {truncated && <Badge tone="warning">Partial results · scan limit reached</Badge>}
               {cancelled && <Badge tone="warning">cancelled</Badge>}
-              {tools.tool === "duplicates" && !!tools.duplicateScan?.skippedEntries && <Badge tone="warning">Partial scope · {tools.duplicateScan.skippedEntries.toLocaleString()} unreadable or changed entries</Badge>}
+              {tools.tool === "duplicates" && !!tools.duplicateScan?.skippedEntries && <Badge tone="warning">Partial scope · {tools.duplicateScan.skippedEntries.toLocaleString()} skipped entries</Badge>}
               <Button size="sm" variant="outline" className="ml-auto" onClick={() => void tools.scan()} disabled={tools.busy} title={scanLabel} aria-label={scanLabel}>
                 <Icon icon="refresh" className={tools.busy ? "animate-spin" : undefined} /> Rescan
               </Button>
@@ -116,22 +118,23 @@ export function FileHygieneTools() {
           )}
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {tools.tool === "duplicates" && <DuplicateScanStatus progress={tools.progress} scan={tools.duplicateScan} scanning={scanning} local={tools.scopeMode === "local"} />}
           {hasScan && <div className="flex flex-wrap items-center gap-2">
-            {tools.tool === "duplicates" && <label className="text-xs text-[var(--text-dim)]">Keep <select aria-label="Duplicate copy retention preference" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.keepPolicy} disabled={tools.busy} onChange={(event) => tools.changeKeepPolicy(event.target.value as "first" | "shortest-path")}><option value="first">First verified copy</option><option value="shortest-path">Copy at shortest path</option></select></label>}
-            <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Smart select copies" : "Select all empty folders"}</Button>
+            {tools.tool === "duplicates" && <label className="text-xs text-[var(--text-dim)]">Keep <select aria-label="Duplicate copy retention preference" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.keepPolicy} disabled={tools.busy} onChange={(event) => tools.changeKeepPolicy(event.target.value as "first" | "shortest-path")}><option value="first">First verified copy</option><option value="shortest-path">Shortest path on this page</option></select></label>}
+            <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Select duplicate copies on this page" : "Select all empty folders"}</Button>
             <Button size="sm" variant="ghost" disabled={tools.busy || !tools.selected.size} onClick={tools.clearSelection}>Clear selection</Button>
           </div>}
-          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Copies are verified by file contents, not names. Scans inspect at most 100,000 files; inaccessible or linked locations are skipped. Potential duplicate data is logical file size, not measured free space. Keep one copy in each group.</p>}
+          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Contents are verified with SHA-256. The full eligible scope is indexed without a file-count cap; results are paged at 100 groups and 200 additional copies per group. Page changes clear selections. Potential duplicate data is logical size, not measured free space.</p>}
           {/* Exactly one scan entry point per state: none of these four
               branches can render at the same time as another. */}
-          {!tools.roots.length && (
+          {!tools.roots.length && (tools.tool === "empty" || tools.scopeMode === "folders") && (
             <SharedEmptyState
               icon="folder-open"
               title="Choose folders to begin"
               hint="Add one or more folders above, then scan for duplicates or empty folders."
             />
           )}
-          {!!tools.roots.length && !hasScan && !scanning && (
+          {(tools.roots.length > 0 || (tools.tool === "duplicates" && tools.scopeMode === "local")) && !hasScan && !scanning && (
             <SharedEmptyState
               icon="search"
               title={tools.tool === "duplicates" ? "Ready to scan for duplicates" : "Ready to scan for empty folders"}
@@ -149,6 +152,7 @@ export function FileHygieneTools() {
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
               <DuplicateGroups tools={tools} />
+              <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => void tools.loadGroups(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => void tools.loadGroups(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
               <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
             </>
           )}

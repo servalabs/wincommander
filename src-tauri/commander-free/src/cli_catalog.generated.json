@@ -7309,6 +7309,36 @@
       ]
     },
     {
+      "id": "tauri:activity_records",
+      "name": "activity_records",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:activity_remove",
+      "name": "activity_remove",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:activity_scan",
+      "name": "activity_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:activity_watch_ensure_started",
       "name": "activity_watch_ensure_started",
       "transport": "tauri",
@@ -8232,6 +8262,36 @@
       ]
     },
     {
+      "id": "tauri:duplicate_finder_group_page",
+      "name": "duplicate_finder_group_page",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_page",
+      "name": "duplicate_finder_page",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_progress",
+      "name": "duplicate_finder_progress",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:duplicate_finder_remove",
       "name": "duplicate_finder_remove",
       "transport": "tauri",
@@ -8244,6 +8304,16 @@
     {
       "id": "tauri:duplicate_finder_scan",
       "name": "duplicate_finder_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_scan_local",
+      "name": "duplicate_finder_scan_local",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -8921,6 +8991,16 @@
     {
       "id": "tauri:get_disk_children",
       "name": "get_disk_children",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_disk_file_types",
+      "name": "get_disk_file_types",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

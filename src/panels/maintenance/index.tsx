@@ -10,6 +10,7 @@ import { FileHygieneTools } from "./FileHygieneTools";
 import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/MaintenanceWorkspaceNav";
 import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
+import MaintenanceActivityPanel from "./activity/MaintenanceActivityPanel";
 import "./DiskSpaceAnalyzerDialog.css";
 import "./MaintenanceStorage.css";
 import { getMaintenanceSessionValue, primeMaintenanceSessionValue, useMaintenanceSessionState } from "./maintenanceSessionState";
@@ -20,7 +21,8 @@ const APP_CACHE_SESSION_KEY = `routine-cleaner.${[...APP_CACHE_CLEANUP_CATEGORIE
 export default function MaintenancePanel() {
   const [windowsOpen, setWindowsOpen] = useMaintenanceSessionState("maintenance.windows-storage-open", false);
   const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-workspace", "cleanup");
-  const active = MAINTENANCE_WORKSPACES.find((item) => item.id === activeTab) ?? MAINTENANCE_WORKSPACES[0];
+  const active = MAINTENANCE_WORKSPACES.find((item) => item.id === (activeTab === "large" ? "analysis" : activeTab)) ?? MAINTENANCE_WORKSPACES[0];
+  const isAnalysis = active.id === "analysis";
   useEffect(() => {
     const openCleanup = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
     const openStorage = () => setActiveTab("cleanup");
@@ -35,17 +37,18 @@ export default function MaintenancePanel() {
     };
   }, [setActiveTab, setWindowsOpen]);
   useMaintenanceReviewPreload();
-  return <div className="panel-container maintenance-panel flex flex-col gap-4">
-    <PanelHeader panelId="maintenance" title="System Maintenance" description="Understand your storage, review cleanable data, and keep your system in order." />
+  return <div className={`panel-container maintenance-panel flex flex-col gap-4${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
+    {!isAnalysis && active.id !== "activity" && <PanelHeader panelId="maintenance" title="System Maintenance" description="Understand your storage, review cleanable data, and keep your system in order." />}
     <div className="maintenance-workspace-shell">
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
-      <section className="maintenance-workspace-main" aria-label={active.label}>
-        {active.id !== "analysis" && active.id !== "large" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
+      <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
+        {!isAnalysis && active.id !== "activity" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
         {active.id === "cleanup" && <StorageAndFileTools windowsOpen={windowsOpen} setWindowsOpen={setWindowsOpen} />}
-        {(active.id === "analysis" || active.id === "large") && <div className="maintenance-analysis-workspace">
-          <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog key={active.id} inline isOpen onClose={() => {}} initialMode={active.id === "large" ? "large" : "space"} /></div></CardContent></Card>
+        {isAnalysis && <div className="maintenance-analysis-workspace">
+          <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen onClose={() => {}} initialMode={activeTab === "large" ? "large" : "space"} /></div></CardContent></Card>
         </div>}
         {active.id === "duplicates" && <FileHygieneTools />}
+        {active.id === "activity" && <MaintenanceActivityPanel />}
         {active.id === "registry" && <RegistryAndHygieneTools />}
         {active.id === "startup" && <StartupDriverTools />}
         {active.id === "history" && <MaintenanceHistoryPanel />}

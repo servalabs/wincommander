@@ -1,9 +1,10 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   useBackend,
   type DuplicateRemoveResult,
   type DuplicateScan,
+  type DuplicateProgress,
   type EmptyFolderRemoveResult,
   type EmptyFolderScan,
 } from "../../hooks/useBackend";
@@ -15,6 +16,7 @@ type FileTool = "duplicates" | "empty";
 
 export function useFileHygiene() {
   const backend = useBackend();
+  const requestProgress = backend.duplicateFinderProgress;
   const [keepPolicy, setKeepPolicy] = useMaintenanceSessionState<DuplicateKeepPolicy>("file-hygiene.keep-policy", "first");
   const [retainedFiles, setRetainedFiles] = useMaintenanceSessionState<Record<string, string>>("file-hygiene.retained-files", {});
   const [roots, setRoots] = useMaintenanceSessionState<string[]>("file-hygiene.roots", []);
@@ -25,6 +27,9 @@ export function useFileHygiene() {
   const [result, setResult] = useMaintenanceSessionState<DuplicateRemoveResult | EmptyFolderRemoveResult | undefined>("file-hygiene.result", undefined);
   const [busy, setBusy] = useMaintenanceSessionState("file-hygiene.busy", false);
   const [error, setError] = useMaintenanceSessionState<string | undefined>("file-hygiene.error", undefined);
+  const [scopeMode, setScopeMode] = useMaintenanceSessionState<"local" | "folders">("file-hygiene.scope", "local");
+  const [progress, setProgress] = useMaintenanceSessionState<DuplicateProgress | undefined>("file-hygiene.progress", undefined);
+  const enteredTool = useRef<FileTool | undefined>(undefined);
 
   const chooseRoots = useCallback(async () => {
     if (busy) return;
@@ -32,10 +37,11 @@ export function useFileHygiene() {
     if (!chosen) return;
     const picked = Array.isArray(chosen) ? chosen : [chosen];
     setRoots((current) => [...new Set([...current, ...picked])]);
+    setScopeMode("folders");
     setDuplicateScan(undefined);
     setEmptyScan(undefined);
     setSelected(new Set());
-  }, [busy, setDuplicateScan, setEmptyScan, setRoots, setSelected]);
+  }, [busy, setDuplicateScan, setEmptyScan, setRoots, setSelected, setScopeMode]);
 
   const removeRoot = useCallback((root: string) => {
     if (busy) return;
@@ -45,24 +51,64 @@ export function useFileHygiene() {
     setSelected(new Set());
   }, [busy, setDuplicateScan, setEmptyScan, setRoots, setSelected]);
 
-  const scan = useCallback(async () => {
-    if (busy || !roots.length) return;
+  const scan = useCallback(async (requestedMode?: "local" | "folders") => {
+    const mode = requestedMode ?? scopeMode;
+    if (busy || ((tool === "empty" || mode === "folders") && !roots.length)) return;
     setBusy(true);
     setError(undefined);
     setResult(undefined);
     setSelected(new Set());
     setRetainedFiles({});
+    setProgress(undefined);
+    if (tool === "duplicates") setScopeMode(mode);
     if (tool === "duplicates") setDuplicateScan(undefined);
     else setEmptyScan(undefined);
     try {
-      if (tool === "duplicates") setDuplicateScan(await backend.duplicateFinderScan(roots));
+      if (tool === "duplicates") setDuplicateScan(await (mode === "local" ? backend.duplicateFinderScanLocal() : backend.duplicateFinderScan(roots)));
       else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
       setError(String(cause));
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, roots, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, tool]);
+  }, [backend, busy, roots, scopeMode, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
+
+  useEffect(() => {
+    if (enteredTool.current === tool) return;
+    enteredTool.current = tool;
+    if (tool === "duplicates" && !busy) void scan("local");
+  }, [busy, scan, tool]);
+
+  useEffect(() => {
+    if (!busy || tool !== "duplicates" || duplicateScan) return;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try { const next = await requestProgress(); if (!disposed) setProgress(next); }
+      catch (cause) { if (!disposed) setError(`Scan progress unavailable: ${String(cause)}`); }
+      if (!disposed) timer = window.setTimeout(() => void poll(), 600);
+    };
+    void poll();
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [requestProgress, busy, duplicateScan, setError, setProgress, tool]);
+
+  const loadGroups = useCallback(async (offset: number) => {
+    if (busy || !duplicateScan) return;
+    setBusy(true); setError(undefined); setSelected(new Set()); setRetainedFiles({});
+    try { setDuplicateScan(await backend.duplicateFinderPage(duplicateScan.scanId, offset)); }
+    catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }, [backend, busy, duplicateScan, setBusy, setDuplicateScan, setError, setSelected, setRetainedFiles]);
+
+  const loadMembers = useCallback(async (groupId: string, offset: number) => {
+    if (busy || !duplicateScan) return;
+    setBusy(true); setError(undefined); setSelected(new Set()); setRetainedFiles({});
+    try {
+      const group = await backend.duplicateFinderGroupPage(duplicateScan.scanId, groupId, offset);
+      setDuplicateScan((current) => current ? { ...current, groups: current.groups.map((entry) => entry.id === group.id ? group : entry) } : current);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }, [backend, busy, duplicateScan, setBusy, setDuplicateScan, setError, setSelected, setRetainedFiles]);
 
   const remove = useCallback(async () => {
     if (busy || !selected.size) return;
@@ -82,7 +128,7 @@ export function useFileHygiene() {
       setDuplicateScan(undefined);
       setEmptyScan(undefined);
       setSelected(new Set());
-      if (tool === "duplicates") setDuplicateScan(await backend.duplicateFinderScan(roots));
+      if (tool === "duplicates") setDuplicateScan(await (scopeMode === "local" ? backend.duplicateFinderScanLocal() : backend.duplicateFinderScan(roots)));
       else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
       if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "failed" });
@@ -91,7 +137,7 @@ export function useFileHygiene() {
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, roots, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
+  }, [backend, busy, roots, scopeMode, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
 
   const cancel = useCallback(async () => {
     try {
@@ -120,7 +166,7 @@ export function useFileHygiene() {
   }, [busy, setError, setResult, setSelected, setTool]);
 
   return {
-    roots, tool, duplicateScan, emptyScan, selected, result, busy, error,
+    roots, tool, duplicateScan, emptyScan, selected, result, busy, error, scopeMode, progress, loadGroups, loadMembers,
     chooseRoots, removeRoot, scan, remove, cancel, select, changeTool, keepPolicy,
     retainedFileId: (group: NonNullable<DuplicateScan>["groups"][number]) => getRetainedFileId(group, keepPolicy, retainedFiles),
     keepFile: (groupId: string, fileId: string) => {

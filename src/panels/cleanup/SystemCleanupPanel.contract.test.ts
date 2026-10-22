@@ -272,27 +272,25 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
   test("one-time actions and browser inventory collapse safely on narrow viewports", async () => {
     const actions = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
-    const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
+    const activityCss = await read("src/panels/maintenance/activity/MaintenanceActivity.css");
 
     expect(actions).toContain("grid grid-cols-1 gap-2");
     expect(actions).toContain("grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3");
     expect(actions).toContain('aria-labelledby="cleanup-one-time-actions-heading"');
     expect(actions).toContain('aria-labelledby="cleanup-system-monitoring-heading"');
-    expect(legacyDialogs).toContain("grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2");
-    expect(legacyDialogs).toContain("grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-2");
+    expect(activityCss).toContain("@container");
+    expect(activityCss).toContain("overflow-wrap: anywhere");
   });
 
   test("active bespoke viewers expose loading, error, empty, and category-specific actions", async () => {
     const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
 
-    expect(legacyDialogs).toContain("const [browserFootprintsError, setBrowserFootprintsError]");
-    expect(legacyDialogs).toContain("Auditing browser profiles…");
-    expect(legacyDialogs).toContain("Browser audit failed:");
-    expect(legacyDialogs).toContain('text="RETRY AUDIT"');
-    expect(legacyDialogs).toContain("No browser profiles detected");
+    const browserSummary = await read("src/panels/maintenance/activity/ActivityLegacySummary.tsx");
+    expect(browserSummary).toContain('role="alert"');
+    expect(browserSummary).toContain("No browser artifacts were returned");
+    expect(browserSummary).not.toContain("clearBrowserFootprints");
     expect(legacyDialogs).toContain("aria-label={`Forget Wi-Fi profile ${p.name}`}");
-    expect(legacyDialogs).toContain("aria-label={`Clear ${b.browser} artifacts for ${b.profilePath}`}");
-    expect(legacyDialogs).toContain("disabled={browserFootprints.length === 0 || !!localLoadingMap['browserFootprints']}");
+    expect(legacyDialogs).not.toContain("handleClearBrowserFootprints");
   });
 
   test("every deep cleanup card is connected to scan, clear, and details", async () => {

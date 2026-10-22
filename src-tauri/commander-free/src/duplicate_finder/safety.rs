@@ -1,5 +1,4 @@
 use super::CachedFile;
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,7 +49,7 @@ pub(super) fn validate_roots(roots: Vec<String>) -> Result<Vec<PathBuf>, String>
         || roots.len() > super::MAX_ROOTS
         || roots.iter().any(|root| root.len() > 4096)
     {
-        return Err("provide between one and eight valid folders".into());
+        return Err("provide between one and thirty-two valid folders".into());
     }
     roots
         .into_iter()
@@ -100,21 +99,6 @@ pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-pub(super) fn retains_live_member(
-    members: &[String],
-    selected: &HashSet<String>,
-    files: &HashMap<String, CachedFile>,
-) -> bool {
-    members
-        .iter()
-        .filter(|id| !selected.contains(*id))
-        .any(|id| {
-            files
-                .get(id)
-                .is_some_and(|file| validated_file(file).is_ok())
-        })
-}
-
 pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
     if crate::settings::is_decoy_mode() {
         return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
@@ -134,7 +118,7 @@ fn is_inside_system_root(path: &Path) -> bool {
         .any(|root| path == root || path.starts_with(root))
 }
 
-fn protected_system_roots() -> Vec<PathBuf> {
+pub(super) fn protected_system_roots() -> Vec<PathBuf> {
     [
         "SystemRoot",
         "windir",

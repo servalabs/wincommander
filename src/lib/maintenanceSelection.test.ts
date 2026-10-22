@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
 import type { DuplicateGroup } from "../hooks/useBackend";
 
-const group: DuplicateGroup = { id: "group", size: 100, reclaimableBytes: 200, files: [
+const group: DuplicateGroup = { id: "group", size: 100, reclaimableBytes: 200, fileCount: 3, memberOffset: 0, hasMoreFiles: false, files: [
   { id: "long", name: "a", path: "C:\\backups\\copy\\a", size: 100 },
   { id: "short", name: "a", path: "C:\\a", size: 100 },
   { id: "third", name: "a", path: "C:\\other\\a", size: 100 },

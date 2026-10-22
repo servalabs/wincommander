@@ -10,6 +10,7 @@ import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
+import type { ActivityArea, ActivityScan, ActivityRecordPage, ActivityRemoveResult } from "../types/generated/activity";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -42,6 +43,13 @@ export interface AIControlOperationResult {
 
 export type RoutineCleanerCategory = "system" | "browsers" | "applications" | "gaming" | "databases" | "developers" | "ai" | "projects";
 
+export interface RoutineCleanerEntryPreview {
+  id: string;
+  path: string | null;
+  actualSizeBytes: number;
+  estimatedReclaimBytes: number | null;
+}
+
 export interface RoutineCleanerItem {
   id: string;
   category: RoutineCleanerCategory;
@@ -52,6 +60,12 @@ export interface RoutineCleanerItem {
   recommended: boolean;
   operation: "delete" | "vacuum";
   truncated: boolean;
+  pathDisplay: string | null;
+  entries: RoutineCleanerEntryPreview[];
+  entryCount: number;
+  entriesLimit: number;
+  entriesTruncated: boolean;
+  description: string | null;
 }
 
 export interface RoutineCleanerScan {
@@ -89,14 +103,44 @@ export interface DuplicateGroup {
   size: number;
   reclaimableBytes: number;
   files: DuplicateFile[];
+  fileCount: number;
+  memberOffset: number;
+  hasMoreFiles: boolean;
 }
 
 export interface DuplicateScan {
+  scanId: string;
+  scopeRoots: string[];
+  excludedVolumes: string[];
   groups: DuplicateGroup[];
   skippedEntries: number;
   scannedFiles: number;
   cancelled: boolean;
   truncated: boolean;
+  hashedFiles: number;
+  skippedLinks: number;
+  errors: string[];
+  complete: boolean;
+  totalGroups: number;
+  totalDuplicateBytes: number;
+  groupOffset: number;
+  hasMoreGroups: boolean;
+}
+
+export interface DuplicateProgress {
+  scanId: string;
+  running: boolean;
+  phase: string;
+  scopeRoots: string[];
+  excludedVolumes: string[];
+  currentPath: string;
+  scannedFiles: number;
+  hashedFiles: number;
+  candidateFiles: number;
+  bytesHashed: number;
+  skippedEntries: number;
+  skippedLinks: number;
+  errors: string[];
 }
 
 export interface DuplicateRemoveResult {
@@ -2392,6 +2436,11 @@ export function useBackend() {
       invoke<RoutineCleanerCleanResult>("routine_cleaner_clean", { itemIds }),
     routineCleanerScanProjects: () => invoke<RoutineCleanerScan | null>("routine_cleaner_scan_projects"),
     routineCleanerCancel: () => invoke<void>("routine_cleaner_cancel"),
+    activityScan: (area: ActivityArea) => invoke<ActivityScan>("activity_scan", { area }),
+    activityRecords: (area: ActivityArea, scanId: string, itemId: string, offset: number) =>
+      invoke<ActivityRecordPage>("activity_records", { area, scanId, itemId, offset }),
+    activityRemove: (area: ActivityArea, scanId: string, itemId: string, recordIds: string[], allRecords: boolean) =>
+      invoke<ActivityRemoveResult>("activity_remove", { area, scanId, itemId, recordIds, allRecords }),
     packageUpdatesInventory: () => invoke<PackageUpdateInventory>("package_updates_inventory"),
     packageUpdatesApply: (updateIds: string[]) => invoke<PackageUpdateResult>("package_updates_apply", { updateIds }),
     packageUpdatesCancel: () => invoke<void>("package_updates_cancel"),
@@ -2402,6 +2451,12 @@ export function useBackend() {
     firewallAuditCancel: () => invoke<void>("firewall_audit_cancel"),
     duplicateFinderScan: (roots: string[]) =>
       invoke<DuplicateScan>("duplicate_finder_scan", { roots }),
+    duplicateFinderScanLocal: () => invoke<DuplicateScan>("duplicate_finder_scan_local"),
+    duplicateFinderProgress: () => invoke<DuplicateProgress>("duplicate_finder_progress"),
+    duplicateFinderPage: (scanId: string, offset: number) =>
+      invoke<DuplicateScan>("duplicate_finder_page", { scanId, offset }),
+    duplicateFinderGroupPage: (scanId: string, groupId: string, offset: number) =>
+      invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
     duplicateFinderRemove: (fileIds: string[]) =>
       invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),
@@ -2465,6 +2520,8 @@ export function useBackend() {
     /** Fetch sorted children of a folder from the in-memory scan cache. */
     getDiskChildren: (path: string) =>
       invoke<Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
+    getDiskFileTypes: (scanId: string, path: string) =>
+      invoke<import("../lib/diskAnalyzer").DiskFileTypes>("get_disk_file_types", { scanId, path }),
     /** Threshold matches from the scanned scope, with an explicit result limit. */
     getLargeDiskItems: (minSizeBytes: number, limit: number = 5000, includeDirs: boolean = false) =>
       invoke<{ items: Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>; matchedCount: number; matchedSize: number; resultLimit: number; limited: boolean; minimumSize: number; scanId: string }>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),

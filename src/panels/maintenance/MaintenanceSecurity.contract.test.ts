@@ -25,9 +25,9 @@ describe("maintenance security and hygiene result handling", () => {
   test("shows exact shortcut paths with wrapping and full-path actions", async () => {
     const hygiene = await Bun.file("src/panels/maintenance/SystemHygieneTools.tsx").text();
 
-    expect(hygiene).toContain('className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{path}</span>');
-    expect(hygiene).toContain("navigator.clipboard.writeText(path)");
-    expect(hygiene).toContain("Open containing folder in Explorer: ${path}");
+    expect(hygiene).toContain('className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{displayPath}</span>');
+    expect(hygiene).toContain("navigator.clipboard.writeText(displayPath)");
+    expect(hygiene).toContain("Open containing folder in Explorer: ${displayPath}");
     expect(hygiene).toContain("Windows does not prove");
   });
 

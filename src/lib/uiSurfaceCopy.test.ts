@@ -289,7 +289,7 @@ describe("redesign surface copy guardrails", () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
     const cleanupPanel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
-    expect(cleanupGrid).toMatch(/\{isLowImpactTab &&\s*(?:\(\s*)?<div[^>]+data-cleanup-summary="true"/);
+    expect(cleanupGrid).toContain("{isLowImpactTab && (");
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");

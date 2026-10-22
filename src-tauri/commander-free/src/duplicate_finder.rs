@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Native, preview-first duplicate finder. IDs are process-local capabilities.
-
+mod index;
 mod safety;
 mod scan;
+mod scope;
 mod verified_file;
 
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 const CACHE_TTL: Duration = Duration::from_secs(20 * 60);
-const MAX_ROOTS: usize = 8;
-const MAX_FILES: usize = 100_000;
+const MAX_ROOTS: usize = 32;
+const MAX_SELECTION: usize = 100_000;
+const GROUP_PAGE_SIZE: usize = 100;
+const MEMBER_PAGE_SIZE: usize = 200;
 
 #[derive(Clone)]
 struct CachedFile {
@@ -27,23 +29,11 @@ struct CachedFile {
     identity: Option<(u32, u64)>,
 }
 
-struct Cache {
-    created_at: Instant,
-    files: HashMap<String, CachedFile>,
-    groups: HashMap<String, Vec<String>>,
-}
-
-static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+static CACHE: OnceLock<Mutex<Option<index::ScanIndex>>> = OnceLock::new();
 static CANCELLED: AtomicBool = AtomicBool::new(false);
-
-fn cache() -> &'static Mutex<Cache> {
-    CACHE.get_or_init(|| {
-        Mutex::new(Cache {
-            created_at: Instant::now(),
-            files: HashMap::new(),
-            groups: HashMap::new(),
-        })
-    })
+static RUNNING: AtomicBool = AtomicBool::new(false);
+fn cache() -> &'static Mutex<Option<index::ScanIndex>> {
+    CACHE.get_or_init(|| Mutex::new(None))
 }
 
 #[derive(Clone, Serialize)]
@@ -54,7 +44,6 @@ pub struct DuplicateFile {
     pub path: String,
     pub size: u64,
 }
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateGroup {
@@ -62,9 +51,11 @@ pub struct DuplicateGroup {
     pub size: u64,
     pub reclaimable_bytes: u64,
     pub files: Vec<DuplicateFile>,
+    pub file_count: usize,
+    pub member_offset: usize,
+    pub has_more_files: bool,
 }
-
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateScan {
     pub groups: Vec<DuplicateGroup>,
@@ -72,8 +63,18 @@ pub struct DuplicateScan {
     pub cancelled: bool,
     pub truncated: bool,
     pub skipped_entries: usize,
+    pub skipped_links: usize,
+    pub scan_id: String,
+    pub scope_roots: Vec<String>,
+    pub excluded_volumes: Vec<String>,
+    pub hashed_files: usize,
+    pub errors: Vec<String>,
+    pub complete: bool,
+    pub total_groups: usize,
+    pub total_duplicate_bytes: u64,
+    pub group_offset: usize,
+    pub has_more_groups: bool,
 }
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateRemoveResult {
@@ -83,21 +84,103 @@ pub struct DuplicateRemoveResult {
     pub errors: Vec<String>,
 }
 
+struct RunningGuard;
+impl RunningGuard {
+    fn acquire() -> Result<Self, String> {
+        RUNNING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "A duplicate scan or removal is already running".to_string())?;
+        CANCELLED.store(false, Ordering::Release);
+        Ok(Self)
+    }
+}
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::Release);
+    }
+}
+
+async fn start_scan(roots: Vec<PathBuf>, excluded: Vec<String>) -> Result<DuplicateScan, String> {
+    let running = RunningGuard::acquire()?;
+    scope::begin(&roots, excluded);
+    *cache()
+        .lock()
+        .map_err(|_| "duplicate cache lock poisoned")? = None;
+    tokio::task::spawn_blocking(move || {
+        let _running = running;
+        let result = scan::scan_roots(&roots, &CANCELLED);
+        match result {
+            Ok(index) => {
+                scope::finish(CANCELLED.load(Ordering::Acquire));
+                let page = index.page(0)?;
+                *cache()
+                    .lock()
+                    .map_err(|_| "duplicate cache lock poisoned")? = Some(index);
+                Ok(page)
+            }
+            Err(error) => {
+                scope::fail(&error);
+                Err(error)
+            }
+        }
+    })
+    .await
+    .map_err(|error| {
+        let message = format!("duplicate scan task failed: {error}");
+        scope::fail(&message);
+        message
+    })?
+}
+
 #[tauri::command]
 pub async fn duplicate_finder_scan(roots: Vec<String>) -> Result<DuplicateScan, String> {
-    let roots = safety::validate_roots(roots)?;
-    CANCELLED.store(false, Ordering::Release);
-    let (scan, files, groups) =
-        tokio::task::spawn_blocking(move || scan::scan_roots(&roots, &CANCELLED))
-            .await
-            .map_err(|error| format!("duplicate scan task failed: {error}"))?;
-    let mut guard = cache()
+    start_scan(safety::validate_roots(roots)?, Vec::new()).await
+}
+#[tauri::command]
+pub async fn duplicate_finder_scan_local() -> Result<DuplicateScan, String> {
+    let (roots, excluded) = scope::local_fixed_roots()?;
+    start_scan(roots, excluded).await
+}
+#[tauri::command]
+pub fn duplicate_finder_progress() -> scope::DuplicateProgress {
+    scope::snapshot()
+}
+
+fn with_index<T>(
+    scan_id: &str,
+    read: impl FnOnce(&index::ScanIndex) -> Result<T, String>,
+) -> Result<T, String> {
+    let guard = cache()
         .lock()
-        .map_err(|_| "duplicate cache lock poisoned".to_string())?;
-    guard.created_at = Instant::now();
-    guard.files = files;
-    guard.groups = groups;
-    Ok(scan)
+        .map_err(|_| "duplicate cache lock poisoned")?;
+    let index = guard
+        .as_ref()
+        .ok_or("Scan again before reviewing duplicates")?;
+    if index.scan_id != scan_id || index.created_at.elapsed() > CACHE_TTL {
+        return Err("Duplicate scan expired or changed; scan again".into());
+    }
+    read(index)
+}
+#[tauri::command]
+pub async fn duplicate_finder_page(
+    scan_id: String,
+    offset: usize,
+) -> Result<DuplicateScan, String> {
+    tokio::task::spawn_blocking(move || with_index(&scan_id, |index| index.page(offset)))
+        .await
+        .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+pub async fn duplicate_finder_group_page(
+    scan_id: String,
+    group_id: String,
+    offset: usize,
+) -> Result<DuplicateGroup, String> {
+    tokio::task::spawn_blocking(move || {
+        with_index(&scan_id, |index| index.group(&group_id, offset))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -105,57 +188,33 @@ pub async fn duplicate_finder_remove(
     file_ids: Vec<String>,
 ) -> Result<DuplicateRemoveResult, String> {
     safety::ensure_mutation_allowed()?;
-    if file_ids.is_empty() || file_ids.len() > MAX_FILES || file_ids.iter().any(|id| id.len() > 64)
+    if file_ids.is_empty()
+        || file_ids.len() > MAX_SELECTION
+        || file_ids.iter().any(|id| id.len() > 64)
     {
         return Err("invalid duplicate selection".into());
     }
+    let running = RunningGuard::acquire()?;
     let selected: HashSet<String> = file_ids.into_iter().collect();
     let (candidates, keepers) = {
         let guard = cache()
             .lock()
-            .map_err(|_| "duplicate cache lock poisoned".to_string())?;
-        if guard.created_at.elapsed() > CACHE_TTL {
-            return Err("duplicate scan expired; scan again before removing files".into());
+            .map_err(|_| "duplicate cache lock poisoned")?;
+        let index = guard
+            .as_ref()
+            .ok_or("duplicate selection is stale; scan again")?;
+        if index.created_at.elapsed() > CACHE_TTL {
+            return Err("duplicate scan expired; scan again".into());
         }
-        let mut by_group: HashMap<&str, Vec<&CachedFile>> = HashMap::new();
-        for id in &selected {
-            let file = guard
-                .files
-                .get(id)
-                .ok_or("duplicate selection is stale or invalid; scan again")?;
-            by_group.entry(&file.group_id).or_default().push(file);
-        }
-        for (group_id, removals) in &by_group {
-            let members = guard
-                .groups
-                .get(*group_id)
-                .ok_or("duplicate group is stale; scan again")?;
-            if removals.len() >= members.len()
-                || !safety::retains_live_member(members, &selected, &guard.files)
-            {
-                return Err(
-                    "refused: every duplicate group must retain at least one verified file".into(),
-                );
-            }
-        }
-        let candidates = selected
-            .iter()
-            .filter_map(|id| guard.files.get(id).cloned())
-            .collect::<Vec<_>>();
-        let keepers = guard
-            .files
-            .iter()
-            .filter(|(id, _)| !selected.contains(*id))
-            .map(|(_, file)| file.clone())
-            .collect::<Vec<_>>();
-        (candidates, keepers)
+        index.removal_selection(&selected)?
     };
-    CANCELLED.store(false, Ordering::Release);
-    tokio::task::spawn_blocking(move || safety::remove_files(candidates, keepers, &CANCELLED))
-        .await
-        .map_err(|error| format!("duplicate removal task failed: {error}"))
+    tokio::task::spawn_blocking(move || {
+        let _running = running;
+        safety::remove_files(candidates, keepers, &CANCELLED)
+    })
+    .await
+    .map_err(|error| format!("duplicate removal task failed: {error}"))
 }
-
 #[tauri::command]
 pub fn duplicate_finder_cancel() {
     CANCELLED.store(true, Ordering::Release);

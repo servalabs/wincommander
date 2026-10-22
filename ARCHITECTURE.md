@@ -68,7 +68,7 @@ The Maintenance frontend separates navigation in
 `src/panels/maintenance/disk-analyzer/`, and pure chart/selection logic in
 `src/lib/diskAnalyzer.ts`, `diskAnalyzerLayout.ts`, and
 `maintenanceSelection.ts`. Existing typed hooks remain the operation entry
-points; application removal and privacy cleanup retain their existing backends.
+points; application removal and Windows/system cleanup retain their existing backends.
 `useMaintenanceHistory` stores bounded local display summaries, independently
 of authorization and evidence workflows.
 
@@ -280,12 +280,22 @@ with delete access, verifies its file identity and handle-resolved final path,
 rechecks its age, and applies deletion to that handle. A strict allowlist
 excludes security and audit-history cleaning from the Free binary.
 
-The Maintenance tool rail separates cache review, large files, duplicates,
-analysis, startup, hygiene, and history. Deep cleanup presents the app cache
+The Maintenance tool rail separates cache review, duplicates, analysis,
+browser/application activity, startup, hygiene, and history. Large Files and
+File Types are tabs within the analyzer, sharing its cached scan scope.
+Chart-only display limits aggregate into Other without changing scan totals;
+the selected-item inspector reserves space independently of chart selection.
+Deep cleanup presents the app cache
 workspace and a separate Windows-storage disclosure (`ReclaimSpaceCard.tsx`).
-Maintenance owns its content scroller so the tool rail stays visible. Privacy
-cleanup links to the existing System Cleanup panel and its Windows account
-scope; it does not introduce another cleanup engine or System Optimization.
+Maintenance owns its content scroller so the tool rail stays visible.
+Browser/application record review uses neutral shared DTOs and a fixed paid
+sidecar dispatch contract. Reads and writes accept opaque scan/item/record
+identifiers; no frontend paths, SQL or executable commands are accepted.
+Record changes require an explicit reviewed selection and a fresh scan after
+every attempt. Decoy blocks activity access and Investigator blocks removal.
+These sources are limited to the current Windows user. System Cleanup keeps
+Windows/system traces, clipboard, network and credentials; System Optimization
+stays in its existing privacy/settings area.
 Windows-owned storage uses `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`;
 app-owned regenerable data uses `routine_cleaner` with the overlapping `system`
 category withheld (`APP_CACHE_CLEANUP_CATEGORIES`). Project-only results carry
@@ -453,7 +463,7 @@ Standard PII protection (§2.8.9); no SQL engine in the store.
 - **Scheduled cleanup migration preserves Windows task definitions** — the installer reuses `Invoke-AutoEraseMigration` in `src-tauri/wincmd-shared/scripts/auto-erase.ps1`. Missing `Settings/Enabled` means enabled, following the Windows schema. Replacement tasks remain disabled until their actions, triggers, principals and settings pass read-back verification through Windows' task-definition serializer; only then is the legacy task removed and its enabled state restored. Unrelated tasks and running wipes are not migrated. `tools/test-wipe-task-migration.ps1 -UseTaskScheduler` exercises disposable, non-executed tasks in an isolated Windows Task Scheduler folder.
 - **Clipboard rules have two independent sources** — user-authored rules are persisted per Windows user and compiled as the local source; signed organization rules remain the last-valid Fleet source. The matcher evaluates both, applies the highest severity plus the union of on-device actions, and keeps source-scoped cooldowns. Local policy can't replace, disable, or lower Fleet policy. Only a Fleet verdict can enter the content-free Fleet reporting path; an outage retains the last valid managed source, while explicit unenrollment removes only that source.
 - **One auto-erase schedule rule, not one per surface** — `Set-AutoEraseSchedule('diskCleanup', …)` has two callers' worth of history: System Cleanup gates every auto-erase timer on `hasPaid && !isInvestigator`, while Maintenance's disk-cleanup clock offered the same backend write with no gate, letting the free tier register a schedule the paid gate forbids. Both surfaces now apply the identical rule and read the same `Get-AutoEraseSchedules` record; free users get the `license-gate-open` upsell instead of a working control, and Investigator mode hides it outright (registering an erase task contradicts evidence preservation). Trade-off: a control that used to work for free users no longer does — deliberate, since the backend `require_paid()` check was the only thing standing behind it.
-- **Space reclamation vs trace erasure** — Maintenance owns space reclamation and OS repair; System Cleanup owns privacy and forensic trace erasure. The boundary is why `routine_cleaner`'s `system` rule set (which reaches event-log archives, Defender scan history, and firewall logs) is not exposed in Maintenance's app-cache scope: those are erasure targets, not reclamation targets.
+- **Space reclamation vs trace erasure** — Maintenance owns space reclamation, OS repair and scoped browser/application record review; System Cleanup owns Windows/system and forensic trace erasure. The boundary is why `routine_cleaner`'s `system` rule set (which reaches event-log archives, Defender scan history, and firewall logs) is not exposed in Maintenance's app-cache scope: those are erasure targets, not reclamation targets.
 - **Encrypted PowerShell modules** — modules are AES-256-GCM `.enc` blobs `include_bytes!`-bundled, decrypted in memory per command, with a per-build XOR-obfuscated salt (`build.rs`). Keeps the operation set out of plaintext on disk and lets the salt rotate per build; trade-off is a re-encrypt step (`bun run encrypt-backend`) after any `.ps1` edit.
 - **Windows AI controls reuse existing surfaces** — the canonical policy switch remains `Remove-CopilotAIComponents` in Windows Settings → Security & Apps. It composes narrowly scoped helpers from `ai-control-common`, `ai-control-policies`, `ai-control-shell`, and `ai-control-apps`. The fixed `Invoke-AIControlOperation` dispatcher exposes only non-duplicative advanced component, maintenance, and classic-app operations; its `ValidateSet` rejects arbitrary operation names. Packages & Apps consumes the classic-app operations through its existing category UI, while System Maintenance consumes Windows Update repair.
 - **Windows AI rollback data** — exact registry snapshots, task exports, file manifests, and app-setting backups live below `%ProgramData%\WinCommander\AIControl`, with inheritance removed and access restricted to SYSTEM and Administrators. Deep CBS/AppX restoration remains best effort because Windows servicing can replace or supersede the original payload.

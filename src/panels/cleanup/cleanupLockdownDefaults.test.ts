@@ -78,7 +78,8 @@ describe("System Cleanup and Lockdown default exclusions", () => {
     expect(rustCleanupIds).toEqual(expectedCleanupIds);
 
     for (const [cleanupId, lockdownId] of Object.entries(CLEANUP_EXCLUSION_TO_LOCKDOWN_STEP)) {
-      expect(cleanupCategories).toContain(`id: '${cleanupId}'`);
+      if (["browserFootprints", "editorHistory", "adobeRecent", "officeMru"].includes(cleanupId)) expect(cleanupCategories).not.toContain(`id: '${cleanupId}'`);
+      else expect(cleanupCategories).toContain(`id: '${cleanupId}'`);
 
       const uiEntry = lockdownUi
         .split(/\r?\n/)

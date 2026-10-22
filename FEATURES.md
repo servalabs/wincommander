@@ -81,11 +81,21 @@ the backend and private component before execution.
   Dashboard action failures appear in Notifications, with unresolved findings
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
-- Maintenance workspaces for cache cleanup, large files, duplicates, disk
-  analysis, startup, registry hygiene, and local operation history. Cache
-  categories show searchable targets, selection totals, and item details.
-  The Maintenance rail remains visible while results scroll; its Privacy
-  cleanup link opens the existing user-scoped trace-cleaning workspace.
+- Maintenance workspaces for cache cleanup, duplicates, disk analysis,
+  browser/application activity, startup, registry hygiene, and local operation
+  history. The tool rail stays visible while content scrolls. System Cleanup
+  retains Windows activity, clipboard, network and credential tools.
+- Browser/application activity groups current-user sources and browser profiles
+  by data type. Available record-level operations require Inspect, selection,
+  review and confirmation; clearing a whole type includes unloaded records.
+  Unsupported stores and missing metadata are labeled unavailable. Browser
+  download records are separate from downloaded files. Sign-in/session data
+  has an additional acknowledgement where removal is supported.
+  Browser Audit, Editor History, Office Document History and Adobe Recent Files
+  no longer duplicate these tools in System Cleanup. Older configured browser
+  and Office timers remain visible for review; moving the cards does not change
+  existing schedules. Locked browser stores require closing the browser before
+  scanning; cleanup always requires the relevant application to be closed.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
 - Explicit project-folder inspection through a native picker for supported
@@ -95,6 +105,11 @@ the backend and private component before execution.
   chart depth, navigation history, progress, and cancellation. Partial scans
   identify skipped entries and scan limits; charts show logical file sizes,
   not measured physical allocation or guaranteed reclaimable space.
+- Space, Large Files and File Types share one Disk Space Analysis workspace.
+  The selected-folder inspector has reserved space beside the chart; small
+  or display-limited areas are represented by an explicit Other tile.
+  File Types reports counts and logical sizes in the current cached scope.
+  Partial scans offer a fresh scan of a browsed subfolder for more detail.
 - Large Files uses a selected minimum file size, type filters, search, and
   sorting. Results disclose the backend display limit and incomplete scans.
   Folder exploration and Open in Explorer are separate from confirmed file
@@ -102,6 +117,12 @@ the backend and private component before execution.
 - Duplicate Smart Select and an explicit copy-to-keep preference, with
   backend content and identity rechecks, retention checks, and a refreshed
   scan after removal. Repeated paths and hard links are not counted as extras.
+  Entering Duplicate Cleanup scans local fixed drives automatically; chosen
+  folder scans remain available. A disk-backed inventory bounds memory use;
+  paged groups disclose their result limits and partial-scan status.
+- Deep Cleanup expands application/category rows into backend-discovered
+  folders and a bounded preview of exact files, with logical sizes and counts.
+  Database-vacuum estimates are distinguished from measured file sizes.
 - Startup review includes enabled/disabled filters, available publisher and
   launcher details, and exact-entry enable/disable controls. Startup delay
   and memory savings are not inferred from a running process's memory use.

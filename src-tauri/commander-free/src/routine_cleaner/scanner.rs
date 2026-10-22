@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::rules::{validate_recursive_containment, ScanTarget, TargetOperation};
-use super::{CachedCleanerItem, CachedFile, RoutineCleanerItem, RoutineCleanerScan};
+use super::{
+    CachedCleanerItem, CachedFile, RoutineCleanerEntryPreview, RoutineCleanerItem,
+    RoutineCleanerScan, MAX_PREVIEW_ENTRIES_PER_TARGET,
+};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
@@ -32,6 +35,9 @@ pub(super) fn scan_targets(
                     cached.files.retain(|file| seen.insert(file.path.clone()));
                     public.file_count = cached.files.len();
                     public.bytes = cached.files.iter().map(|file| file.bytes).sum();
+                    public.entry_count = cached.files.len();
+                    public.entries_truncated = cached.files.len() > MAX_PREVIEW_ENTRIES_PER_TARGET;
+                    public.entries = preview_entries(&cached.files, cached.operation);
                     if cached.files.is_empty() {
                         continue;
                     }
@@ -110,13 +116,20 @@ fn scan_target(
         TargetOperation::Delete => "delete",
         TargetOperation::Vacuum => "vacuum",
     };
+    let entry_count = files.len();
     let public = RoutineCleanerItem {
         id: id.clone(),
         category: target.category.clone(),
         label: target.label.clone(),
+        description: target.description.clone(),
         path: target.path.to_string_lossy().into_owned(),
+        path_display: target.path.to_str().map(str::to_owned),
         bytes,
-        file_count: files.len(),
+        file_count: entry_count,
+        entries: preview_entries(&files, target.operation),
+        entry_count,
+        entries_limit: MAX_PREVIEW_ENTRIES_PER_TARGET,
+        entries_truncated: entry_count > MAX_PREVIEW_ENTRIES_PER_TARGET,
         recommended: target.recommended,
         operation: operation.into(),
         truncated,
@@ -212,6 +225,7 @@ fn collect_deletable_files(
                 files.push(CachedFile {
                     file_identity: identity,
                     path,
+                    actual_bytes: metadata.len(),
                     bytes: metadata.len(),
                     minimum_age,
                 });
@@ -235,6 +249,7 @@ fn scan_database(path: &Path) -> Result<(Vec<CachedFile>, u64, bool), String> {
     Ok((
         vec![CachedFile {
             path: path.to_path_buf(),
+            actual_bytes: size,
             bytes: estimated,
             minimum_age: Duration::ZERO,
             file_identity: None,
@@ -242,6 +257,24 @@ fn scan_database(path: &Path) -> Result<(Vec<CachedFile>, u64, bool), String> {
         estimated,
         false,
     ))
+}
+
+fn preview_entries(
+    files: &[CachedFile],
+    operation: TargetOperation,
+) -> Vec<RoutineCleanerEntryPreview> {
+    let mut ordered: Vec<_> = files.iter().collect();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    ordered
+        .into_iter()
+        .take(MAX_PREVIEW_ENTRIES_PER_TARGET)
+        .map(|file| RoutineCleanerEntryPreview {
+            id: Uuid::new_v4().to_string(),
+            path: file.path.to_str().map(str::to_owned),
+            actual_size_bytes: file.actual_bytes,
+            estimated_reclaim_bytes: (operation == TargetOperation::Vacuum).then_some(file.bytes),
+        })
+        .collect()
 }
 
 pub(super) fn has_sqlite_header(path: &Path) -> bool {

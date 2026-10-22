@@ -45,20 +45,32 @@ pub(super) fn open_verified(
 }
 
 #[cfg(windows)]
-fn verify_handle(handle: &File, file: &CachedFile) -> Result<(), String> {
-    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+pub(super) fn handle_identity(handle: &File) -> Result<Option<(u32, u64)>, String> {
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, GetFinalPathNameByHandleW, BY_HANDLE_FILE_INFORMATION,
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
     let raw = handle.as_raw_handle();
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
     if unsafe { GetFileInformationByHandle(raw, &mut information) } == 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
-    let identity = Some((
+    Ok(Some((
         information.dwVolumeSerialNumber,
         (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
-    ));
+    )))
+}
+#[cfg(not(windows))]
+pub(super) fn handle_identity(_handle: &File) -> Result<Option<(u32, u64)>, String> {
+    Ok(None)
+}
+
+#[cfg(windows)]
+fn verify_handle(handle: &File, file: &CachedFile) -> Result<(), String> {
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+    let raw = handle.as_raw_handle();
+    let identity = handle_identity(handle)?;
     if file.identity.is_none() || identity != file.identity {
         return Err("duplicate file identity changed; scan again".into());
     }

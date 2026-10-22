@@ -100,7 +100,7 @@ fn validate_cached_metadata(
     if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse_point(metadata) {
         return Err("cached file is no longer a regular file".into());
     }
-    if metadata.len() != file.bytes || current_identity != file.file_identity {
+    if metadata.len() != file.actual_bytes || current_identity != file.file_identity {
         return Err("cached file identity changed after the scan".into());
     }
     if !is_old_enough(
@@ -335,6 +335,7 @@ mod tests {
         let metadata = file.metadata().unwrap();
         CachedFile {
             path: path.to_path_buf(),
+            actual_bytes: metadata.len(),
             bytes: metadata.len(),
             minimum_age: Duration::ZERO,
             file_identity: super::super::scanner::file_identity(path),
@@ -355,6 +356,7 @@ mod tests {
             requires_plain_path: false,
             files: vec![super::super::CachedFile {
                 path: substituted,
+                actual_bytes: 1,
                 bytes: 1,
                 minimum_age: Duration::ZERO,
                 file_identity: None,

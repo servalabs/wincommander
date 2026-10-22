@@ -21,19 +21,21 @@ mod child_jobs;
 pub mod cli;
 mod ipc_boundary;
 pub use wincmd_shared::command_strings;
+mod activity_bridge;
 mod auth_anomaly;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_agent_test;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_test;
+mod bluetooth_control;
 mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
 mod context_menu_scrub;
-mod context_scrub_outcome;
+mod context_menu_shred;
 mod context_scrub_failure;
 mod context_scrub_notification;
-mod context_menu_shred;
+mod context_scrub_outcome;
 mod datastore;
 mod datastore_io;
 mod devtools;
@@ -84,7 +86,6 @@ mod net_traffic_alert;
 mod network_guard;
 mod network_maintenance;
 mod network_toggle;
-mod bluetooth_control;
 mod package_updates;
 mod paste_monitor;
 mod path_identity;
@@ -2775,9 +2776,13 @@ pub fn run() {
             backend::is_path_dir,
             // ── Disk Space Analyzer ──
             disk_analyzer::run_disk_scan,
+            activity_bridge::activity_scan,
+            activity_bridge::activity_records,
+            activity_bridge::activity_remove,
             disk_analyzer::cancel_disk_scan,
             disk_analyzer::get_disk_scan_progress,
             disk_analyzer::get_disk_children,
+            disk_analyzer::get_disk_file_types,
             disk_analyzer::get_large_disk_items,
             disk_analyzer::open_disk_item,
             disk_analyzer::disk_delete_item,
@@ -2788,6 +2793,10 @@ pub fn run() {
             routine_cleaner::routine_cleaner_cancel,
             // ── Duplicate and empty-folder tools ──
             duplicate_finder::duplicate_finder_scan,
+            duplicate_finder::duplicate_finder_scan_local,
+            duplicate_finder::duplicate_finder_progress,
+            duplicate_finder::duplicate_finder_page,
+            duplicate_finder::duplicate_finder_group_page,
             duplicate_finder::duplicate_finder_remove,
             duplicate_finder::duplicate_finder_cancel,
             empty_folder_cleaner::empty_folder_cleaner_scan,

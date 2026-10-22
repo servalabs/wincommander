@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use rules::TargetOperation;
 
 const CACHE_TTL: Duration = Duration::from_secs(20 * 60);
+pub(super) const MAX_PREVIEW_ENTRIES_PER_TARGET: usize = 100;
 const ALLOWED_CATEGORIES: &[&str] = &[
     "system",
     "browsers",
@@ -36,6 +37,7 @@ const ALLOWED_CATEGORIES: &[&str] = &[
 #[derive(Clone, Debug)]
 struct CachedFile {
     path: std::path::PathBuf,
+    actual_bytes: u64,
     bytes: u64,
     minimum_age: Duration,
     file_identity: Option<(u32, u64)>,
@@ -75,13 +77,28 @@ fn cache() -> &'static Mutex<CleanerCache> {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RoutineCleanerEntryPreview {
+    pub id: String,
+    pub path: Option<String>,
+    pub actual_size_bytes: u64,
+    pub estimated_reclaim_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoutineCleanerItem {
     pub id: String,
     pub category: String,
     pub label: String,
+    pub description: Option<String>,
     pub path: String,
+    pub path_display: Option<String>,
     pub bytes: u64,
     pub file_count: usize,
+    pub entries: Vec<RoutineCleanerEntryPreview>,
+    pub entry_count: usize,
+    pub entries_limit: usize,
+    pub entries_truncated: bool,
     pub recommended: bool,
     pub operation: String,
     pub truncated: bool,

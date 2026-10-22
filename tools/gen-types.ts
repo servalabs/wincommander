@@ -71,6 +71,7 @@ const OUT_DIR = join(ROOT, "src", "types", "generated");
 const FILES = [
   { rel: "fleet.ts", bindingsDirs: [FLEET_PROTO_BINDINGS, WINCMD_CLIP_RULES_BINDINGS] },
   { rel: "ipc.ts", bindingsDirs: [WINCMD_SHARED_BINDINGS] },
+  { rel: "activity.ts", bindingsDirs: [WINCMD_SHARED_BINDINGS] },
   { rel: "serde_json/JsonValue.ts", bindingsDirs: [WINCMD_SHARED_BINDINGS] },
 ] as const;
 
