@@ -15,8 +15,7 @@ export default function BluetoothControl() {
   return (
     <button
       type="button"
-      className={`killswitch-toggle focus-visible:outline-2 focus-visible:outline-offset-2 ${status?.state === "blocked" ? "cut" : status?.state === "allowed" ? "live" : ""}`}
-      style={{ marginTop: 0, whiteSpace: "normal", padding: "6px 8px" }}
+      className={`killswitch-toggle bluetooth-control focus-visible:outline-2 focus-visible:outline-offset-2 ${status?.state === "blocked" ? "cut" : status?.state === "allowed" ? "live" : ""}`}
       disabled={busy || !canChange}
       aria-busy={busy}
       title={canChange ? `${description} ${nextBlocked ? "Click to apply the Bluetooth block policy for all Windows accounts." : "Click to release WinCommander’s Bluetooth policy restriction."}` : description}

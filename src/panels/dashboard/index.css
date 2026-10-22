@@ -706,6 +706,11 @@ html.light .tech-grid.armed {
 .privacy-connectivity-toggles .killswitch-toggle {
     width: 100%;
     margin-top: 0;
+    white-space: nowrap;
+}
+
+.privacy-connectivity-toggles .killswitch-toggle > svg {
+    flex: 0 0 auto;
 }
 
 /* ── Network identity strip ──────────────────────────────────────────
