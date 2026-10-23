@@ -193,10 +193,10 @@
   max-width: none;
 }
 
-/* Use the small spare area below Debloat without reviving an outer page
-   scrollbar. Long application lists still scroll only inside their results pane. */
+/* Size the review card from the current viewport.  Long application lists
+   still scroll only inside their results pane. */
 .apps-panel--debloat .application-review-workspace {
-  min-height: min(620px, calc(100dvh - 405px));
+  min-height: 0;
   align-self: stretch;
 }
 
