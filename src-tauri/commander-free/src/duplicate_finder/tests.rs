@@ -237,6 +237,19 @@ fn refuses_changed_content_even_when_size_and_timestamp_match() {
 }
 
 #[test]
+fn review_validation_allows_an_unchanged_cached_file_without_granting_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"same").unwrap();
+    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    let (_, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    let file = files.values().next().unwrap();
+    assert!(safety::validated_review_file(file).is_ok());
+}
+
+#[test]
 fn refuses_removal_when_retained_copy_disappears() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a"), b"same").unwrap();

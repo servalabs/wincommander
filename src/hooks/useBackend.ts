@@ -97,6 +97,7 @@ export interface DuplicateFile {
   size: number;
   /** Nanoseconds since the Unix epoch, captured while the content was verified. */
   modified: string | null;
+  removable: boolean;
 }
 
 export interface DuplicateGroup {
@@ -2457,6 +2458,8 @@ export function useBackend() {
       invoke<DuplicateScan>("duplicate_finder_page", { scanId, offset }),
     duplicateFinderGroupPage: (scanId: string, groupId: string, offset: number) =>
       invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
+    duplicateFinderOpen: (scanId: string, fileId: string) =>
+      invoke<void>("duplicate_finder_open", { scanId, fileId }),
     duplicateFinderRemove: (fileIds: string[]) =>
       invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),

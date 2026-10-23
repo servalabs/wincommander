@@ -80,7 +80,6 @@ pub(super) fn enumerate(
     minimum_size_bytes: u64,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    let protected = safety::protected_system_roots();
     let temporary = fs::canonicalize(index.directory.path()).map_err(|error| error.to_string())?;
     // The database is for file candidates and result paging. Keeping the
     // traversal queue there made a large volume perform a read/write round trip
@@ -148,10 +147,11 @@ pub(super) fn enumerate(
                 let Some((directory, root)) = pending.pop_front() else {
                     break;
                 };
-                if protected.iter().any(|path| directory.starts_with(path))
-                    || directory.starts_with(&temporary)
-                {
-                    scope::error(&directory, "Protected application/system scope excluded");
+                if directory.starts_with(&temporary) {
+                    // The scanner's own private SQLite directory must never
+                    // become a candidate when it lives underneath a selected
+                    // folder.  Windows and application folders are kept in
+                    // the review inventory; deletion policy rejects them.
                     continue;
                 }
                 let metadata = match fs::symlink_metadata(&directory) {

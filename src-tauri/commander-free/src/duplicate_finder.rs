@@ -55,6 +55,9 @@ pub struct DuplicateFile {
     pub size: u64,
     /// Nanoseconds since the Unix epoch, captured after the file content was verified.
     pub modified: Option<String>,
+    /// Protected system/application locations can be inspected but never
+    /// selected for duplicate removal.
+    pub removable: bool,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -217,6 +220,36 @@ pub async fn duplicate_finder_group_page(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn duplicate_finder_open(scan_id: String, file_id: String) -> Result<(), String> {
+    if file_id.is_empty() || file_id.len() > 64 {
+        return Err("invalid duplicate file reference".into());
+    }
+    let target = tokio::task::spawn_blocking(move || {
+        with_index(&scan_id, |index| {
+            let file = index.file(&file_id)?;
+            safety::validated_review_file(&file)
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    #[cfg(windows)]
+    {
+        let windows = std::env::var_os("SystemRoot").ok_or("Windows directory unavailable.")?;
+        std::process::Command::new(PathBuf::from(windows).join("explorer.exe"))
+            .arg("/select,")
+            .arg(target)
+            .spawn()
+            .map_err(|error| format!("Could not open Explorer: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Err("Open in Explorer requires Windows.".into())
+    }
 }
 
 #[tauri::command]

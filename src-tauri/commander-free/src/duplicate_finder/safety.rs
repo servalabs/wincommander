@@ -112,10 +112,42 @@ pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
     Ok(())
 }
 
-fn is_inside_system_root(path: &Path) -> bool {
+pub(super) fn is_inside_system_root(path: &Path) -> bool {
     protected_system_roots()
         .iter()
         .any(|root| path == root || path.starts_with(root))
+}
+
+/// Validates a cached duplicate only for opening it in Explorer.  This is
+/// deliberately narrower than deletion validation: protected Windows and
+/// application locations may be inspected, but they remain unavailable for
+/// duplicate removal.  The frontend supplies only an opaque scan/file ID; the
+/// path always comes from the current scan cache.
+pub(super) fn validated_review_file(file: &CachedFile) -> Result<PathBuf, String> {
+    let meta = fs::symlink_metadata(&file.path).map_err(|error| error.to_string())?;
+    if !meta.is_file()
+        || is_link_or_reparse(&meta)
+        || meta.len() != file.bytes
+        || meta.modified().ok() != file.modified
+    {
+        return Err("duplicate file changed after scanning; scan again".into());
+    }
+    let path = fs::canonicalize(&file.path).map_err(|error| error.to_string())?;
+    if !path.starts_with(&file.root) {
+        return Err("refused file outside its scanned location".into());
+    }
+    let mut ancestor = file.path.parent();
+    while let Some(parent) = ancestor {
+        let metadata = fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
+        if is_link_or_reparse(&metadata) {
+            return Err("refused linked duplicate parent folder".into());
+        }
+        if parent == file.root {
+            break;
+        }
+        ancestor = parent.parent();
+    }
+    Ok(path)
 }
 
 pub(super) fn protected_system_roots() -> Vec<PathBuf> {

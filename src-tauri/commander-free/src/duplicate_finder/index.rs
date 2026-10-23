@@ -160,16 +160,20 @@ impl ScanIndex {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(|error| error.to_string())?;
-        let display = |(id, path, modified): (String, String, Option<String>)| DuplicateFile {
-            name: PathBuf::from(&path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Name unavailable")
-                .into(),
-            id,
-            path,
-            size,
-            modified,
+        let display = |(id, path, modified): (String, String, Option<String>)| {
+            let removable = !super::safety::is_inside_system_root(&PathBuf::from(&path));
+            DuplicateFile {
+                name: PathBuf::from(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Name unavailable")
+                    .into(),
+                id,
+                path,
+                size,
+                modified,
+                removable,
+            }
         };
         files.push(display(keeper));
         for row in statement

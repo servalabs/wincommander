@@ -153,6 +153,12 @@ export function useFileHygiene() {
     } catch (cause) { setError(String(cause)); }
   }, [backend, setError, tool]);
 
+  const openDuplicate = useCallback(async (fileId: string) => {
+    if (busy || !duplicateScan) return;
+    try { await backend.duplicateFinderOpen(duplicateScan.scanId, fileId); }
+    catch (cause) { setError(String(cause)); }
+  }, [backend, busy, duplicateScan, setError]);
+
   const select = useCallback((id: string) => {
     if (busy) return;
     if (tool === "duplicates" && !duplicateScan?.groups.some((group) => group.files.some((file) => file.id === id) && getRetainedFileId(group, keepPolicy, retainedFiles) !== id)) return;
@@ -174,7 +180,7 @@ export function useFileHygiene() {
 
   return {
     roots, tool, duplicateScan, emptyScan, selected, result, busy, error, scopeMode, progress, minimumSizeBytes, loadGroups, loadMembers,
-    chooseRoots, removeRoot, scan, remove, cancel, select, changeTool, keepPolicy,
+    chooseRoots, removeRoot, scan, remove, cancel, openDuplicate, select, changeTool, keepPolicy,
     retainedFileId: (group: NonNullable<DuplicateScan>["groups"][number]) => getRetainedFileId(group, keepPolicy, retainedFiles),
     keepFile: (groupId: string, fileId: string) => {
       if (busy) return;

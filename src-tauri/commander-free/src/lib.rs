@@ -2793,6 +2793,7 @@ pub fn run() {
             duplicate_finder::duplicate_finder_progress,
             duplicate_finder::duplicate_finder_page,
             duplicate_finder::duplicate_finder_group_page,
+            duplicate_finder::duplicate_finder_open,
             duplicate_finder::duplicate_finder_remove,
             duplicate_finder::duplicate_finder_cancel,
             empty_folder_cleaner::empty_folder_cleaner_scan,
