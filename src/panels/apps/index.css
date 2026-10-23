@@ -153,12 +153,18 @@
   min-height: 0;
 }
 
-/* The app panel can arrive before its inventory does.  Keep the review
-   surface stretched to the stage from that first paint: otherwise a loading
-   category rail can shrink the panel, then make it visibly jump wider when
-   Programs or an app detail becomes available. */
+.app-content:has(.apps-panel--debloat) .app-panel-stage {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* The app panel can arrive before its inventory does. Keep its single loading
+   surface stretched to the stage from its first paint, so it never starts as
+   a narrowed fragment and then jumps wider when records arrive. */
 .app-panel-stage > .apps-panel.apps-panel--debloat {
   align-self: stretch;
+  flex: 1 1 0;
+  height: auto;
   inline-size: 100%;
   max-inline-size: none;
 }
@@ -172,6 +178,10 @@
   min-height: 0;
   width: 100%;
   max-width: none;
+}
+
+.apps-panel--debloat .apps-panel-layout {
+  height: auto;
 }
 
 .apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
@@ -197,6 +207,7 @@
    still scroll only inside their results pane. */
 .apps-panel--debloat .application-review-workspace {
   min-height: 0;
+  flex: 1 1 0;
   align-self: stretch;
 }
 

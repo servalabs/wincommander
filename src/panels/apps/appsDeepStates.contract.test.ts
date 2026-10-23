@@ -25,10 +25,16 @@ describe("apps populated-state interaction contracts", () => {
   });
 
   test("debloat keeps long app lists and details inside its review workspace", () => {
+    const review = readFileSync("src/panels/apps/components/ApplicationReviewResults.tsx", "utf8");
     expect(appsPanel).toContain('apps-panel--debloat');
     expect(appsStyles).toContain('.apps-panel--debloat .application-review-results');
     expect(appsStyles).toContain('.apps-panel--debloat .application-review-detail');
     expect(appsStyles).toContain('.app-content:has(.apps-panel--debloat)');
+    expect(appsStyles).toContain('flex-direction: column;');
+    expect(appsStyles).toContain('flex: 1 1 0;');
+    expect(review).toContain('if (showInitialLoading)');
+    expect(review).toContain('application-review-workspace--loading');
+    expect(review).not.toContain('application-review-category-skeleton');
     expect(appsStyles).toContain('overflow-y: auto;');
   });
 

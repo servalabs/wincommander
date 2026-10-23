@@ -1,8 +1,8 @@
 .application-review-workspace { display: grid; grid-template-columns: minmax(180px, 24%) minmax(0, 1fr); inline-size: 100%; max-inline-size: none; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); min-height: 360px; }
-/* The review card has a fixed top control area, then should consume the
-   remaining window height.  This keeps a large display useful without pushing
-   the card below a smaller display's visible stage. */
-.apps-panel--debloat .application-review-workspace { block-size: min(760px, max(320px, calc(100dvh - 330px))); max-block-size: calc(100dvh - 210px); }
+/* Debloat's parent is a viewport-height flex stack. The card receives its
+   exact remaining space from that stack, so it expands on a tall window and
+   contracts safely on a short one without a viewport-height guess. */
+.apps-panel--debloat .application-review-workspace { min-block-size: 0; }
 .application-review-workspace--loading { display: flex; align-items: stretch; }
 .application-review-workspace--loading .application-review-empty { flex: 1; justify-content: center; }
 .application-review-categories { border-right: 1px solid var(--border); padding: 8px; background: var(--surface); }
@@ -44,5 +44,4 @@
 .application-review-workspace button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @keyframes application-review-shimmer { to { background-position: -200% 0; } }
 @media (max-width: 1000px) { .application-review-metadata { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-height: 720px) { .apps-panel--debloat .application-review-workspace { block-size: calc(100dvh - 340px); min-block-size: 260px; max-block-size: calc(100dvh - 210px); } }
 @media (max-width: 700px) { .application-review-workspace { grid-template-columns: 1fr; } .application-review-categories { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } .application-review-categories button { width: auto; flex-shrink: 0; } .application-review-category-skeleton { min-width: 132px; flex: 1; } .application-review-size { display: none; } .application-review-metadata { grid-template-columns: 1fr; } .application-review-metadata-location { grid-column: auto; } }
