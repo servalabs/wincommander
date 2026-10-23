@@ -409,7 +409,24 @@ pub(crate) async fn handle_connection(
             crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             continue;
         }
-        match authorize_with_interactive_session(
+        let authorization = if matches!(req.feature_id.as_str(),
+            "svc.managed_deployment.apply" | "svc.managed_deployment.status") {
+            let gate = Arc::clone(&session_helper_gate);
+            let verb = req.feature_id.clone();
+            let permitted_session = peer.as_deref().is_some_and(|peer| {
+                crate::peer_auth::deployment_session_is_permitted(
+                    peer.session_id(), wts_connect_state(peer.session_id()),
+                    peer.caller_sid() == "S-1-5-18",
+                )
+            });
+            match tokio::task::spawn_blocking(move || {
+                gate.authorize_deployment_relay(client_pid, &verb, permitted_session)
+            }).await {
+                Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                Err(_) => Err("managed deployment peer authorization unavailable".into()),
+            }
+        } else {
+            authorize_with_interactive_session(
             &req.feature_id,
             caller_privileged
                 || (vault_policy_manager && is_vault_management_verb(&req.feature_id)),
@@ -417,8 +434,9 @@ pub(crate) async fn handle_connection(
             client_pid,
             &session_helper_gate,
         )
-        .await
-        {
+            .await
+        };
+        match authorization {
             Err(reason) => {
                 let reply = Envelope::Error(ErrorReply {
                     request_id,
@@ -598,6 +616,12 @@ async fn dispatch_verb(
         "svc.get_settings" => Ok(settings_host::get_settings()),
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
+        "svc.managed_deployment.bind" => crate::managed_deployment::bind(args)
+            .await.map_err(|kind| VerbError::new(kind, kind)),
+        "svc.managed_deployment.apply" => crate::managed_deployment::apply(args, request_id)
+            .await.map_err(|kind| VerbError::new(kind, kind)),
+        "svc.managed_deployment.status" => crate::managed_deployment::status(args)
+            .await.map_err(|kind| VerbError::new(kind, kind)),
         "svc.bluetooth.policy.status" | "svc.bluetooth.policy.set_blocked" => {
             crate::bluetooth_control::handle(&feature_id, args, caller_privileged)
                 .await

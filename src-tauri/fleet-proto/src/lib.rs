@@ -15,6 +15,7 @@ use serde_json::Value;
 #[cfg(feature = "autonomous-test")]
 pub mod autonomous_test;
 pub mod checkin;
+mod deployment_digest;
 pub mod events;
 pub mod outcomes;
 pub mod policy;
@@ -22,6 +23,7 @@ pub mod policy;
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;
 pub use checkin::*;
+pub use deployment_digest::canonical_json_sha256;
 pub use events::*;
 pub use outcomes::*;
 pub use policy::*;
@@ -333,6 +335,12 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         action_class: ActionClass::Safe,
         summary: "Run an administrator-authorized metadata-only sensitive-file discovery",
         payload_schema: Some(r#"{"type":"object","properties":{"run_id":{"type":"string","maxLength":36}},"required":["run_id"],"additionalProperties":false}"#),
+    },
+    CommandMeta {
+        catalog_id: "managed_scanner.setup",
+        action_class: ActionClass::Destructive,
+        summary: "Install the approved managed discovery client",
+        payload_schema: Some(r#"{"type":"object","properties":{"setup_id":{"type":"string","maxLength":36},"device_id":{"type":"string","maxLength":36},"deployment_id":{"type":"string","maxLength":80},"bundle_sha256":{"type":"string","maxLength":64}},"required":["setup_id","device_id","deployment_id","bundle_sha256"],"additionalProperties":false}"#),
     },
     CommandMeta {
         catalog_id: "dns.cache.clear",

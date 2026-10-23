@@ -30,6 +30,8 @@ fn main() {
 #[cfg(windows)]
 mod personal_settings;
 mod settings_host;
+#[cfg(any(windows, test))]
+mod managed_deployment;
 
 #[cfg(windows)]
 mod license_cache;

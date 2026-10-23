@@ -100,7 +100,10 @@ pub const STORE_LICENSE_CACHE_VERB: &str = "svc.license.store_cache";
 pub fn is_known_verb(feature_id: &str) -> bool {
     matches!(
         feature_id,
-        "svc.status"
+        "svc.managed_deployment.bind"
+            | "svc.managed_deployment.apply"
+            | "svc.managed_deployment.status"
+            | "svc.status"
             | "svc.get_settings"
             | "svc.ping"
             | "svc.bluetooth.policy.status"
@@ -302,6 +305,9 @@ impl CapabilityClass {
 /// ```
 pub fn classify_verb(feature_id: &str) -> CapabilityClass {
     match feature_id {
+        "svc.managed_deployment.bind" => CapabilityClass::Privileged,
+        "svc.managed_deployment.apply" => CapabilityClass::SessionHelper,
+        "svc.managed_deployment.status" => CapabilityClass::SessionHelper,
         "svc.personal_settings.read" | "svc.personal_settings.write" => CapabilityClass::UserScoped,
         // A valid key may be entered by a standard interactive Windows user.
         // The service verifies the signed worker envelope and writes only the

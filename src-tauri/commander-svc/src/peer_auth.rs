@@ -123,6 +123,10 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+#[path = "peer_auth_deployment.rs"]
+mod deployment;
+pub(crate) use deployment::deployment_session_is_permitted;
+
 // ── Policy constants ─────────────────────────────────────────────────────
 
 /// Leaf filenames allowed to call in as a `SessionHelper`, all expected
