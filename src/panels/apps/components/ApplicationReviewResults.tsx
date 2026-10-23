@@ -40,25 +40,27 @@ export default function ApplicationReviewResults(props: Props) {
   const detailLocation = toExplorerDisplayPath(detail?.installLocation);
   const showInitialLoading = props.loading && props.initialLoading;
 
+  // The store and program inventories finish independently. Keep the first
+  // paint as one complete surface so a partial category rail never flashes
+  // beside an empty results area and then widens after records arrive.
+  if (showInitialLoading) {
+    return <div className="application-review-workspace application-review-workspace--loading" aria-busy="true">
+      <div className="application-review-empty"><Spinner size={20} /><p>Reading installed applications…</p></div>
+    </div>;
+  }
+
   return <div className="application-review-workspace">
     <nav className="application-review-categories" aria-label="Application categories">
-      {showInitialLoading ? <>
-        <div className="application-review-category-skeleton" aria-hidden="true" />
-        <div className="application-review-category-skeleton" aria-hidden="true" />
-        <div className="application-review-category-skeleton" aria-hidden="true" />
-      </> : <>
-        <button type="button" aria-current={!activeCategory ? "page" : undefined} onClick={() => setCategory(null)}><Icon icon="applications" /><span>All applications</span><strong>{allItems.length}</strong></button>
-        {props.groups.map(([name, items]) => <button type="button" key={name} aria-current={activeCategory === name ? "page" : undefined} onClick={() => setCategory(name)}><Icon icon={name === "Programs" ? "desktop" : "box"} /><span>{name}</span><strong>{items.length}</strong></button>)}
-        {!props.bcuInstalled && <button type="button" disabled={props.bcuInstalling || props.removing} onClick={props.onInstallBcu}><Icon icon="download" /><span>{props.bcuInstalling ? "Installing engine…" : "Install program inventory engine"}</span></button>}
-      </>}
+      <button type="button" aria-current={!activeCategory ? "page" : undefined} onClick={() => setCategory(null)}><Icon icon="applications" /><span>All applications</span><strong>{allItems.length}</strong></button>
+      {props.groups.map(([name, items]) => <button type="button" key={name} aria-current={activeCategory === name ? "page" : undefined} onClick={() => setCategory(name)}><Icon icon={name === "Programs" ? "desktop" : "box"} /><span>{name}</span><strong>{items.length}</strong></button>)}
+      {!props.bcuInstalled && <button type="button" disabled={props.bcuInstalling || props.removing} onClick={props.onInstallBcu}><Icon icon="download" /><span>{props.bcuInstalling ? "Installing engine…" : "Install program inventory engine"}</span></button>}
     </nav>
     <div className="application-review-main">
       <div className="application-review-results" aria-busy={props.loading}>
       {props.errors.store && <p role="alert" className="application-review-error">Store apps: {props.errors.store}</p>}
       {props.errors.programs && <p role="alert" className="application-review-error">Programs: {props.errors.programs}</p>}
-      {showInitialLoading && <div className="application-review-empty"><Spinner size={20} /><p>Reading installed applications…</p></div>}
-      {!showInitialLoading && !props.loading && !allItems.length && <p className="application-review-empty">No applications match the current filters.</p>}
-      {!showInitialLoading && groups.map(([name, items]) => <section key={name} aria-label={name}>
+      {!props.loading && !allItems.length && <p className="application-review-empty">No applications match the current filters.</p>}
+      {groups.map(([name, items]) => <section key={name} aria-label={name}>
         <header className="application-review-group"><strong>{name}</strong><button type="button" disabled={props.removing} onClick={() => props.onSelectGroup(name)}>Select category</button></header>
         {items.map(item => <div key={item.id} className={`application-review-row${props.selected.has(item.id) ? " is-selected" : ""}${detailId === item.id ? " is-inspected" : ""}`}>
           <input type="checkbox" checked={props.selected.has(item.id)} onChange={() => { props.onToggle(item.id); setDetailId(item.id); }} disabled={props.removing || !!item.removalUnavailable} aria-label={`Select ${item.label} for removal`} title={item.removalUnavailable} />

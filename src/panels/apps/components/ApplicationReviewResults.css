@@ -1,4 +1,6 @@
 .application-review-workspace { display: grid; grid-template-columns: minmax(180px, 24%) minmax(0, 1fr); inline-size: 100%; max-inline-size: none; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); min-height: 360px; }
+.application-review-workspace--loading { display: flex; align-items: stretch; min-height: min(620px, calc(100dvh - 405px)); }
+.application-review-workspace--loading .application-review-empty { flex: 1; justify-content: center; }
 .application-review-categories { border-right: 1px solid var(--border); padding: 8px; background: var(--surface); }
 .application-review-categories button { display: flex; align-items: center; gap: 9px; width: 100%; border: 1px solid transparent; border-radius: var(--r); padding: 12px 9px; color: var(--text-dim); text-align: left; font-size: 12px; }
 .application-review-categories button span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
