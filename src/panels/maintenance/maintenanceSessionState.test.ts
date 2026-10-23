@@ -100,9 +100,9 @@ test("maintenance exposes distinct workspaces with review and selection controls
   expect(css).toContain("position: sticky");
   expect(cleaner).toContain("<AlertDialog");
   expect(preview).toContain('aria-label="Filter cache targets"');
-  expect(preview).toContain('onClick={cleaner.clearSelection}');
-  expect(preview).toContain('onClick={cleaner.selectRecommended}');
-  expect(preview).toContain('disabled={isBusy || !selectedItems.length}');
+  expect(cleaner).toContain('onClick={cleaner.clearSelection}');
+  expect(cleaner).toContain('onClick={cleaner.selectRecommended}');
+  expect(cleaner).toContain('disabled={isRunning || !selectedItems.length}');
 });
 
 test("visible maintenance scan controls retain accessible action labels", async () => {

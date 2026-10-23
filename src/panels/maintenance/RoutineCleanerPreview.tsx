@@ -50,16 +50,15 @@ const CLEANUP_APP_ICON_FILES: Record<string, string> = {
   "Epic Games Launcher": "epic-games.svg",
 };
 
-export function RoutineCleanerPreview({ cleaner, onRequestClean }: { cleaner: RoutineCleaner; onRequestClean: () => void }) {
-  const { scan, selectedIds, selectedItems, operation } = cleaner;
+export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) {
+  const { scan, selectedIds, operation } = cleaner;
   const [activeCategory, setActiveCategory] = useState<string>();
   const [focusedId, setFocusedId] = useState<string>();
   const [query, setQuery] = useState("");
-  const groups = useMemo(() => getRoutineCleanerCategories(cleaner.scanScope === "projects" ? ["projects"] : [...new Set([...cleaner.categories, ...(scan?.items.map((item) => item.category) ?? [])])]).map((category) => ({ ...category, items: scan?.items.filter((item) => item.category === category.id) ?? [] })), [cleaner.categories, cleaner.scanScope, scan?.items]);
+  const groups = useMemo(() => getRoutineCleanerCategories([...new Set([...cleaner.categories, ...(scan?.items.map((item) => item.category) ?? [])])]).map((category) => ({ ...category, items: scan?.items.filter((item) => item.category === category.id) ?? [] })), [cleaner.categories, scan?.items]);
   const visibleCategory = groups.find((group) => group.id === activeCategory) ?? groups.find((group) => group.items.length) ?? groups[0];
   const visibleItems = (visibleCategory?.items ?? []).filter((item) => `${item.label} ${item.pathDisplay ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const focusedItem = visibleItems.find((item) => item.id === focusedId);
-  const selectedSizes = summarizeItems(selectedItems);
   const scanSizes = summarizeItems(scan?.items ?? []);
   const isBusy = operation !== "idle";
   const isCategorySelected = !!visibleCategory?.items.length && visibleCategory.items.every((item) => selectedIds.has(item.id));
@@ -67,8 +66,6 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: { cleaner: Ro
 
   return <div className="maintenance-cache-workspace">
     <div className="maintenance-findings-summary" role="status" aria-live="polite">
-      {cleaner.scanScope === "projects" && <Badge tone="neutral">Chosen project folder</Badge>}
-      {cleaner.scanScope === "projects" && scan.scanRoot && <span className="break-all text-xs text-[var(--text-dim)]" title={scan.scanRoot}>{scan.scanRoot}</span>}
       <span><strong>{scan.items.length}</strong> targets · <strong>{scan.totalFiles.toLocaleString()}</strong> file records in the scan</span>
       <span>Logical file size <strong className="text-[var(--accent)]">{formatBytes(scanSizes.logicalBytes)}</strong></span>
       {scanSizes.vacuumEstimateBytes > 0 && <span>Database optimization estimate <strong className="text-[var(--accent)]">{formatBytes(scanSizes.vacuumEstimateBytes)}</strong></span>}
@@ -100,10 +97,6 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: { cleaner: Ro
         </div>
       </section>
     </div>
-    <footer className="maintenance-selection-bar">
-      <div><strong>{selectedItems.length} targets selected</strong><span>{formatBytes(selectedSizes.logicalBytes)} logical file size{selectedSizes.vacuumEstimateBytes ? ` · ${formatBytes(selectedSizes.vacuumEstimateBytes)} estimated database reclaim` : ""}</span></div>
-      <div className="flex flex-wrap gap-2"><Button size="sm" variant="ghost" onClick={cleaner.clearSelection} disabled={isBusy || !selectedItems.length}>Clear</Button><Button size="sm" variant="outline" onClick={cleaner.selectRecommended} disabled={isBusy || !scan.items.length}>Select recommended</Button><Button size="sm" variant="primary" onClick={onRequestClean} disabled={isBusy || !selectedItems.length}><Icon icon="clean" /> Clean selected</Button></div>
-    </footer>
   </div>;
 }
 

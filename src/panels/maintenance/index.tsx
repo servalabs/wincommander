@@ -5,7 +5,7 @@ import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { SystemHygieneTools } from "./SystemHygieneTools";
 import { StartupDriverTools } from "./StartupDriverTools";
-import { AppBrowserCacheCard, RoutineCacheCleanupCard, WindowsStorageCard } from "./ReclaimSpaceCard";
+import { AppBrowserCacheCard, WindowsStorageCard } from "./ReclaimSpaceCard";
 import { FileHygieneTools } from "./FileHygieneTools";
 import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/MaintenanceWorkspaceNav";
 import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
@@ -114,8 +114,8 @@ function useMaintenanceReviewPreload() {
 function StorageAndFileTools({ windowsOpen, setWindowsOpen }: { windowsOpen: boolean; setWindowsOpen: (open: boolean) => void }) {
   return <div className="flex flex-col gap-4">
     <AppBrowserCacheCard />
-    <details className="maintenance-secondary-scope" open={windowsOpen} onToggle={(event) => setWindowsOpen(event.currentTarget.open)}><summary>Windows storage &amp; routine maintenance</summary>
-      <div className="flex flex-col gap-4 pt-4"><WindowsStorageCard /><RoutineCacheCleanupCard /></div>
+    <details className="maintenance-secondary-scope" open={windowsOpen} onToggle={(event) => setWindowsOpen(event.currentTarget.open)}><summary>Windows storage</summary>
+      <div className="pt-4"><WindowsStorageCard /></div>
     </details>
   </div>;
 }

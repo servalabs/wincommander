@@ -89,9 +89,10 @@ the backend and private component before execution.
   and credential tools.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
-- Explicit project-folder inspection through a native picker for supported
-  Cargo artifacts and JavaScript/Python caches. Project results are separate
-  from the ordinary cache scan and require manual selection.
+- Deep Cleanup scans supported application cache locations automatically;
+  selection totals and review actions sit beside the scan control. Windows
+  storage groups its additional cache tools separately. Browser history,
+  location traces, DNS and app activity remain in System Cleanup.
 - Disk analysis with synchronized folder results, treemap/sunburst charts,
   chart depth, navigation history, progress, and cancellation. Partial scans
   identify skipped entries and scan limits; charts show logical file sizes,

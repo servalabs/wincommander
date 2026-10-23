@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +20,7 @@ import { RoutineCleanerPreview } from "./RoutineCleanerPreview";
 import { CleanupReviewItems } from "./CleanupReviewItems";
 import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { type useRoutineCleaner } from "./useRoutineCleaner";
+import "./RoutineCleanerPanel.css";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
 
@@ -28,12 +29,11 @@ type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
  * because it is one scope inside the "Reclaim disk space" card — the caller
  * owns the heading and the categories.
  */
-export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[] }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
+export function RoutineCleanerPanel({ cleaner, categories: allowedCategories, confirmOpen, onConfirmOpenChange }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[]; confirmOpen: boolean; onConfirmOpenChange: (open: boolean) => void }) {
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
   const isRunning = operation !== "idle";
   const categoryOptions = getRoutineCleanerCategories(allowedCategories);
-  const scanLabel = scan && cleaner.scanScope !== "projects" ? "Rescan application caches" : "Scan application caches";
+  const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
   const selectedLogicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
   const selectedVacuumEstimate = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
   const reviewEntries = selectedItems.flatMap((item) => {
@@ -71,7 +71,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
   }, [result]);
 
   const runClean = async () => {
-    setConfirmOpen(false);
+    onConfirmOpenChange(false);
     await cleaner.cleanSelected();
   };
 
@@ -80,7 +80,6 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
       <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--r)] bg-[var(--surface-2)] p-1">
         {categoryOptions.map((category) => <Button size="sm" variant={categories.includes(category.id) ? "outline" : "ghost"} key={category.id} aria-pressed={categories.includes(category.id)} disabled={isRunning} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Button>)}
       </div>
-      <Button size="sm" variant="outline" onClick={() => void cleaner.scanProjects()} disabled={isRunning}><Icon icon="folder-open" /> Choose project folder</Button>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
     </div>
     {!scan && (
@@ -94,8 +93,8 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
     {operation === "cleaning" && <Card><CardContent className="flex items-center gap-3 py-4 text-sm text-[var(--text-dim)]"><Icon icon="clean" className="animate-spin text-[var(--accent)]" /> Cleaning selected items. You can cancel while the current target completes.</CardContent></Card>}
     {error && <ResultNotice tone="danger" title="Operation failed" message={error} />}
     {result && <CleanResult result={result} />}
-    <RoutineCleanerPreview cleaner={cleaner} onRequestClean={() => setConfirmOpen(true)} />
-    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+    <RoutineCleanerPreview cleaner={cleaner} />
+    <AlertDialog open={confirmOpen} onOpenChange={onConfirmOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Clean selected cache data?</AlertDialogTitle>
@@ -111,21 +110,32 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
 }
 
 /** The owning card renders this in its header so refresh remains fixed to the card edge. */
-export function RoutineCleanerHeaderActions({ cleaner }: { cleaner: RoutineCleaner }) {
-  const { categories, operation, scan } = cleaner;
+export function RoutineCleanerHeaderActions({ cleaner, onRequestClean }: { cleaner: RoutineCleaner; onRequestClean: () => void }) {
+  const { categories, operation, scan, selectedItems } = cleaner;
   const isRunning = operation !== "idle";
-  const scanLabel = scan && cleaner.scanScope !== "projects" ? "Rescan application caches" : "Scan application caches";
+  const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+  const logicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
+  const vacuumEstimateBytes = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-2">
-      {isRunning && (
-        <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation">
-          <Icon icon="stop" />
+    <div className="maintenance-cache-header-actions">
+      <div className="maintenance-cache-header-selection" role="status" aria-live="polite">
+        <strong>{selectedItems.length} targets selected</strong>
+        <span>{formatBytes(logicalBytes)} logical file size{vacuumEstimateBytes ? ` · ${formatBytes(vacuumEstimateBytes)} estimated database reclaim` : ""}</span>
+      </div>
+      <div className="maintenance-cache-header-buttons">
+        <Button size="sm" variant="ghost" onClick={cleaner.clearSelection} disabled={isRunning || !selectedItems.length}>Clear</Button>
+        <Button size="sm" variant="outline" onClick={cleaner.selectRecommended} disabled={isRunning || !scan?.items.length}>Select recommended</Button>
+        <Button size="sm" variant="primary" onClick={onRequestClean} disabled={isRunning || !selectedItems.length}><Icon icon="clean" /> Clean selected</Button>
+        {isRunning && (
+          <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation">
+            <Icon icon="stop" />
+          </Button>
+        )}
+        <Button size="icon" variant="outline" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={operation === "scanning" ? "Scanning application caches" : scanLabel} aria-label={operation === "scanning" ? "Scanning application caches" : scanLabel}>
+          <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
         </Button>
-      )}
-      <Button size="sm" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} /> {operation === "scanning" ? "Scanning…" : scan && cleaner.scanScope !== "projects" ? "Scan again" : "Scan caches"}
-      </Button>
+      </div>
     </div>
   );
 }
