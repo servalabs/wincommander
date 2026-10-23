@@ -1,21 +1,31 @@
 use super::{index::ScanIndex, safety, scope};
-use rusqlite::{params, OptionalExtension};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use rusqlite::params;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc, Arc, Mutex,
+};
 use std::time::{Instant, UNIX_EPOCH};
 
-const ENUMERATION_BATCH_SIZE: usize = 512;
+// A larger write batch turns a full-drive inventory into a few thousand SQLite
+// transactions instead of one transaction for every small folder.
+const ENUMERATION_BATCH_SIZE: usize = 4096;
+// The inventory pool persists for the whole scan. It keeps native directory
+// reads concurrent without creating a new operating-system thread per folder.
+const INVENTORY_WORKER_LIMIT: usize = 8;
 const HASH_WORKER_LIMIT: usize = 4;
-const CANDIDATE_BATCH_SIZE: i64 = 128;
 const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
-const SAMPLE_WINDOW_BYTES: u64 = 64 * 1024;
+// Samples only reject non-matches; full BLAKE3 still confirms every group.
+// Small start/middle/end windows avoid reading several gigabytes before full
+// hashing has narrowed the field.
+const SAMPLE_WINDOW_BYTES: u64 = 16 * 1024;
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 
 type CandidateRow = (i64, String, u64, Option<u32>, Option<String>);
+type DirectoryListing = Result<Vec<Result<InventoryEntry, (PathBuf, String)>>, String>;
 
 enum InventoryKind {
     Directory,
@@ -72,103 +82,160 @@ pub(super) fn enumerate(
 ) -> Result<(), String> {
     let protected = safety::protected_system_roots();
     let temporary = fs::canonicalize(index.directory.path()).map_err(|error| error.to_string())?;
-    while !cancelled.load(Ordering::Acquire) {
-        let pending: Option<(String, String)> = index
-            .connection
-            .query_row(
-                "SELECT path,root FROM directories WHERE done=0 LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        let Some((directory, root)) = pending else {
-            break;
-        };
-        index
-            .connection
-            .execute("UPDATE directories SET done=1 WHERE path=?1", [&directory])
-            .map_err(|error| error.to_string())?;
-        let directory = PathBuf::from(directory);
-        scope::update(|state| {
-            state.current_path = scope::display_path(&directory).unwrap_or_default()
-        });
-        if protected.iter().any(|path| directory.starts_with(path))
-            || directory.starts_with(&temporary)
-        {
-            scope::error(&directory, "Protected application/system scope excluded");
-            continue;
+    // The database is for file candidates and result paging. Keeping the
+    // traversal queue there made a large volume perform a read/write round trip
+    // for every folder. A single scan already owns this process, so retain the
+    // queue in memory and leave only the original roots in SQLite for auditability.
+    let roots = index
+        .connection
+        .prepare("SELECT path,root FROM directories ORDER BY rowid")
+        .map_err(|error| error.to_string())?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut pending = VecDeque::new();
+    let mut queued = HashSet::new();
+    for (path, root) in roots {
+        if queued.insert(path.clone()) {
+            pending.push_back((PathBuf::from(path), root));
         }
-        let metadata = match fs::symlink_metadata(&directory) {
-            Ok(meta) => meta,
-            Err(error) => {
-                scope::error(&directory, error);
-                continue;
-            }
-        };
-        if safety::is_link_or_reparse(&metadata) {
-            scope::update(|state| state.skipped_links += 1);
-            continue;
+    }
+    let mut files = Vec::new();
+    let mut discovered = 0usize;
+    let mut skipped_small = 0usize;
+    std::thread::scope(|worker_scope| -> Result<(), String> {
+        let (work_sender, work_receiver) =
+            mpsc::sync_channel::<(PathBuf, String)>(INVENTORY_WORKER_LIMIT);
+        let (result_sender, result_receiver) =
+            mpsc::channel::<(PathBuf, String, DirectoryListing)>();
+        let work_receiver = Arc::new(Mutex::new(work_receiver));
+        for _ in 0..INVENTORY_WORKER_LIMIT {
+            let result_sender = result_sender.clone();
+            let work_receiver = Arc::clone(&work_receiver);
+            worker_scope.spawn(move || loop {
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                let task = match work_receiver.lock() {
+                    Ok(receiver) => receiver.recv(),
+                    Err(_) => break,
+                };
+                let Ok((directory, root)) = task else {
+                    break;
+                };
+                let mut entries = Vec::new();
+                let result = enumerate_directory(&directory, cancelled, |entry| {
+                    entries.push(entry);
+                    Ok(())
+                })
+                .map(|()| entries);
+                if result_sender.send((directory, root, result)).is_err() {
+                    break;
+                }
+            });
         }
-        let mut directories = Vec::new();
-        let mut files = Vec::new();
-        let mut discovered = 0usize;
-        let enumerated = enumerate_directory(&directory, cancelled, |entry| {
+        drop(result_sender);
+
+        let mut active = 0usize;
+        loop {
             if cancelled.load(Ordering::Acquire) {
-                return Ok(());
+                break;
             }
-            match entry {
-                Err((path, error)) => scope::error(&path, error),
-                Ok(entry) => {
-                    if matches!(entry.kind, InventoryKind::Link) {
-                        scope::update(|state| state.skipped_links += 1);
-                        return Ok(());
+            while active < INVENTORY_WORKER_LIMIT {
+                let Some((directory, root)) = pending.pop_front() else {
+                    break;
+                };
+                if protected.iter().any(|path| directory.starts_with(path))
+                    || directory.starts_with(&temporary)
+                {
+                    scope::error(&directory, "Protected application/system scope excluded");
+                    continue;
+                }
+                let metadata = match fs::symlink_metadata(&directory) {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        scope::error(&directory, error);
+                        continue;
                     }
-                    let Some(display_path) = entry.path.to_str() else {
-                        scope::error(&directory, "An entry name cannot be decoded safely");
-                        return Ok(());
-                    };
-                    if matches!(entry.kind, InventoryKind::Directory) {
-                        directories.push(display_path.to_owned());
-                    } else if matches!(entry.kind, InventoryKind::File) {
-                        if entry.size < minimum_size_bytes {
-                            scope::update(|state| state.skipped_small_files += 1);
-                            return Ok(());
+                };
+                if safety::is_link_or_reparse(&metadata) {
+                    scope::update(|state| state.skipped_links += 1);
+                    continue;
+                }
+                work_sender
+                    .send((directory, root))
+                    .map_err(|_| "Duplicate inventory workers stopped unexpectedly")?;
+                active += 1;
+            }
+            if active == 0 {
+                break;
+            }
+            let (directory, root, enumerated) = result_receiver
+                .recv()
+                .map_err(|_| "Duplicate inventory workers stopped unexpectedly")?;
+            active -= 1;
+            scope::update(|state| {
+                state.current_path = scope::display_path(&directory).unwrap_or_default()
+            });
+            let entries = match enumerated {
+                Ok(entries) => entries,
+                Err(error) => {
+                    scope::error(&directory, error);
+                    continue;
+                }
+            };
+            for entry in entries {
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                match entry {
+                    Err((path, error)) => scope::error(&path, error),
+                    Ok(entry) => {
+                        if matches!(entry.kind, InventoryKind::Link) {
+                            scope::update(|state| state.skipped_links += 1);
+                            continue;
                         }
-                        if entry.size > i64::MAX as u64 {
-                            scope::error(&entry.path, "File size exceeds supported range");
-                            return Ok(());
+                        let Some(display_path) = entry.path.to_str() else {
+                            scope::error(&directory, "An entry name cannot be decoded safely");
+                            continue;
+                        };
+                        if matches!(entry.kind, InventoryKind::Directory) {
+                            if queued.insert(display_path.to_owned()) {
+                                pending.push_back((entry.path, root.clone()));
+                            }
+                        } else if matches!(entry.kind, InventoryKind::File) {
+                            if entry.size < minimum_size_bytes {
+                                skipped_small += 1;
+                                continue;
+                            }
+                            if entry.size > i64::MAX as u64 {
+                                scope::error(&entry.path, "File size exceeds supported range");
+                                continue;
+                            }
+                            files.push((display_path.to_owned(), root.clone(), entry.size as i64));
                         }
-                        files.push((
-                            display_path.to_owned(),
-                            entry.size as i64,
-                            // Collecting a stable Windows identity opens a handle. Most files have no
-                            // same-size peer and cannot be duplicates, so defer that work until the
-                            // candidate stage. The prefix cannot collide with a real volume:file key.
-                            format!("path:{display_path}"),
-                            None,
-                            None,
-                        ));
                     }
                 }
+                if files.len() >= ENUMERATION_BATCH_SIZE {
+                    discovered += flush_file_batch(index, &mut files)?;
+                    scope::update(|state| state.scanned_files += discovered);
+                    discovered = 0;
+                }
             }
-            if directories.len() + files.len() >= ENUMERATION_BATCH_SIZE {
-                discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
-                scope::update(|state| {
-                    state.current_path = scope::display_path(&directory).unwrap_or_default();
-                    state.scanned_files += discovered;
-                });
-                discovered = 0;
+            if skipped_small > 0 {
+                scope::update(|state| state.skipped_small_files += skipped_small);
+                skipped_small = 0;
             }
-            Ok(())
-        });
-        if let Err(error) = enumerated {
-            scope::error(&directory, error);
         }
-        discovered += flush_enumeration_batch(index, &root, &mut directories, &mut files)?;
-        if discovered > 0 {
-            scope::update(|state| state.scanned_files += discovered);
-        }
+        drop(work_sender);
+        Ok(())
+    })?;
+    discovered += flush_file_batch(index, &mut files)?;
+    if discovered > 0 {
+        scope::update(|state| state.scanned_files += discovered);
     }
     Ok(())
 }
@@ -328,37 +395,25 @@ fn enumerate_directory(
     }
 }
 
-fn flush_enumeration_batch(
+fn flush_file_batch(
     index: &ScanIndex,
-    root: &str,
-    directories: &mut Vec<String>,
-    files: &mut Vec<(String, i64, String, Option<u32>, Option<String>)>,
+    files: &mut Vec<(String, String, i64)>,
 ) -> Result<usize, String> {
-    if directories.is_empty() && files.is_empty() {
+    if files.is_empty() {
         return Ok(0);
     }
     let transaction = index
         .connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
-    {
-        let mut insert_directory = transaction
-            .prepare("INSERT OR IGNORE INTO directories(path,root) VALUES(?1,?2)")
-            .map_err(|error| error.to_string())?;
-        for path in directories.drain(..) {
-            insert_directory
-                .execute(params![path, root])
-                .map_err(|error| error.to_string())?;
-        }
-    }
     let mut inserted = 0usize;
     {
         let mut insert_file = transaction
-            .prepare("INSERT OR IGNORE INTO files(id,path,root,size,identity,volume,file_index) VALUES(lower(hex(randomblob(16))),?1,?2,?3,?4,?5,?6)")
+            .prepare("INSERT OR IGNORE INTO files(id,path,root,size) VALUES(lower(hex(randomblob(16))),?1,?2,?3)")
             .map_err(|error| error.to_string())?;
-        for (path, size, identity, volume, file_index) in files.drain(..) {
+        for (path, root, size) in files.drain(..) {
             inserted += insert_file
-                .execute(params![path, root, size, identity, volume, file_index])
+                .execute(params![path, root, size])
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -387,11 +442,11 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
             "DELETE FROM candidates WHERE file_row NOT IN (
             SELECT f.rowid FROM files f
             JOIN candidates c ON f.rowid=c.file_row
-            WHERE f.sample_hash IN (
-                SELECT sampled.sample_hash FROM files sampled
+            WHERE (f.size, f.sample_hash) IN (
+                SELECT sampled.size, sampled.sample_hash FROM files sampled
                 JOIN candidates candidate ON sampled.rowid=candidate.file_row
                 WHERE length(sampled.sample_hash)=32
-                GROUP BY sampled.sample_hash HAVING count(*)>1
+                GROUP BY sampled.size, sampled.sample_hash HAVING count(*)>1
             )
         );",
         )
@@ -403,57 +458,55 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
         })
         .map_err(|error| error.to_string())?;
     scope::update(|state| state.candidate_files = verified_total);
-    let mut cursor = 0i64;
-    while !cancelled.load(Ordering::Acquire) {
-        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2").map_err(|error| error.to_string())?;
-        let batch = statement
-            .query_map(params![cursor, CANDIDATE_BATCH_SIZE], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    super::index::unsigned(row, 2)?,
-                    row.get::<_, Option<u32>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        if batch.is_empty() {
+    let candidates = candidate_rows(index)?;
+    let results = hash_candidate_batch(&candidates, cancelled)?;
+    let transaction = index
+        .connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let mut update = transaction
+        .prepare("UPDATE files SET hash=?1,modified=?2 WHERE rowid=?3")
+        .map_err(|error| error.to_string())?;
+    for (row, path, result) in results {
+        if cancelled.load(Ordering::Acquire) {
             break;
         }
-        if let Some((_, path, _, _, _)) = batch.first() {
-            let path = PathBuf::from(path);
-            scope::update(|state| {
-                state.current_path = scope::display_path(&path).unwrap_or_default()
-            });
-        }
-        for (row, path, result) in hash_candidate_batch(&batch, cancelled)? {
-            if cancelled.load(Ordering::Acquire) {
-                break;
+        let path = PathBuf::from(path);
+        scope::update(|state| state.current_path = scope::display_path(&path).unwrap_or_default());
+        match result {
+            Ok((hash, modified)) => {
+                update
+                    .execute(params![hash.as_slice(), modified, row])
+                    .map_err(|error| error.to_string())?;
             }
-            cursor = row;
-            let path = PathBuf::from(path);
-            scope::update(|state| {
-                state.current_path = scope::display_path(&path).unwrap_or_default()
-            });
-            match result {
-                Ok((hash, modified)) => {
-                    index
-                        .connection
-                        .execute(
-                            "UPDATE files SET hash=?1,modified=?2 WHERE rowid=?3",
-                            params![hash.as_slice(), modified, row],
-                        )
-                        .map_err(|error| error.to_string())?;
-                }
-                Err(error) if !cancelled.load(Ordering::Acquire) => scope::error(&path, error),
-                Err(_) => {}
-            }
-            scope::update(|state| state.hashed_files += 1);
+            Err(error) => scope::error(&path, error),
         }
+        scope::update(|state| state.hashed_files += 1);
     }
+    drop(update);
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn candidate_rows(index: &ScanIndex) -> Result<Vec<CandidateRow>, String> {
+    let mut statement = index
+        .connection
+        .prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row ORDER BY f.rowid")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                super::index::unsigned(row, 2)?,
+                row.get::<_, Option<u32>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
 }
 
 /// Resolves file identities only after the cheap size filter. This keeps hard-link aliases from
@@ -465,11 +518,11 @@ fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Re
         let mut statement = index
             .connection
             .prepare(
-                "SELECT f.rowid,f.path FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128",
+                "SELECT f.rowid,f.path FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2",
             )
             .map_err(|error| error.to_string())?;
         let batch = statement
-            .query_map([cursor], |row| {
+            .query_map(params![cursor, 512], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|error| error.to_string())?
@@ -478,7 +531,7 @@ fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Re
         if batch.is_empty() {
             break;
         }
-        for (row, path) in batch {
+        for (row, path, identity) in resolve_candidate_identity_batch(&batch, cancelled)? {
             if cancelled.load(Ordering::Acquire) {
                 break;
             }
@@ -487,7 +540,6 @@ fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Re
             scope::update(|state| {
                 state.current_path = scope::display_path(&path).unwrap_or_default()
             });
-            let identity = crate::routine_cleaner::file_identity(&path);
             if cfg!(windows) && identity.is_none() {
                 index
                     .connection
@@ -527,62 +579,81 @@ fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Re
     Ok(())
 }
 
-fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
-    let mut cursor = 0i64;
-    while !cancelled.load(Ordering::Acquire) {
-        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2").map_err(|error| error.to_string())?;
-        let batch = statement
-            .query_map(params![cursor, CANDIDATE_BATCH_SIZE], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    super::index::unsigned(row, 2)?,
-                    row.get::<_, Option<u32>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
+/// Stable identities are required only for same-size candidates, but opening
+/// those files one at a time dominated full-drive scans. Read identities in the
+/// same bounded worker shape used for sample and full-content verification;
+/// the SQLite candidate updates stay on this caller thread.
+fn resolve_candidate_identity_batch(
+    batch: &[(i64, String)],
+    cancelled: &AtomicBool,
+) -> Result<Vec<(i64, String, Option<(u32, u64)>)>, String> {
+    if batch.is_empty() {
+        return Ok(Vec::new());
+    }
+    let worker_count = batch.len().min(HASH_WORKER_LIMIT);
+    let chunk_size = batch.len().div_ceil(worker_count);
+    std::thread::scope(|scope| {
+        let handles = batch
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|(row, path)| {
+                            let identity = (!cancelled.load(Ordering::Acquire))
+                                .then(|| crate::routine_cleaner::file_identity(Path::new(path)))
+                                .flatten();
+                            (*row, path.clone(), identity)
+                        })
+                        .collect::<Vec<_>>()
+                })
             })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        if batch.is_empty() {
+            .collect::<Vec<_>>();
+        let mut results = Vec::with_capacity(batch.len());
+        for handle in handles {
+            results.extend(
+                handle
+                    .join()
+                    .map_err(|_| "Duplicate identity worker failed".to_string())?,
+            );
+        }
+        Ok(results)
+    })
+}
+
+fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
+    let candidates = candidate_rows(index)?;
+    let results = sample_candidate_batch(&candidates, cancelled)?;
+    let transaction = index
+        .connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    let mut update = transaction
+        .prepare("UPDATE files SET sample_hash=?1 WHERE rowid=?2")
+        .map_err(|error| error.to_string())?;
+    for (row, path, result) in results {
+        if cancelled.load(Ordering::Acquire) {
             break;
         }
-        if let Some((_, path, _, _, _)) = batch.first() {
-            let path = PathBuf::from(path);
-            scope::update(|state| {
-                state.current_path = scope::display_path(&path).unwrap_or_default()
-            });
-        }
-        for (row, path, result) in sample_candidate_batch(&batch, cancelled)? {
-            if cancelled.load(Ordering::Acquire) {
-                break;
+        let path = PathBuf::from(path);
+        scope::update(|state| state.current_path = scope::display_path(&path).unwrap_or_default());
+        match result {
+            Ok(sample_hash) => {
+                update
+                    .execute(params![sample_hash.as_slice(), row])
+                    .map_err(|error| error.to_string())?;
             }
-            cursor = row;
-            let path = PathBuf::from(path);
-            scope::update(|state| {
-                state.current_path = scope::display_path(&path).unwrap_or_default()
-            });
-            match result {
-                Ok(sample_hash) => {
-                    index
-                        .connection
-                        .execute(
-                            "UPDATE files SET sample_hash=?1 WHERE rowid=?2",
-                            params![sample_hash.as_slice(), row],
-                        )
-                        .map_err(|error| error.to_string())?;
-                }
-                Err(error) if !cancelled.load(Ordering::Acquire) => scope::error(&path, error),
-                Err(_) => {}
-            }
+            Err(error) => scope::error(&path, error),
         }
     }
+    drop(update);
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
 
-/// Reads at most four unrelated candidate files at once. The caller applies every database
-/// result after the workers finish, so SQLite remains single-writer and result ordering stays
-/// deterministic. Each worker still verifies the opened handle before reading content.
+/// Runs a fixed set of content workers for the whole candidate set. The caller
+/// remains the only SQLite writer, while workers take the next file dynamically
+/// so a few large files cannot leave the other workers idle.
 fn process_candidate_batch<T: Send, F>(
     batch: &[CandidateRow],
     cancelled: &AtomicBool,
@@ -595,41 +666,50 @@ where
         return Ok(Vec::new());
     }
     let worker_count = batch.len().min(HASH_WORKER_LIMIT);
-    let chunk_size = batch.len().div_ceil(worker_count);
     std::thread::scope(|scope| {
-        let handles = batch
-            .chunks(chunk_size)
-            .map(|chunk| {
+        let next = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = mpsc::sync_channel(worker_count.saturating_mul(2));
+        let handles = (0..worker_count)
+            .map(|_| {
+                let sender = sender.clone();
                 let process = &process;
+                let next = Arc::clone(&next);
                 scope.spawn(move || {
                     let mut buffer = vec![0; HASH_BUFFER_BYTES];
-                    chunk
-                        .iter()
-                        .map(|(row, path, size, volume, file_index)| {
-                            let identity = volume.zip(
-                                file_index
-                                    .as_ref()
-                                    .and_then(|value| value.parse::<u64>().ok()),
-                            );
-                            let result = if cancelled.load(Ordering::Acquire) {
-                                Err("cancelled".into())
-                            } else {
-                                process(Path::new(path), *size, identity, cancelled, &mut buffer)
-                            };
-                            (*row, path.clone(), result)
-                        })
-                        .collect::<Vec<_>>()
+                    loop {
+                        let position = next.fetch_add(1, Ordering::AcqRel);
+                        let Some((row, path, size, volume, file_index)) = batch.get(position)
+                        else {
+                            break;
+                        };
+                        let identity = volume.zip(
+                            file_index
+                                .as_ref()
+                                .and_then(|value| value.parse::<u64>().ok()),
+                        );
+                        let result = if cancelled.load(Ordering::Acquire) {
+                            Err("cancelled".into())
+                        } else {
+                            process(Path::new(path), *size, identity, cancelled, &mut buffer)
+                        };
+                        if sender.send((*row, path.clone(), result)).is_err() {
+                            break;
+                        }
+                    }
                 })
             })
             .collect::<Vec<_>>();
+        drop(sender);
         let mut results = Vec::with_capacity(batch.len());
-        for handle in handles {
-            results.extend(
-                handle
-                    .join()
-                    .map_err(|_| "Duplicate hashing worker failed".to_string())?,
-            );
+        while let Ok(result) = receiver.recv() {
+            results.push(result);
         }
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| "Duplicate hashing worker failed".to_string())?;
+        }
+        results.sort_by_key(|(row, _, _)| *row);
         Ok(results)
     })
 }
@@ -667,7 +747,7 @@ fn sample_candidate_with_buffer(
     {
         return Err("File handle identity changed before content comparison".into());
     }
-    let mut hasher = Sha256::new();
+    let mut hasher = blake3::Hasher::new();
     if size <= SAMPLE_WINDOW_BYTES.saturating_mul(3) {
         if read_hash_segment(&mut file, &mut hasher, size, cancelled, buffer)? != size {
             return Err("File changed during content comparison".into());
@@ -720,7 +800,7 @@ fn sample_candidate_with_buffer(
     {
         return Err("File changed during content comparison".into());
     }
-    Ok(hasher.finalize().into())
+    Ok(*hasher.finalize().as_bytes())
 }
 
 fn hash_candidate_with_buffer(
@@ -776,14 +856,14 @@ fn hash_reader_with_buffer(
     cancelled: &AtomicBool,
     buffer: &mut [u8],
 ) -> Result<[u8; 32], String> {
-    let mut hasher = Sha256::new();
+    let mut hasher = blake3::Hasher::new();
     read_hash_segment(reader, &mut hasher, u64::MAX, cancelled, buffer)?;
-    Ok(hasher.finalize().into())
+    Ok(*hasher.finalize().as_bytes())
 }
 
 fn read_hash_segment(
     reader: &mut impl Read,
-    hasher: &mut Sha256,
+    hasher: &mut blake3::Hasher,
     mut remaining: u64,
     cancelled: &AtomicBool,
     buffer: &mut [u8],

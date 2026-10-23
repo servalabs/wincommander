@@ -125,7 +125,7 @@ export function FileHygieneTools() {
             <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Select duplicate copies on this page" : "Select all empty folders"}</Button>
             <Button size="sm" variant="ghost" disabled={tools.busy || !tools.selected.size} onClick={tools.clearSelection}>Clear selection</Button>
           </div>}
-          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Contents are verified with SHA-256. Files below {formatBytes(tools.duplicateScan?.minimumSizeBytes ?? tools.minimumSizeBytes)} are intentionally excluded; choose Any size to include them. The full eligible scope is indexed without a file-count cap; results are paged at 100 groups and 200 additional copies per group. Page changes clear selections. Potential duplicate data is logical size, not measured free space.</p>}
+          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Contents are verified with a full cryptographic content hash. Files below {formatBytes(tools.duplicateScan?.minimumSizeBytes ?? tools.minimumSizeBytes)} are intentionally excluded; choose Any size to include them. The full eligible scope is indexed without a file-count cap; results are paged at 100 groups and 200 additional copies per group. Page changes clear selections. Potential duplicate data is logical size, not measured free space.</p>}
           {/* Exactly one scan entry point per state: none of these four
               branches can render at the same time as another. */}
           {!tools.roots.length && (tools.tool === "empty" || tools.scopeMode === "folders") && (
