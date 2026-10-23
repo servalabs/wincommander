@@ -18,7 +18,7 @@ fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
         .connection
         .execute("INSERT INTO directories(path,root) VALUES(?1,?1)", [path])
         .unwrap();
-    scan::enumerate(&index, &AtomicBool::new(false)).unwrap();
+    scan::enumerate(&index, 0, &AtomicBool::new(false)).unwrap();
     let files: i64 = index
         .connection
         .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
@@ -45,7 +45,7 @@ fn batched_inventory_keeps_every_file_and_nested_folder() {
         .execute("INSERT INTO directories(path,root) VALUES(?1,?1)", [path])
         .unwrap();
 
-    scan::enumerate(&index, &AtomicBool::new(false)).unwrap();
+    scan::enumerate(&index, 0, &AtomicBool::new(false)).unwrap();
 
     let files: i64 = index
         .connection
@@ -80,8 +80,29 @@ fn scan_fixture(
 
 fn fixture_index(roots: &[PathBuf], cancelled: &AtomicBool) -> index::ScanIndex {
     let _serial = SERIAL.lock().unwrap();
-    scope::begin(roots, Vec::new());
-    scan::scan_roots(roots, cancelled).unwrap()
+    scope::begin(roots, Vec::new(), 0);
+    scan::scan_roots(roots, 0, cancelled).unwrap()
+}
+
+#[test]
+fn broad_scan_minimum_excludes_small_files_without_counting_them_as_errors() {
+    let _serial = SERIAL.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("small-a"), b"same").unwrap();
+    std::fs::write(root.path().join("small-b"), b"same").unwrap();
+    let large = vec![7u8; DEFAULT_MINIMUM_SIZE_BYTES as usize];
+    std::fs::write(root.path().join("large-a"), &large).unwrap();
+    std::fs::write(root.path().join("large-b"), &large).unwrap();
+    let roots = [std::fs::canonicalize(root.path()).unwrap()];
+    scope::begin(&roots, Vec::new(), DEFAULT_MINIMUM_SIZE_BYTES);
+    let index =
+        scan::scan_roots(&roots, DEFAULT_MINIMUM_SIZE_BYTES, &AtomicBool::new(false)).unwrap();
+    let eligible: i64 = index
+        .connection
+        .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(eligible, 2);
+    assert_eq!(index.page(0).unwrap().groups.len(), 1);
 }
 
 #[test]
@@ -99,6 +120,23 @@ fn hashes_after_size_candidates_and_keeps_one() {
     let members = groups.values().next().unwrap();
     assert_eq!(members.len(), 2);
     assert_eq!(files.len(), 2);
+}
+
+#[test]
+fn duplicate_rows_expose_the_verified_modified_time_for_retention_review() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"same").unwrap();
+    std::fs::write(dir.path().join("b"), b"same").unwrap();
+
+    let (scan, _, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+
+    assert!(scan.groups[0].files.iter().all(|file| file
+        .modified
+        .as_deref()
+        .is_some_and(|value| value.parse::<u128>().is_ok())));
 }
 
 #[test]
@@ -120,7 +158,7 @@ fn only_full_hashes_same_size_files_with_matching_content_samples() {
 #[test]
 fn full_hash_rejects_files_that_match_only_at_the_sampled_edges() {
     let dir = tempfile::tempdir().unwrap();
-    let first = vec![7u8; 256 * 1024];
+    let first = vec![7u8; 512 * 1024];
     let mut second = first.clone();
     second[128 * 1024] = 9;
     std::fs::write(dir.path().join("a"), first).unwrap();
@@ -131,6 +169,29 @@ fn full_hash_rejects_files_that_match_only_at_the_sampled_edges() {
     );
     assert!(scan.groups.is_empty());
     assert_eq!(scan.hashed_files, 2);
+}
+
+#[test]
+fn parallel_candidate_batches_keep_full_hash_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let duplicate = vec![7u8; 256 * 1024];
+    for index in 0..4 {
+        std::fs::write(dir.path().join(format!("copy-{index}")), &duplicate).unwrap();
+    }
+    for index in 0..4 {
+        let mut sampled_match = duplicate.clone();
+        sampled_match[64 * 1024 + index] = index as u8;
+        std::fs::write(dir.path().join(format!("different-{index}")), sampled_match).unwrap();
+    }
+
+    let (scan, _, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+
+    assert_eq!(scan.groups.len(), 1);
+    assert_eq!(scan.groups[0].files.len(), 4);
+    assert_eq!(scan.hashed_files, 8);
 }
 
 #[test]

@@ -9,8 +9,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
 
 const ENUMERATION_BATCH_SIZE: usize = 512;
+const HASH_WORKER_LIMIT: usize = 4;
+const CANDIDATE_BATCH_SIZE: i64 = 128;
 const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const SAMPLE_WINDOW_BYTES: u64 = 64 * 1024;
+const HASH_BUFFER_BYTES: usize = 1024 * 1024;
+
+type CandidateRow = (i64, String, u64, Option<u32>, Option<String>);
 
 enum InventoryKind {
     Directory,
@@ -26,7 +31,11 @@ struct InventoryEntry {
     size: u64,
 }
 
-pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<ScanIndex, String> {
+pub(super) fn scan_roots(
+    roots: &[PathBuf],
+    minimum_size_bytes: u64,
+    cancelled: &AtomicBool,
+) -> Result<ScanIndex, String> {
     let mut index = ScanIndex::new()?;
     for root in roots {
         let root = root
@@ -40,7 +49,7 @@ pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<Sc
             )
             .map_err(|error| error.to_string())?;
     }
-    enumerate(&index, cancelled)?;
+    enumerate(&index, minimum_size_bytes, cancelled)?;
     if !cancelled.load(Ordering::Acquire) {
         hash_candidates(&index, cancelled)?;
     }
@@ -56,7 +65,11 @@ pub(super) fn scan_roots(roots: &[PathBuf], cancelled: &AtomicBool) -> Result<Sc
     Ok(index)
 }
 
-pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
+pub(super) fn enumerate(
+    index: &ScanIndex,
+    minimum_size_bytes: u64,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
     let protected = safety::protected_system_roots();
     let temporary = fs::canonicalize(index.directory.path()).map_err(|error| error.to_string())?;
     while !cancelled.load(Ordering::Acquire) {
@@ -118,6 +131,10 @@ pub(super) fn enumerate(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(),
                     if matches!(entry.kind, InventoryKind::Directory) {
                         directories.push(display_path.to_owned());
                     } else if matches!(entry.kind, InventoryKind::File) {
+                        if entry.size < minimum_size_bytes {
+                            scope::update(|state| state.skipped_small_files += 1);
+                            return Ok(());
+                        }
                         if entry.size > i64::MAX as u64 {
                             scope::error(&entry.path, "File size exceeds supported range");
                             return Ok(());
@@ -388,9 +405,9 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
     scope::update(|state| state.candidate_files = verified_total);
     let mut cursor = 0i64;
     while !cancelled.load(Ordering::Acquire) {
-        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128").map_err(|error| error.to_string())?;
+        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2").map_err(|error| error.to_string())?;
         let batch = statement
-            .query_map([cursor], |row| {
+            .query_map(params![cursor, CANDIDATE_BATCH_SIZE], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -405,7 +422,13 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
         if batch.is_empty() {
             break;
         }
-        for (row, path, size, volume, file_index) in batch {
+        if let Some((_, path, _, _, _)) = batch.first() {
+            let path = PathBuf::from(path);
+            scope::update(|state| {
+                state.current_path = scope::display_path(&path).unwrap_or_default()
+            });
+        }
+        for (row, path, result) in hash_candidate_batch(&batch, cancelled)? {
             if cancelled.load(Ordering::Acquire) {
                 break;
             }
@@ -414,8 +437,7 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
             scope::update(|state| {
                 state.current_path = scope::display_path(&path).unwrap_or_default()
             });
-            let identity = volume.zip(file_index.and_then(|value| value.parse::<u64>().ok()));
-            match hash_candidate(&path, size, identity, cancelled) {
+            match result {
                 Ok((hash, modified)) => {
                     index
                         .connection
@@ -508,9 +530,9 @@ fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Re
 fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
     let mut cursor = 0i64;
     while !cancelled.load(Ordering::Acquire) {
-        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT 128").map_err(|error| error.to_string())?;
+        let mut statement = index.connection.prepare("SELECT f.rowid,f.path,f.size,f.volume,f.file_index FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2").map_err(|error| error.to_string())?;
         let batch = statement
-            .query_map([cursor], |row| {
+            .query_map(params![cursor, CANDIDATE_BATCH_SIZE], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
@@ -525,7 +547,13 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
         if batch.is_empty() {
             break;
         }
-        for (row, path, size, volume, file_index) in batch {
+        if let Some((_, path, _, _, _)) = batch.first() {
+            let path = PathBuf::from(path);
+            scope::update(|state| {
+                state.current_path = scope::display_path(&path).unwrap_or_default()
+            });
+        }
+        for (row, path, result) in sample_candidate_batch(&batch, cancelled)? {
             if cancelled.load(Ordering::Acquire) {
                 break;
             }
@@ -534,8 +562,7 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
             scope::update(|state| {
                 state.current_path = scope::display_path(&path).unwrap_or_default()
             });
-            let identity = volume.zip(file_index.and_then(|value| value.parse::<u64>().ok()));
-            match sample_candidate(&path, size, identity, cancelled) {
+            match result {
                 Ok(sample_hash) => {
                     index
                         .connection
@@ -553,11 +580,80 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
     Ok(())
 }
 
-fn sample_candidate(
+/// Reads at most four unrelated candidate files at once. The caller applies every database
+/// result after the workers finish, so SQLite remains single-writer and result ordering stays
+/// deterministic. Each worker still verifies the opened handle before reading content.
+fn process_candidate_batch<T: Send, F>(
+    batch: &[CandidateRow],
+    cancelled: &AtomicBool,
+    process: F,
+) -> Result<Vec<(i64, String, Result<T, String>)>, String>
+where
+    F: Fn(&Path, u64, Option<(u32, u64)>, &AtomicBool, &mut [u8]) -> Result<T, String> + Sync,
+{
+    if batch.is_empty() {
+        return Ok(Vec::new());
+    }
+    let worker_count = batch.len().min(HASH_WORKER_LIMIT);
+    let chunk_size = batch.len().div_ceil(worker_count);
+    std::thread::scope(|scope| {
+        let handles = batch
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let process = &process;
+                scope.spawn(move || {
+                    let mut buffer = vec![0; HASH_BUFFER_BYTES];
+                    chunk
+                        .iter()
+                        .map(|(row, path, size, volume, file_index)| {
+                            let identity = volume.zip(
+                                file_index
+                                    .as_ref()
+                                    .and_then(|value| value.parse::<u64>().ok()),
+                            );
+                            let result = if cancelled.load(Ordering::Acquire) {
+                                Err("cancelled".into())
+                            } else {
+                                process(Path::new(path), *size, identity, cancelled, &mut buffer)
+                            };
+                            (*row, path.clone(), result)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut results = Vec::with_capacity(batch.len());
+        for handle in handles {
+            results.extend(
+                handle
+                    .join()
+                    .map_err(|_| "Duplicate hashing worker failed".to_string())?,
+            );
+        }
+        Ok(results)
+    })
+}
+
+fn sample_candidate_batch(
+    batch: &[CandidateRow],
+    cancelled: &AtomicBool,
+) -> Result<Vec<(i64, String, Result<[u8; 32], String>)>, String> {
+    process_candidate_batch(batch, cancelled, sample_candidate_with_buffer)
+}
+
+fn hash_candidate_batch(
+    batch: &[CandidateRow],
+    cancelled: &AtomicBool,
+) -> Result<Vec<(i64, String, Result<([u8; 32], Option<String>), String>)>, String> {
+    process_candidate_batch(batch, cancelled, hash_candidate_with_buffer)
+}
+
+fn sample_candidate_with_buffer(
     path: &Path,
     size: u64,
     identity: Option<(u32, u64)>,
     cancelled: &AtomicBool,
+    buffer: &mut [u8],
 ) -> Result<[u8; 32], String> {
     let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !before.is_file() || safety::is_link_or_reparse(&before) || before.len() != size {
@@ -572,20 +668,42 @@ fn sample_candidate(
         return Err("File handle identity changed before content comparison".into());
     }
     let mut hasher = Sha256::new();
-    let first = size.min(SAMPLE_WINDOW_BYTES);
-    if read_hash_segment(&mut file, &mut hasher, first, cancelled)? != first {
-        return Err("File changed during content comparison".into());
-    }
-    if size <= SAMPLE_WINDOW_BYTES.saturating_mul(2) {
-        let remaining = size.saturating_sub(first);
-        if read_hash_segment(&mut file, &mut hasher, remaining, cancelled)? != remaining {
+    if size <= SAMPLE_WINDOW_BYTES.saturating_mul(3) {
+        if read_hash_segment(&mut file, &mut hasher, size, cancelled, buffer)? != size {
             return Err("File changed during content comparison".into());
         }
-    } else {
+    } else if read_hash_segment(
+        &mut file,
+        &mut hasher,
+        SAMPLE_WINDOW_BYTES,
+        cancelled,
+        buffer,
+    )? != SAMPLE_WINDOW_BYTES
+    {
+        return Err("File changed during content comparison".into());
+    }
+    if size > SAMPLE_WINDOW_BYTES.saturating_mul(3) {
+        file.seek(SeekFrom::Start(size / 2 - SAMPLE_WINDOW_BYTES / 2))
+            .map_err(|error| error.to_string())?;
+        if read_hash_segment(
+            &mut file,
+            &mut hasher,
+            SAMPLE_WINDOW_BYTES,
+            cancelled,
+            buffer,
+        )? != SAMPLE_WINDOW_BYTES
+        {
+            return Err("File changed during content comparison".into());
+        }
         file.seek(SeekFrom::Start(size - SAMPLE_WINDOW_BYTES))
             .map_err(|error| error.to_string())?;
-        if read_hash_segment(&mut file, &mut hasher, SAMPLE_WINDOW_BYTES, cancelled)?
-            != SAMPLE_WINDOW_BYTES
+        if read_hash_segment(
+            &mut file,
+            &mut hasher,
+            SAMPLE_WINDOW_BYTES,
+            cancelled,
+            buffer,
+        )? != SAMPLE_WINDOW_BYTES
         {
             return Err("File changed during content comparison".into());
         }
@@ -605,11 +723,12 @@ fn sample_candidate(
     Ok(hasher.finalize().into())
 }
 
-fn hash_candidate(
+fn hash_candidate_with_buffer(
     path: &Path,
     size: u64,
     identity: Option<(u32, u64)>,
     cancelled: &AtomicBool,
+    buffer: &mut [u8],
 ) -> Result<([u8; 32], Option<String>), String> {
     let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !before.is_file() || safety::is_link_or_reparse(&before) || before.len() != size {
@@ -623,7 +742,7 @@ fn hash_candidate(
     {
         return Err("File handle identity changed before content comparison".into());
     }
-    let hash = hash_reader(&mut file, cancelled)?;
+    let hash = hash_reader_with_buffer(&mut file, cancelled, buffer)?;
     let finished = file.metadata().map_err(|error| error.to_string())?;
     let after = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !after.is_file()
@@ -648,8 +767,17 @@ pub(super) fn hash_reader(
     reader: &mut impl Read,
     cancelled: &AtomicBool,
 ) -> Result<[u8; 32], String> {
+    let mut buffer = vec![0; HASH_BUFFER_BYTES];
+    hash_reader_with_buffer(reader, cancelled, &mut buffer)
+}
+
+fn hash_reader_with_buffer(
+    reader: &mut impl Read,
+    cancelled: &AtomicBool,
+    buffer: &mut [u8],
+) -> Result<[u8; 32], String> {
     let mut hasher = Sha256::new();
-    read_hash_segment(reader, &mut hasher, u64::MAX, cancelled)?;
+    read_hash_segment(reader, &mut hasher, u64::MAX, cancelled, buffer)?;
     Ok(hasher.finalize().into())
 }
 
@@ -658,8 +786,8 @@ fn read_hash_segment(
     hasher: &mut Sha256,
     mut remaining: u64,
     cancelled: &AtomicBool,
+    buffer: &mut [u8],
 ) -> Result<u64, String> {
-    let mut buffer = [0u8; 128 * 1024];
     let mut pending_progress = 0u64;
     let mut read_total = 0u64;
     while remaining > 0 {

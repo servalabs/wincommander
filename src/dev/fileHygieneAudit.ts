@@ -6,14 +6,15 @@ const SCAN: DuplicateScan = {
   totalDuplicateBytes: 66 * 1024 ** 2, groupOffset: 0, hasMoreGroups: false,
   groups: [
     { id: "audit-archive", size: 64 * 1024 ** 2, reclaimableBytes: 64 * 1024 ** 2, fileCount: 2, memberOffset: 0, hasMoreFiles: false, files: [
-      { id: "archive-original", name: "project.zip", path: "C:\\Audit\\Projects\\project.zip", size: 64 * 1024 ** 2 },
-      { id: "archive-copy", name: "project-backup.zip", path: "C:\\Audit\\Downloads\\project-backup.zip", size: 64 * 1024 ** 2 },
+      { id: "archive-original", name: "project.zip", path: "C:\\Audit\\Projects\\project.zip", size: 64 * 1024 ** 2, modified: "1727222400000000000" },
+      { id: "archive-copy", name: "project-backup.zip", path: "C:\\Audit\\Downloads\\project-backup.zip", size: 64 * 1024 ** 2, modified: "1729900800000000000" },
     ] },
     { id: "audit-document", size: 2 * 1024 ** 2, reclaimableBytes: 2 * 1024 ** 2, fileCount: 2, memberOffset: 0, hasMoreFiles: false, files: [
-      { id: "document-original", name: "notes.pdf", path: "C:\\Audit\\Documents\\notes.pdf", size: 2 * 1024 ** 2 },
-      { id: "document-copy", name: "notes-copy.pdf", path: "C:\\Audit\\Downloads\\notes-copy.pdf", size: 2 * 1024 ** 2 },
+      { id: "document-original", name: "notes.pdf", path: "C:\\Audit\\Documents\\notes.pdf", size: 2 * 1024 ** 2, modified: "1727222400000000000" },
+      { id: "document-copy", name: "notes-copy.pdf", path: "C:\\Audit\\Downloads\\notes-copy.pdf", size: 2 * 1024 ** 2, modified: "1729900800000000000" },
     ] },
   ], scannedFiles: 142, skippedEntries: 0, truncated: false, cancelled: false,
+  minimumSizeBytes: 200 * 1024, skippedSmallFiles: 31,
 };
 
 export function fileHygieneAuditResponse(command: string, args: Record<string, unknown>): unknown {

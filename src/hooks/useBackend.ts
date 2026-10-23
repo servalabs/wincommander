@@ -95,6 +95,8 @@ export interface DuplicateFile {
   name: string;
   path: string;
   size: number;
+  /** Nanoseconds since the Unix epoch, captured while the content was verified. */
+  modified: string | null;
 }
 
 export interface DuplicateGroup {
@@ -124,6 +126,8 @@ export interface DuplicateScan {
   totalDuplicateBytes: number;
   groupOffset: number;
   hasMoreGroups: boolean;
+  minimumSizeBytes: number;
+  skippedSmallFiles: number;
 }
 
 export interface DuplicateProgress {
@@ -140,6 +144,8 @@ export interface DuplicateProgress {
   skippedEntries: number;
   skippedLinks: number;
   errors: string[];
+  minimumSizeBytes: number;
+  skippedSmallFiles: number;
 }
 
 export interface DuplicateRemoveResult {
@@ -2443,9 +2449,9 @@ export function useBackend() {
     firewallAuditRemediate: (ruleIds: string[], action: "enable" | "disable" | "remove") =>
       invoke<FirewallRemediation>("firewall_audit_remediate", { ruleIds, action }),
     firewallAuditCancel: () => invoke<void>("firewall_audit_cancel"),
-    duplicateFinderScan: (roots: string[]) =>
-      invoke<DuplicateScan>("duplicate_finder_scan", { roots }),
-    duplicateFinderScanLocal: () => invoke<DuplicateScan>("duplicate_finder_scan_local"),
+    duplicateFinderScan: (roots: string[], minimumSizeBytes?: number) =>
+      invoke<DuplicateScan>("duplicate_finder_scan", { roots, minimumSizeBytes }),
+    duplicateFinderScanLocal: (minimumSizeBytes?: number) => invoke<DuplicateScan>("duplicate_finder_scan_local", { minimumSizeBytes }),
     duplicateFinderProgress: () => invoke<DuplicateProgress>("duplicate_finder_progress"),
     duplicateFinderPage: (scanId: string, offset: number) =>
       invoke<DuplicateScan>("duplicate_finder_page", { scanId, offset }),

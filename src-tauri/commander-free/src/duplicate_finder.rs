@@ -17,6 +17,16 @@ const MAX_ROOTS: usize = 32;
 const MAX_SELECTION: usize = 100_000;
 const GROUP_PAGE_SIZE: usize = 100;
 const MEMBER_PAGE_SIZE: usize = 200;
+/// Broad scans default to a useful file size so caches and source trees do not
+/// turn a duplicate review into an hours-long comparison of tiny files.
+pub(super) const DEFAULT_MINIMUM_SIZE_BYTES: u64 = 200 * 1024;
+const ALLOWED_MINIMUM_SIZES: [u64; 5] = [
+    0,
+    DEFAULT_MINIMUM_SIZE_BYTES,
+    1024 * 1024,
+    10 * 1024 * 1024,
+    100 * 1024 * 1024,
+];
 
 #[derive(Clone)]
 struct CachedFile {
@@ -43,6 +53,8 @@ pub struct DuplicateFile {
     pub name: String,
     pub path: String,
     pub size: u64,
+    /// Nanoseconds since the Unix epoch, captured after the file content was verified.
+    pub modified: Option<String>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +86,8 @@ pub struct DuplicateScan {
     pub total_duplicate_bytes: u64,
     pub group_offset: usize,
     pub has_more_groups: bool,
+    pub minimum_size_bytes: u64,
+    pub skipped_small_files: usize,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,15 +114,27 @@ impl Drop for RunningGuard {
     }
 }
 
-async fn start_scan(roots: Vec<PathBuf>, excluded: Vec<String>) -> Result<DuplicateScan, String> {
+fn validate_minimum_size(minimum_size_bytes: Option<u64>) -> Result<u64, String> {
+    let minimum = minimum_size_bytes.unwrap_or(DEFAULT_MINIMUM_SIZE_BYTES);
+    ALLOWED_MINIMUM_SIZES
+        .contains(&minimum)
+        .then_some(minimum)
+        .ok_or_else(|| "Unsupported duplicate minimum size".to_string())
+}
+
+async fn start_scan(
+    roots: Vec<PathBuf>,
+    excluded: Vec<String>,
+    minimum_size_bytes: u64,
+) -> Result<DuplicateScan, String> {
     let running = RunningGuard::acquire()?;
-    scope::begin(&roots, excluded);
+    scope::begin(&roots, excluded, minimum_size_bytes);
     *cache()
         .lock()
         .map_err(|_| "duplicate cache lock poisoned")? = None;
     tokio::task::spawn_blocking(move || {
         let _running = running;
-        let result = scan::scan_roots(&roots, &CANCELLED);
+        let result = scan::scan_roots(&roots, minimum_size_bytes, &CANCELLED);
         match result {
             Ok(index) => {
                 scope::finish(CANCELLED.load(Ordering::Acquire));
@@ -133,13 +159,23 @@ async fn start_scan(roots: Vec<PathBuf>, excluded: Vec<String>) -> Result<Duplic
 }
 
 #[tauri::command]
-pub async fn duplicate_finder_scan(roots: Vec<String>) -> Result<DuplicateScan, String> {
-    start_scan(safety::validate_roots(roots)?, Vec::new()).await
+pub async fn duplicate_finder_scan(
+    roots: Vec<String>,
+    minimum_size_bytes: Option<u64>,
+) -> Result<DuplicateScan, String> {
+    start_scan(
+        safety::validate_roots(roots)?,
+        Vec::new(),
+        validate_minimum_size(minimum_size_bytes)?,
+    )
+    .await
 }
 #[tauri::command]
-pub async fn duplicate_finder_scan_local() -> Result<DuplicateScan, String> {
+pub async fn duplicate_finder_scan_local(
+    minimum_size_bytes: Option<u64>,
+) -> Result<DuplicateScan, String> {
     let (roots, excluded) = scope::local_fixed_roots()?;
-    start_scan(roots, excluded).await
+    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?).await
 }
 #[tauri::command]
 pub fn duplicate_finder_progress() -> scope::DuplicateProgress {

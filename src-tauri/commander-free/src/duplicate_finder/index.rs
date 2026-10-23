@@ -129,6 +129,8 @@ impl ScanIndex {
                     .iter()
                     .any(|entry| entry.contains("Fixed drive unavailable")),
             truncated: false,
+            minimum_size_bytes: state.minimum_size_bytes,
+            skipped_small_files: state.skipped_small_files,
         })
     }
 
@@ -146,19 +148,19 @@ impl ScanIndex {
         }
         let mut statement = self
             .connection
-            .prepare("SELECT id,path FROM files WHERE group_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3")
+            .prepare("SELECT id,path,modified FROM files WHERE group_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3")
             .map_err(|error| error.to_string())?;
         let mut files = Vec::new();
         // A stable original copy is repeated on every member page to keep retention explicit.
-        let keeper: (String, String) = self
+        let keeper: (String, String, Option<String>) = self
             .connection
             .query_row(
-                "SELECT id,path FROM files WHERE group_id=?1 ORDER BY id LIMIT 1",
+                "SELECT id,path,modified FROM files WHERE group_id=?1 ORDER BY id LIMIT 1",
                 [group_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(|error| error.to_string())?;
-        let display = |(id, path): (String, String)| DuplicateFile {
+        let display = |(id, path, modified): (String, String, Option<String>)| DuplicateFile {
             name: PathBuf::from(&path)
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -167,12 +169,19 @@ impl ScanIndex {
             id,
             path,
             size,
+            modified,
         };
         files.push(display(keeper));
         for row in statement
             .query_map(
                 params![group_id, MEMBER_PAGE_SIZE as i64, offset as i64 + 1],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .map_err(|error| error.to_string())?
         {

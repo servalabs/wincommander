@@ -18,6 +18,15 @@ const TYPES: { id: string; label: string; icon: IconName; extensions: string[] }
 ];
 const fileType = (name: string) => TYPES.find((type) => type.extensions.includes(name.split(".").pop()?.toLowerCase() ?? ""));
 
+function formatModified(modified: string | null) {
+  if (!modified || !/^\d+$/.test(modified)) return "Modified date unavailable";
+  try {
+    const milliseconds = Number(BigInt(modified) / 1_000_000n);
+    if (!Number.isFinite(milliseconds)) return "Modified date unavailable";
+    return `Modified ${new Date(milliseconds).toLocaleString()}`;
+  } catch { return "Modified date unavailable"; }
+}
+
 export function DuplicateGroups({ tools }: { tools: Tools }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
@@ -56,9 +65,9 @@ function DuplicateGroupRows({ group, tools }: { group: DuplicateGroup; tools: To
         const retained = retainedId === file.id;
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${file.path}`} onChange={() => tools.select(file.id)} />
-          <span className="duplicate-member-location"><strong>{file.name}</strong><small>{file.path}</small></span>
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small>{file.path} · {formatModified(file.modified)}</small></span>
           <span className="duplicate-member-size">{formatBytes(file.size)}</span>
-          {retained ? <Badge tone="success">Keep this copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${file.path}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep this copy</Button>}
+          {retained ? <Badge tone="success">Kept copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${file.path}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep selected</Button>}
         </div>;
       })}
       {group.files.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({group.files.length - visibleCount} remaining)</Button>}

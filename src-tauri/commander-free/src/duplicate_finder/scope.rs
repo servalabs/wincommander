@@ -19,6 +19,8 @@ pub struct DuplicateProgress {
     pub skipped_entries: usize,
     pub skipped_links: usize,
     pub errors: Vec<String>,
+    pub minimum_size_bytes: u64,
+    pub skipped_small_files: usize,
 }
 static PROGRESS: OnceLock<Mutex<DuplicateProgress>> = OnceLock::new();
 fn progress() -> &'static Mutex<DuplicateProgress> {
@@ -55,7 +57,7 @@ pub(super) fn display_path(path: &Path) -> Option<String> {
     (!display.contains('?') && !display.contains('\u{FFFD}')).then_some(display)
 }
 
-pub(super) fn begin(roots: &[PathBuf], excluded: Vec<String>) {
+pub(super) fn begin(roots: &[PathBuf], excluded: Vec<String>, minimum_size_bytes: u64) {
     update(|state| {
         *state = DuplicateProgress {
             scan_id: uuid::Uuid::new_v4().to_string(),
@@ -68,6 +70,7 @@ pub(super) fn begin(roots: &[PathBuf], excluded: Vec<String>) {
                 })
                 .collect(),
             excluded_volumes: excluded,
+            minimum_size_bytes,
             ..Default::default()
         }
     });

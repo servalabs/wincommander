@@ -13,6 +13,7 @@ import { getRetainedFileId, selectDuplicateCopies, type DuplicateKeepPolicy } fr
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
 
 type FileTool = "duplicates" | "empty";
+const DUPLICATE_SIZE_CHOICES = [0, 200 * 1024, 1024 * 1024, 10 * 1024 * 1024, 100 * 1024 * 1024] as const;
 
 export function useFileHygiene() {
   const backend = useBackend();
@@ -29,6 +30,7 @@ export function useFileHygiene() {
   const [error, setError] = useMaintenanceSessionState<string | undefined>("file-hygiene.error", undefined);
   const [scopeMode, setScopeMode] = useMaintenanceSessionState<"local" | "folders">("file-hygiene.scope", "local");
   const [progress, setProgress] = useMaintenanceSessionState<DuplicateProgress | undefined>("file-hygiene.progress", undefined);
+  const [minimumSizeBytes, setMinimumSizeBytes] = useMaintenanceSessionState<number>("file-hygiene.minimum-size-bytes", 200 * 1024);
   const enteredTool = useRef<FileTool | undefined>(undefined);
 
   const chooseRoots = useCallback(async () => {
@@ -64,7 +66,7 @@ export function useFileHygiene() {
     if (tool === "duplicates") setDuplicateScan(undefined);
     else setEmptyScan(undefined);
     try {
-      if (tool === "duplicates") setDuplicateScan(await (mode === "local" ? backend.duplicateFinderScanLocal() : backend.duplicateFinderScan(roots)));
+      if (tool === "duplicates") setDuplicateScan(await (mode === "local" ? backend.duplicateFinderScanLocal(minimumSizeBytes) : backend.duplicateFinderScan(roots, minimumSizeBytes)));
       else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
       setError(String(cause));
@@ -128,7 +130,7 @@ export function useFileHygiene() {
       setDuplicateScan(undefined);
       setEmptyScan(undefined);
       setSelected(new Set());
-      if (tool === "duplicates") setDuplicateScan(await (scopeMode === "local" ? backend.duplicateFinderScanLocal() : backend.duplicateFinderScan(roots)));
+      if (tool === "duplicates") setDuplicateScan(await (scopeMode === "local" ? backend.duplicateFinderScanLocal(minimumSizeBytes) : backend.duplicateFinderScan(roots, minimumSizeBytes)));
       else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
       if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "failed" });
@@ -137,7 +139,7 @@ export function useFileHygiene() {
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, roots, scopeMode, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
+  }, [backend, busy, minimumSizeBytes, roots, scopeMode, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
 
   const cancel = useCallback(async () => {
     try {
@@ -166,7 +168,7 @@ export function useFileHygiene() {
   }, [busy, setError, setResult, setSelected, setTool]);
 
   return {
-    roots, tool, duplicateScan, emptyScan, selected, result, busy, error, scopeMode, progress, loadGroups, loadMembers,
+    roots, tool, duplicateScan, emptyScan, selected, result, busy, error, scopeMode, progress, minimumSizeBytes, loadGroups, loadMembers,
     chooseRoots, removeRoot, scan, remove, cancel, select, changeTool, keepPolicy,
     retainedFileId: (group: NonNullable<DuplicateScan>["groups"][number]) => getRetainedFileId(group, keepPolicy, retainedFiles),
     keepFile: (groupId: string, fileId: string) => {
@@ -175,6 +177,7 @@ export function useFileHygiene() {
       setSelected((current) => { const next = new Set(current); next.delete(fileId); return next; });
     },
     changeKeepPolicy: (next: DuplicateKeepPolicy) => { if (!busy) { setKeepPolicy(next); setSelected(new Set()); } },
+    changeMinimumSize: (next: number) => { if (!busy && DUPLICATE_SIZE_CHOICES.includes(next as typeof DUPLICATE_SIZE_CHOICES[number])) { setMinimumSizeBytes(next); setDuplicateScan(undefined); setSelected(new Set()); } },
     smartSelect: () => { if (!busy) setSelected(tool === "duplicates" ? selectDuplicateCopies(duplicateScan?.groups ?? [], keepPolicy, retainedFiles) : new Set(emptyScan?.folders.map((folder) => folder.id) ?? [])); },
     clearSelection: () => { if (!busy) setSelected(new Set()); },
   };
