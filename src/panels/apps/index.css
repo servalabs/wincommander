@@ -128,6 +128,8 @@
 .apps-panel--debloat .apps-panel-layout {
   height: 100%;
   min-height: 0;
+  width: 100%;
+  max-width: none;
 }
 
 .apps-panel--debloat {
@@ -151,6 +153,16 @@
   min-height: 0;
 }
 
+/* The app panel can arrive before its inventory does.  Keep the review
+   surface stretched to the stage from that first paint: otherwise a loading
+   category rail can shrink the panel, then make it visibly jump wider when
+   Programs or an app detail becomes available. */
+.app-panel-stage > .apps-panel.apps-panel--debloat {
+  align-self: stretch;
+  inline-size: 100%;
+  max-inline-size: none;
+}
+
 .apps-panel--debloat .apps-panel-layout,
 .apps-panel--debloat [data-slot="tabs"],
 .apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
@@ -159,6 +171,7 @@
   flex-direction: column;
   min-height: 0;
   width: 100%;
+  max-width: none;
 }
 
 .apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
@@ -175,7 +188,9 @@
 .apps-panel--debloat .debloat-panel,
 .apps-panel--debloat .application-review-workspace,
 .apps-panel--debloat .application-review-results {
-  flex: 1;
+  flex: 1 1 0;
+  width: 100%;
+  max-width: none;
 }
 
 .apps-panel--debloat .application-review-main {
@@ -189,6 +204,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 .debloat-hero {

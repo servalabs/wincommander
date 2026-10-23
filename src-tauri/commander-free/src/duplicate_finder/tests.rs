@@ -250,6 +250,28 @@ fn review_validation_allows_an_unchanged_cached_file_without_granting_removal() 
 }
 
 #[test]
+fn explorer_selection_uses_a_normal_windows_path_after_canonicalization() {
+    let argument =
+        explorer_select_argument(std::path::Path::new(r"\\?\C:\Users\Parth\same file.txt"))
+            .unwrap();
+    assert_eq!(
+        argument.to_string_lossy(),
+        r"/select,C:\Users\Parth\same file.txt"
+    );
+
+    let unc = explorer_select_argument(std::path::Path::new(r"\\?\UNC\server\share\same file.txt"))
+        .unwrap();
+    assert_eq!(
+        unc.to_string_lossy(),
+        r"/select,\\server\share\same file.txt"
+    );
+    assert!(
+        explorer_select_argument(std::path::Path::new(r"\\?\Volume{unsafe}\same file.txt"))
+            .is_err()
+    );
+}
+
+#[test]
 fn refuses_removal_when_retained_copy_disappears() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a"), b"same").unwrap();

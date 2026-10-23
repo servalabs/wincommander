@@ -239,8 +239,7 @@ pub async fn duplicate_finder_open(scan_id: String, file_id: String) -> Result<(
     {
         let windows = std::env::var_os("SystemRoot").ok_or("Windows directory unavailable.")?;
         std::process::Command::new(PathBuf::from(windows).join("explorer.exe"))
-            .arg("/select,")
-            .arg(target)
+            .arg(explorer_select_argument(&target)?)
             .spawn()
             .map_err(|error| format!("Could not open Explorer: {error}"))?;
         Ok(())
@@ -250,6 +249,28 @@ pub async fn duplicate_finder_open(scan_id: String, file_id: String) -> Result<(
         let _ = target;
         Err("Open in Explorer requires Windows.".into())
     }
+}
+
+/// `canonicalize` produces an extended-length path on Windows. Explorer's
+/// `/select,` switch expects the ordinary drive or UNC spelling instead.
+fn explorer_select_argument(path: &std::path::Path) -> Result<std::ffi::OsString, String> {
+    let raw = path.to_string_lossy();
+    let explorer_path = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if raw.starts_with(r"\\?\") {
+        let rest = &raw[4..];
+        if rest.len() >= 3 && rest.as_bytes()[1] == b':' && rest.as_bytes()[2] == b'\\' {
+            rest.to_string()
+        } else {
+            return Err("Explorer cannot safely open this duplicate location".into());
+        }
+    } else {
+        raw.to_string()
+    };
+    if explorer_path.contains('\0') {
+        return Err("Explorer cannot safely open this duplicate location".into());
+    }
+    Ok(format!("/select,{explorer_path}").into())
 }
 
 #[tauri::command]

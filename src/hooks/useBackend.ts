@@ -97,7 +97,8 @@ export interface DuplicateFile {
   size: number;
   /** Nanoseconds since the Unix epoch, captured while the content was verified. */
   modified: string | null;
-  removable: boolean;
+  /** Missing only while an already-running older backend is being replaced. */
+  removable?: boolean;
 }
 
 export interface DuplicateGroup {
