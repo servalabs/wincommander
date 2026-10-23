@@ -1,6 +1,6 @@
 // src/panels/apps/DebloatPanel.tsx
 import { Button, Checkbox, InputGroup } from "@/components/ui/bp";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { runOperation } from "../../context/OperationContext";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
@@ -38,6 +38,11 @@ export default function DebloatPanel() {
   const [restorePoint, setRestorePoint] = useState(true);
   const [removing, setRemoving]         = useState(false);
   const [heroActive, setHeroActive]     = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  useEffect(() => {
+    if (!loading) setInitialLoading(false);
+  }, [loading]);
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.toLowerCase();
@@ -192,7 +197,7 @@ export default function DebloatPanel() {
               onClick={() => setActiveFilter(chip.key)}
             >
               {chip.label}
-              {filterCounts[chip.key] != null && filterCounts[chip.key] > 0 && (
+              {!initialLoading && filterCounts[chip.key] != null && filterCounts[chip.key] > 0 && (
                 <span className="debloat-chip-count">{filterCounts[chip.key]}</span>
               )}
             </button>
@@ -211,7 +216,7 @@ export default function DebloatPanel() {
       </div>
 
       <ApplicationReviewResults
-        groups={grouped} selected={selected} removing={removing} loading={loading}
+        groups={grouped} selected={selected} removing={removing} loading={loading} initialLoading={initialLoading}
         bcuInstalled={bcuInstalled} bcuInstalling={bcuInstalling} errors={errors}
         onToggle={toggleItem} onSelectGroup={selectGroup} onInstallBcu={() => void installBcu()}
       />

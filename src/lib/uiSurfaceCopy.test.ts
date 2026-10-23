@@ -243,7 +243,7 @@ describe("redesign surface copy guardrails", () => {
     expect(uninstaller).not.toContain("fallback");
   });
 
-  test("System Cleanup stacks four confirmed-clean cards in one readable column", async () => {
+  test("System Cleanup keeps scan findings in the familiar card grid", async () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
 
     // Confirmed-clean cards remain visible and use four readable rows so their
@@ -254,9 +254,9 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).toContain("cleanCardPacks.map((pack, index) => (");
     expect(cleanupGrid).toContain('className="grid h-[168px] grid-cols-1 grid-rows-4 gap-1"');
     expect(cleanupGrid).toMatch(/className="[^"]*\bcleanup-category-grid\b[^"]*"/);
-    expect(cleanupGrid).toContain("<PrivacyTraceWorkspace");
-    expect(cleanupGrid).toContain("categories={[...activeSysCats, ...activeUserCats]}");
-    expect(cleanupGrid).toContain("cat.scopeAware ? userCardData(cat)");
+    expect(cleanupGrid).toContain("{activeSysCats.map((cat) => renderCard(cat))}");
+    expect(cleanupGrid).toContain("{activeUserCats.map((cat) => renderUserCard(cat))}");
+    expect(cleanupGrid).not.toContain("PrivacyTraceWorkspace");
     expect(cleanupGrid).not.toContain("cleanCardsOpen");
   });
 
@@ -289,7 +289,7 @@ describe("redesign surface copy guardrails", () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
     const cleanupPanel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
-    expect(cleanupGrid).toContain("{isLowImpactTab && (");
+    expect(cleanupGrid).toContain("{isLowImpactTab && <div");
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");

@@ -78,6 +78,13 @@ test("storage dashboards do not auto-scan the manual analysis tools", async () =
   expect(fileStats).not.toContain("if (!fileStatsSession) void runScan()");
 });
 
+test("duplicate discovery starts once per app session and keeps a completed report on return", async () => {
+  const source = await read("useFileHygiene.ts");
+
+  expect(source).toContain('if (tool === "duplicates" && !busy && !duplicateScan) void scan("local")');
+  expect(source).toContain("keep the completed report in");
+});
+
 test("maintenance exposes distinct workspaces with review and selection controls", async () => {
   const [panel, navigation, css, cleaner, preview] = await Promise.all([
     read("index.tsx"), read("workspace/MaintenanceWorkspaceNav.tsx"),

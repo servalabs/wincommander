@@ -78,8 +78,13 @@ export function useFileHygiene() {
   useEffect(() => {
     if (enteredTool.current === tool) return;
     enteredTool.current = tool;
-    if (tool === "duplicates" && !busy) void scan("local");
-  }, [busy, scan, tool]);
+    // This store lives for the desktop-app session, while Maintenance tabs
+    // mount and unmount as people navigate. Start one useful local scan on
+    // the first visit after app launch, then keep the completed report in
+    // place until the person explicitly asks to scan again. Re-entering the
+    // tab must never discard a report or restart an expensive drive walk.
+    if (tool === "duplicates" && !busy && !duplicateScan) void scan("local");
+  }, [busy, duplicateScan, scan, tool]);
 
   useEffect(() => {
     if (!busy || tool !== "duplicates" || duplicateScan) return;

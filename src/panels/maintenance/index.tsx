@@ -24,7 +24,11 @@ export default function MaintenancePanel() {
   const isAnalysis = active.id === "analysis";
   useEffect(() => {
     const openCleanup = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
-    const openStorage = () => setActiveTab("cleanup");
+    // The tour target is inside the optional Windows storage reveal. Opening
+    // the Maintenance panel alone leaves that target out of the DOM, so the
+    // spotlight can never find it. Reveal the exact section before the tour
+    // polls for its anchor.
+    const openStorage = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
     const openAnalyzer = () => setActiveTab("analysis");
     window.addEventListener("open-disk-cleanup", openCleanup);
     window.addEventListener("open-disk-space-analyzer", openAnalyzer);

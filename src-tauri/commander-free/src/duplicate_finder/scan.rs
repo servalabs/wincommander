@@ -424,7 +424,6 @@ fn flush_file_batch(
 pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
     index.connection.execute_batch("CREATE TABLE candidates AS SELECT rowid AS file_row FROM files WHERE size IN (SELECT size FROM files GROUP BY size HAVING count(*)>1); CREATE UNIQUE INDEX candidate_rows ON candidates(file_row);")
         .map_err(|error| error.to_string())?;
-    resolve_candidate_identities(index, cancelled)?;
     let total: usize = index
         .connection
         .query_row("SELECT count(*) FROM candidates", [], |row| {
@@ -436,6 +435,53 @@ pub(super) fn hash_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Resu
         state.candidate_files = total;
     });
     sample_candidates(index, cancelled)?;
+    // Capture identity while the sample stage already has each file open.
+    // The former pre-pass opened every same-size candidate solely to learn
+    // this value, then opened it again to sample its contents. Keep one
+    // physical copy of a hard-linked file before full-content hashing.
+    let hard_link_aliases: usize = index
+        .connection
+        .query_row(
+            "SELECT count(*)
+            FROM candidates duplicate
+            JOIN files duplicate_file ON duplicate_file.rowid=duplicate.file_row
+            JOIN (
+                SELECT file.identity AS identity, MIN(file.rowid) AS keeper
+                FROM candidates candidate
+                JOIN files file ON file.rowid=candidate.file_row
+                WHERE file.identity IS NOT NULL
+                GROUP BY file.identity
+                HAVING count(*)>1
+            ) aliases ON aliases.identity=duplicate_file.identity
+            WHERE duplicate_file.rowid!=aliases.keeper",
+            [],
+            |row| super::index::count(row, 0),
+        )
+        .map_err(|error| error.to_string())?;
+    index
+        .connection
+        .execute_batch(
+            "DELETE FROM candidates WHERE file_row IN (
+            SELECT duplicate.file_row
+            FROM candidates duplicate
+            JOIN files duplicate_file ON duplicate_file.rowid=duplicate.file_row
+            JOIN (
+                SELECT file.identity AS identity, MIN(file.rowid) AS keeper
+                FROM candidates candidate
+                JOIN files file ON file.rowid=candidate.file_row
+                WHERE file.identity IS NOT NULL
+                GROUP BY file.identity
+                HAVING count(*)>1
+            ) aliases ON aliases.identity=duplicate_file.identity
+            WHERE duplicate_file.rowid!=aliases.keeper
+        );",
+        )
+        .map_err(|error| error.to_string())?;
+    if hard_link_aliases > 0 {
+        scope::update(|state| {
+            state.scanned_files = state.scanned_files.saturating_sub(hard_link_aliases)
+        });
+    }
     index
         .connection
         .execute_batch(
@@ -511,116 +557,6 @@ fn candidate_rows(index: &ScanIndex) -> Result<Vec<CandidateRow>, String> {
 
 /// Resolves file identities only after the cheap size filter. This keeps hard-link aliases from
 /// being reported as reclaimable copies without opening every unrelated file in a full-drive scan.
-fn resolve_candidate_identities(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
-    let mut cursor = 0i64;
-    let mut seen = HashSet::new();
-    while !cancelled.load(Ordering::Acquire) {
-        let mut statement = index
-            .connection
-            .prepare(
-                "SELECT f.rowid,f.path FROM files f JOIN candidates c ON f.rowid=c.file_row WHERE f.rowid>?1 ORDER BY f.rowid LIMIT ?2",
-            )
-            .map_err(|error| error.to_string())?;
-        let batch = statement
-            .query_map(params![cursor, 512], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        if batch.is_empty() {
-            break;
-        }
-        for (row, path, identity) in resolve_candidate_identity_batch(&batch, cancelled)? {
-            if cancelled.load(Ordering::Acquire) {
-                break;
-            }
-            cursor = row;
-            let path = PathBuf::from(path);
-            scope::update(|state| {
-                state.current_path = scope::display_path(&path).unwrap_or_default()
-            });
-            if cfg!(windows) && identity.is_none() {
-                index
-                    .connection
-                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
-                    .map_err(|error| error.to_string())?;
-                scope::error(&path, "Stable file identity is unavailable");
-                continue;
-            }
-            let identity_key = identity
-                .map(|(volume, file)| format!("{volume}:{file}"))
-                .unwrap_or_else(|| format!("path:{}", path.to_string_lossy()));
-            if !seen.insert(identity_key.clone()) {
-                index
-                    .connection
-                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
-                    .map_err(|error| error.to_string())?;
-                scope::update(|state| state.scanned_files = state.scanned_files.saturating_sub(1));
-                continue;
-            }
-            if let Err(error) = index.connection.execute(
-                "UPDATE files SET identity=?1,volume=?2,file_index=?3 WHERE rowid=?4",
-                params![
-                    identity_key,
-                    identity.map(|value| value.0),
-                    identity.map(|value| value.1.to_string()),
-                    row
-                ],
-            ) {
-                index
-                    .connection
-                    .execute("DELETE FROM candidates WHERE file_row=?1", [row])
-                    .map_err(|delete_error| delete_error.to_string())?;
-                scope::error(&path, format!("Stable file identity changed: {error}"));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Stable identities are required only for same-size candidates, but opening
-/// those files one at a time dominated full-drive scans. Read identities in the
-/// same bounded worker shape used for sample and full-content verification;
-/// the SQLite candidate updates stay on this caller thread.
-fn resolve_candidate_identity_batch(
-    batch: &[(i64, String)],
-    cancelled: &AtomicBool,
-) -> Result<Vec<(i64, String, Option<(u32, u64)>)>, String> {
-    if batch.is_empty() {
-        return Ok(Vec::new());
-    }
-    let worker_count = batch.len().min(HASH_WORKER_LIMIT);
-    let chunk_size = batch.len().div_ceil(worker_count);
-    std::thread::scope(|scope| {
-        let handles = batch
-            .chunks(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|(row, path)| {
-                            let identity = (!cancelled.load(Ordering::Acquire))
-                                .then(|| crate::routine_cleaner::file_identity(Path::new(path)))
-                                .flatten();
-                            (*row, path.clone(), identity)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut results = Vec::with_capacity(batch.len());
-        for handle in handles {
-            results.extend(
-                handle
-                    .join()
-                    .map_err(|_| "Duplicate identity worker failed".to_string())?,
-            );
-        }
-        Ok(results)
-    })
-}
-
 fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), String> {
     let candidates = candidate_rows(index)?;
     let results = sample_candidate_batch(&candidates, cancelled)?;
@@ -629,7 +565,9 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
     let mut update = transaction
-        .prepare("UPDATE files SET sample_hash=?1 WHERE rowid=?2")
+        .prepare(
+            "UPDATE files SET sample_hash=?1,identity=?2,volume=?3,file_index=?4 WHERE rowid=?5",
+        )
         .map_err(|error| error.to_string())?;
     for (row, path, result) in results {
         if cancelled.load(Ordering::Acquire) {
@@ -638,9 +576,22 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
         let path = PathBuf::from(path);
         scope::update(|state| state.current_path = scope::display_path(&path).unwrap_or_default());
         match result {
-            Ok(sample_hash) => {
+            Ok((sample_hash, identity)) => {
+                if cfg!(windows) && identity.is_none() {
+                    scope::error(&path, "Stable file identity is unavailable");
+                    continue;
+                }
+                let identity_key = identity
+                    .map(|(volume, file)| format!("{volume}:{file}"))
+                    .unwrap_or_else(|| format!("path:{}", path.to_string_lossy()));
                 update
-                    .execute(params![sample_hash.as_slice(), row])
+                    .execute(params![
+                        sample_hash.as_slice(),
+                        identity_key,
+                        identity.map(|value| value.0),
+                        identity.map(|value| value.1.to_string()),
+                        row,
+                    ])
                     .map_err(|error| error.to_string())?;
             }
             Err(error) => scope::error(&path, error),
@@ -717,7 +668,7 @@ where
 fn sample_candidate_batch(
     batch: &[CandidateRow],
     cancelled: &AtomicBool,
-) -> Result<Vec<(i64, String, Result<[u8; 32], String>)>, String> {
+) -> Result<Vec<(i64, String, Result<([u8; 32], Option<(u32, u64)>), String>)>, String> {
     process_candidate_batch(batch, cancelled, sample_candidate_with_buffer)
 }
 
@@ -731,20 +682,21 @@ fn hash_candidate_batch(
 fn sample_candidate_with_buffer(
     path: &Path,
     size: u64,
-    identity: Option<(u32, u64)>,
+    _identity: Option<(u32, u64)>,
     cancelled: &AtomicBool,
     buffer: &mut [u8],
-) -> Result<[u8; 32], String> {
+) -> Result<([u8; 32], Option<(u32, u64)>), String> {
     let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !before.is_file() || safety::is_link_or_reparse(&before) || before.len() != size {
         return Err("File changed before content comparison".into());
     }
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
     let opened = file.metadata().map_err(|error| error.to_string())?;
-    if identity != super::verified_file::handle_identity(&file)?
-        || opened.len() != size
-        || opened.modified().ok() != before.modified().ok()
-    {
+    let identity = super::verified_file::handle_identity(&file)?;
+    if cfg!(windows) && identity.is_none() {
+        return Err("Stable file identity is unavailable".into());
+    }
+    if opened.len() != size || opened.modified().ok() != before.modified().ok() {
         return Err("File handle identity changed before content comparison".into());
     }
     let mut hasher = blake3::Hasher::new();
@@ -800,7 +752,7 @@ fn sample_candidate_with_buffer(
     {
         return Err("File changed during content comparison".into());
     }
-    Ok(*hasher.finalize().as_bytes())
+    Ok((*hasher.finalize().as_bytes(), identity))
 }
 
 fn hash_candidate_with_buffer(
