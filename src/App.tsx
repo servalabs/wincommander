@@ -1426,12 +1426,12 @@ function AppContent({ splashDone, onSplashComplete }: {
                 AnimatePresence by design (see KT note above) — only initial+
                 animate apply on the keyed remount. */}
             <motion.div
+              className="app-panel-frame"
               key={activePanel}
               variants={panelVariants}
               initial="initial"
               animate="animate"
               transition={panelTransition}
-              style={{ height: '100%' }}
             >
               {isIdlePaused ? (
                 <div className="h-full w-full flex items-center justify-center px-6">

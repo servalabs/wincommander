@@ -1,5 +1,5 @@
 // src/panels/apps/index.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import AppInstallerPanel, { type AppInstallerStatus } from "./components/AppInstallerPanel";
 import DebloatPanel from "./DebloatPanel";
 import { PackageUpdateTools } from "./PackageUpdateTools";
@@ -18,12 +18,18 @@ declare global {
 }
 
 export default function AppsPanel() {
+  const panelRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useAppsSessionState("apps.active-tab", "install");
   const [installerStatus, setInstallerStatus] = useState<AppInstallerStatus>({
     wingetStatus: "checking",
     vulnerabilityTone: "is-neutral",
     vulnerabilityText: "SCANNING APP INVENTORY",
   });
+
+  // Tabs share the shell scroller; clear the previous tab's offset before paint.
+  useLayoutEffect(() => {
+    panelRef.current?.closest(".app-panel-stage")?.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [activeTab]);
 
   useEffect(() => {
     const scrollToUpdates = () => {
@@ -58,7 +64,7 @@ export default function AppsPanel() {
   }, [setActiveTab]);
 
   return (
-    <div className={`panel-container apps-panel${activeTab === "debloat" ? " apps-panel--debloat" : ""}`}>
+    <div ref={panelRef} className={`panel-container apps-panel${activeTab === "debloat" ? " apps-panel--debloat" : ""}`}>
       <div className="apps-panel-layout flex flex-col gap-0">
         <PanelHeader
           panelId="apps"
