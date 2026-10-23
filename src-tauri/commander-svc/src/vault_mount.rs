@@ -2572,6 +2572,20 @@ impl VaultMountBroker {
         }) {
             return Err(VaultMountReason::MountStateUnknown);
         }
+        // A new installation has no service-recorded mount to verify.  The
+        // driver is prepared asynchronously after the service starts, so a
+        // snapshot can legitimately be unavailable while this caller's
+        // authorized inventory is empty.  Do not turn that harmless startup
+        // race into an ownership/identity error; once a record exists, the
+        // snapshot below remains mandatory before exposing it.
+        if self
+            .active
+            .lock()
+            .map_err(|_| VaultMountReason::MountStateUnknown)?
+            .is_empty()
+        {
+            return Ok(Vec::new());
+        }
         let slots = self
             .snapshot()
             .map_err(|_| VaultMountReason::MountStateUnknown)?;
@@ -4474,6 +4488,31 @@ mod tests {
                 true
             ),
             Err(VaultMountReason::MountStateUnknown)
+        );
+    }
+
+    #[test]
+    fn fresh_personal_inventory_does_not_require_the_driver_to_be_ready() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(
+            Mutex::new(BrokerEvents::default()),
+        ))));
+        // Model the short first-install interval before the service's
+        // background driver preparation has made the device available.
+        broker.engine_snapshot = Some(|| Err("driver not ready".into()));
+
+        assert_eq!(
+            broker.personal_mounts_for_caller(
+                &store,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-new-user",
+                false,
+            ),
+            Ok(Vec::new())
         );
     }
 
