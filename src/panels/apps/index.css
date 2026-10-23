@@ -133,6 +133,8 @@
 }
 
 .apps-panel--debloat {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -181,7 +183,10 @@
 }
 
 .apps-panel--debloat .apps-panel-layout {
+  display: flex;
+  flex: 1 1 0;
   height: auto;
+  min-block-size: 0;
 }
 
 .apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
