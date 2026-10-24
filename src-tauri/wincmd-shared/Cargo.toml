@@ -42,7 +42,7 @@ ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 
 [features]
 # Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
-ts-codegen = ["dep:ts-rs"]
+ts-codegen = ["dep:ts-rs", "fleet-proto/ts-codegen"]
 
 # Test-only — `#[tokio::test]`, `tokio::join!`, and `tokio::io::duplex`
 # need `macros` + `rt`. Production builds don't pull these.
