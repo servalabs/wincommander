@@ -5,16 +5,6 @@ import { RoutineCleanerHeaderActions, RoutineCleanerPanel } from "./RoutineClean
 import { APP_CACHE_CLEANUP_CATEGORIES } from "./routineCleanerHelpers";
 import { useRoutineCleaner } from "./useRoutineCleaner";
 
-/** Kept as a compatibility export for callers that need both reclaim scopes. */
-export default function ReclaimSpaceCard() {
-  return (
-    <div className="maintenance-reclaim-grid">
-      <WindowsStorageCard />
-      <AppBrowserCacheCard />
-    </div>
-  );
-}
-
 export function WindowsStorageCard() {
   return (
     <Card className="maintenance-storage-card maintenance-storage-overview-card">

@@ -91,7 +91,9 @@ test("maintenance exposes distinct workspaces with review and selection controls
     read("MaintenanceStorage.css"), read("RoutineCleanerPanel.tsx"), read("RoutineCleanerPreview.tsx"),
   ]);
   expect(panel).toContain("<MaintenanceWorkspaceNav");
-  for (const id of ["cleanup", "duplicates", "analysis", "startup", "registry", "history"]) expect(navigation).toContain(`id: "${id}"`);
+  for (const id of ["cleanup", "windows-storage", "duplicates", "analysis", "startup", "registry", "history"]) expect(navigation).toContain(`id: "${id}"`);
+  expect(navigation).not.toContain("Windows-managed storage cleanup is available in its own section.");
+  expect(panel).toContain('active.id === "windows-storage" && <WindowsStorageCard />');
   expect(navigation).not.toContain('id: "activity"');
   expect(navigation).not.toContain('id: "large"');
   expect(await read("disk-analyzer/DiskAnalyzerTabs.tsx")).toContain("Large Files");

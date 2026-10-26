@@ -83,9 +83,10 @@ supported application cache locations and reviews selected targets from its
 header. The bounded project-artifact command remains available to CLI clients;
 the Maintenance UI does not offer arbitrary folder or drive cleanup. Admission
 and mutation recheck plain path components and existing handle-based identity
-constraints before deletion. Windows-managed storage cleanup is presented in
-Maintenance; Windows Spotlight, Legacy Icon Cache and BranchCache remain among
-the existing System Cleanup categories with their review and confirmation flow.
+constraints before deletion. Windows-managed storage cleanup has its own
+Maintenance workspace; Windows Spotlight, Legacy Icon Cache and BranchCache
+remain among the existing System Cleanup categories with their review and
+confirmation flow.
 
 | Component | Responsibility | Location |
 | :-- | :-- | :-- |

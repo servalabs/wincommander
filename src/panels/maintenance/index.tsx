@@ -18,27 +18,23 @@ import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds } from "./routineCl
 const APP_CACHE_SESSION_KEY = `routine-cleaner.${[...APP_CACHE_CLEANUP_CATEGORIES].sort().join("-")}`;
 
 export default function MaintenancePanel() {
-  const [windowsOpen, setWindowsOpen] = useMaintenanceSessionState("maintenance.windows-storage-open", false);
   const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-workspace", "cleanup");
   const active = MAINTENANCE_WORKSPACES.find((item) => item.id === (activeTab === "large" ? "analysis" : activeTab)) ?? MAINTENANCE_WORKSPACES[0];
   const isAnalysis = active.id === "analysis";
   useEffect(() => {
-    const openCleanup = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
-    // The tour target is inside the optional Windows storage reveal. Opening
-    // the Maintenance panel alone leaves that target out of the DOM, so the
-    // spotlight can never find it. Reveal the exact section before the tour
-    // polls for its anchor.
-    const openStorage = () => { setActiveTab("cleanup"); setWindowsOpen(true); };
+    // Keep the tour target mounted in its dedicated workspace before the
+    // spotlight polls for the Windows storage cleanup anchor.
+    const openStorage = () => setActiveTab("windows-storage");
     const openAnalyzer = () => setActiveTab("analysis");
-    window.addEventListener("open-disk-cleanup", openCleanup);
+    window.addEventListener("open-disk-cleanup", openStorage);
     window.addEventListener("open-disk-space-analyzer", openAnalyzer);
     window.addEventListener("open-maintenance-storage", openStorage);
     return () => {
-      window.removeEventListener("open-disk-cleanup", openCleanup);
+      window.removeEventListener("open-disk-cleanup", openStorage);
       window.removeEventListener("open-disk-space-analyzer", openAnalyzer);
       window.removeEventListener("open-maintenance-storage", openStorage);
     };
-  }, [setActiveTab, setWindowsOpen]);
+  }, [setActiveTab]);
   useMaintenanceReviewPreload();
   return <div className={`panel-container maintenance-panel flex flex-col${isAnalysis ? " maintenance-panel--analysis" : ""}`}>
       <PanelHeader
@@ -49,8 +45,9 @@ export default function MaintenancePanel() {
     <div className="maintenance-workspace-shell">
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
       <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
-        {!isAnalysis && <header className="maintenance-workspace-heading"><h2>{active.label}</h2><p>{active.description}</p></header>}
-        {active.id === "cleanup" && <StorageAndFileTools windowsOpen={windowsOpen} setWindowsOpen={setWindowsOpen} />}
+        {!isAnalysis && active.id !== "cleanup" && active.id !== "windows-storage" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2>{active.description && <p>{active.description}</p>}</header>}
+        {active.id === "cleanup" && <AppBrowserCacheCard />}
+        {active.id === "windows-storage" && <WindowsStorageCard />}
         {isAnalysis && <div className="maintenance-analysis-workspace">
           <Card className="maintenance-analysis-card"><CardContent className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen onClose={() => {}} initialMode={activeTab === "large" ? "large" : "space"} /></div></CardContent></Card>
         </div>}
@@ -98,9 +95,9 @@ function useMaintenanceReviewPreload() {
       primeMaintenanceSessionValue("system-hygiene.busy", false);
     });
 
-    // App/browser caches are a read-only Maintenance-wide preload. The panel
-    // consumes this same session entry, so opening Storage & files never starts
-    // a second scan and the visible refresh button remains the explicit rescan.
+    // App/browser caches are a read-only Maintenance-wide preload. Deep Cleanup
+    // consumes this same session entry, so opening its tab never starts a
+    // second scan and the visible refresh button remains the explicit rescan.
     void backend.routineCleanerScan(APP_CACHE_CLEANUP_CATEGORIES).then((scan) => {
       primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.scan`, scan);
       primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.selected`, new Set(getRecommendedItemIds(scan.items)));
@@ -111,15 +108,6 @@ function useMaintenanceReviewPreload() {
     });
   }, [backend]);
 }
-function StorageAndFileTools({ windowsOpen, setWindowsOpen }: { windowsOpen: boolean; setWindowsOpen: (open: boolean) => void }) {
-  return <div className="flex flex-col gap-4">
-    <AppBrowserCacheCard />
-    <details className="maintenance-secondary-scope" open={windowsOpen} onToggle={(event) => setWindowsOpen(event.currentTarget.open)}><summary>Windows storage</summary>
-      <div className="pt-4"><WindowsStorageCard /></div>
-    </details>
-  </div>;
-}
-
 function RegistryAndHygieneTools() {
   return (
     <div className="flex flex-col gap-4">

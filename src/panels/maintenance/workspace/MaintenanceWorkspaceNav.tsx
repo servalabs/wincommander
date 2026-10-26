@@ -1,7 +1,8 @@
 import { Icon, type IconName } from "../../../components/ui/icon";
 
-export const MAINTENANCE_WORKSPACES: Array<{ id: string; label: string; icon: IconName; description: string }> = [
-  { id: "cleanup", label: "Deep cleanup", icon: "clean", description: "Review supported browser, application and developer caches; Windows-managed storage cleanup is available in its own section." },
+export const MAINTENANCE_WORKSPACES: Array<{ id: string; label: string; icon: IconName; description?: string }> = [
+  { id: "cleanup", label: "Deep cleanup", icon: "clean" },
+  { id: "windows-storage", label: "Windows storage", icon: "hard-drive" },
   { id: "duplicates", label: "Duplicate cleanup", icon: "duplicate", description: "Compare identical files and keep a verified copy." },
   { id: "analysis", label: "Disk space analysis", icon: "hard-drive", description: "Explore folders and understand disk usage." },
   { id: "startup", label: "Startup & drivers", icon: "power", description: "Review startup programs and installed drivers." },

@@ -81,12 +81,12 @@ the backend and private component before execution.
   Dashboard action failures appear in Notifications, with unresolved findings
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
-- Maintenance workspaces for cache cleanup, duplicates, disk analysis, startup,
-  registry hygiene, and local operation history. Large Files and File Types are
-  tabs within Disk Space Analysis. The compact tab row stays visible while its
-  content scrolls. System Cleanup retains Browser Audit, Editor History, Office
-  Document History, Adobe Recent Files, Windows activity, clipboard, network
-  and credential tools.
+- Maintenance workspaces for Deep Cleanup, Windows Storage, duplicates, disk
+  analysis, startup, registry hygiene, and local operation history. Large Files
+  and File Types are tabs within Disk Space Analysis. The compact tab row stays
+  visible while its content scrolls. System Cleanup retains Browser Audit,
+  Editor History, Office Document History, Adobe Recent Files, Windows activity,
+  clipboard, network and credential tools.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
 - Deep Cleanup scans supported application cache locations automatically;

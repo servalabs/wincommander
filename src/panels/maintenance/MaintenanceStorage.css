@@ -30,9 +30,6 @@
 .maintenance-workspace-heading { margin-bottom: 1.25rem; }
 .maintenance-workspace-heading h2 { color: var(--text); font-size: 1.35rem; font-weight: 600; letter-spacing: -0.03em; }
 .maintenance-workspace-heading p { margin-top: 0.25rem; color: var(--text-dim); font-size: 0.78rem; }
-.maintenance-secondary-scope { padding: 1rem; border: 1px solid var(--border); border-radius: var(--r-lg); }
-.maintenance-secondary-scope summary { color: var(--text-dim); cursor: pointer; font-size: 0.82rem; font-weight: 500; }
-.maintenance-reclaim-grid, .maintenance-storage-workspace { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: 1rem; }
 .maintenance-storage-card { min-width: 0; }
 .maintenance-app-cache-content, .maintenance-storage-overview-content { min-width: 0; }
 .maintenance-routine-cleaner { min-width: 0; }

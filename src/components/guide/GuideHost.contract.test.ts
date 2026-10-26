@@ -5,12 +5,13 @@ declare const Bun: {
 };
 
 describe("first-run guide completion", () => {
-  test("Maintenance tour reveals its storage target before the spotlight looks for it", async () => {
+  test("Maintenance tour opens the Windows Storage workspace before the spotlight looks for its target", async () => {
     const maintenance = await Bun.file("src/panels/maintenance/index.tsx").text();
     const topics = await Bun.file("src/content/guide/topics.ts").text();
 
     expect(topics).toContain('openEvent: "open-maintenance-storage"');
-    expect(maintenance).toContain('const openStorage = () => { setActiveTab("cleanup"); setWindowsOpen(true); };');
+    expect(maintenance).toContain('const openStorage = () => setActiveTab("windows-storage");');
+    expect(maintenance).toContain('window.addEventListener("open-maintenance-storage", openStorage)');
   });
 
   test("Lockdown is asked as the final step of the full tour before Dashboard completion", async () => {
