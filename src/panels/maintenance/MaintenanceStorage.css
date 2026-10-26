@@ -73,6 +73,7 @@
 .maintenance-cache-idle__visual { display: grid; place-content: center; width: 5rem; height: 5rem; border: 1px solid var(--border); border-radius: 50%; color: var(--accent); background: var(--surface); box-shadow: 0 0 0 1rem var(--accent-soft); }
 .maintenance-file-hygiene-card { overflow: hidden; }
 .maintenance-file-hygiene-results > [data-slot="card-content"] { max-height: 42rem; overflow: auto; overscroll-behavior: contain; }
+.maintenance-file-hygiene-results--duplicates > [data-slot="card-content"] { overscroll-behavior: auto; }
 .maintenance-analysis-workspace { display: flex; min-width: 0; min-height: 0; flex: 1; }
 .maintenance-analysis-card { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .maintenance-analysis-content { display: flex; min-height: 0; flex: 1; padding: 0; }

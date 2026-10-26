@@ -89,8 +89,9 @@ the backend and private component before execution.
   clipboard, network and credential tools.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
-- Deep Cleanup scans supported application cache locations automatically;
-  selection totals and review actions sit beside the scan control. Windows
+- Deep Cleanup scans supported application cache locations automatically and
+  shows only categories with discovered targets; selection totals and review
+  actions sit beside the scan control. Windows
   Storage focuses on Windows-managed storage cleanup. Windows Spotlight,
   Legacy Icon Cache and BranchCache remain in System Cleanup alongside browser
   history, location traces, DNS and app activity.

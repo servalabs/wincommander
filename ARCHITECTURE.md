@@ -79,8 +79,9 @@ matches before returning at most 5,000 files. Explorer actions resolve a
 current scan identifier and entry identifier in the backend, then validate
 the path and reject links; the frontend supplies no executable to launch.
 The routine cleaner uses one owner per overlapping target. Deep Cleanup scans
-supported application cache locations and reviews selected targets from its
-header. The bounded project-artifact command remains available to CLI clients;
+supported application cache locations, displays only populated categories, and
+reviews selected targets from its header. The bounded project-artifact command
+remains available to CLI clients;
 the Maintenance UI does not offer arbitrary folder or drive cleanup. Admission
 and mutation recheck plain path components and existing handle-based identity
 constraints before deletion. Windows-managed storage cleanup has its own

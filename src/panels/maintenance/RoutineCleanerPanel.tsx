@@ -32,7 +32,9 @@ type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
 export function RoutineCleanerPanel({ cleaner, categories: allowedCategories, confirmOpen, onConfirmOpenChange }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[]; confirmOpen: boolean; onConfirmOpenChange: (open: boolean) => void }) {
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
   const isRunning = operation !== "idle";
-  const categoryOptions = getRoutineCleanerCategories(allowedCategories);
+  // Categories choose the scope before scanning. Once results are available,
+  // the preview exposes only categories that actually produced a target.
+  const categoryOptions = scan ? [] : getRoutineCleanerCategories(allowedCategories);
   const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
   const selectedLogicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
   const selectedVacuumEstimate = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
@@ -76,12 +78,12 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories, co
   };
 
   return <div className="maintenance-routine-cleaner flex min-h-0 flex-1 flex-col gap-4">
-    <div className="flex flex-wrap items-start gap-2">
+    {categoryOptions.length > 0 && <div className="flex flex-wrap items-start gap-2">
       <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--r)] bg-[var(--surface-2)] p-1">
         {categoryOptions.map((category) => <Button size="sm" variant={categories.includes(category.id) ? "outline" : "ghost"} key={category.id} aria-pressed={categories.includes(category.id)} disabled={isRunning} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Button>)}
       </div>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
-    </div>
+    </div>}
     {!scan && (
       <CacheScanIdleState
         isScanning={operation === "scanning"}

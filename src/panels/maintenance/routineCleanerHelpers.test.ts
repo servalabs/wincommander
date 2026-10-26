@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RoutineCleanerItem, RoutineCleanerScan } from "../../hooks/useBackend";
-import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
+import { APP_CACHE_CLEANUP_CATEGORIES, getPopulatedRoutineCleanerCategories, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
 
 const items: RoutineCleanerItem[] = [
   {
@@ -27,6 +27,11 @@ test("groups preview items by their backend category", () => {
   const groups = groupRoutineCleanerItems(items);
   expect(groups.system?.map((item) => item.id)).toEqual(["system-1", "system-2"]);
   expect(groups.browsers?.map((item) => item.id)).toEqual(["browser-1"]);
+});
+
+test("preview categories include only cache types with scan targets in canonical order", () => {
+  expect(getPopulatedRoutineCleanerCategories(items).map((group) => group.id)).toEqual(["system", "browsers"]);
+  expect(getPopulatedRoutineCleanerCategories([])).toEqual([]);
 });
 
 test("recommended selection excludes opt-in targets", () => {

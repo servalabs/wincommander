@@ -8,7 +8,7 @@ import { Icon, type IconName } from "../../components/ui/icon";
 import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
 import { resolveBrowserIconUrl } from "../privacy/browserIcons";
 import { toExplorerDisplayPath } from "./maintenancePathDisplay";
-import { formatBytes, getRoutineCleanerCategories } from "./routineCleanerHelpers";
+import { formatBytes, getPopulatedRoutineCleanerCategories } from "./routineCleanerHelpers";
 import type { useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -55,8 +55,8 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
   const [activeCategory, setActiveCategory] = useState<string>();
   const [focusedId, setFocusedId] = useState<string>();
   const [query, setQuery] = useState("");
-  const groups = useMemo(() => getRoutineCleanerCategories([...new Set([...cleaner.categories, ...(scan?.items.map((item) => item.category) ?? [])])]).map((category) => ({ ...category, items: scan?.items.filter((item) => item.category === category.id) ?? [] })), [cleaner.categories, scan?.items]);
-  const visibleCategory = groups.find((group) => group.id === activeCategory) ?? groups.find((group) => group.items.length) ?? groups[0];
+  const groups = useMemo(() => getPopulatedRoutineCleanerCategories(scan?.items ?? []), [scan?.items]);
+  const visibleCategory = groups.find((group) => group.id === activeCategory) ?? groups[0];
   const visibleItems = (visibleCategory?.items ?? []).filter((item) => `${item.label} ${item.pathDisplay ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const focusedItem = visibleItems.find((item) => item.id === focusedId);
   const scanSizes = summarizeItems(scan?.items ?? []);
@@ -73,7 +73,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
       {scan.skippedTargets > 0 && <Badge tone="warning">{scan.skippedTargets} unavailable targets</Badge>}
       {scan.items.some((item) => item.truncated) && <Badge tone="warning">Some target scans were partial</Badge>}
     </div>
-    <div className="maintenance-cache-master-detail">
+    {!groups.length ? <div className="maintenance-cache-empty"><Icon icon="confirm" size={28} /><strong>No cleanable data found</strong><p>All selected cache scopes were checked. No supported regenerable cache targets were found.</p></div> : <div className="maintenance-cache-master-detail">
       <nav className="maintenance-cache-categories" aria-label="Cache categories">
         {groups.map((group) => {
           const sizes = summarizeItems(group.items);
@@ -96,7 +96,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
           {!visibleItems.length && <div className="maintenance-cache-empty"><Icon icon="confirm" size={28} /><strong>{query ? "No matching targets" : "No cleanable data found"}</strong><p>{query ? "Try another name or location." : "This category has no cache targets in the current scan."}</p></div>}
         </div>
       </section>
-    </div>
+    </div>}
   </div>;
 }
 

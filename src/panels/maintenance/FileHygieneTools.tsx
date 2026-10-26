@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -65,13 +65,22 @@ export function FileHygieneTools() {
   const selectedReview = tools.tool === "duplicates"
     ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
     : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
+  const resetDuplicateResultScroll = useCallback(() => {
+    const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > [data-slot=\"card-content\"]");
+    results?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    results?.closest<HTMLElement>(".maintenance-workspace-main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+  const loadDuplicateGroupPage = useCallback((offset: number) => {
+    resetDuplicateResultScroll();
+    void tools.loadGroups(offset);
+  }, [resetDuplicateResultScroll, tools]);
 
   return (
     <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
       <Card className="maintenance-file-hygiene-card">
         {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
         {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
-        <div className="maintenance-file-hygiene-results">
+        <div className={`maintenance-file-hygiene-results${tools.tool === "duplicates" ? " maintenance-file-hygiene-results--duplicates" : ""}`}>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -153,7 +162,7 @@ export function FileHygieneTools() {
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
               <DuplicateGroups tools={tools} />
-              <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => void tools.loadGroups(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => void tools.loadGroups(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
+              <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => loadDuplicateGroupPage(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => loadDuplicateGroupPage(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
               <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
             </>
           )}
