@@ -45,7 +45,7 @@ export default function MaintenancePanel() {
     <div className="maintenance-workspace-shell">
       <MaintenanceWorkspaceNav active={active.id} onChange={setActiveTab} />
       <section className={`maintenance-workspace-main${isAnalysis ? " maintenance-workspace-main--analysis" : ""}`} aria-label={active.label}>
-        {!isAnalysis && active.id !== "cleanup" && active.id !== "windows-storage" && <header className="maintenance-workspace-heading"><h2>{active.label}</h2>{active.description && <p>{active.description}</p>}</header>}
+        {!isAnalysis && !["cleanup", "windows-storage", "duplicates"].includes(active.id) && <header className="maintenance-workspace-heading"><h2>{active.label}</h2>{active.description && <p>{active.description}</p>}</header>}
         {active.id === "cleanup" && <AppBrowserCacheCard />}
         {active.id === "windows-storage" && <WindowsStorageCard />}
         {isAnalysis && <div className="maintenance-analysis-workspace">
