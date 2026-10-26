@@ -4,9 +4,6 @@ import DiskCleanupGranular from "../../components/tweaks/managers/DiskCleanupGra
 import { RoutineCleanerHeaderActions, RoutineCleanerPanel } from "./RoutineCleanerPanel";
 import { APP_CACHE_CLEANUP_CATEGORIES } from "./routineCleanerHelpers";
 import { useRoutineCleaner } from "./useRoutineCleaner";
-import { useCleanupScan } from "../cleanup/useCleanupScan";
-import WindowsStorageCacheTools from "./WindowsStorageCacheTools";
-import useEntitlements from "../../hooks/useEntitlements";
 
 /** Kept as a compatibility export for callers that need both reclaim scopes. */
 export default function ReclaimSpaceCard() {
@@ -29,10 +26,6 @@ export function WindowsStorageCard() {
         <section data-tour="maintenance-disk-cleanup" aria-label="Windows storage cleanup" className="maintenance-storage-section">
           <DiskCleanupGranular />
         </section>
-        <details className="maintenance-secondary-scope">
-          <summary>Additional Windows caches</summary>
-          <div className="pt-4"><AdditionalWindowsCaches /></div>
-        </details>
       </CardContent>
     </Card>
   );
@@ -53,24 +46,5 @@ export function AppBrowserCacheCard() {
       </CardHeader>
       <CardContent className="maintenance-app-cache-content"><RoutineCleanerPanel cleaner={cleaner} categories={APP_CACHE_CLEANUP_CATEGORIES} confirmOpen={confirmOpen} onConfirmOpenChange={setConfirmOpen} /></CardContent>
     </Card>
-  );
-}
-
-function AdditionalWindowsCaches() {
-  const { isInvestigator, isLoading } = useEntitlements();
-  const scan = useCleanupScan({
-    schedulesEnabled: false,
-    entitlementsReady: !isLoading,
-    migrationEnabled: false,
-    auxiliaryStateEnabled: false,
-  });
-
-  return (
-    <WindowsStorageCacheTools
-      cardDataMap={scan.cardDataMap}
-      isInvestigator={isInvestigator || isLoading}
-      handleCardLoad={scan.handleCardLoad}
-      handleCardClear={scan.handleCardClear}
-    />
   );
 }

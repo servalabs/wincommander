@@ -91,8 +91,9 @@ the backend and private component before execution.
   user-managed models, datasets, credentials, and resumable upload staging.
 - Deep Cleanup scans supported application cache locations automatically;
   selection totals and review actions sit beside the scan control. Windows
-  storage groups its additional cache tools separately. Browser history,
-  location traces, DNS and app activity remain in System Cleanup.
+  Storage focuses on Windows-managed storage cleanup. Windows Spotlight,
+  Legacy Icon Cache and BranchCache remain in System Cleanup alongside browser
+  history, location traces, DNS and app activity.
 - Disk analysis with synchronized folder results, treemap/sunburst charts,
   chart depth, navigation history, progress, and cancellation. Partial scans
   identify skipped entries and scan limits; charts show logical file sizes,
