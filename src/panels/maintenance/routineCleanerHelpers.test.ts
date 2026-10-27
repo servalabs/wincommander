@@ -30,7 +30,9 @@ test("groups preview items by their backend category", () => {
 });
 
 test("preview categories include only cache types with scan targets in canonical order", () => {
-  expect(getPopulatedRoutineCleanerCategories(items).map((group) => group.id)).toEqual(["system", "browsers"]);
+  const categories = getPopulatedRoutineCleanerCategories(items);
+  expect(categories.map((group) => group.id)).toEqual(["system", "browsers"]);
+  expect(categories[0]?.description).toBe("Temporary files, caches, and diagnostics");
   expect(getPopulatedRoutineCleanerCategories([])).toEqual([]);
 });
 

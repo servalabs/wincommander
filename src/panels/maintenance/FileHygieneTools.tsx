@@ -5,7 +5,7 @@ import {
 } from "../../components/ui/alert-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { CheckboxControl } from "../../components/ui/bp";
 import { Icon, type IconName } from "../../components/ui/icon";
@@ -66,7 +66,7 @@ export function FileHygieneTools() {
     ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
     : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
   const resetDuplicateResultScroll = useCallback(() => {
-    const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > [data-slot=\"card-content\"]");
+    const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > .maintenance-file-hygiene-content");
     results?.scrollTo({ top: 0, left: 0, behavior: "auto" });
     results?.closest<HTMLElement>(".maintenance-workspace-main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, []);
@@ -77,15 +77,14 @@ export function FileHygieneTools() {
 
   return (
     <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
-      <Card className="maintenance-file-hygiene-card">
-        {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
-        {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
-        <div className={`maintenance-file-hygiene-results${tools.tool === "duplicates" ? " maintenance-file-hygiene-results--duplicates" : ""}`}>
-        <CardHeader>
+      {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
+      {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
+      <div className={`maintenance-file-hygiene-results${tools.tool === "duplicates" ? " maintenance-file-hygiene-results--duplicates" : ""}`}>
+        <div className="maintenance-file-hygiene-header">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Icon icon="clean" size={16} className="text-[var(--accent)]" />
-              <CardTitle>{tools.tool === "duplicates" ? "Duplicate Cleanup" : "Inspect empty folders"}</CardTitle>
+              <h2 className="font-semibold font-[family-name:var(--font-display)] text-[15px] leading-none">{tools.tool === "duplicates" ? "Duplicate Cleanup" : "Inspect empty folders"}</h2>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} folder{tools.roots.length === 1 ? "" : "s"}</Badge>}
@@ -95,11 +94,11 @@ export function FileHygieneTools() {
               {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
             </div>
           </div>
-          <CardDescription>
+          <p className="text-[13px] text-[var(--text-dim)]">
             {tools.tool === "duplicates"
               ? "Select copies to remove; one verified copy per group is always retained."
               : "Only folders still empty at removal time are deleted."}
-          </CardDescription>
+          </p>
           <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
             <TabsList>
               <TabsTrigger value="duplicates">Duplicate files</TabsTrigger>
@@ -125,8 +124,8 @@ export function FileHygieneTools() {
               </Button>
             </div>
           )}
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
+        </div>
+        <div className="maintenance-file-hygiene-content flex flex-col gap-3">
           {tools.tool === "duplicates" && <DuplicateScanStatus progress={tools.progress} scan={tools.duplicateScan} scanning={scanning} local={tools.scopeMode === "local"} />}
           {tools.tool === "duplicates" && <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-dim)]"><label>Find duplicates at least <select aria-label="Minimum duplicate file size" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select></label><span>Small files are skipped to keep whole-drive scans practical.</span></div>}
           {hasScan && <div className="flex flex-wrap items-center gap-2">
@@ -176,9 +175,8 @@ export function FileHygieneTools() {
               <SelectionActionBar disabled={tools.busy} count={tools.selected.size} onRemove={() => setConfirmOpen(true)} />
             </>
           )}
-        </CardContent>
+        </div>
       </div>
-      </Card>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

@@ -45,6 +45,7 @@ export function groupRoutineCleanerItems(items: RoutineCleanerItem[]): RoutineCl
 export interface RoutineCleanerCategoryGroup {
   id: RoutineCleanerCategory;
   label: string;
+  description: string;
   items: RoutineCleanerItem[];
 }
 
@@ -56,7 +57,7 @@ export interface RoutineCleanerCategoryGroup {
 export function getPopulatedRoutineCleanerCategories(items: RoutineCleanerItem[]): RoutineCleanerCategoryGroup[] {
   const groups = groupRoutineCleanerItems(items);
   return ROUTINE_CLEANER_CATEGORIES
-    .map((category) => ({ id: category.id, label: category.label, items: groups[category.id] ?? [] }))
+    .map((category) => ({ ...category, items: groups[category.id] ?? [] }))
     .filter((category) => category.items.length > 0);
 }
 
