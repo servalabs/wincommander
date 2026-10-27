@@ -2823,6 +2823,7 @@ pub fn run() {
             environment_cleaner::environment_cleaner_repair,
             uninstall_leftovers::uninstall_leftovers_scan,
             uninstall_leftovers::uninstall_leftovers_remove,
+            uninstall_leftovers::uninstall_leftovers_reveal,
             uninstall_leftovers::uninstall_leftovers_cancel,
             // ── Preview-first ARP cache maintenance ──
             network_maintenance::arp_cache_scan,

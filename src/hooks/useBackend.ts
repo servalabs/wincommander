@@ -2505,6 +2505,7 @@ export function useBackend() {
     environmentCleanerRepair: (ids: string[]) => invoke<EnvironmentRepairResult>("environment_cleaner_repair", { ids }),
     uninstallLeftoversScan: () => invoke<UninstallLeftoverScan>("uninstall_leftovers_scan"),
     uninstallLeftoversRemove: (ids: string[]) => invoke<UninstallLeftoverRemoveResult>("uninstall_leftovers_remove", { ids }),
+    uninstallLeftoversReveal: (id: string) => invoke<void>("uninstall_leftovers_reveal", { id }),
     uninstallLeftoversCancel: () => invoke<void>("uninstall_leftovers_cancel"),
     arpCacheScan: () => invoke<ArpScan>("arp_cache_scan"),
     arpCacheClear: (scanId: string) => invoke<ArpClearResult>("arp_cache_clear", { scanId }),

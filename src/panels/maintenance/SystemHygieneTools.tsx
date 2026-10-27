@@ -30,7 +30,7 @@ import { showSuccess } from "../../utils/toast";
 
 export function SystemHygieneTools() {
   const tools = useSystemHygiene();
-  const { openPath } = useBackend();
+  const { openPath, uninstallLeftoversReveal } = useBackend();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const items =
     tools.tool === "shortcuts"
@@ -181,7 +181,8 @@ export function SystemHygieneTools() {
                 title={`${item.name} · ${formatBytes(item.bytes)} · possible remnant`}
                 detail={item.scope}
                 path={item.path}
-                onReveal={(path) => void openParentFolder(openPath, path)}
+                revealLabel="Open candidate folder in Explorer"
+                onReveal={() => void uninstallLeftoversReveal(item.id)}
               />
             ))}
             {!tools.leftovers.entries.length && <Empty />}
@@ -295,6 +296,7 @@ function Row({
   title,
   detail,
   path,
+  revealLabel = "Open containing folder in Explorer",
   onReveal,
 }: {
   checked: boolean;
@@ -302,6 +304,7 @@ function Row({
   title: string;
   detail: string;
   path: string;
+  revealLabel?: string;
   onReveal: (path: string) => void;
 }) {
   const displayPath = toExplorerDisplayPath(path);
@@ -317,7 +320,7 @@ function Row({
         <span className="block text-sm text-[var(--text)]">{title}</span>
         <span className="mt-0.5 block text-[10px] text-[var(--text-mute)]">{detail}</span>
         {displayPath ? (
-          <button type="button" onClick={() => onReveal(path)} className="block min-w-0 max-w-full text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${displayPath}`}>
+          <button type="button" onClick={() => onReveal(path)} className="block min-w-0 max-w-full text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`${revealLabel}: ${displayPath}`}>
             <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{displayPath}</span>
           </button>
         ) : (
@@ -326,7 +329,7 @@ function Row({
       </span>
       <span className="flex shrink-0 items-center gap-0.5">
         <Button size="icon" variant="ghost" className="size-7" title={displayPath ? "Copy full location" : "Path unavailable"} aria-label={`Copy ${title} location`} disabled={!displayPath} onClick={() => void copyPath()}><Icon icon="clipboard" size={14} /></Button>
-        <Button size="icon" variant="ghost" className="size-7" title={displayPath ? "Open containing folder" : "Path unavailable"} aria-label={`Open ${title} in Explorer`} disabled={!displayPath} onClick={() => onReveal(path)}><Icon icon="folder-open" size={14} /></Button>
+        <Button size="icon" variant="ghost" className="size-7" title={displayPath ? revealLabel : "Path unavailable"} aria-label={`Open ${title} in Explorer`} disabled={!displayPath} onClick={() => onReveal(path)}><Icon icon="folder-open" size={14} /></Button>
       </span>
     </div>
   );

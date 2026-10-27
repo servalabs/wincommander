@@ -11846,6 +11846,16 @@
       ]
     },
     {
+      "id": "tauri:uninstall_leftovers_reveal",
+      "name": "uninstall_leftovers_reveal",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:uninstall_leftovers_scan",
       "name": "uninstall_leftovers_scan",
       "transport": "tauri",

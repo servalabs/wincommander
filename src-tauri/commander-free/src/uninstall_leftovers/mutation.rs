@@ -3,6 +3,7 @@ use super::scanner::is_safe_name;
 use super::{CachedFolder, UninstallLeftoverRemoveResult};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) fn remove_leftovers(
@@ -29,6 +30,15 @@ pub(super) fn remove_leftovers(
         }
     }
     result
+}
+
+pub(super) fn reveal_leftover(entry: CachedFolder) -> Result<(), String> {
+    let path = validate_folder(&entry)?;
+    Command::new("explorer.exe")
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("failed to open leftover folder: {error}"))?;
+    Ok(())
 }
 fn validate_folder(entry: &CachedFolder) -> Result<PathBuf, String> {
     let meta = fs::symlink_metadata(&entry.path).map_err(|error| error.to_string())?;

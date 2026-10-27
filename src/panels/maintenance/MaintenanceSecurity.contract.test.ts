@@ -31,6 +31,17 @@ describe("maintenance security and hygiene result handling", () => {
     expect(hygiene).toContain("Windows does not prove");
   });
 
+  test("opens an uninstall candidate only through its validated scan ID", async () => {
+    const hygiene = await Bun.file("src/panels/maintenance/SystemHygieneTools.tsx").text();
+    const backend = await Bun.file("src-tauri/commander-free/src/uninstall_leftovers/mod.rs").text();
+
+    expect(hygiene).toContain("uninstallLeftoversReveal(item.id)");
+    expect(hygiene).toContain('revealLabel="Open candidate folder in Explorer"');
+    expect(backend).toContain("pub async fn uninstall_leftovers_reveal(id: String)");
+    expect(backend).toContain("mutation::reveal_leftover(entry)");
+    expect(backend).toContain("uninstall leftovers scan expired; scan again before opening folders");
+  });
+
   test("renders Defender scan results and exposes the Windows Security fallback", async () => {
     const malware = await Bun.file("src/panels/maintenance/MalwareCenter.tsx").text();
 
