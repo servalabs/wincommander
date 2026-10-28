@@ -401,6 +401,8 @@ function CleanupTabNavigation({
         handleAutoSetSchedules,
         autoSetSchedulesBusy,
         hasScheduledWipes,
+        scheduleState,
+        refreshSchedules,
     } = scan;
     const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
     const isScanningAll = isCategoryBatchScanning(allScanCategories);
@@ -444,7 +446,7 @@ function CleanupTabNavigation({
                     small
                     intent="primary"
                     icon={autoSetSchedulesBusy ? undefined : "time"}
-                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
+                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : schedulesEnabled && scheduleState === "checking" ? "Checking scheduled wipes…" : schedulesEnabled && scheduleState === "unavailable" ? "Retry schedule status" : hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
                     aria-label={hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
                     title={isInvestigator
                         ? "Scheduled wipes are unavailable in review mode"
@@ -454,12 +456,13 @@ function CleanupTabNavigation({
                                 : "Set safe default intervals without changing existing schedules"
                             : "Unlock scheduled wipes"}
                     loading={autoSetSchedulesBusy}
-                    disabled={isInvestigator || autoSetSchedulesBusy}
+                    disabled={isInvestigator || autoSetSchedulesBusy || (schedulesEnabled && scheduleState === "checking")}
                     onClick={() => {
                         if (!schedulesEnabled) {
                             onRequestScheduleAccess?.();
                             return;
                         }
+                        if (scheduleState === "unavailable") { void refreshSchedules(); return; }
                         void handleAutoSetSchedules();
                     }}
                     data-cleanup-auto-set-schedules="true"

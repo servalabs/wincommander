@@ -186,7 +186,7 @@ function cleanupAuditResponse(command: string): unknown | undefined {
       };
     case "Get-ProcessIntelligence":
       return {
-        entries: [
+        processes: [
           { name: "audit-sync.exe", pid: 4242, path: "C:\\Audit\\Tools\\audit-sync.exe", signed: "Valid", signer: "ServaLabs Audit", elevated: "No" },
           { name: "case-indexer.exe", pid: 4343, path: "C:\\Audit\\Tools\\case-indexer.exe", signed: "NotSigned", signer: null, elevated: "Yes" },
         ],
@@ -202,12 +202,13 @@ function cleanupAuditResponse(command: string): unknown | undefined {
       };
     case "Get-SRUMData":
       return {
-        entries: [
-          { name: "audit-sync.exe", pid: 4242, path: "C:\\Audit\\Tools\\audit-sync.exe", owner: "AuditAnalyst", cpuTime: 183.4, memoryKB: 86400, threadCount: 12 },
-          { name: "case-indexer.exe", pid: 4343, path: "C:\\Audit\\Tools\\case-indexer.exe", owner: "AuditAnalyst", cpuTime: 92.1, memoryKB: 42112, threadCount: 7 },
-        ],
+        files: [{ name: "SRUDB.dat", path: "C:\\Windows\\System32\\sru\\SRUDB.dat", sizeKB: 12902.4, modified: "2026-08-01 22:41:08" }],
         srumSizeMb: 12.6,
-        total: 2,
+        databaseExists: true,
+        historicalRecordsAvailable: false,
+        countUnit: "database files",
+        coverage: "Database file metadata only. Historical usage records inside SRUDB.dat are not decoded.",
+        total: 1,
       };
     case "Get-EventLogSummary":
       return {
@@ -225,7 +226,7 @@ function cleanupAuditResponse(command: string): unknown | undefined {
         ],
         historyPath: "C:\\Users\\AuditAnalyst\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt",
         total: 2,
-        fileTotal: 1,
+        fileTotal: 2,
       };
     case "Get-RecentFiles":
       return {

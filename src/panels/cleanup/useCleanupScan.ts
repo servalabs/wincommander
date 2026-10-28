@@ -8,6 +8,10 @@ import useBackend from "../../hooks/useBackend";
 import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
+import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
+export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
+import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
+import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
     invalidateDiskCleanupScheduleStatus,
@@ -50,7 +54,7 @@ function writeScheduleCache(schedules: Record<string, number>): void {
 // Persists loaded card data across panel unmount/remount so navigating
 // away and back shows results instantly without re-spawning PowerShell.
 // Also used to store results from in-flight scans that complete after unmount.
-export type CardData = { count: number; items: string[]; loading: boolean; clearing: boolean; error?: string; raw?: any };
+export type CardData = { count: number; items: string[]; loading: boolean; clearing: boolean; error?: string; raw?: any; verification?: CleanupVerification };
 let _cleanupCache: Record<string, CardData> = {};
 // Per-other-user scan cache (keyed by profile folder name). Switching back to
 // an already-scanned account shows its traces instantly instead of re-running
@@ -91,7 +95,7 @@ export async function runCleanupWorkers<T>(
     ));
 }
 
-export type CleanupClearResult = 'cleared' | 'reduced' | 'unchanged' | 'failed';
+export type CleanupClearResult = 'cleared' | 'reduced' | 'reset' | 'unchanged' | 'deferred' | 'failed';
 
 export interface CleanupClearReconciliation {
     result: CleanupClearResult;
@@ -112,10 +116,8 @@ export const formatAutoSetScheduleSummary = (summary: AutoSetScheduleSummary) =>
         : `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.`;
 
 /**
- * The post-clear scan is the authoritative result. Several Windows cleaners
- * can remove entries and still return a non-critical backend error while
- * closing an optional handle, so reporting that response alone as a failure
- * contradicted the count displayed on the card.
+ * A reduced post-clear count proves progress, but a failed cleaner cannot be
+ * reported as a complete clear even if the fresh scan found zero.
  */
 export function reconcileCleanupClear(
     before: number,
@@ -123,9 +125,23 @@ export function reconcileCleanupClear(
     backendSucceeded: boolean,
 ): CleanupClearReconciliation {
     const removed = Math.max(0, before - after);
+    if (!backendSucceeded) return { result: 'failed', removed };
     if (after === 0) return { result: 'cleared', removed };
     if (removed > 0) return { result: 'reduced', removed };
-    return { result: backendSucceeded ? 'unchanged' : 'failed', removed };
+    return { result: 'unchanged', removed };
+}
+
+export function verifyNtfsJournalReset(
+    receipt: { verifiedReset?: boolean; journals?: Array<{ drive?: string; beforeJournalId?: string; afterJournalId?: string }> } | undefined,
+    scan: { journals?: Array<{ drive?: string; journalId?: string }> } | undefined,
+): boolean {
+    if (receipt?.verifiedReset !== true || !Array.isArray(receipt.journals) || !receipt.journals.length || !Array.isArray(scan?.journals)) return false;
+    return receipt.journals.every(journal => {
+        const before = journal.beforeJournalId?.toLowerCase();
+        const after = journal.afterJournalId?.toLowerCase();
+        const current = scan.journals!.find(row => row.drive?.toLowerCase() === journal.drive?.toLowerCase())?.journalId?.toLowerCase();
+        return !!before && !!after && before !== after && current === after;
+    });
 }
 
 // Sentinel "account" for the combined All-Users view (#7).
@@ -156,12 +172,6 @@ const HIDDEN_PROFILE_FRAGMENTS = [
     "wdagutilityaccount",
 ];
 
-const DEFAULT_BULK_CLEAR_EXCLUDES = [
-    'wlanProfiles', 'browserFootprints', 'notepadState', 'wslData',
-    'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches',
-    'credentialManager', 'sshState', 'passwordManagerCaches',
-];
-
 function isRealVisibleProfile(profile: { name?: string; displayName?: string; path?: string }): boolean {
     const name = (profile.name ?? "").trim();
     if (!name) return false;
@@ -188,7 +198,7 @@ function publishScanningBatches() {
 }
 
 export function updateCacheEntry(id: string, data: CardData) {
-    _cleanupCache[id] = data;
+    _cleanupCache[id] = retainCleanupVerification(data, _cleanupCache[id]);
     _cacheSubscriber?.({ ..._cleanupCache });
 }
 
@@ -299,9 +309,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         error,
     } = backend;
 
-    // Exclusions apply to every bulk cleanup scope. Their persisted settings
-    // are scoped to the current Windows user; defaults protect sensitive data
-    // until that user makes their first change.
+    // User exclusions may add protection; backend-protected defaults stay fixed.
     const [clearAllExcludes, setClearAllExcludesRaw] = useState<Set<string>>(
         () => new Set(DEFAULT_BULK_CLEAR_EXCLUDES)
     );
@@ -310,7 +318,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     useEffect(() => {
         if (hasChangedExclusions.current || !settings) return;
         setClearAllExcludesRaw(
-            new Set(settings.app.bulkClearExcludes ?? DEFAULT_BULK_CLEAR_EXCLUDES),
+            new Set([...DEFAULT_BULK_CLEAR_EXCLUDES, ...(settings.app.bulkClearExcludes ?? [])]),
         );
     }, [settings]);
 
@@ -325,7 +333,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const setClearAllExcludes: React.Dispatch<React.SetStateAction<Set<string>>> = (update) => {
         hasChangedExclusions.current = true;
         setClearAllExcludesRaw((previous) => {
-            return new Set(typeof update === "function" ? update(previous) : update);
+            return new Set([...DEFAULT_BULK_CLEAR_EXCLUDES, ...(typeof update === "function" ? update(previous) : update)]);
         });
     };
 
@@ -350,7 +358,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [allUsersRaw, setAllUsersRaw] = useState<Array<{
         username: string;
         displayName: string;
-        categories: Record<string, { count: number; items: string[]; raw?: unknown }>;
+        categories: Record<string, { count: number; items: string[]; raw?: unknown; error?: string }>;
     }>>([]);
 
     // True when the grid is showing the logged-in operator (the default). All
@@ -375,17 +383,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         setOtherUserLoading(true);
         try {
             const res = await getCleanupSummaryAllUsers(categoryIds ?? [], [username]);
-            if (res.success && res.data?.users?.length) {
+            if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
                 const u = res.data.users[0];
-                // hiveAvailable=false means registry categories show 0 (hive locked/unavailable).
-                // This is silent — not an error the user needs to act on.
-                const byId: Record<string, { count: number; items: string[]; raw?: unknown }> = {};
+                const byId: Record<string, { count: number; items: string[]; raw?: unknown; error?: string }> = {};
                 for (const c of u.categories) {
-                    byId[c.id] = {
-                        count: c.count,
-                        items: c.items ?? [],
-                        raw: c.records?.length ? { records: c.records } : undefined,
-                    };
+                    byId[c.id] = readCleanupUserSummary(c);
                 }
                 const next: Record<string, CardData> = {};
                 const requestedIds = categoryIds?.length ? new Set(categoryIds) : null;
@@ -394,11 +396,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                     if (requestedIds && !requestedIds.has(cat.id)) continue;
                     const d = byId[cat.id];
                     next[cat.id] = {
-                        count: d?.count ?? 0,
+                        count: d?.count ?? -1,
                         items: d?.items ?? [],
                         loading: false,
                         clearing: false,
                         raw: d?.raw,
+                        error: d?.error ?? (d ? undefined : 'This category was not scanned.'),
                     };
                 }
                 const merged = categoryIds?.length
@@ -406,11 +409,17 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                     : next;
                 _otherUserCache[username] = merged;
                 setOtherUserDataMap(merged);
+                return categoryIds?.length === 1 && next[categoryIds[0]]?.count === 0 && !next[categoryIds[0]]?.error;
             } else {
-                showError(res.error || `Failed to load traces for ${username}.`);
+                const message = res.error || `Failed to load traces for ${username}.`;
+                showError(message);
+                setOtherUserDataMap({});
+                return false;
             }
         } catch (e) {
             showError(`Failed to load traces for ${username}: ${e}`);
+            setOtherUserDataMap({});
+            return false;
         } finally {
             setOtherUserLoading(false);
         }
@@ -418,25 +427,34 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // Load EVERY account's scope-aware traces, kept per-user, so the grid can
     // sum them and the detail modal can break the total back down (#7).
-    const loadAllUsersView = async () => {
+    const loadAllUsersView = async (categoryId?: string) => {
         setOtherUserLoading(true);
         try {
-            const res = await getCleanupSummaryAllUsers([], []);
-            if (res.success && res.data?.users?.length) {
+            const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [], []);
+            if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
                 setAllUsersRaw(res.data.users.map(u => ({
                     username: u.username,
                     displayName: availableUsers.find(a => a.name === u.username)?.displayName ?? u.username,
-                    categories: Object.fromEntries((u.categories ?? []).map(c => [c.id, {
-                        count: c.count,
-                        items: c.items ?? [],
-                        raw: c.records?.length ? { records: c.records } : undefined,
-                    }])),
+                    categories: Object.fromEntries((u.categories ?? []).map(c => {
+                        return [c.id, readCleanupUserSummary(c)];
+                    })),
                 })));
+                return categoryId
+                    ? res.data.users.every(u => {
+                        const c = u.categories?.find(item => item.id === categoryId) as
+                            | (typeof u.categories[number] & { error?: boolean; status?: string }) | undefined;
+                        return !!c && readCleanupUserSummary(c).count === 0;
+                    })
+                    : res.data.users.every(u => (u.categories ?? []).every(c => c.count === 0));
             } else {
                 showError(res.error || 'Failed to load combined user traces.');
+                setAllUsersRaw([]);
+                return false;
             }
         } catch (e) {
             showError(`Failed to load combined user traces: ${e}`);
+            setAllUsersRaw([]);
+            return false;
         } finally {
             setOtherUserLoading(false);
         }
@@ -469,13 +487,16 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             if (!cat.scopeAware || !MULTI_USER_CLEANUP_IDS.has(cat.id)) continue;
             let total = 0;
             const breakdown: string[] = [];
+            let incomplete = allUsersRaw.length === 0;
             for (const u of allUsersRaw) {
                 const d = u.categories[cat.id];
-                const c = d?.count ?? 0;
-                total += c;
+                const c = d?.count ?? -1;
+                if (c < 0 || d?.error) incomplete = true;
+                if (c > 0) total += c;
                 if (c > 0) breakdown.push(`${u.displayName} — ${c}`);
             }
-            map[cat.id] = { count: total, items: breakdown, loading: false, clearing: false };
+            map[cat.id] = { count: incomplete ? -1 : total, items: breakdown, loading: false, clearing: false,
+                error: incomplete && allUsersRaw.length > 0 ? 'One or more user scans were incomplete.' : undefined };
         }
         return map;
     }, [allUsersRaw]);
@@ -489,14 +510,18 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Render the last verified snapshot immediately. Task Scheduler remains
     // authoritative and replaces this cache silently after panel startup.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>(readScheduleCache);
+    const [scheduleState, setScheduleState] = useState<"checking" | "verified" | "unavailable">("checking");
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const migrationStarted = useRef(false);
 
     const refreshSchedules = async () => {
-        const res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true);
-        if (res.success && res.data?.schedules) {
+        setScheduleState("checking");
+        let res;
+        try { res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true); }
+        catch { setScheduleState("unavailable"); return null; }
+        if (isCleanupCommandSuccessful(res) && Array.isArray(res.data?.schedules)) {
             const map: Record<string, number> = {};
             const autoSetIds = new Set<string>();
             for (const s of res.data.schedules) {
@@ -512,7 +537,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             setSchedulesById(map);
             writeScheduleCache(map);
             setAutoSetScheduleIds(autoSetIds);
+            setScheduleState("verified");
+            return map;
         }
+        setScheduleState("unavailable");
+        return null;
     };
 
     useEffect(() => {
@@ -560,23 +589,27 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     }, [entitlementsReady, schedulesEnabled, migrationEnabled]);
 
     const handleSetSchedule = async (categoryId: string, minutes: number, runAsSystem: boolean) => {
+        const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
+        if (!category?.schedulable || !schedulesEnabled) return false;
+        const allowDefaultExcluded = isDefaultExcludedCleanup(categoryId);
+        if (!await requestCleanupManualAuthorization(category, 'schedule', requestConfirm, minutes)) return false;
         setScheduleBusyId(categoryId);
         try {
             const schedulerId = getSchedulerCategoryId(categoryId);
-            const res = await setAutoEraseSchedule(schedulerId, minutes, runAsSystem);
-            if (res.success) {
-                invalidateDiskCleanupScheduleStatus();
-                setSchedulesById(prev => {
-                    const next = { ...prev, [categoryId]: minutes };
-                    writeScheduleCache(next);
-                    return next;
-                });
-                showSuccess(`Auto-clean scheduled every ${minutes} min for ${categoryId}`);
-                return true;
-            } else {
-                showError(res.error || `Failed to schedule auto-clean for ${categoryId}`);
+            const res = await setAutoEraseSchedule(schedulerId, minutes, runAsSystem, false, false, allowDefaultExcluded);
+            if (!isCleanupCommandSuccessful(res)) {
+                showError(res.error || `Failed to schedule auto-clean for ${category.label}`);
                 return false;
             }
+            invalidateDiskCleanupScheduleStatus();
+            const verified = await refreshSchedules();
+            const registeredMinutes = res.data?.intervalMinutes ?? minutes;
+            if (verified?.[categoryId] !== registeredMinutes) {
+                showError(`${category.label}: the enabled schedule could not be confirmed. Check Task Scheduler and retry.`);
+                return false;
+            }
+            showSuccess(`Auto-clean scheduled every ${registeredMinutes} min for ${category.label}`);
+            return true;
         } finally {
             setScheduleBusyId(null);
         }
@@ -587,20 +620,18 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         try {
             const schedulerId = getSchedulerCategoryId(categoryId);
             const res = await removeAutoEraseSchedule(schedulerId);
-            if (res.success) {
-                invalidateDiskCleanupScheduleStatus();
-                setSchedulesById(prev => {
-                    const next = { ...prev };
-                    delete next[categoryId];
-                    writeScheduleCache(next);
-                    return next;
-                });
-                showSuccess(`Auto-clean turned off for ${categoryId}`);
-                return true;
-            } else {
+            if (!isCleanupCommandSuccessful(res)) {
                 showError(res.error || `Failed to turn off auto-clean for ${categoryId}`);
                 return false;
             }
+            invalidateDiskCleanupScheduleStatus();
+            const verified = await refreshSchedules();
+            if (!verified || verified[categoryId] !== undefined) {
+                showError(`${categoryId}: schedule removal could not be confirmed. Check Task Scheduler and retry.`);
+                return false;
+            }
+            showSuccess(`Auto-clean turned off for ${categoryId}`);
+            return true;
         } finally {
             setScheduleBusyId(null);
         }
@@ -716,12 +747,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         defenderHistory: getDefenderHistoryInfo,
     };
 
-    const clearerMap: Record<string, (() => Promise<any>) | undefined> = {
+    const clearerMap: Record<string, ((allowDefaultExcluded?: boolean) => Promise<any>) | undefined> = {
         shellBags: clearShellBags,
         usbHistory: clearUsbHistory,
         dnsCache: flushDnsCache,
         execCache: clearExecutionCache,
-        wlanProfiles: () => removeWlanProfile(''),
+        wlanProfiles: (allowDefaultExcluded) => removeWlanProfile('', allowDefaultExcluded),
         btDevices: clearBluetoothHistory,
         netDrives: clearNetworkDrives,
         eventLogs: clearEventLogs,
@@ -732,7 +763,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         connectivityHistory: clearConnectivityHistory,
         clipboardHistory: clearClipboard,
         jumpLists: clearJumpLists,
-        browserFootprints: clearBrowserFootprints,
+        browserFootprints: (allowDefaultExcluded) => clearBrowserFootprints(undefined, undefined, allowDefaultExcluded),
         prefetchFiles: clearPrefetch,
         shadowCopies: clearShadowCopies,
         ntfsJournals: clearNTFSJournals,
@@ -758,7 +789,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         usageTraceLogs: clearUsageTraceLogs,
         defenderHistory: clearDefenderHistory,
         virtualMemory: invokeVirtualMemoryPurge,
-        unallocatedErase: invokeUnallocatedSpaceErase,
+        unallocatedErase: () => invokeUnallocatedSpaceErase(),
         // Drive optimization is a single OsRepairCard action. Windows chooses
         // defrag or ReTrim per volume, so no SSD-only cleanup action is
         // dispatched through this map.
@@ -770,10 +801,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // clearer methods can be resolved safely from their declared backend keys.
     // This also prevents a backend-complete card from silently becoming a
     // no-op when a category is added without duplicating it in both maps.
-    const backendNoArg = (methodName: string): (() => Promise<any>) | undefined => {
+    const backendNoArg = (methodName: string): ((allowDefaultExcluded?: boolean) => Promise<any>) | undefined => {
         const candidate = (backend as unknown as Record<string, unknown>)[methodName];
         return typeof candidate === 'function'
-            ? () => (candidate as () => Promise<any>)()
+            ? (allowDefaultExcluded) => (candidate as (allowDefaultExcluded?: boolean) => Promise<any>)(allowDefaultExcluded)
             : undefined;
     };
     for (const cat of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES, ...VIEW_ONLY_CATEGORIES, ...ACTION_CATEGORIES]) {
@@ -782,20 +813,19 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     }
 
     // Load a single category — writes to module cache so results survive unmount
-    const loadSingleCategory = async (cat: CleanupCategory) => {
+    const loadSingleCategory = async (cat: CleanupCategory): Promise<CardData | undefined> => {
         const getter = getterMap[cat.id];
         if (!getter) return;
         updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: -1, items: [] }), loading: true, clearing: false });
         try {
             const res = await getter();
-            if (res.success && res.data) {
-                const { count, items } = cat.extractPreview(res.data);
-                updateCacheEntry(cat.id, { count, items, loading: false, clearing: false, raw: res.data });
-            } else {
-                updateCacheEntry(cat.id, { count: 0, items: [], loading: false, clearing: false, error: res.error });
-            }
+            const data = readCleanupScanResult(cat, res);
+            updateCacheEntry(cat.id, data);
+            return data;
         } catch (e) {
-            updateCacheEntry(cat.id, { count: 0, items: [], loading: false, clearing: false, error: String(e) });
+            const data: CardData = { count: -1, items: [], loading: false, clearing: false, error: String(e) };
+            updateCacheEntry(cat.id, data);
+            return data;
         }
     };
 
@@ -816,7 +846,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         publishScanningBatches();
         const concurrency = getCleanupScanConcurrency();
         try {
-            await runCleanupWorkers(cats, loadSingleCategory, concurrency);
+            await runCleanupWorkers(cats, async cat => { await loadSingleCategory(cat); }, concurrency);
         } finally {
             _scanningBatchIds.delete(batchId);
             publishScanningBatches();
@@ -845,32 +875,58 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Clear a category for the CURRENT user (in-process single-user clear).
     // `onDriveWipe` opens the drive-wipe selector dialog (owned by the caller)
     // instead of running the generic confirm+clear flow.
-    const clearAndReconcile = async (cat: CleanupCategory): Promise<{
+    type ClearOutcome = {
         result: CleanupClearResult;
         before: number;
         after: number;
         removed: number;
         error?: string;
-    }> => {
+    };
+    const clearAndReconcile = async (cat: CleanupCategory, allowDefaultExcluded = false): Promise<ClearOutcome> => {
         const before = Math.max(0, _cleanupCache[cat.id]?.count ?? cardDataMap[cat.id]?.count ?? 0);
         const clearer = clearerMap[cat.id];
         if (!clearer) return { result: 'failed', before, after: before, removed: 0 };
+        const recordVerification = (outcome: ClearOutcome): ClearOutcome => {
+            const current = _cleanupCache[cat.id];
+            if (current) updateCacheEntry(cat.id, {
+                ...current, loading: false, clearing: false,
+                verification: createCleanupVerification(outcome.result),
+            });
+            return outcome;
+        };
 
         updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: before, items: [] }), clearing: true, loading: false });
         let backendSucceeded = false;
         let error: string | undefined;
         try {
-            const res = await clearer();
-            backendSucceeded = !!res.success;
-            error = res.error;
-            await loadSingleCategory(cat);
-            const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
-            return { ...reconcileCleanupClear(before, after, backendSucceeded), before, after, error };
+            const res = await clearer(allowDefaultExcluded);
+            const payload = res.data as { ok?: boolean; error?: boolean; message?: string; stdout?: string;
+                verifiedReset?: boolean; journals?: Array<{ drive?: string; beforeJournalId?: string; afterJournalId?: string }> } | undefined;
+            backendSucceeded = payload?.ok === true && isCleanupCommandSuccessful(res);
+            error = res.error || (payload?.error || payload?.ok === false ? payload.message || payload.stdout : undefined);
+            const bootScheduled = cat.id === 'amcache' && backendSucceeded
+                ? Number(payload?.stdout?.match(/\bbootScheduled=(\d+)/i)?.[1] ?? 0)
+                : 0;
+            const fresh = await loadSingleCategory(cat);
+            if (!fresh || fresh.error || fresh.count < 0) {
+                return recordVerification({ result: 'failed', before, after: before, removed: 0, error: fresh?.error || 'A complete verification scan was not available.' });
+            }
+            const after = fresh.count;
+            if (bootScheduled > 0) return recordVerification({ result: 'deferred', before, after, removed: 0 });
+            if (cat.id === 'ntfsJournals') {
+                const resetVerified = backendSucceeded && verifyNtfsJournalReset(payload, fresh.raw);
+                return recordVerification({ result: resetVerified ? 'reset' : 'failed', before, after, removed: 0,
+                    error: resetVerified ? undefined : 'Journal reset could not be verified by identity.' });
+            }
+            return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded), before, after, error });
         } catch (cause) {
-            await loadSingleCategory(cat);
-            const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
+            const fresh = await loadSingleCategory(cat);
+            if (!fresh || fresh.error || fresh.count < 0) {
+                return recordVerification({ result: 'failed', before, after: before, removed: 0, error: fresh?.error || 'A complete verification scan was not available.' });
+            }
+            const after = fresh.count;
             error = String(cause);
-            return { ...reconcileCleanupClear(before, after, false), before, after, error };
+            return recordVerification({ ...reconcileCleanupClear(before, after, false), before, after, error });
         }
     };
 
@@ -887,7 +943,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (!schedulesEnabled) {
+        if (!schedulesEnabled || scheduleState !== "verified") {
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;
         }
@@ -911,7 +967,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 for (const categoryId of scheduledIds) {
                     try {
                         const res = await removeAutoEraseSchedule(getSchedulerCategoryId(categoryId));
-                        if (res.success) summary.disabled++;
+                        if (isCleanupCommandSuccessful(res)) summary.disabled++;
                         else {
                             summary.failed++;
                             firstFailure ??= res.error || `Failed to turn off ${categoryId}.`;
@@ -922,8 +978,14 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                     }
                 }
             } else {
+                const eligibleCategories = SCHEDULABLE_CATEGORIES.filter(category =>
+                    category.schedulable && category.clearDataKey && !isAutomaticCleanupExcluded(category.id, clearAllExcludes));
+                if (!await requestConfirm(getCleanupAutoScheduleConfirmation(eligibleCategories))) {
+                    summary.skipped = SCHEDULABLE_CATEGORIES.length;
+                    return summary;
+                }
                 for (const category of SCHEDULABLE_CATEGORIES) {
-                    if (!category.schedulable || !category.clearDataKey) {
+                    if (!category.schedulable || !category.clearDataKey || isAutomaticCleanupExcluded(category.id, clearAllExcludes)) {
                         summary.skipped++;
                         continue;
                     }
@@ -939,9 +1001,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                             true,
                             true,
                         );
-                        if (res.success && res.data?.status === "alreadyConfigured") {
+                        if (isCleanupCommandSuccessful(res) && res.data?.status === "alreadyConfigured") {
                             summary.alreadyConfigured++;
-                        } else if (res.success) summary.created++;
+                        } else if (isCleanupCommandSuccessful(res)) summary.created++;
                         else {
                             summary.failed++;
                             firstFailure ??= res.error || `Failed to schedule ${category.label}.`;
@@ -963,7 +1025,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         true,
                         true,
                     );
-                    if (!trim.success) {
+                    if (!isCleanupCommandSuccessful(trim)) {
                         summary.failed++;
                         firstFailure ??= trim.error || "Failed to schedule automatic SSD trim.";
                     }
@@ -987,11 +1049,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     };
 
     const handleCardClear = async (cat: CleanupCategory, onDriveWipe?: () => void) => {
+        const allowDefaultExcluded = isDefaultExcludedCleanup(cat.id);
+        if (!await requestCleanupManualAuthorization(cat, 'clear', requestConfirm)) return;
         if (cat.id === 'unallocatedErase') {
             onDriveWipe?.();
             return;
         }
-        if (cat.confirmMessage) {
+        if (cat.confirmMessage && !allowDefaultExcluded) {
             const accepted = await requestConfirm({
                 title: `Clear ${cat.label}?`,
                 description: cat.confirmMessage,
@@ -999,32 +1063,40 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             });
             if (!accepted) return;
         }
-        // Background tasks return before the actual drive work completes.
-        if (cat.id === 'unallocatedErase' || cat.id === 'virtualMemory') {
+        // One-time actions have no scanner, so they need their own receipt.
+        if (cat.actionOnly) {
             const clearer = clearerMap[cat.id];
             if (!clearer) return;
-            updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: true, loading: false });
+            updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: -1, items: [] }), clearing: true, loading: false });
             try {
                 const res = await clearer();
-                if (res.success || res.data) {
-                    updateCacheEntry(cat.id, { count: 0, items: [], loading: false, clearing: false });
-                    showSuccess(`${cat.label} started in background — this may take 30+ minutes.`);
+                const receipt = res.data as { ok?: boolean; status?: string; stdout?: string } | undefined;
+                if (res.success && receipt?.ok === true && receipt.status !== 'partial' && !/^fail:/im.test(receipt.stdout ?? '')) {
+                    updateCacheEntry(cat.id, { count: -1, items: [], loading: false, clearing: false });
+                    const message = cat.id === 'virtualMemory'
+                        ? 'configured; shutdown or restart is required to finish.'
+                        : receipt.status === 'started' ? 'started in background.' : 'completed.';
+                    showSuccess(`${cat.label}: ${message}`);
                 } else {
-                    showError(res.error || `Failed to start ${cat.label}.`);
-                    updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: false, loading: false });
+                    showError(res.error || receipt?.stdout || `${cat.label} was not completed.`);
+                    updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: -1, items: [] }), clearing: false, loading: false });
                 }
             } catch (e) {
-                showError(`Failed to start ${cat.label}: ${e}`);
-                updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: false, loading: false });
+                showError(`Failed to run ${cat.label}: ${e}`);
+                updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: -1, items: [] }), clearing: false, loading: false });
             }
             return;
         }
 
-        const outcome = await clearAndReconcile(cat);
+        const outcome = await clearAndReconcile(cat, allowDefaultExcluded);
         if (outcome.result === 'cleared') {
-            showSuccess(`${cat.label}: removed ${outcome.removed} record${outcome.removed === 1 ? '' : 's'}; ${outcome.after} remain.`);
+            showSuccess(`${cat.label}: the fresh scan found no records.`);
         } else if (outcome.result === 'reduced') {
-            showSuccess(`${cat.label}: removed ${outcome.removed} record${outcome.removed === 1 ? '' : 's'}; reduced from ${outcome.before} to ${outcome.after}.`);
+            showSuccess(`${cat.label}: the scan count fell from ${outcome.before} to ${outcome.after}.`);
+        } else if (outcome.result === 'reset') {
+            showSuccess(`${cat.label}: new journal identities were confirmed. Windows keeps active journals, so the card count may stay the same.`);
+        } else if (outcome.result === 'deferred') {
+            showSuccess(`${cat.label}: deletion is scheduled for restart. Scan again after restarting to verify it.`);
         } else if (outcome.result === 'unchanged') {
             showError(`${cat.label} still reports ${outcome.after} traces after cleanup.${outcome.error ? ` ${outcome.error}` : ''}`);
         } else {
@@ -1041,6 +1113,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             !cat.actionOnly &&
             (cardDataMap[cat.id]?.count ?? 0) > 0 &&
             clearerMap[cat.id] &&
+            !isDefaultExcludedCleanup(cat.id) &&
             !excludedIds.has(cat.id)
         );
         if (!withFindings.length) return;
@@ -1063,15 +1136,18 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         });
         const cleared = withFindings.filter(cat => results.get(cat.id)?.result === 'cleared');
         const reduced = withFindings.filter(cat => results.get(cat.id)?.result === 'reduced');
+        const reset = withFindings.filter(cat => results.get(cat.id)?.result === 'reset');
         const unchanged = withFindings.filter(cat => results.get(cat.id)?.result === 'unchanged');
+        const deferred = withFindings.filter(cat => results.get(cat.id)?.result === 'deferred');
         const failed = withFindings.filter(cat => results.get(cat.id)?.result === 'failed');
-        const removed = Array.from(results.values()).reduce((total, outcome) => total + outcome.removed, 0);
-        if (cleared.length || reduced.length) {
+        if (cleared.length || reduced.length || reset.length || deferred.length) {
             const summary = [
-                cleared.length ? `${cleared.length} cleared` : '',
-                reduced.length ? `${reduced.length} reduced` : '',
+                cleared.length ? `${cleared.length} with no records on rescan` : '',
+                reduced.length ? `${reduced.length} with lower scan counts` : '',
+                reset.length ? `${reset.length} journals reset and verified by identity` : '',
+                deferred.length ? `${deferred.length} scheduled for restart` : '',
             ].filter(Boolean).join(', ');
-            showSuccess(`${label}: ${summary}; ${removed} record${removed === 1 ? '' : 's'} removed.`);
+            showSuccess(`${label}: ${summary}.`);
         }
         if (unchanged.length || failed.length) {
             const unchangedLabels = unchanged.map(cat => cat.label);
@@ -1091,8 +1167,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Clears for the selected OTHER user (or all users) write into the
     // sub-section's own data map, so the main current-user grid is never
     // touched. `targets` undefined = all users.
-    const runOtherUserClear = async (cat: CleanupCategory, targets: string[] | undefined) => {
-        const prev = otherUserDataMap[cat.id] || { count: 0, items: [] };
+    const runOtherUserClear = async (cat: CleanupCategory, targets: string[] | undefined, allowDefaultExcluded = false) => {
+        if (isDefaultExcludedCleanup(cat.id) && !allowDefaultExcluded) return;
+        const prev = otherUserDataMap[cat.id] || { count: -1, items: [] };
         const setCard = (data: CardData) => {
             setOtherUserDataMap(p => ({ ...p, [cat.id]: data }));
             // Keep the per-user cache in sync so switching away and back shows
@@ -1102,35 +1179,26 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             }
         };
         // Keep the count while clearing so the card footer + "Clearing..." show.
-        setCard({ count: prev.count ?? 0, items: prev.items ?? [], loading: false, clearing: true });
+        setCard({ count: prev.count, items: prev.items ?? [], loading: false, clearing: true });
         try {
-            const res = await invokeCleanupClearAllUsers([cat.id], targets);
-            if (res.success) {
+            const res = await invokeCleanupClearAllUsers([cat.id], targets, allowDefaultExcluded);
+            if (res.success && !(res.data as { error?: boolean } | undefined)?.error) {
                 const d = res.data;
-                if (d && d.partial > 0) {
-                    // Partial clear — a logged-in user's registry hive was locked
-                    // so some traces remain. Re-scan for the TRUE remaining count
-                    // instead of hard-coding 0, which previously wrote a false
-                    // "cleared" (count 0) into the card and the per-user cache.
-                    if (targets && targets.length) {
-                        await loadUserView(targets[0], [cat.id]);
-                    } else {
-                        await loadAllUsersView();
-                    }
+                const verifiedEmpty = targets && targets.length
+                    ? await loadUserView(targets[0], [cat.id])
+                    : await loadAllUsersView(cat.id);
+                if ((d?.partial ?? 0) > 0 || !verifiedEmpty) {
+                    showError(`${cat.label}: cleanup was partial or its result could not be verified on a fresh scan.`);
                 } else {
-                    setCard({ count: 0, items: [], loading: false, clearing: false });
+                    showSuccess(`${cat.label}: a fresh scan found no records for the selected users.`);
                 }
-                const partialNote = d && d.partial > 0
-                    ? ` (${d.partial} logged-in user${d.partial !== 1 ? 's' : ''} partial — registry skipped)`
-                    : '';
-                showSuccess(`${cat.label} cleared for ${d?.cleaned ?? 0} user${(d?.cleaned ?? 0) !== 1 ? 's' : ''}${partialNote}.`);
             } else {
                 showError(res.error || `Failed to clear ${cat.label}.`);
-                setCard({ count: prev.count ?? 0, items: prev.items ?? [], loading: false, clearing: false });
+                setCard({ count: prev.count, items: prev.items ?? [], loading: false, clearing: false });
             }
         } catch (e) {
             showError(`Failed to clear ${cat.label}: ${e}`);
-            setCard({ count: prev.count ?? 0, items: prev.items ?? [], loading: false, clearing: false });
+            setCard({ count: prev.count, items: prev.items ?? [], loading: false, clearing: false });
         }
     };
 
@@ -1139,22 +1207,22 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         if (!selectedUser) return;
         const accepted = await requestConfirm({
             title: `Clear ${cat.label}?`,
-            description: `Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward.`,
+            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward. This cannot be undone.`,
             confirmLabel: "Clear profile",
         });
         if (!accepted) return;
-        await runOtherUserClear(cat, [selectedUser]);
+        await runOtherUserClear(cat, [selectedUser], isDefaultExcludedCleanup(cat.id));
     };
 
     // "Clear for all users" in the sub-section (admin-only, scopeAware-only).
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
         const accepted = await requestConfirm({
             title: `Clear ${cat.label} for all users?`,
-            description: `Clear ${cat.label} for all ${availableUsers.length} user profiles on this machine? This cannot be undone.`,
+            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all ${availableUsers.length} user profiles on this machine? This cannot be undone.`,
             confirmLabel: "Clear all users",
         });
         if (!accepted) return;
-        await runOtherUserClear(cat, undefined);
+        await runOtherUserClear(cat, undefined, isDefaultExcludedCleanup(cat.id));
     };
 
     return {
@@ -1190,7 +1258,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleOtherUserClear,
         handleCardClearAllUsers,
         schedulesById,
-        hasScheduledWipes: Object.keys(schedulesById).length > 0,
+        scheduleState,
+        refreshSchedules,
+        hasScheduledWipes: scheduleState === "verified" && Object.keys(schedulesById).length > 0,
         scheduleBusyId,
         autoSetSchedulesBusy,
         handleSetSchedule,

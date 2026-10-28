@@ -7,7 +7,7 @@ import useBackend from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { runOperation } from "../../context/OperationContext";
 import { showSuccess } from "../../utils/toast";
-import { formatMaintenanceSuccess } from "../../utils/maintenance";
+import { formatMaintenanceSuccess, getMaintenanceFailureMessage } from "../../utils/maintenance";
 import RunOnceButton from "../../components/cleanup/RunOnceButton";
 
 /**
@@ -67,11 +67,18 @@ export default function OsRepairCard({ embedded = false, group = "all" }: OsRepa
     setBusy(prev => ({ ...prev, [key]: true }));
     let captured: unknown = null;
     try {
-      await runOperation(
+      const outcome = await runOperation(
         operationLabel,
-        [{ label: `Running ${operationLabel.toLowerCase()}...`, fn: async () => { const result = await fn(); captured = result; return result; } }],
+        [{ label: `Running ${operationLabel.toLowerCase()}...`, fn: async () => {
+          const result = await fn();
+          captured = result;
+          const failure = getMaintenanceFailureMessage(operationLabel, result);
+          if (failure) throw new Error(failure);
+          return result;
+        } }],
         { mode: "sequential", accent: "neutral" },
       );
+      if (outcome.anyError) return;
       const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.[key];
       await patchAppSettings({
         ideal: { tweaks: { maintenanceRuns: {

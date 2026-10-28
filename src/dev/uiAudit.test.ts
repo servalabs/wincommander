@@ -5,6 +5,7 @@ import { createUiAuditLicenseStatus, createUiAuditPendingPurchase, createUiAudit
 import { buildTraceView } from "../components/shared/traceTable";
 import { shouldSkipStartupSplash } from "../lib/startupMode";
 import { ALL_CATEGORIES } from "../panels/cleanup/cleanupCategories";
+import { readCleanupScanResult } from "../panels/cleanup/cleanupScanResult";
 
 describe("UI audit fixture", () => {
   test("preloads synthetic free letters through the native drive-list command", () => {
@@ -71,7 +72,7 @@ describe("UI audit fixture", () => {
     const eventLogs = buildTraceView(uiAuditBackendResponse("Get-EventLogSummary"), []);
 
     expect(dns.datasets.map((dataset) => dataset.id)).toEqual(["entries"]);
-    expect(srum.datasets.map((dataset) => dataset.id)).toEqual(["entries"]);
+    expect(srum.datasets.map((dataset) => dataset.id)).toEqual(["files"]);
     expect(cacheFiles.datasets.map((dataset) => dataset.id)).toEqual(["files"]);
     expect(eventLogs.datasets.map((dataset) => dataset.id)).toEqual(["logs"]);
     expect([dns, srum, cacheFiles, eventLogs].every((view) =>
@@ -94,10 +95,15 @@ describe("UI audit fixture", () => {
         : undefined;
       expect(command).toBeTruthy();
 
-      const view = buildTraceView(uiAuditBackendResponse(command!), []);
+      const fixture = uiAuditBackendResponse(command!);
+      const view = buildTraceView(fixture, []);
       expect(view.datasets.length).toBeGreaterThan(0);
       expect(view.datasets.length <= 2).toBe(true);
       expect(view.datasets.every((dataset) => dataset.columns.length >= 2)).toBe(true);
+      const card = readCleanupScanResult(category, { success: true, data: fixture });
+      if (card.error) throw new Error(`${category.id}: ${card.error}`);
+      expect(card.error).toBeUndefined();
+      expect(card.count > 0).toBe(true);
     }
   });
 

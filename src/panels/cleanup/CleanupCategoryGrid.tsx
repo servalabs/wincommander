@@ -16,6 +16,7 @@ import {
 import {
   ALL_USERS_KEY,
   MULTI_USER_CLEANUP_IDS,
+  isDefaultExcludedCleanup,
   useCleanupScan,
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
@@ -75,6 +76,8 @@ export default function CleanupCategoryGrid({
     handleOtherUserClear,
     handleCardClearAllUsers,
     schedulesById,
+    scheduleState,
+    refreshSchedules,
     scheduleBusyId,
     handleSetSchedule,
     handleClearSchedule,
@@ -134,6 +137,8 @@ export default function CleanupCategoryGrid({
         scheduleMinutes={
           cat.schedulable ? (schedulesById[cat.id] ?? null) : undefined
         }
+        scheduleState={scheduleState}
+        onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={cat.schedulable && scheduleBusyId === cat.id}
         onSetSchedule={
           cat.schedulable && schedulesEnabled
@@ -240,6 +245,8 @@ export default function CleanupCategoryGrid({
             ? (schedulesById[cat.id] ?? null)
             : undefined
         }
+        scheduleState={scheduleState}
+        onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
           isViewingCurrentUser && cat.schedulable && scheduleBusyId === cat.id
         }
@@ -304,12 +311,13 @@ export default function CleanupCategoryGrid({
             >
               <div className="flex items-center gap-2 flex-wrap flex-1">
                 <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)] mr-1">
-                  Exclude from bulk clear:
+                  Skip in Clear All / Auto-set:
                 </span>
                 {Array.from(clearAllExcludes).map((id) => (
                   <button
                     key={id}
                     type="button"
+                    disabled={isDefaultExcludedCleanup(id)}
                     onClick={() =>
                       setClearAllExcludes((prev) => {
                         const next = new Set(prev);
@@ -317,8 +325,10 @@ export default function CleanupCategoryGrid({
                         return next;
                       })
                     }
-                    title="Remove from exclusions"
-                    aria-label={`Remove ${orderedScanCategories.find((c) => c.id === id)?.label ?? id} from bulk-clear exclusions`}
+                    title={isDefaultExcludedCleanup(id) ? "Default exclusion from Clear All and Auto-set. An individual clear or schedule requires confirmation." : "Remove from exclusions"}
+                    aria-label={isDefaultExcludedCleanup(id)
+                      ? `${orderedScanCategories.find((c) => c.id === id)?.label ?? id} is excluded from bulk cleanup and automatic schedule setup by default`
+                      : `Remove ${orderedScanCategories.find((c) => c.id === id)?.label ?? id} from bulk-clear exclusions`}
                     style={{
                       fontSize: 9,
                       fontWeight: 700,
@@ -328,11 +338,11 @@ export default function CleanupCategoryGrid({
                       border: "1px solid var(--color-border)",
                       background: "var(--color-bg-secondary)",
                       color: "var(--color-text-primary)",
-                      cursor: "pointer",
+                      cursor: isDefaultExcludedCleanup(id) ? "default" : "pointer",
                       textTransform: "uppercase",
                     }}
                   >
-                    ✕{" "}
+                    {isDefaultExcludedCleanup(id) ? "Default: " : "✕ "}
                     {orderedScanCategories.find((c) => c.id === id)?.label ??
                       id}
                   </button>

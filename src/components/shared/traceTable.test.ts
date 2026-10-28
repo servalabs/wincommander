@@ -49,6 +49,11 @@ describe("trace table view model", () => {
     });
   });
 
+  test("labels empty samples separately from category record counts", () => {
+    const view = buildTraceView({ entries: [{ category: "InventoryApplication", count: 15, sample: [] }], total: 15 }, []);
+    expect(view.datasets[0].rows[0]).toMatchObject({ Count: 15, Sample: "0 samples" });
+  });
+
   test("turns legacy flattened strings into useful fallback columns", () => {
     const view = buildTraceView(undefined, [
       "[NetworkList] Office Wi-Fi",

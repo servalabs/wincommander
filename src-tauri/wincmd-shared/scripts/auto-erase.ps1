@@ -49,8 +49,11 @@ if (-not ([System.Management.Automation.PSTypeName]'WcAutoErase.Native').Type) {
     try { Add-Type -Namespace WcAutoErase -Name Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern bool MoveFileEx(string a, string b, int dwFlags);' } catch {}
 }
 function Erase-OneFile($p) {
-    $f = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    try { $f = Get-Item -LiteralPath $p -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return $false }
+    catch { $script:AutoEraseFailed++; return $false }
     if (-not $f -or $f.PSIsContainer) { return $false }
+    if ($f.Attributes -band [IO.FileAttributes]::ReparsePoint) { $script:AutoEraseFailed++; return $false }
     $z = $f.Length
     if ($z -gt 0) {
         $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -71,7 +74,7 @@ function Erase-OneFile($p) {
             # reach the disk before the GUID-rename + delete; a bare .Flush()
             # only empties the .NET buffer to the OS cache.
             $s.Flush($true)
-        } catch {} finally {
+        } catch { $script:AutoEraseFailed++; return $false } finally {
             if ($s) { try { $s.Close(); $s.Dispose() } catch {} }
             try { $rng.Dispose() } catch {}
         }
@@ -82,7 +85,9 @@ function Erase-OneFile($p) {
     try { Rename-Item -LiteralPath $p -NewName $g -Force -ErrorAction Stop; $renamed = $true } catch {}
     $target = if ($renamed) { Join-Path $par $g } else { $p }
     Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path -LiteralPath $target)) { $script:AutoEraseRemoved++; return $true }
+    try { $null = Get-Item -LiteralPath $target -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); $script:AutoEraseRemoved++; return $true }
+    catch { $script:AutoEraseFailed++; return $false }
     # Still on disk — a running process holds a handle. Fall back to a
     # delete-on-next-reboot so the trace is not left behind indefinitely.
     try {
@@ -94,13 +99,108 @@ function Erase-OneFile($p) {
     return $false
 }
 function Erase-Dir($d) {
-    if (-not (Test-Path -LiteralPath $d)) { return }
-    try { (Get-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue).Attributes = [System.IO.FileAttributes]::Normal } catch {}
-    Get-ChildItem -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        try { $_.Attributes = [System.IO.FileAttributes]::Normal } catch {}
+    try {
+        $root = Get-Item -LiteralPath $d -Force -ErrorAction Stop
+        if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
+        if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
     }
-    Get-ChildItem -LiteralPath $d -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile $_.FullName }
-    Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
+    catch { $script:AutoEraseFailed++; return }
+    try {
+        $files = @(Get-AutoEraseFiles -Path $d -Recurse)
+        $files | ForEach-Object { Erase-OneFile $_.FullName | Out-Null }
+        # Only remove empty directories; a failed overwrite must never fall through to an ordinary recursive delete.
+        Get-ChildItem -LiteralPath $d -Recurse -Directory -Force -ErrorAction Stop | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object {
+            if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup directories are not supported.' }
+            if (@(Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction Stop).Count -eq 0) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop }
+        }
+        if (@(Get-ChildItem -LiteralPath $d -Force -ErrorAction Stop).Count -eq 0) { Remove-Item -LiteralPath $d -Force -ErrorAction Stop }
+    } catch { $script:AutoEraseFailed++ }
+}
+function Get-AutoEraseFiles {
+    param([string]$Path, [string]$Filter = '*', [switch]$Recurse, [int]$Depth = -1)
+    try { $root = Get-Item -LiteralPath $Path -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
+    if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
+    if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
+    $pending = [Collections.Generic.Queue[object]]::new()
+    $pending.Enqueue(@{ path=$Path; depth=0 })
+    $files = [Collections.Generic.List[object]]::new()
+    while ($pending.Count) {
+        $current = $pending.Dequeue()
+        foreach ($file in @(Get-ChildItem -LiteralPath $current.path -Filter $Filter -File -Force -ErrorAction Stop)) {
+            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup files are not supported.' }
+            $files.Add($file)
+        }
+        if ($Recurse -and ($Depth -lt 0 -or $current.depth -lt $Depth)) {
+            foreach ($directory in @(Get-ChildItem -LiteralPath $current.path -Directory -Force -ErrorAction Stop)) {
+                if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup directories are not supported.' }
+                $pending.Enqueue(@{ path=$directory.FullName; depth=($current.depth + 1) })
+            }
+        }
+    }
+    $files.ToArray()
+}
+function Get-AutoEraseDirectories {
+    param([string]$Path, [string]$Filter = '*', [switch]$Recurse, [int]$Depth = -1)
+    try { $root = Get-Item -LiteralPath $Path -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
+    if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
+    if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
+    $pending = [Collections.Generic.Queue[object]]::new()
+    $pending.Enqueue(@{ path=$Path; depth=0 })
+    $directories = [Collections.Generic.List[object]]::new()
+    while ($pending.Count) {
+        $current = $pending.Dequeue()
+        $arguments = @{ LiteralPath=$current.path; Directory=$true; Force=$true; ErrorAction='Stop' }
+        if (-not $Recurse) { $arguments.Filter = $Filter }
+        foreach ($directory in @(Get-ChildItem @arguments)) {
+            if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup directories are not supported.' }
+            if ($directory.Name -like $Filter) { $directories.Add($directory) }
+            if ($Recurse -and ($Depth -lt 0 -or $current.depth -lt $Depth)) { $pending.Enqueue(@{ path=$directory.FullName; depth=($current.depth + 1) }) }
+        }
+    }
+    $directories.ToArray()
+}
+function Erase-FileSet {
+    param([object[]]$Files)
+    foreach ($file in @($Files | Sort-Object FullName -Unique)) {
+        Erase-OneFile $file.FullName | Out-Null
+    }
+}
+function Get-AutoEraseRegistryItem {
+    param([string]$Path)
+    try { Get-Item -LiteralPath $Path -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0) }
+}
+function Erase-RegistryTree {
+    param([string]$Path)
+    if ($null -ne (Get-AutoEraseRegistryItem $Path)) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        if ($null -ne (Get-AutoEraseRegistryItem $Path)) { throw 'Registry cleanup could not be verified.' }
+        $script:AutoEraseRemoved++
+    }
+}
+function Erase-RegistryValues {
+    param([string]$Path, [string]$NamePattern = '*', [string[]]$ExcludedNames = @())
+    $item = Get-AutoEraseRegistryItem $Path
+    if ($null -eq $item) { return }
+    foreach ($name in @($item.Property | Where-Object { $_ -like $NamePattern -and $_ -notin $ExcludedNames })) {
+        Remove-ItemProperty -LiteralPath $Path -Name $name -Force -ErrorAction Stop
+        $readback = Get-AutoEraseRegistryItem $Path
+        if ($name -in @($readback.Property)) { throw 'Registry value cleanup could not be verified.' }
+        $script:AutoEraseRemoved++
+    }
+}
+function Invoke-AutoEraseWithServices {
+    param([string[]]$Names, [scriptblock]$Body)
+    $running = @(Get-Service -Name $Names -ErrorAction Stop | Where-Object Status -eq 'Running')
+    try {
+        foreach ($service in $running) { Stop-Service -Name $service.Name -Force -ErrorAction Stop }
+        & $Body
+    } finally {
+        foreach ($service in $running) { Start-Service -Name $service.Name -ErrorAction Stop }
+    }
 }
 '@
 
@@ -125,12 +225,22 @@ Get-Volume -ErrorAction SilentlyContinue | Where-Object {
         if ($physical -and $physical.MediaType -in @('SSD', 'NVMe')) {
             Optimize-Volume -DriveLetter $drive -ReTrim -ErrorAction Stop
         }
-    } catch {}
+    } catch { $script:AutoEraseFailed++ }
 }
 '@
 
     # Standard categories ----------------------------------------------
-    'clipboard'         = "Set-Clipboard -Value `$null -ErrorAction SilentlyContinue; Get-Service cbdhsvc_* -ErrorAction SilentlyContinue | Restart-Service -Force -ErrorAction SilentlyContinue"
+    'clipboard' = @'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+$null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+if (-not [Windows.ApplicationModel.DataTransfer.Clipboard]::ClearHistory()) { throw 'Clipboard history could not be cleared in this task session.' }
+[Windows.ApplicationModel.DataTransfer.Clipboard]::Clear()
+$asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType } | Select-Object -First 1
+if (-not $asTask) { throw 'Clipboard history read-back is unavailable.' }
+$resultType = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+$task = $asTask.MakeGenericMethod($resultType).Invoke($null, @([Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()))
+if (-not $task.Wait(2000) -or $task.Result.Status.ToString() -ne 'Success' -or @($task.Result.Items).Count) { throw 'Clipboard history cleanup could not be verified.' }
+'@
     'rdpHistory'        = @"
 `$default = 'HKCU:\Software\Microsoft\Terminal Server Client\Default'
 if (Test-Path `$default) {
@@ -138,22 +248,26 @@ if (Test-Path `$default) {
         Remove-ItemProperty -Path `$default -Name `$_ -ErrorAction SilentlyContinue
     }
 }
-'HKCU:\Software\Microsoft\Terminal Server Client\Servers',
-'HKCU:\Software\Microsoft\Terminal Server Client\LocalDevices' | ForEach-Object {
+'HKCU:\Software\Microsoft\Terminal Server Client\Servers' | ForEach-Object {
     if (Test-Path `$_) { Remove-Item `$_ -Recurse -Force -ErrorAction SilentlyContinue; New-Item `$_ -Force | Out-Null }
 }
 Erase-OneFile (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Default.rdp')
-Erase-OneFile "`$env:APPDATA\Microsoft\Windows\Recent\AutomaticDestinations\1b4dd67f29cb1962.automaticDestinations-ms"
-Get-ChildItem -Path "`$env:LOCALAPPDATA\Microsoft\Terminal Server Client\Cache" -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-cmdkey /list 2>`$null | Select-String 'Target: Domain:target=TERMSRV/' | ForEach-Object {
-    `$t = `$_.ToString().Split('=')[1]; cmdkey /delete:`$t 2>`$null | Out-Null
+`$credentials = @(& cmdkey.exe /list 2>&1)
+if (`$LASTEXITCODE -ne 0) { throw 'RDP credential read-back is unavailable.' }
+if (@(`$credentials | Where-Object { `$_ -match '(?i)target=TERMSRV/' }).Count) { throw 'RDP history was cleared, but saved credentials were preserved. Cleanup is partial.' }
+"@
+    'eventLogs'         = @"
+try { `$logs = @(Get-WinEvent -ListLog * -Force -ErrorAction Stop) }
+catch { `$script:AutoEraseFailed++; `$logs = @() }
+`$logs | Where-Object { `$_.RecordCount -gt 0 } | ForEach-Object {
+    try { [System.Diagnostics.Eventing.Reader.EventLogSession]::GlobalSession.ClearLog(`$_.LogName) }
+    catch { `$script:AutoEraseFailed++ }
 }
 "@
-    'eventLogs'         = "Get-WinEvent -ListLog * -Force -ErrorAction SilentlyContinue | Where-Object { `$_.RecordCount -gt 0 } | ForEach-Object { try { [System.Diagnostics.Eventing.Reader.EventLogSession]::GlobalSession.ClearLog(`$_.LogName) } catch {} }"
     'recentFiles'       = @"
-Get-ChildItem -Path "`$env:APPDATA\Microsoft\Windows\Recent" -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-Get-ChildItem -Path "`$env:APPDATA\Microsoft\Windows\Recent" -Directory -Force -ErrorAction SilentlyContinue | Where-Object { `$_.Name -notin 'AutomaticDestinations','CustomDestinations' } | ForEach-Object { Erase-Dir `$_.FullName }
-Get-ChildItem -Path "`$env:APPDATA\Microsoft\Office\Recent" -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+Get-AutoEraseFiles -Path "`$env:APPDATA\Microsoft\Windows\Recent" -Recurse | ForEach-Object { Erase-OneFile `$_.FullName }
+Get-AutoEraseDirectories -Path "`$env:APPDATA\Microsoft\Windows\Recent" | Where-Object { `$_.Name -notin 'AutomaticDestinations','CustomDestinations' } | ForEach-Object { Erase-Dir `$_.FullName }
+Get-AutoEraseFiles -Path "`$env:APPDATA\Microsoft\Office\Recent" -Recurse | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
     'jumpLists'         = @"
 Get-ChildItem -Path "`$env:APPDATA\Microsoft\Windows\Recent\AutomaticDestinations" -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
@@ -165,7 +279,7 @@ if (`$histPath -and (Test-Path `$histPath)) { Erase-OneFile `$histPath }
 `$fallback = Join-Path `$env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
 if (Test-Path `$fallback) { Erase-OneFile `$fallback }
 "@
-    'dnsCache'          = "ipconfig /flushdns | Out-Null"
+    'dnsCache'          = "ipconfig /flushdns | Out-Null; if (`$LASTEXITCODE -ne 0) { `$script:AutoEraseFailed++ }"
     'browserFootprints' = @"
 `$chromiumRoots = @(
     "`$env:LOCALAPPDATA\Google\Chrome\User Data",
@@ -209,7 +323,7 @@ foreach (`$root in `$geckoRoots) {
 }
 "@
     'prefetchFiles'     = @"
-Get-ChildItem -Path "`$env:SystemRoot\Prefetch" -Filter '*.pf' -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+Get-AutoEraseFiles -Path "`$env:SystemRoot\Prefetch" -Filter '*.pf' | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
     'shellBags'         = @"
 'HKCU:\Software\Microsoft\Windows\Shell\Bags',
@@ -290,12 +404,7 @@ if (`$pnpReady) {
 }
 "@
     'execCache'         = @"
-# KT: AppCompatCache is a registry VALUE, not a key with subkeys -- Get-ChildItem on it
-# returns nothing, making a Remove-Item -Recurse loop a silent no-op. Clear the value directly.
-`$shimPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-if (Test-Path `$shimPath -ErrorAction SilentlyContinue) {
-    Remove-ItemProperty -Path `$shimPath -Name 'AppCompatCache' -ErrorAction SilentlyContinue
-}
+Erase-RegistryValues -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache' -NamePattern 'AppCompatCache'
 
 # These are all per-user keys, so HKCU resolves to the scheduled task's target
 # account (including each S4U task created by Set-MultiUserAutoEraseSchedule).
@@ -310,8 +419,7 @@ if (Test-Path `$userAssist -ErrorAction SilentlyContinue) {
 }
 `$muiCache = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache'
 if (Test-Path `$muiCache -ErrorAction SilentlyContinue) {
-    Remove-Item -Path `$muiCache -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -Path `$muiCache -Force -ErrorAction SilentlyContinue | Out-Null
+    Erase-RegistryValues -Path `$muiCache -ExcludedNames @('LangID')
 }
 `$recentApps = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\RecentApps'
 if (Test-Path `$recentApps -ErrorAction SilentlyContinue) {
@@ -332,8 +440,17 @@ foreach (`$pcaPath in @(
 netsh wlan show profiles 2>`$null | Where-Object { `$_ -match 'All User Profile\s*:\s*(.+)' } | ForEach-Object { `$n = `$Matches[1].Trim(); netsh wlan delete profile name="`$n" 2>`$null | Out-Null }
 Get-ChildItem -Path "`$env:ProgramData\Microsoft\Wlansvc\Profiles\Interfaces" -Recurse -Filter '*.xml' -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
-    'netDrives'         = "Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayRoot -like '\\\\*' } | ForEach-Object { Remove-PSDrive -Name `$_.Name -Force -ErrorAction SilentlyContinue }; net use * /delete /yes 2>`$null | Out-Null"
-    'ntfsJournals'      = "`$fsTool = 'fs' + 'util'; Get-Volume -ErrorAction SilentlyContinue | Where-Object { `$_.DriveLetter -and `$_.FileSystem -eq 'NTFS' } | ForEach-Object { & `$fsTool usn deletejournal /d (`$_.DriveLetter + ':') 2>`$null | Out-Null }"
+    'netDrives' = @'
+$drives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop | Where-Object { $_.DisplayRoot -like '\\*' })
+foreach ($drive in $drives) {
+    if ($drive.Name -notmatch '^[A-Za-z]$') { throw 'A mapped-drive identity could not be validated.' }
+    $null = & net.exe use ($drive.Name + ':') /delete /yes 2>&1
+    if ($LASTEXITCODE -ne 0) { throw 'Mapped-drive removal failed.' }
+    if (@(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop | Where-Object { $_.Name -eq $drive.Name -and $_.DisplayRoot -like '\\*' }).Count) { throw 'Mapped-drive removal could not be verified.' }
+    $script:AutoEraseRemoved++
+}
+'@
+    'ntfsJournals'      = "`$fsTool = 'fs' + 'util'; Get-Volume -ErrorAction Stop | Where-Object { `$_.DriveLetter -and `$_.FileSystem -eq 'NTFS' } | ForEach-Object { & `$fsTool usn deletejournal /d (`$_.DriveLetter + ':') 2>`$null | Out-Null; if (`$LASTEXITCODE -ne 0) { `$script:AutoEraseFailed++ } }"
     'recycleBin'        = @"
 `$drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { `$_.DriveType -in 'Fixed','Removable' -and `$_.IsReady }
 foreach (`$drv in `$drives) {
@@ -376,14 +493,12 @@ Get-ChildItem -Path "`$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsNote
 }
 "@
     'pcaDatabase'       = @"
-Get-ChildItem -Path "`$env:SystemRoot\appcompat\pca" -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+Get-AutoEraseFiles -Path "`$env:SystemRoot\appcompat\pca" | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
     'crashDumps'        = @"
 `$targets = @(
     "`$env:LOCALAPPDATA\CrashDumps",
     "`$env:SystemRoot\Minidump",
-    "`$env:ProgramData\Microsoft\Windows\WER\ReportArchive",
-    "`$env:ProgramData\Microsoft\Windows\WER\ReportQueue",
     "`$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportArchive",
     "`$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportQueue"
 )
@@ -397,12 +512,17 @@ foreach (`$t in `$targets) {
 if (Test-Path `$memdmp) { Erase-OneFile `$memdmp }
 "@
     'walFiles'          = @"
-Get-ChildItem -Path `$env:APPDATA, `$env:LOCALAPPDATA -Include '*.db-wal','*.db-shm','*.sqlite-wal','*.sqlite-shm' -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+foreach (`$root in @(`$env:LOCALAPPDATA, `$env:APPDATA)) {
+    `$files = @(foreach (`$pattern in @('*.wal','*.shm')) { Get-AutoEraseFiles -Path `$root -Filter `$pattern -Recurse -Depth 5 })
+    Erase-FileSet @(`$files | Select-Object -First 100)
+    if (@(foreach (`$pattern in @('*.wal','*.shm')) { Get-AutoEraseFiles -Path `$root -Filter `$pattern -Recurse -Depth 5 }).Count) { throw 'WAL cleanup is incomplete within the scanned coverage.' }
+}
 "@
     'printSpooler'      = @"
-Stop-Service Spooler -Force -ErrorAction SilentlyContinue
-Get-ChildItem -Path "`$env:SystemRoot\System32\spool\PRINTERS" -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-Start-Service Spooler -ErrorAction SilentlyContinue
+Invoke-AutoEraseWithServices -Names Spooler -Body {
+    Erase-FileSet @(Get-AutoEraseFiles -Path "`$env:SystemRoot\System32\spool\PRINTERS")
+    Erase-FileSet @(Get-AutoEraseFiles -Path "`$env:LOCALAPPDATA\Microsoft\Windows\Spool" -Filter '*.spl')
+}
 "@
     'webCache'          = @"
 `$webCacheDir = "`$env:LOCALAPPDATA\Microsoft\Windows\WebCache"
@@ -435,6 +555,7 @@ Get-Service -Name 'WpnUserService*' -ErrorAction SilentlyContinue | Start-Servic
 "@
     'branchCache'       = @"
 netsh branchcache flush 2>`$null | Out-Null
+if (`$LASTEXITCODE -ne 0) { throw 'BranchCache flush failed.' }
 `$targets = @(
     "`$env:SystemRoot\System32\PeerDistRep",
     "`$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub"
@@ -448,18 +569,23 @@ foreach (`$t in `$targets) {
 
     # Phase E system diagnostic / servicing / log categories -----------------
     'eventTranscript'    = @"
-Get-Service DiagTrack -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+`$diagService = Get-Service DiagTrack -ErrorAction Stop
+`$diagWasRunning = `$diagService.Status -eq 'Running'
+try {
+if (`$diagWasRunning) { Stop-Service DiagTrack -Force -ErrorAction Stop }
 `$etDir = "`$env:ProgramData\Microsoft\Diagnosis\EventTranscript"
 if (Test-Path `$etDir) {
-    Get-ChildItem -Path (Join-Path `$etDir 'EventTranscript.db') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
-    Get-ChildItem -Path (Join-Path `$etDir '*.jrs') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
-    Get-ChildItem -Path (Join-Path `$etDir '*.rbs') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+    foreach (`$pattern in @('EventTranscript.db', '*.jrs', '*.rbs')) {
+        Get-AutoEraseFiles -Path `$etDir -Filter `$pattern | ForEach-Object { Erase-OneFile `$_.FullName }
+    }
 }
 `$etlDir = "`$env:ProgramData\Microsoft\Diagnosis\ETLLogs"
 if (Test-Path `$etlDir) {
-    Get-ChildItem -Path `$etlDir -Recurse -Filter '*.etl' -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+    Get-AutoEraseFiles -Path `$etlDir -Recurse -Filter '*.etl' | ForEach-Object { Erase-OneFile `$_.FullName }
 }
-Get-Service DiagTrack -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue
+} finally {
+    if (`$diagWasRunning) { Start-Service DiagTrack -ErrorAction Stop }
+}
 "@
     'activitiesTimeline' = @"
 `$cdpDir = "`$env:LOCALAPPDATA\ConnectedDevicesPlatform"
@@ -481,14 +607,14 @@ if (Test-Path `$rdpCacheDir) {
 )
 foreach (`$t in `$targets) {
     if (Test-Path `$t) {
-        Get-ChildItem -LiteralPath `$t -File -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+        Get-AutoEraseFiles -Path `$t | ForEach-Object { Erase-OneFile `$_.FullName }
     }
 }
 "@
     'deviceInstallLogs'  = @"
 `$infDir = "`$env:SystemRoot\INF"
 if (Test-Path `$infDir) {
-    Get-ChildItem -Path (Join-Path `$infDir 'setupapi.*.log') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+    Get-AutoEraseFiles -Path `$infDir -Filter 'setupapi.*.log' | ForEach-Object { Erase-OneFile `$_.FullName }
 }
 "@
     'usageTraceLogs'     = @"
@@ -499,14 +625,14 @@ if (Test-Path `$infDir) {
 )
 foreach (`$t in `$targets) {
     if (Test-Path `$t) {
-        Get-ChildItem -Path (Join-Path `$t '*.etl') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+        Get-AutoEraseFiles -Path `$t -Filter '*.etl' | ForEach-Object { Erase-OneFile `$_.FullName }
     }
 }
 "@
     'defenderHistory'    = @"
 `$historyDir = "`$env:ProgramData\Microsoft\Windows Defender\Scans\History\Service"
 if (Test-Path `$historyDir) {
-    Get-ChildItem -LiteralPath `$historyDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+    Get-AutoEraseFiles -Path `$historyDir -Recurse | ForEach-Object { Erase-OneFile `$_.FullName }
 }
 `$mpLog = "`$env:ProgramData\Microsoft\Windows Defender\Support\MpCmdRun.log"
 if (Test-Path `$mpLog) { Erase-OneFile `$mpLog }
@@ -515,31 +641,22 @@ if (Test-Path `$mpLog) { Erase-OneFile `$mpLog }
     # firewall service opens a fresh log after removal, so this is safe to run
     # periodically under SYSTEM without changing rules or connectivity.
     'firewallLog'        = @"
-foreach (`$profile in @(Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
-    `$path = [string]`$profile.LogFileName
-    if (`$path -and (Test-Path -LiteralPath `$path -PathType Leaf -ErrorAction SilentlyContinue)) {
-        Erase-OneFile `$path | Out-Null
-    }
+foreach (`$profile in @(Get-NetFirewallProfile -ErrorAction Stop)) {
+    `$path = [Environment]::ExpandEnvironmentVariables([string]`$profile.LogFileName)
+    if (`$path -match '%[^%]+%') { throw 'A firewall log path could not be resolved.' }
+    if (`$path) { Erase-OneFile `$path | Out-Null }
 }
 "@
 
     # Extended app-usage / office / web-cache / P2P update categories --------
-    'appLaunchHistory'   = @"
-`$bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
-if (Test-Path `$bamRoot) {
-    Get-ChildItem -Path `$bamRoot -ErrorAction SilentlyContinue | ForEach-Object {
-        `$sidKeyPath = `$_.PSPath
-        try {
-            `$sidKey = Get-Item -Path `$sidKeyPath -ErrorAction SilentlyContinue
-            if (`$sidKey) {
-                foreach (`$valueName in @(`$sidKey.Property)) {
-                    Remove-ItemProperty -Path `$sidKeyPath -Name `$valueName -ErrorAction SilentlyContinue
-                }
-            }
-        } catch {}
+    'appLaunchHistory' = @'
+$bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
+if ($null -ne (Get-AutoEraseRegistryItem $bamRoot)) {
+    Get-ChildItem -LiteralPath $bamRoot -ErrorAction Stop | ForEach-Object {
+        Erase-RegistryValues -Path $_.PSPath -ExcludedNames @('Version','SequenceNumber')
     }
 }
-"@
+'@
     'officeMru'          = @"
 `$officePatterns = @(
     'HKCU:\Software\Microsoft\Office\*\*\File MRU',
@@ -553,22 +670,52 @@ foreach (`$pattern in `$officePatterns) {
 }
 "@
     'embeddedWebCache'   = @"
-Get-ChildItem -Path "`$env:LOCALAPPDATA" -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-AutoEraseDirectories -Path "`$env:LOCALAPPDATA" -Recurse -Filter 'EBWebView' -Depth 4 | ForEach-Object { Erase-Dir `$_.FullName }
 "@
     'p2pUpdateCache'     = @"
-Stop-Service DoSvc -Force -ErrorAction SilentlyContinue
+Invoke-AutoEraseWithServices -Names DoSvc -Body {
 `$doDir = "`$env:SystemRoot\SoftwareDistribution\DeliveryOptimization"
 if (Test-Path `$doDir) {
     Get-ChildItem -Path `$doDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
 }
-Start-Service DoSvc -ErrorAction SilentlyContinue
+}
 "@
     'reliabilityHistory' = @"
 `$racDir = "`$env:ProgramData\Microsoft\RAC\StateData"
 if (Test-Path `$racDir) {
-    Get-ChildItem -LiteralPath `$racDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+    Get-AutoEraseFiles -Path `$racDir -Recurse | ForEach-Object { Erase-OneFile `$_.FullName }
 }
 "@
+    'remoteAccessLogs' = @'
+$roots = @(
+    (Join-Path $env:APPDATA 'TeamViewer'),
+    (Join-Path $env:APPDATA 'AnyDesk'),
+    (Join-Path $env:ProgramData 'AnyDesk'),
+    (Join-Path $env:APPDATA 'RealVNC'),
+    (Join-Path $env:LOCALAPPDATA 'Google\Chrome Remote Desktop')
+)
+foreach ($root in $roots) {
+    foreach ($pattern in @('Connections*.txt', '*.trace', '*.log')) {
+        Get-AutoEraseFiles -Path $root -Filter $pattern -Recurse | ForEach-Object { Erase-OneFile $_.FullName | Out-Null }
+    }
+}
+'@
+    'gameLauncherLogs' = @'
+foreach ($root in @(
+    (Join-Path ${env:ProgramFiles(x86)} 'Steam\logs'),
+    (Join-Path $env:LOCALAPPDATA 'EpicGamesLauncher\Saved\Logs'),
+    (Join-Path $env:APPDATA 'Battle.net\Logs'),
+    (Join-Path $env:ProgramData 'Battle.net\Logs')
+)) {
+    Get-AutoEraseFiles -Path $root -Recurse | ForEach-Object { Erase-OneFile $_.FullName | Out-Null }
+}
+'@
+    'spotlightCache' = @'
+$packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
+Get-AutoEraseDirectories -Path $packagesRoot -Filter 'Microsoft.Windows.ContentDeliveryManager_*' | ForEach-Object {
+    Get-AutoEraseFiles -Path (Join-Path $_.FullName 'LocalState\Assets') -Recurse | ForEach-Object { Erase-OneFile $_.FullName | Out-Null }
+}
+'@
     'explorerSearchHistory' = @"
 foreach (`$k in @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery',
@@ -623,16 +770,228 @@ foreach (`$c in `$cats) {
     `$k = Join-Path `$volPath `$c
     if (Test-Path `$k) { Set-ItemProperty -Path `$k -Name `$flagName -Value 2 -Type DWord -EA SilentlyContinue }
 }
-Start-Process cleanmgr.exe -ArgumentList "/sagerun:`$sageRunId" -Wait -NoNewWindow -EA SilentlyContinue
+`$process = Start-Process cleanmgr.exe -ArgumentList "/sagerun:`$sageRunId" -Wait -NoNewWindow -PassThru -ErrorAction Stop
+if (`$process.ExitCode -ne 0) { throw 'Disk cleanup failed.' }
 "@
+    'connectivityHistory' = @'
+foreach ($root in @(
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles',
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\Unmanaged',
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\Managed'
+)) {
+    if ($null -ne (Get-AutoEraseRegistryItem $root)) {
+        Get-ChildItem -LiteralPath $root -ErrorAction Stop | ForEach-Object { Erase-RegistryTree $_.PSPath }
+    }
+}
+'@
+    'shadowCopies' = @'
+$shadows = @(Get-CimInstance Win32_ShadowCopy -ErrorAction Stop)
+foreach ($shadow in $shadows) {
+    Remove-CimInstance -InputObject $shadow -ErrorAction Stop
+    if (@(Get-CimInstance Win32_ShadowCopy -Filter ("ID='" + $shadow.ID.Replace("'", "''") + "'") -ErrorAction Stop).Count) { throw 'Shadow copy deletion could not be verified.' }
+    $script:AutoEraseRemoved++
+}
+'@
+    'amcache' = @'
+Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:SystemRoot 'AppCompat\Programs') -Filter 'Amcache.hve*')
+'@
+    'searchIndex' = @'
+Invoke-AutoEraseWithServices -Names WSearch -Body {
+    $root = Join-Path $env:ProgramData 'Microsoft\Search\Data\Applications\Windows'
+    foreach ($pattern in @('Windows.edb', 'Windows*.db*')) { Erase-FileSet @(Get-AutoEraseFiles -Path $root -Filter $pattern) }
+    foreach ($sub in @('Projects', 'GatherLogs')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $root $sub) -Recurse) }
+}
+'@
+    'srumData' = @'
+Invoke-AutoEraseWithServices -Names DPS -Body {
+    Erase-OneFile (Join-Path $env:SystemRoot 'System32\sru\SRUDB.dat') | Out-Null
+}
+'@
+    'recallDb' = @'
+foreach ($relative in @('CoreAIPlatform.00','ConnectedDevicesPlatform')) {
+    foreach ($pattern in @('*.db','*.db-wal','*.db-shm','*.db-journal','*.edb')) {
+        Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA $relative) -Filter $pattern -Recurse)
+    }
+}
+'@
+    'developerCaches' = @'
+foreach ($root in @(
+    (Join-Path $env:APPDATA 'npm-cache'), (Join-Path $env:LOCALAPPDATA 'npm-cache'),
+    (Join-Path $env:LOCALAPPDATA 'pip\Cache'), (Join-Path $env:USERPROFILE '.cargo\registry\cache'),
+    (Join-Path $env:USERPROFILE '.cargo\registry\src')
+)) { Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse) }
+foreach ($relative in @('.npmrc','.cargo\config.toml','.cargo\credentials.toml')) { Erase-OneFile (Join-Path $env:USERPROFILE $relative) | Out-Null }
+'@
+    'networkWizardHistory' = "Erase-RegistryTree 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Network\Network Connection Wizard'"
+    'werHistory' = @'
+foreach ($root in @('HKCU:\Software\Microsoft\Windows\Windows Error Reporting','HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting')) {
+    foreach ($suffix in @('Consent','ExclusionList')) { Erase-RegistryTree (Join-Path $root $suffix) }
+}
+'@
+    'stickyNotes' = @'
+Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') -Filter 'Microsoft.MicrosoftStickyNotes_*' | ForEach-Object {
+    foreach ($name in @('plum.sqlite','plum.sqlite-wal','plum.sqlite-shm')) { Erase-OneFile (Join-Path $_.FullName "LocalState\$name") | Out-Null }
+}
+'@
+    'oneDriveMetadata' = @'
+Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings') | ForEach-Object {
+    foreach ($pattern in @('*.dat','*.db')) { Erase-FileSet @(Get-AutoEraseFiles -Path $_.FullName -Filter $pattern -Recurse) }
+}
+'@
+    'fontCache' = @'
+Invoke-AutoEraseWithServices -Names FontCache -Body {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache') -Filter '*.dat' -Recurse)
+}
+'@
+    'legacyIconCache' = "Erase-OneFile (Join-Path `$env:LOCALAPPDATA 'IconCache.db') | Out-Null"
+    'gameCaptures' = @'
+Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:USERPROFILE 'Videos\Captures') -Recurse)
+Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') | Where-Object { $_.Name -like 'Microsoft.XboxGamingOverlay_*' -or $_.Name -like 'Microsoft.GamingApp_*' } | ForEach-Object {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $_.FullName 'LocalState') -Recurse)
+}
+'@
+    'photosCache' = @'
+Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.Windows.Photos_8wekyb3d8bbwe\LocalState') -Recurse)
+'@
+    'xboxCache' = @'
+Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') | Where-Object { $_.Name -like 'Microsoft.GamingApp_*' -or $_.Name -like 'Microsoft.XboxApp_*' } | ForEach-Object {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $_.FullName 'LocalState') -Recurse)
+}
+'@
+    'communicationCaches' = @'
+foreach ($relative in @('Microsoft\Teams\Cache','Microsoft\Teams\IndexedDB','Slack\Cache','Slack\IndexedDB','Slack\Local Storage\leveldb','discord\Cache','discord\IndexedDB','discord\Local Storage\leveldb')) {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA $relative) -Recurse)
+}
+'@
+    'editorHistory' = @'
+foreach ($pattern in @('storage.json','state.vscdb')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA 'Code\User\globalStorage') -Filter $pattern) }
+Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA 'Code\User\History') -Recurse)
+Get-AutoEraseDirectories -Path (Join-Path $env:APPDATA 'JetBrains') | ForEach-Object {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $_.FullName 'options') -Filter 'recentProjects.xml' -Recurse)
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA ("JetBrains\{0}\LocalHistory" -f $_.Name)) -Recurse)
+}
+'@
+    'sshState' = @'
+$sshAdd = Get-Command ssh-add.exe -ErrorAction Stop
+$null = & $sshAdd.Source -D 2>&1
+if ($LASTEXITCODE -ne 0) { throw 'SSH agent identities could not be removed.' }
+$null = & $sshAdd.Source -l 2>&1
+if ($LASTEXITCODE -ne 1) { throw 'SSH agent cleanup could not be verified.' }
+Erase-OneFile (Join-Path $env:USERPROFILE '.ssh\known_hosts') | Out-Null
+'@
+    'passwordManagerCaches' = @'
+foreach ($relative in @('1Password\Cache','1Password\Local Storage\leveldb')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA $relative) -Recurse) }
+foreach ($relative in @('Bitwarden\Cache','Bitwarden\Local Storage\leveldb','Bitwarden\Session Storage','LastPass\Cache','LastPass\Local Storage\leveldb','LastPass\Session Storage')) {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA $relative) -Recurse)
+}
+'@
+    'adobeRecent' = @'
+$root = 'HKCU:\Software\Adobe\Acrobat Reader'
+if ($null -ne (Get-AutoEraseRegistryItem $root)) {
+    Get-ChildItem -LiteralPath $root -ErrorAction Stop | ForEach-Object {
+        foreach ($suffix in @('AVGeneral\cRecentFiles','AVGeneral\cDigitalSignatures')) { Erase-RegistryValues (Join-Path $_.PSPath $suffix) }
+    }
+}
+'@
+    'officeTempFiles' = @'
+foreach ($relative in @('Documents','Desktop','Downloads')) {
+    foreach ($pattern in @('~$*.doc*','~$*.xls*','~$*.ppt*')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:USERPROFILE $relative) -Filter $pattern -Recurse -Depth 2) }
+}
+Erase-FileSet @(Get-AutoEraseFiles -Path $env:TEMP -Filter '*.tmp' -Recurse -Depth 2 | Sort-Object LastWriteTime -Descending | Select-Object -First 500)
+foreach ($relative in @('Documents','Desktop','Downloads')) {
+    foreach ($pattern in @('~$*.doc*','~$*.xls*','~$*.ppt*')) {
+        if (@(Get-AutoEraseFiles -Path (Join-Path $env:USERPROFILE $relative) -Filter $pattern -Recurse -Depth 2).Count) { throw 'Office temporary-file cleanup is incomplete.' }
+    }
+}
+if (@(Get-AutoEraseFiles -Path $env:TEMP -Filter '*.tmp' -Recurse -Depth 2).Count) { throw 'Temporary-file cleanup is incomplete.' }
+'@
+    'neighborCache' = @'
+$neighbors = @(Get-NetNeighbor -ErrorAction Stop | Where-Object { $_.State -ne 'Permanent' })
+foreach ($neighbor in $neighbors) {
+    Remove-NetNeighbor -InterfaceIndex $neighbor.InterfaceIndex -IPAddress $neighbor.IPAddress -Confirm:$false -ErrorAction Stop
+    if (@(Get-NetNeighbor -ErrorAction Stop | Where-Object { $_.InterfaceIndex -eq $neighbor.InterfaceIndex -and $_.IPAddress -eq $neighbor.IPAddress }).Count) { throw 'Neighbor-cache cleanup could not be verified.' }
+    $script:AutoEraseRemoved++
+}
+'@
+    'netbiosCache' = @'
+$null = & nbtstat.exe -R 2>&1
+if ($LASTEXITCODE -ne 0) { throw 'NetBIOS-cache cleanup failed.' }
+$cache = @(& nbtstat.exe -c 2>&1)
+if ($LASTEXITCODE -ne 0 -or @($cache | Where-Object { $_ -match '<[0-9A-Fa-f]{2}>' }).Count) { throw 'NetBIOS-cache cleanup could not be verified.' }
+'@
+    'geolocationCache' = @'
+Invoke-AutoEraseWithServices -Names lfsvc -Body {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:ProgramData 'Microsoft\Windows\LfSvc') -Recurse)
+}
+'@
+    'vpnPhonebooks' = @'
+foreach ($root in @((Join-Path $env:APPDATA 'Microsoft\Network\Connections\Pbk'), (Join-Path $env:LOCALAPPDATA 'Microsoft\Network\Connections'), (Join-Path $env:ProgramData 'Microsoft\Network\Connections\Pbk'))) {
+    foreach ($pattern in @('rasphone.pbk','*.log','*.etl')) { Erase-FileSet @(Get-AutoEraseFiles -Path $root -Filter $pattern -Recurse) }
+}
+'@
+    'proxyCache' = "Erase-RegistryValues 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'"
+    'bitsQueue' = @'
+$jobs = @(Get-BitsTransfer -AllUsers -ErrorAction Stop)
+foreach ($job in $jobs) {
+    Remove-BitsTransfer -BitsJob $job -Confirm:$false -ErrorAction Stop
+    if (@(Get-BitsTransfer -AllUsers -ErrorAction Stop | Where-Object JobId -eq $job.JobId).Count) { throw 'BITS job removal could not be verified.' }
+    $script:AutoEraseRemoved++
+}
+Invoke-AutoEraseWithServices -Names BITS -Body {
+    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:ProgramData 'Microsoft\Network\Downloader') -Filter 'qmgr*.dat')
+}
+'@
 }
 
 # Public: the set of categoryIds this scheduler accepts. Frontend's
 # Privacy Clean panel hardcodes the same set in privacyCleanCategories.ts
 # (SUPPORTED_AUTOERASE_IDS) — keep them in sync.
-function Get-AutoEraseSupportedCategories {
-    @{ categories = @($script:AutoEraseScripts.Keys | Sort-Object) }
+$script:AutoEraseProtectedCategories = @(
+    'wlanProfiles', 'browserFootprints', 'notepadState', 'wslData',
+    'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches',
+    'credentialManager', 'sshState', 'passwordManagerCaches'
+)
+$script:AutoEraseUnsupportedCategories = [ordered]@{
+    wslData = 'Requires distribution unregister and lifecycle verification.'
+    dockerDesktopData = 'Requires Docker and virtual-disk lifecycle verification.'
+    virtualMachineArtifacts = 'Requires the VM provider to validate snapshot chains.'
+    credentialManager = 'Requires typed credential enumeration and deletion APIs.'
+    cloudPlaceholders = 'Requires provider-aware placeholder removal and read-back.'
+    inactiveUserProtectionMetadata = 'Requires identity-bound recovery-key authorization.'
+    cellularHistory = 'Requires locale-independent mobile-profile APIs.'
+    gitActivity = 'Requires typed credential deletion and Git configuration verification.'
+    browserFootprints = 'Requires the installed-browser inventory and profile-aware clear adapter.'
+    wlanProfiles = 'Requires locale-independent WLAN-profile enumeration and deletion APIs.'
+    ntfsJournals = 'Requires the native fixed-volume journal reset, sizing preservation, and identity read-back.'
 }
+function Get-AutoEraseSupportedCategories {
+    $all = @($script:AutoEraseScripts.Keys | Where-Object { $_ -notin @('maintenanceTrim','diskCleanup') -and -not $script:AutoEraseUnsupportedCategories.Contains($_) } | ForEach-Object { if ($_ -eq 'clipboard') { 'clipboardHistory' } else { $_ } } | Sort-Object)
+    @{
+        categories = @($all | Where-Object { $_ -notin $script:AutoEraseProtectedCategories })
+        schedulableCategories = $all
+        unsupportedCategories = @($script:AutoEraseUnsupportedCategories.Keys | ForEach-Object { @{ categoryId=$_; reason=$script:AutoEraseUnsupportedCategories[$_] } })
+    }
+}
+
+$script:AutoEraseSystemCategories = @(
+    'eventLogs', 'eventTranscript', 'servicingLogs', 'deviceInstallLogs',
+    'usageTraceLogs', 'appLaunchHistory', 'reliabilityHistory', 'defenderHistory', 'maintenanceTrim',
+    'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'branchCache',
+    'neighborCache', 'netbiosCache', 'bitsQueue', 'p2pUpdateCache', 'fontCache', 'geolocationCache'
+)
+$script:AutoEraseHourlyCategories = @(
+    'ntUserTraces', 'pcaDatabase', 'eventTranscript', 'activitiesTimeline',
+    'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs', 'defenderHistory',
+    'firewallLog', 'appLaunchHistory', 'officeMru', 'reliabilityHistory',
+    'explorerSearchHistory', 'remoteAccessLogs', 'gameLauncherLogs', 'spotlightCache',
+    'amcache', 'searchIndex', 'srumData', 'recallDb', 'notepadState', 'developerCaches', 'networkWizardHistory',
+    'werHistory', 'stickyNotes', 'oneDriveMetadata', 'fontCache', 'legacyIconCache',
+    'gameCaptures', 'photosCache', 'xboxCache', 'communicationCaches', 'editorHistory',
+    'sshState', 'passwordManagerCaches', 'adobeRecent', 'officeTempFiles', 'neighborCache',
+    'netbiosCache', 'geolocationCache', 'vpnPhonebooks', 'proxyCache', 'bitsQueue',
+    'crashDumps', 'walFiles', 'printSpooler', 'webCache', 'thumbnailDb', 'notificationDb',
+    'branchCache', 'rdpBitmapCache', 'embeddedWebCache', 'p2pUpdateCache', 'searchPersonalization'
+)
 
 # Build a scheduled-task argument string from a erase script block.
 #
@@ -691,6 +1050,42 @@ function Initialize-AutoEraseStorage {
     @{ base = $base; scripts = $scripts; state = $state }
 }
 
+function Get-AutoEraseNextDue {
+    param($State, [string]$LegacyLastSuccess, [DateTime]$FirstDueUtc, [int]$IntervalMinutes)
+    $style = [Globalization.DateTimeStyles]::RoundtripKind
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $lastSuccess = $null
+    if ($State -and $State.lastSuccessfulUtc) {
+        $lastSuccess = [DateTime]::Parse([string]$State.lastSuccessfulUtc, $culture, $style).ToUniversalTime()
+    } elseif ($LegacyLastSuccess) {
+        $lastSuccess = [DateTime]::Parse($LegacyLastSuccess, $culture, $style).ToUniversalTime()
+    }
+    if ($State -and $State.nextDueUtc -and [int]$State.intervalMinutes -eq $IntervalMinutes) {
+        $nextDue = [DateTime]::Parse([string]$State.nextDueUtc, $culture, $style).ToUniversalTime()
+    } elseif ($lastSuccess) {
+        $nextDue = $lastSuccess.AddMinutes($IntervalMinutes)
+    } elseif ($State -and $State.attemptedUtc) {
+        $nextDue = [DateTime]::Parse([string]$State.attemptedUtc, $culture, $style).ToUniversalTime().AddMinutes($IntervalMinutes)
+    } else {
+        $nextDue = $FirstDueUtc.ToUniversalTime()
+    }
+    @{ nextDue = $nextDue; lastSuccess = $lastSuccess }
+}
+
+function New-AutoEraseResult {
+    param([DateTime]$CompletedUtc, $LastSuccess, [int]$IntervalMinutes, [int]$Removed, [int]$Deferred, [int]$Failed)
+    $completed = $CompletedUtc.ToUniversalTime()
+    $success = ($Failed -eq 0 -and $Deferred -eq 0)
+    if ($success) { $LastSuccess = $completed }
+    @{
+        attemptedUtc = $completed.ToString('o')
+        lastSuccessfulUtc = if ($LastSuccess) { $LastSuccess.ToUniversalTime().ToString('o') } else { $null }
+        nextDueUtc = $completed.AddMinutes($IntervalMinutes).ToString('o')
+        intervalMinutes = $IntervalMinutes; success = $success
+        removed = $Removed; deferred = $Deferred; failed = $Failed
+    }
+}
+
 function ConvertTo-AutoEraseTaskArgument {
     param(
         [string]$CategoryId,
@@ -698,7 +1093,8 @@ function ConvertTo-AutoEraseTaskArgument {
         [string]$Script,
         [string]$ExecutionScope = 'default',
         [string]$FirstDueUtc,
-        [int]$PayloadRevision = 0
+        [int]$PayloadRevision = 0,
+        [bool]$AllowDefaultExcluded = $false
     )
     # Every scheduled task invocation goes through a small queue/catch-up wrapper:
     #   - one global mutex makes categories run sequentially instead of all at once
@@ -708,8 +1104,10 @@ function ConvertTo-AutoEraseTaskArgument {
     $scopeKey = ConvertTo-AutoEraseSafeScope $ExecutionScope
     $scopeLiteral = $scopeKey.Replace("'", "''")
     $wrapper = @"
-`$ErrorActionPreference = 'SilentlyContinue'
+`$ErrorActionPreference = 'Stop'
 `$categoryId = '$categoryLiteral'
+`$allowDefaultExcluded = `$$($AllowDefaultExcluded.ToString().ToLowerInvariant())
+if (`$categoryId -in @('wlanProfiles','browserFootprints','notepadState','wslData','dockerDesktopData','virtualMachineArtifacts','developerCaches','credentialManager','sshState','passwordManagerCaches') -and -not `$allowDefaultExcluded) { throw 'This protected schedule has no explicit manual authorization.' }
 `$scopeKey = '$scopeLiteral'
 `$intervalMinutes = $IntervalMinutes
 `$firstDueUtc = '$FirstDueUtc'
@@ -722,19 +1120,16 @@ New-Item -ItemType Directory -Path `$stateRoot -Force | Out-Null
 `$marker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.state.json")
 `$legacyMarker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.last")
 `$now = Get-Date
-`$lastSuccess = `$null
-`$nextDue = [DateTime]::Parse(`$firstDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+`$firstDue = [DateTime]::Parse(`$firstDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+`$state = `$null
+`$legacy = ''
 if (Test-Path -LiteralPath `$marker) {
-    try {
-        `$state = Get-Content -LiteralPath `$marker -Raw | ConvertFrom-Json
-        if (`$state.lastSuccessfulUtc) { `$lastSuccess = [DateTime]::Parse([string]`$state.lastSuccessfulUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
-        elseif (`$state.nextDueUtc) { `$nextDue = [DateTime]::Parse([string]`$state.nextDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
-    } catch {}
+    try { `$state = Get-Content -LiteralPath `$marker -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Scheduled cleanup state could not be read.' }
 } elseif (Test-Path -LiteralPath `$legacyMarker) {
-    try { `$lastSuccess = [DateTime]::Parse(([System.IO.File]::ReadAllText(`$legacyMarker).Trim()), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } catch {}
+    try { `$legacy = [System.IO.File]::ReadAllText(`$legacyMarker).Trim() } catch { throw 'Scheduled cleanup history could not be read.' }
 }
-if (`$lastSuccess) { `$nextDue = `$lastSuccess.ToUniversalTime().AddMinutes(`$intervalMinutes) }
-`$due = (`$now.ToUniversalTime() -ge `$nextDue.ToUniversalTime())
+try { `$schedule = Get-AutoEraseNextDue `$state `$legacy `$firstDue `$intervalMinutes } catch { throw 'Scheduled cleanup timing is invalid.' }
+`$due = (`$now.ToUniversalTime() -ge `$schedule.nextDue)
 if (`$due) {
     `$mutex = New-Object System.Threading.Mutex(`$false, 'Global\WinCommanderAutoEraseQueue')
     `$hasLock = `$false
@@ -743,29 +1138,29 @@ if (`$due) {
         if (`$hasLock) {
             `$now = Get-Date
             if (Test-Path -LiteralPath `$marker) {
-                try {
-                    `$state = Get-Content -LiteralPath `$marker -Raw | ConvertFrom-Json
-                    if (`$state.lastSuccessfulUtc) { `$lastSuccess = [DateTime]::Parse([string]`$state.lastSuccessfulUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
-                    elseif (`$state.nextDueUtc) { `$nextDue = [DateTime]::Parse([string]`$state.nextDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
-                } catch {}
+                try { `$state = Get-Content -LiteralPath `$marker -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Scheduled cleanup state could not be read.' }
             }
-            if (`$lastSuccess) { `$nextDue = `$lastSuccess.ToUniversalTime().AddMinutes(`$intervalMinutes) }
-            `$due = (`$now.ToUniversalTime() -ge `$nextDue.ToUniversalTime())
+            try { `$schedule = Get-AutoEraseNextDue `$state `$legacy `$firstDue `$intervalMinutes } catch { throw 'Scheduled cleanup timing is invalid.' }
+            `$lastSuccess = `$schedule.lastSuccess
+            `$due = (`$now.ToUniversalTime() -ge `$schedule.nextDue)
             if (`$due) {
+                `$Error.Clear()
+                try {
 __AUTO_ERASE_BODY__
+                } catch { `$script:AutoEraseFailed++ }
+                # Legacy category scripts can suppress a non-terminating error. It must still invalidate this run.
+                if (`$Error.Count -gt 0 -and `$script:AutoEraseFailed -eq 0) { `$script:AutoEraseFailed++ }
                 # Record a truthful outcome (not just "it ran"): how many files
                 # were actually removed, how many are queued for reboot, and how
                 # many could not be cleared. Consumed by the UI/telemetry so a
                 # clear can never silently report success while leaving traces.
                 try {
-                    `$success = (`$script:AutoEraseFailed -eq 0)
                     `$completedUtc = (Get-Date).ToUniversalTime()
-                    if (`$success) { `$lastSuccess = `$completedUtc }
-                    `$nextDue = if (`$lastSuccess) { `$lastSuccess.AddMinutes(`$intervalMinutes) } else { `$completedUtc.AddMinutes(`$intervalMinutes) }
-                    `$res = @{ attemptedUtc = `$completedUtc.ToString('o'); lastSuccessfulUtc = if (`$lastSuccess) { `$lastSuccess.ToString('o') } else { `$null }; nextDueUtc = `$nextDue.ToString('o'); intervalMinutes = `$intervalMinutes; success = `$success; removed = `$script:AutoEraseRemoved; deferred = `$script:AutoEraseDeferred; failed = `$script:AutoEraseFailed }
+                    `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed
                     [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.result.json")), (`$res | ConvertTo-Json -Compress))
                     [System.IO.File]::WriteAllText(`$marker, (`$res | ConvertTo-Json -Compress))
-                } catch {}
+                } catch { throw 'Scheduled cleanup outcome could not be saved.' }
+                if (-not `$res.success) { throw 'Scheduled cleanup was incomplete. See its result record.' }
             }
         }
     } finally {
@@ -776,7 +1171,9 @@ __AUTO_ERASE_BODY__
 "@
     # Always prepend the single-pass erase functions so every scheduled task script
     # has Erase-OneFile / Erase-Dir available regardless of which category it serves.
-    $fullScript = $script:EraseFunctions + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
+    $dueFunction = "function Get-AutoEraseNextDue {`n" + ${function:Get-AutoEraseNextDue}.ToString() + "`n}"
+    $resultFunction = "function New-AutoEraseResult {`n" + ${function:New-AutoEraseResult}.ToString() + "`n}"
+    $fullScript = $script:EraseFunctions + "`n" + $dueFunction + "`n" + $resultFunction + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
 
     $storage = Initialize-AutoEraseStorage
     $revisionSuffix = if ($PayloadRevision -gt 0) { ".r$PayloadRevision" } else { '' }
@@ -821,6 +1218,16 @@ $script:AutoEraseCategoryCodes = [ordered]@{
     usageTraceLogs = '33'; defenderHistory = '34'; firewallLog = '35'; appLaunchHistory = '36'
     officeMru = '37'; embeddedWebCache = '38'; p2pUpdateCache = '39'; reliabilityHistory = '40'
     explorerSearchHistory = '41'; searchPersonalization = '42'; diskCleanup = '43'
+    remoteAccessLogs = '44'; gameLauncherLogs = '45'; spotlightCache = '46'
+    connectivityHistory = '47'; shadowCopies = '48'; amcache = '49'; searchIndex = '50'
+    srumData = '51'; recallDb = '52'; developerCaches = '53'; networkWizardHistory = '54'
+    werHistory = '55'; stickyNotes = '56'; oneDriveMetadata = '57'; fontCache = '58'
+    legacyIconCache = '59'; gameCaptures = '60'; photosCache = '61'; xboxCache = '62'
+    communicationCaches = '63'; editorHistory = '64'; sshState = '65'; passwordManagerCaches = '66'
+    adobeRecent = '67'; officeTempFiles = '68'; neighborCache = '69'; netbiosCache = '70'
+    geolocationCache = '71'; vpnPhonebooks = '72'; proxyCache = '73'; bitsQueue = '74'
+    wslData = '75'; dockerDesktopData = '76'; virtualMachineArtifacts = '77'; credentialManager = '78'
+    cloudPlaceholders = '79'; inactiveUserProtectionMetadata = '80'; cellularHistory = '81'; gitActivity = '82'
 }
 
 function Get-AutoEraseCategoryCode {
@@ -913,16 +1320,29 @@ function Set-AutoEraseSchedule {
         [switch]$PreserveExisting,
         # Marks schedules created by the bulk toolbar so its second click can
         # remove only those tasks, never a schedule chosen per-card.
-        [switch]$ManagedByAutoSet
+        [switch]$ManagedByAutoSet,
+        [switch]$AllowDefaultExcluded
     )
-    Assert-AutoEraseAdmin
-
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    if ($CategoryId -in $script:AutoEraseProtectedCategories -and ($ManagedByAutoSet -or -not $AllowDefaultExcluded)) {
+        return @{ error = $true; message = "Category '$CategoryId' requires explicit per-card authorization and cannot be auto-set" }
+    }
+    if ($script:AutoEraseUnsupportedCategories.Contains($CategoryId)) { return @{ error=$true; message=$script:AutoEraseUnsupportedCategories[$CategoryId] } }
     if (-not $script:AutoEraseScripts.ContainsKey($CategoryId)) {
         return @{ error = $true; message = "Category '$CategoryId' is not supported for auto-erase" }
     }
     if ($IntervalMinutes -lt 1) {
         return @{ error = $true; message = "IntervalMinutes must be >= 1" }
     }
+    if ($CategoryId -in $script:AutoEraseHourlyCategories -and $IntervalMinutes -lt 60) {
+        return @{ error = $true; message = "This category requires an interval of at least 60 minutes" }
+    }
+    if ($CategoryId -in $script:AutoEraseSystemCategories) {
+        $RunAsSystem = $true
+    } elseif ($RunAsSystem) {
+        return @{ error = $true; message = "This category requires the selected user's context" }
+    }
+    Assert-AutoEraseAdmin
 
     try {
         $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
@@ -949,7 +1369,7 @@ function Set-AutoEraseSchedule {
         $eraseScript = $script:AutoEraseScripts[$CategoryId]
         $scope = if ($RunAsSystem) { 'system' } else { "user-$TargetUser" }
         $firstDueUtc = [DateTime]::UtcNow.AddMinutes($IntervalMinutes).ToString('o')
-        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope -FirstDueUtc $firstDueUtc
+        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope -FirstDueUtc $firstDueUtc -AllowDefaultExcluded ([bool]$AllowDefaultExcluded)
 
         $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
 
@@ -989,18 +1409,12 @@ function Set-AutoEraseSchedule {
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType S4U -RunLevel Highest
         }
 
-        if ($CategoryId -eq 'usbHistory') {
-            $description = if ($ManagedByAutoSet) {
-                'System Maintenance scheduled cleanup v4 (managed)'
-            } else {
-                'System Maintenance scheduled cleanup v4'
-            }
+        $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
+            'System Maintenance scheduled cleanup v6 (manual opt-in)'
+        } elseif ($ManagedByAutoSet) {
+            'System Maintenance scheduled cleanup v6 (managed)'
         } else {
-            $description = if ($ManagedByAutoSet) {
-                'System Maintenance scheduled cleanup v4 (managed)'
-            } else {
-                'System Maintenance scheduled cleanup v4'
-            }
+            'System Maintenance scheduled cleanup v6'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -1031,8 +1445,17 @@ function Set-MultiUserAutoEraseSchedule {
         [Parameter(Mandatory)] [int]$IntervalMinutes,
         [bool]$RunAsSystem = $false,
         # Comma-separated string from the backend router (or real array from PS callers)
-        [string]$TargetUsers = ''
+        [string]$TargetUsers = '',
+        [switch]$ManagedByAutoSet,
+        [switch]$AllowDefaultExcluded
     )
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    if ($CategoryId -in $script:AutoEraseProtectedCategories -and ($ManagedByAutoSet -or -not $AllowDefaultExcluded)) {
+        return @{ error = $true; message = "Category '$CategoryId' requires explicit per-card authorization and cannot be auto-set" }
+    }
+    if ($script:AutoEraseUnsupportedCategories.Contains($CategoryId)) { return @{ error=$true; message=$script:AutoEraseUnsupportedCategories[$CategoryId] } }
+    if (-not $script:AutoEraseScripts.ContainsKey($CategoryId)) { return @{ error=$true; message="Category '$CategoryId' is not supported for auto-erase" } }
+    if ($CategoryId -in $script:AutoEraseSystemCategories) { $RunAsSystem = $true }
     Assert-AutoEraseAdmin
 
     # Split comma-separated string into array; empty = all non-system accounts
@@ -1055,7 +1478,9 @@ function Set-MultiUserAutoEraseSchedule {
             -CategoryId      $CategoryId `
             -IntervalMinutes $IntervalMinutes `
             -RunAsSystem     $true `
-            -TargetUser      'SYSTEM'
+            -TargetUser      'SYSTEM' `
+            -ManagedByAutoSet:$ManagedByAutoSet `
+            -AllowDefaultExcluded:$AllowDefaultExcluded
         return @{ status = 'ok'; results = @($r); total = 1 }
     }
 
@@ -1065,7 +1490,9 @@ function Set-MultiUserAutoEraseSchedule {
             -CategoryId      $CategoryId `
             -IntervalMinutes $IntervalMinutes `
             -RunAsSystem     $RunAsSystem `
-            -TargetUser      $user
+            -TargetUser      $user `
+            -ManagedByAutoSet:$ManagedByAutoSet `
+            -AllowDefaultExcluded:$AllowDefaultExcluded
         $results += $r
     }
     @{ status = 'ok'; results = $results; total = $results.Count }
@@ -1138,7 +1565,7 @@ function Get-AutoEraseSchedules {
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
                 ownerAccount     = $t.Principal.UserId
-                managedByAutoSet = ($t.Description -like 'WinCommander Auto-set scheduled wipe*')
+                managedByAutoSet = ($t.Description -match '^System Maintenance scheduled cleanup v[456] \(managed\)$' -or $t.Description -like 'WinCommander Auto-set scheduled wipe*')
                 lastRun          = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun          = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
@@ -1189,13 +1616,21 @@ function Invoke-AutoEraseMigration {
     Assert-AutoEraseAdmin
     Initialize-SystemMaintenanceTaskFolder
     $migrated = @()
+    $disabledProtected = @()
     $errors = @()
     foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $isUsbHistoryTask = $identity.categoryId -eq 'usbHistory'
-            $currentPayload = $task.Description -like 'System Maintenance scheduled cleanup v4*'
+            $manualOptIn = $task.Description -eq 'System Maintenance scheduled cleanup v6 (manual opt-in)'
+            if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
+                Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
+                $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+                if ([string]$protectedReadback.State -ne 'Disabled') { throw 'A protected cleanup schedule could not be disabled.' }
+                $disabledProtected += $identity.categoryId
+                continue
+            }
+            $currentPayload = $task.Description -like 'System Maintenance scheduled cleanup v6*'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload) { continue }
@@ -1215,9 +1650,9 @@ function Invoke-AutoEraseMigration {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = if ($isUsbHistoryTask) { 3 } else { 2 }
-                $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision
-                $xml.Task.RegistrationInfo.Description = if ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v4 (managed)' } else { 'System Maintenance scheduled cleanup v4' }
+                $revision = 6
+                $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v6 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v6 (managed)' } else { 'System Maintenance scheduled cleanup v6' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false
@@ -1248,6 +1683,6 @@ function Invoke-AutoEraseMigration {
             $migrated += $identity.categoryId
         } catch { $errors += $_.Exception.Message }
     }
-    if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; message = ($errors -join ' '); errors = $errors } }
-    @{ status = 'ok'; migrated = $migrated }
+    if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; disabledProtected = $disabledProtected; message = ($errors -join ' '); errors = $errors } }
+    @{ status = 'ok'; migrated = $migrated; disabledProtected = $disabledProtected }
 }

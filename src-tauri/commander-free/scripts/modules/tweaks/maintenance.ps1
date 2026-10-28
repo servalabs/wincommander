@@ -215,15 +215,19 @@ function Invoke-SystemRepair {
     try {
         Write-Host "Step 1/4: Running CHKDSK Scan..."
         chkdsk.exe /scan /perf | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "CHKDSK exited with code $LASTEXITCODE" }
         
         Write-Host "Step 2/4: Running SFC Scan (Initial)..."
         sfc.exe /scannow | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Initial SFC exited with code $LASTEXITCODE" }
         
         Write-Host "Step 3/4: Running DISM Restore Health..."
         DISM /Online /Cleanup-Image /RestoreHealth | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "DISM exited with code $LASTEXITCODE" }
         
         Write-Host "Step 4/4: Running SFC Scan (Verification)..."
         sfc.exe /scannow | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Verification SFC exited with code $LASTEXITCODE" }
         
         return @{ status = 'success'; message = 'System repair completed successfully.' }
     }
@@ -234,28 +238,54 @@ function Invoke-SystemRepair {
 
 function Invoke-WindowsUpdateRepair {
     Assert-IsAdmin
+    $runningServices = @()
+    $failure = $null
     try {
         $services = @('bits', 'wuauserv', 'appidsvc', 'cryptsvc', 'msiserver')
-        foreach ($service in $services) { Stop-Service -Name $service -Force -ErrorAction SilentlyContinue }
-        Remove-Item -LiteralPath (Join-Path $env:windir 'SoftwareDistribution') -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath (Join-Path $env:windir 'System32\catroot2') -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($service in $services) {
+            $state = Get-Service -Name $service -ErrorAction Stop
+            if ($state.Status -eq 'Running') {
+                $runningServices += $service
+                Stop-Service -Name $service -Force -ErrorAction Stop
+            }
+        }
+        foreach ($path in @((Join-Path $env:windir 'SoftwareDistribution'), (Join-Path $env:windir 'System32\catroot2'))) {
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+                if (Test-Path -LiteralPath $path) { throw "Update cache remains at $path" }
+            }
+        }
         netsh.exe winsock reset | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Winsock reset exited with code $LASTEXITCODE" }
         netsh.exe winhttp reset proxy | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "WinHTTP reset exited with code $LASTEXITCODE" }
         DISM /Online /Cleanup-Image /RestoreHealth /NoRestart | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "DISM exited with code $LASTEXITCODE" }
         sfc.exe /scannow | Out-Null
-        foreach ($service in $services) { Start-Service -Name $service -ErrorAction SilentlyContinue }
-        return @{ status = 'repaired'; requiresReboot = $true }
+        if ($LASTEXITCODE -ne 0) { throw "SFC exited with code $LASTEXITCODE" }
     }
     catch {
-        return @{ error = $true; message = "Windows Update repair failed: $($_.Exception.Message)" }
+        $failure = $_.Exception.Message
     }
+    finally {
+        foreach ($service in $runningServices) {
+            try { Start-Service -Name $service -ErrorAction Stop }
+            catch { $failure = "${failure} Service $service could not be restarted: $($_.Exception.Message)".Trim() }
+        }
+    }
+    if ($failure) { return @{ error = $true; message = "Windows Update repair failed: $failure" } }
+    return @{ status = 'repaired'; requiresReboot = $true }
 }
 
 function Invoke-Defrag {
     Assert-IsAdmin
     try {
         # Optimize-Volume automatically handles SSDs (retrim) and HDDs (defrag)
-        Get-Volume | Where-Object DriveLetter | Where-Object DriveType -eq Fixed | Optimize-Volume | Out-Null
+        $volumes = @(Get-Volume -ErrorAction Stop | Where-Object DriveLetter | Where-Object DriveType -eq Fixed)
+        if ($volumes.Count -eq 0) { throw 'No fixed volumes were available for optimization' }
+        foreach ($volume in $volumes) {
+            Optimize-Volume -DriveLetter $volume.DriveLetter -ErrorAction Stop | Out-Null
+        }
         return @{ status = 'success'; message = 'Drive optimization completed.' }
     }
     catch {

@@ -71,13 +71,13 @@ describe("Routine Hygiene policy", () => {
       }]),
     );
     snapshots.dnsCache.count = 4;
-    snapshots.thumbnailDb.count = 2;
+    snapshots.spotlightCache.count = 2;
 
     const plan = buildRoutineHygienePlan(ALL_CATEGORIES, snapshots);
 
     expect(plan.previewComplete).toBe(true);
     expect(plan.canClear).toBe(true);
     expect(plan.totalFindings).toBe(6);
-    expect(plan.ready.map(category => category.id)).toEqual(["dnsCache", "thumbnailDb"]);
+    expect(plan.ready.map(category => category.id)).toEqual(["dnsCache", "spotlightCache"]);
   });
 });

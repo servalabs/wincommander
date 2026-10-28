@@ -66,8 +66,8 @@ export function getMaintenanceFailureMessage(label: string, captured: unknown): 
     const envelope = captured as BackendEnvelope<MaintenancePayload>;
     if (envelope.success === false) return envelope.error || `${label} failed.`;
 
-    const data = (envelope.data ?? captured) as MaintenancePayload & { success?: boolean; error?: boolean | string };
-    if (data.success === false || data.error) {
+    const data = (envelope.data ?? captured) as MaintenancePayload & { success?: boolean; ok?: boolean; error?: boolean | string };
+    if (data.success === false || data.ok === false || data.error) {
         return (typeof data.error === "string" ? data.error : data.message) || `${label} failed.`;
     }
 

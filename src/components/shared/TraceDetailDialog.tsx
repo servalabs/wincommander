@@ -71,6 +71,10 @@ export default function TraceDetailDialog({
   const datasetCount = groupedViews.length
     ? groupedViews.reduce((total, group) => total + group.view.datasets.length, 0)
     : view.datasets.length;
+  const countUnit = rawData && typeof rawData === "object" && "countUnit" in rawData &&
+    typeof rawData.countUnit === "string" && rawData.countUnit.trim()
+    ? rawData.countUnit.trim()
+    : category.id === "amcache" ? "app launch records" : category.id === "eventLogs" ? "event records" : count === 1 ? "item" : "items";
 
   return (
     <div className="trace-dialog" role="dialog" aria-modal="true" aria-label={category.label}>
@@ -90,7 +94,7 @@ export default function TraceDetailDialog({
         <div className="trace-dialog__toolbar">
           <div className="trace-dialog__summary">
             <strong>{count}</strong>
-            <span>{count === 1 ? "item" : "items"}</span>
+            <span>{countUnit}</span>
             {datasetCount > 0 ? <small>{datasetCount} {datasetCount === 1 ? "dataset" : "datasets"}</small> : null}
           </div>
           <label className="trace-dialog__search">
@@ -112,6 +116,14 @@ export default function TraceDetailDialog({
           <p className="trace-dialog__bounded-preview" role="status">
             Showing the first {typeof previewLimit === "number" ? previewLimit : items.length} entries. The total above includes every item found.
           </p>
+        ) : null}
+        {category.id === "amcache" ? (
+          <p className="trace-dialog__bounded-preview">
+            The total adds the record counts in each category. Samples are previews and can be fewer than the records found.
+          </p>
+        ) : null}
+        {category.id === "eventLogs" ? (
+          <p className="trace-dialog__bounded-preview">The total counts event records. Each detail row summarizes one log channel.</p>
         ) : null}
         <div className="trace-dialog__items">
           {view.metadata.length > 0 && groupedViews.length === 0 ? (

@@ -8,6 +8,7 @@ import {
   getCleanupScanConcurrency,
   reconcileCleanupClear,
   runCleanupWorkers,
+  verifyNtfsJournalReset,
 } from "./useCleanupScan";
 
 describe("System Cleanup usability tiers", () => {
@@ -43,13 +44,13 @@ describe("System Cleanup usability tiers", () => {
     expect(completed.sort()).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test("reports observed cleanup progress even when a cleaner returns a late error", () => {
+  test("does not call a failed cleaner complete even when the count falls", () => {
     expect(reconcileCleanupClear(12, 0, false)).toEqual({
-      result: "cleared",
+      result: "failed",
       removed: 12,
     });
     expect(reconcileCleanupClear(12, 5, false)).toEqual({
-      result: "reduced",
+      result: "failed",
       removed: 7,
     });
   });
@@ -59,5 +60,12 @@ describe("System Cleanup usability tiers", () => {
       result: "failed",
       removed: 0,
     });
+  });
+
+  test("a recreated NTFS journal is verified by identity, even with the same active count", () => {
+    const receipt = { verifiedReset: true, journals: [{ drive: "C:", beforeJournalId: "0x10", afterJournalId: "0x20" }] };
+    expect(verifyNtfsJournalReset(receipt, { journals: [{ drive: "C:", journalId: "0x20" }] })).toBe(true);
+    expect(verifyNtfsJournalReset(receipt, { journals: [{ drive: "C:", journalId: "0x10" }] })).toBe(false);
+    expect(verifyNtfsJournalReset({ ...receipt, verifiedReset: false }, { journals: [{ drive: "C:", journalId: "0x20" }] })).toBe(false);
   });
 });

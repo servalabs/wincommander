@@ -15,10 +15,25 @@ type LegacyCleanupCategory = Omit<CleanupCategory, 'extractPreview'> & {
   extractPreview: (data: LegacyPreviewInput) => CleanupPreview;
 };
 
+const CUSTOM_SCAN_ARRAYS: Record<string, readonly string[]> = {
+  shellBags: ['entries'], usbHistory: ['devices'], recycleBin: ['items'],
+  dnsCache: ['entries'], clipboardHistory: ['historyItems'], execCache: ['entries'],
+  wlanProfiles: ['profiles'], netDrives: ['drives'], eventLogs: ['logs'],
+  psHistory: ['entries'], recentFiles: ['entries'], rdpHistory: ['entries'],
+  jumpLists: ['entries'], connectivityHistory: ['entries'], browserFootprints: ['browsers'],
+  prefetchFiles: ['entries'], shadowCopies: ['copies'], ntfsJournals: ['journals'],
+  amcache: ['entries'], ntUserTraces: ['sections'], crashDumps: ['dumps'],
+  searchIndex: ['files'], recallDb: ['databases'], processIntel: ['processes'],
+};
+
 function exposeCleanupCategories(categories: LegacyCleanupCategory[]): CleanupCategory[] {
   return categories.map(({ extractPreview, ...category }) => ({
     ...category,
     extractPreview: (data: unknown) => extractPreview(data as LegacyPreviewInput),
+    requiredScanArrays: category.actionOnly ? undefined :
+      extractPreview === fileNamePreview ? ['files'] :
+      extractPreview === fileOrEntryNamePreview || extractPreview === fileOrEntryPathPreview ? ['files', 'entries'] :
+      CUSTOM_SCAN_ARRAYS[category.id],
   }));
 }
 
@@ -82,6 +97,9 @@ export interface CleanupCategory {
   /** Extract count + normalized item labels from raw backend response.
    * Cards slice this list for preview; TraceDetailDialog shows the full list. */
   extractPreview: PreviewAdapter;
+  countUnits?: { singular: string; plural: string };
+  /** At least one of these collections must be present on a completed scan. */
+  requiredScanArrays?: readonly string[];
   /** If true, this is a "run" action with no viewable data */
   actionOnly?: boolean;
   /** Confirm message before clearing (null = no confirm) */
@@ -351,7 +369,8 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'eventLogs',
     label: 'Event Logs',
-    description: 'Windows event log volumes',
+    countUnits: { singular: 'event record', plural: 'event records' },
+    description: 'Event records across Windows log channels',
     icon: 'timeline-events',
     color: '#a855f7',
     severity: 'warning',
@@ -362,16 +381,17 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
     clearDataKey: 'clearEventLogs',
     extractPreview: (data) => {
       const logs = Array.isArray(data?.logs) ? data.logs : [];
-      const totalEntries = logs.reduce((s: number, l: any) => s + (l.entries || l.count || 0), 0);
+      const totalEntries = logs.reduce((s: number, l: any) => s + (l.entries ?? l.count ?? 0), 0);
       return {
         count: totalEntries,
-        items: logs.map((l: any) => `${l.logName || l.name}: ${l.entries || l.count || 0}`),
+        items: logs.map((l: any) => `${l.logName || l.name}: ${l.entries ?? l.count ?? 0} records`),
       };
     },
   },
   {
     id: 'psHistory',
     label: 'Command History',
+    countUnits: { singular: 'command line', plural: 'command lines' },
     description: 'Terminal command log',
     icon: 'console',
     color: '#0284c7',
@@ -383,7 +403,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
     extractPreview: (data) => {
       const entries = Array.isArray(data?.entries) ? data.entries : [];
       return {
-        count: data?.fileTotal ?? entries.length,
+        count: data?.total ?? entries.length,
         items: entries.map((e: any) => (e.command || e.line || '—').substring(0, 50)),
       };
     },
@@ -536,6 +556,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'ntfsJournals',
     label: 'NTFS Journals',
+    countUnits: { singular: 'active journal', plural: 'active journals' },
     description: 'USN journal per drive',
     icon: 'database',
     color: '#78716c',
@@ -567,6 +588,7 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
   {
     id: 'amcache',
     label: 'App Launch Cache',
+    countUnits: { singular: 'app launch record', plural: 'app launch records' },
     description: 'Windows app launch records',
     icon: 'history',
     color: '#dc2626',
@@ -680,31 +702,17 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
   {
     id: 'srumData',
     label: 'Resource Usage History',
-    description: 'Per-app CPU, network, and energy usage history (live process snapshot + SRUDB.dat status)',
+    countUnits: { singular: 'database file', plural: 'database files' },
+    description: 'Windows SRUM database file and size; historical records are not decoded',
     icon: 'dashboard',
     color: '#ec4899',
     severity: 'warning',
     group: 'deep-dfir',
     systemWide: true,
-    regeneratesNote: 'SRUDB.dat is locked while Windows runs — viewer shows live processes as proxy. The database is wiped on clear; DPS recreates it within seconds.',
+    regeneratesNote: 'Windows recreates the SRUM database after it is cleared. A new database file does not prove old usage records remain.',
     getDataKey: 'getSRUMData',
     clearDataKey: 'clearSRUM',
-    extractPreview: (data) => {
-      const entries = Array.isArray(data?.entries) ? data.entries : [];
-      const srumSizeMb = data?.srumSizeMb;
-      // Show database status as first item so it's visible immediately after clear.
-      const dbLine = srumSizeMb != null
-        ? `SRUDB.dat: ${srumSizeMb} MB`
-        : 'SRUDB.dat: cleared (not present)';
-      const processLines = entries.map((e: any) =>
-        e.name || e.appId || e.exeInfo || e.path?.split(/[\\/]/).pop() || '—'
-      );
-      return {
-        // Count based on SRUDB.dat existence — not the always-present process list.
-        count: srumSizeMb != null ? entries.length : 0,
-        items: [dbLine, ...processLines],
-      };
-    },
+    extractPreview: fileNamePreview,
   },
   {
     id: 'walFiles',
@@ -1403,6 +1411,7 @@ const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
   {
     id: 'appLaunchHistory',
     label: 'App Launch History',
+    countUnits: { singular: 'tracked program', plural: 'tracked programs' },
     description: 'Per-user timestamped record of every program launched (Windows BAM service)',
     icon: 'history',
     color: '#b45309',
@@ -1587,31 +1596,38 @@ export const VIEW_ONLY_CATEGORIES = exposeCleanupCategories(legacyViewOnlyCatego
 // repeating those operations would either change system state unsafely or have
 // no cleanup payload at all.
 //
-// SUPPORTED_AUTOERASE_IDS is the canonical list — MUST match the keys of
-// `$script:AutoEraseScripts` in privacy/cleanup.ps1 (and the inline switch
-// in commander-pro/src/handlers.rs). Hardcoded here so the clock icon
+// SUPPORTED_AUTOERASE_IDS must match the keys of `$script:AutoEraseScripts`
+// in wincmd-shared/scripts/auto-erase.ps1. Hardcoded here so the clock icon
 // appears instantly on first render — no waiting on an async backend
-// roundtrip. If you add a new erase script in the PowerShell module, add
+// roundtrip. If you add a new erase script in the shared module, add
 // the id here too.
+const SCHEDULE_UNAVAILABLE_REASONS: Record<string, string> = {
+  wlanProfiles: 'Saved Wi-Fi profiles require an interactive manual clear; a verified scheduled action is not available.',
+  browserFootprints: 'Browser footprints require an interactive manual clear; a verified scheduled action is not available.',
+  wslData: 'A verified standalone scheduled wipe for Linux distributions is not available.',
+  dockerDesktopData: 'A verified standalone scheduled wipe for Docker storage is not available.',
+  virtualMachineArtifacts: 'A verified standalone scheduled wipe for virtual machines is not available.',
+  credentialManager: 'Saved credentials require an interactive manual clear.',
+  cloudPlaceholders: 'Cloud placeholders require an interactive manual clear to verify file hydration.',
+  inactiveUserProtectionMetadata: "Removing another user's encryption protection requires an interactive manual decision.",
+  cellularHistory: 'Mobile-profile scheduling needs a verified reader for this Windows language.',
+  gitActivity: 'Git credentials and repository history require an interactive manual clear.',
+  ntfsJournals: 'Scheduling requires the native fixed-volume journal reset and verification of the new journal identity.',
+};
+
 export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
-  // Standard
-  'clipboard', 'rdpHistory', 'eventLogs', 'recentFiles', 'jumpLists',
-  'psHistory', 'dnsCache', 'browserFootprints', 'prefetchFiles',
-  'shellBags', 'usbHistory', 'execCache', 'wlanProfiles', 'netDrives',
-  'ntfsJournals', 'recycleBin',
-  // DFIR
-  'ntUserTraces', 'notepadState', 'pcaDatabase', 'crashDumps', 'walFiles',
-  'printSpooler', 'webCache', 'thumbnailDb', 'notificationDb', 'branchCache',
-  'eventTranscript', 'activitiesTimeline', 'rdpBitmapCache', 'servicingLogs',
-  'deviceInstallLogs', 'usageTraceLogs', 'defenderHistory',
-  'appLaunchHistory', 'officeMru', 'embeddedWebCache', 'p2pUpdateCache',
-  'reliabilityHistory', 'explorerSearchHistory', 'searchPersonalization', 'firewallLog',
-  // Disk cleanup (scheduled via cleanmgr — runs as current user). No
-  // CleanupCategory carries this id, so applyScheduling() never surfaces it
-  // here; its only UI is Maintenance's "Reclaim disk space" card, which gates
-  // the control on the same `hasPaid && !isInvestigator` rule this panel uses.
+  ...[...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]
+    .filter(category => category.getDataKey && category.clearDataKey && !SCHEDULE_UNAVAILABLE_REASONS[category.id])
+    .map(category => category.id === 'clipboardHistory' ? 'clipboard' : category.id),
   'diskCleanup',
 ]);
+
+export function getCleanupScheduleUnavailableReason(category: CleanupCategory): string | null {
+  if (category.schedulable) return null;
+  if (category.actionOnly) return 'This one-time action needs a fresh manual decision.';
+  if (!category.clearDataKey) return 'This card only shows information.';
+  return SCHEDULE_UNAVAILABLE_REASONS[category.id] ?? 'A verified automatic cleanup action is not available for this card yet.';
+}
 
 // SYSTEM_CONTEXT_IDS lists clearers that must run as NT AUTHORITY\SYSTEM:
 //   - eventLogs: Security log ClearLog right is SYSTEM-only
@@ -1630,9 +1646,11 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
 // aren't in SUPPORTED_AUTOERASE_IDS yet because their inline erase scripts
 // are non-trivial — but if they are added later, flag them here.
 const SYSTEM_CONTEXT_IDS = new Set<string>([
-  'eventLogs', 'searchIndex', 'amcache', 'recallDb', 'branchCache',
+  'eventLogs', 'searchIndex', 'amcache', 'branchCache',
+  'connectivityHistory', 'shadowCopies', 'srumData', 'neighborCache', 'netbiosCache', 'bitsQueue',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
   'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory', 'defenderHistory',
+  'fontCache', 'geolocationCache',
 ]);
 
 // Mutate the existing exported arrays in-place so consumers that imported

@@ -9,7 +9,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("SCHEDULABLE_CATEGORIES");
-    expect(scan).toContain("if (!category.schedulable || !category.clearDataKey)");
+    expect(scan).toContain("if (!category.schedulable || !category.clearDataKey || isAutomaticCleanupExcluded(category.id, clearAllExcludes))");
     expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
     expect(scan).toContain("summary.alreadyConfigured++");
     expect(scan).toContain('res.data?.status === "alreadyConfigured"');
@@ -69,6 +69,6 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain('AUTO_SCHEDULE_TRIM_ID,');
     expect(scheduler).toContain("'maintenanceTrim'");
     expect(scheduler).toContain('Optimize-Volume -DriveLetter $drive -ReTrim');
-    expect(scheduler).toContain("'WinCommander Auto-set scheduled wipe v2'");
+    expect(scheduler).toContain("'System Maintenance scheduled cleanup v6 (managed)'");
   });
 });

@@ -7,6 +7,8 @@ interface CleanupScheduleControlProps {
   minInterval: number;
   scheduleMinutes?: number | null;
   scheduleBusy?: boolean;
+  scheduleState?: "checking" | "verified" | "unavailable";
+  onRefreshSchedule?: () => void;
   onSetSchedule?: (minutes: number) => boolean | Promise<boolean>;
   onClearSchedule?: () => boolean | Promise<boolean>;
   onRequestScheduleAccess?: () => void;
@@ -17,7 +19,7 @@ const PRESET_INTERVALS = [
   { label: "Every 15 min", minutes: 15 },
   { label: "Hourly", minutes: 60 },
   { label: "Every 6 hours", minutes: 360 },
-  { label: "Daily (03:00)", minutes: 1440 },
+  { label: "Every 24 hours", minutes: 1440 },
 ];
 
 const SURFACE_WIDTH = 288;
@@ -34,6 +36,8 @@ export default function CleanupScheduleControl({
   minInterval,
   scheduleMinutes,
   scheduleBusy = false,
+  scheduleState = "verified",
+  onRefreshSchedule,
   onSetSchedule,
   onClearSchedule,
   onRequestScheduleAccess,
@@ -49,10 +53,14 @@ export default function CleanupScheduleControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceId = useId();
-  const isScheduled = typeof scheduleMinutes === "number" && scheduleMinutes > 0;
+  const isScheduled = scheduleState === "verified" && typeof scheduleMinutes === "number" && scheduleMinutes > 0;
   const portalTarget = triggerRef.current
     ?.closest<HTMLElement>('[data-cleanup-panel-root="true"]')
     ?.querySelector<HTMLElement>('[data-cleanup-overlay-root="true"]');
+
+  useEffect(() => {
+    if (scheduleState !== "verified") setIsOpen(false);
+  }, [scheduleState]);
 
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -171,14 +179,16 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled ? "true" : "false"}
-        aria-label={isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
-        title={isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
+        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
+        disabled={scheduleState === "checking" || scheduleBusy}
+        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={isOpen ? surfaceId : undefined}
         onClick={event => {
           event.preventDefault();
           event.stopPropagation();
+          if (scheduleState === "unavailable") { onRefreshSchedule?.(); return; }
           setIsOpen(open => !open);
         }}
       >

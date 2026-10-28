@@ -5,6 +5,7 @@ import {
   STANDARD_CATEGORIES,
   DEEP_DFIR_CATEGORIES,
   SUPPORTED_AUTOERASE_IDS,
+  getCleanupScheduleUnavailableReason,
   VIEW_ONLY_CATEGORIES,
 } from "./cleanupCategories";
 
@@ -13,6 +14,24 @@ declare const Bun: {
 };
 
 describe("System Cleanup scheduler catalogue", () => {
+  test("every unscheduled card explains why its clock is unavailable", () => {
+    for (const category of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES, ...ACTION_CATEGORIES, ...VIEW_ONLY_CATEGORIES]) {
+      expect(category.schedulable || !!getCleanupScheduleUnavailableReason(category)).toBe(true);
+    }
+  });
+  test("every clearable card has a schedule or a named execution blocker", () => {
+    const blockedIds = new Set([
+      "wlanProfiles", "browserFootprints", "wslData", "dockerDesktopData", "virtualMachineArtifacts", "credentialManager",
+      "cloudPlaceholders", "inactiveUserProtectionMetadata", "cellularHistory", "gitActivity", "ntfsJournals",
+    ]);
+    const cards = [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES];
+    expect(cards.length).toBe(80);
+    expect(cards.filter(category => category.schedulable).length).toBe(69);
+    for (const category of cards) {
+      expect(category.schedulable === true).toBe(!blockedIds.has(category.id));
+      if (blockedIds.has(category.id)) expect(getCleanupScheduleUnavailableReason(category)).not.toBeNull();
+    }
+  });
   test("every schedulable card has a real shared scheduler payload", async () => {
     const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text();
     const scriptIds = new Set(

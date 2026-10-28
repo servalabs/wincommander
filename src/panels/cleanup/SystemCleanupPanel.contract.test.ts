@@ -328,11 +328,13 @@ describe("System Cleanup panel reconstruction contracts", () => {
     const cleanupScript = await read("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1");
 
     expect(backendTypes).toContain("records?: Array<Record<string, unknown>>");
-    expect(scan).toContain("raw: c.records?.length ? { records: c.records } : undefined");
+    expect(scan).toContain("byId[c.id] = readCleanupUserSummary(c)");
+    expect(scan).toContain("return [c.id, readCleanupUserSummary(c)]");
+    expect(scan).toContain("count: d?.count ?? -1");
     expect(panel).toContain("rawData={otherUserDataMap[otherDetail.catId]?.raw}");
     expect(panel).toContain("rawData: userData?.raw");
     expect(dialog).toContain("buildTraceView(group.rawData, group.items)");
-    expect(cleanupScript).toContain("$count = 0; $items = @(); $records = @()");
+    expect(cleanupScript).toContain("$count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null");
     expect(cleanupScript).toContain("records = @($records | Select-Object -First $previewMax)");
   });
 

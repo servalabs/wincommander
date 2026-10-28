@@ -1,0 +1,33 @@
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'auto-erase.ps1')
+$catalogOutput = & bun -e "import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES } from './src/panels/cleanup/cleanupCategories.ts'; console.log(JSON.stringify([...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES].map(c => ({id:c.id,schedulable:!!c.schedulable,schedulerId:c.schedulerCategoryId,min:c.minIntervalMinutes,system:!!c.schedulerRunAsSystem}))))"
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the public cleanup catalog.' }
+$catalog = $catalogOutput | ConvertFrom-Json
+$catalogIds = @($catalog | ForEach-Object id)
+$support = Get-AutoEraseSupportedCategories
+$manual = @($support.schedulableCategories)
+$unsupported = @($support.unsupportedCategories | ForEach-Object categoryId)
+if ($catalog.Count -ne 80) { throw 'Expected all 80 scan-and-clear catalog entries.' }
+$classified = @($manual) + @($unsupported)
+if (@(Compare-Object ($catalogIds | Sort-Object) ($classified | Sort-Object)).Count) { throw 'A cleanup card is missing, duplicated, or invented in scheduling coverage.' }
+foreach ($card in $catalog) {
+    $id = $card.id
+    $schedulerId = if ($id -eq 'clipboardHistory') { 'clipboard' } else { $id }
+    if (-not $script:AutoEraseCategoryCodes.Contains($schedulerId)) { throw "A catalog card has no stable task code: $id" }
+    if ($id -in $manual -and -not $script:AutoEraseScripts.ContainsKey($schedulerId)) { throw "An advertised category has no payload: $id" }
+    if ($card.schedulable -ne ($id -in $manual)) { throw "Frontend/backend schedule availability disagrees for $id" }
+    if ($card.schedulable) {
+        if ($card.schedulerId -ne $schedulerId) { throw "Frontend scheduler identity disagrees for $id" }
+        if ($card.system -ne ($schedulerId -in $script:AutoEraseSystemCategories)) { throw "Frontend execution account disagrees for $id" }
+        $backendMinimum = if ($schedulerId -in $script:AutoEraseHourlyCategories) { 60 } else { 1 }
+        if ($card.min -ne $backendMinimum) { throw "Frontend/backend interval floor disagrees for $id" }
+    }
+}
+if (@($script:AutoEraseCategoryCodes.Values | Group-Object | Where-Object Count -gt 1).Count) { throw 'Task codes are duplicated.' }
+foreach ($id in $script:AutoEraseScripts.Keys) {
+    $parseErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($script:AutoEraseScripts[$id], [ref]$null, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw "Payload syntax is invalid for $id" }
+}
+if (@($support.categories | Where-Object { $_ -in $script:AutoEraseProtectedCategories }).Count) { throw 'Auto-set advertises a default-excluded card.' }
+Write-Output "Passed: all 80 cards classified; $($manual.Count) manual payloads, $($support.categories.Count) auto-set, $($unsupported.Count) explicit unsupported reasons; unique task codes and valid payload syntax."

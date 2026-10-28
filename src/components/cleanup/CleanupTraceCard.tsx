@@ -6,7 +6,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
+import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
+import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import RunOnceButton from "./RunOnceButton";
 import "./CleanupTraceCard.css";
@@ -23,6 +24,8 @@ interface CleanupTraceCardProps {
   onLoad?: () => void;
   scheduleMinutes?: number | null;
   scheduleBusy?: boolean;
+  scheduleState?: "checking" | "verified" | "unavailable";
+  onRefreshSchedule?: () => void;
   onSetSchedule?: (minutes: number) => boolean | Promise<boolean>;
   onClearSchedule?: () => boolean | Promise<boolean>;
   onRequestScheduleAccess?: () => void;
@@ -101,6 +104,8 @@ export default function CleanupTraceCard({
   onLoad,
   scheduleMinutes,
   scheduleBusy,
+  scheduleState,
+  onRefreshSchedule,
   onSetSchedule,
   onClearSchedule,
   onRequestScheduleAccess,
@@ -121,6 +126,8 @@ export default function CleanupTraceCard({
   const isNotLoaded = count === -1 && !isActionOnly && !loading;
   const hasScanOutput = !isActionOnly && (count >= 0 || !!error);
   const infoText = category.description;
+  const countUnit = category.countUnits?.[count === 1 ? 'singular' : 'plural'] ?? (count === 1 ? 'trace' : 'traces');
+  const scheduleReason = getCleanupScheduleUnavailableReason(category);
   const bandState: BandState = isActionOnly
     ? "action-only"
     : loading
@@ -134,7 +141,7 @@ export default function CleanupTraceCard({
           : "not-scanned";
   const band = BAND[bandState];
   const accessibleStatus = bandState === "has"
-    ? `${count} ${count === 1 ? "trace found" : "traces found"}`
+    ? `${count} ${countUnit} found`
     : band.label;
   // Unlike a Popover, Tooltip does not restore focus to a card action that
   // moved during wheel input and therefore cannot pull this panel backward.
@@ -165,6 +172,8 @@ export default function CleanupTraceCard({
           {category.label}
         </strong>
         {infoText}
+        {isDefaultExcludedCleanup(category.id) ? <p className="mt-1">Clear All and Auto-set skip this card by default. An individual clear or available schedule requires confirmation.</p> : null}
+        {scheduleReason ? <p className="mt-1">Schedule unavailable: {scheduleReason}</p> : null}
       </TooltipContent>
     </Tooltip>
   );
@@ -175,6 +184,8 @@ export default function CleanupTraceCard({
         minInterval={minInterval}
         scheduleMinutes={scheduleMinutes}
         scheduleBusy={scheduleBusy}
+        scheduleState={scheduleState}
+        onRefreshSchedule={onRefreshSchedule}
         onSetSchedule={onSetSchedule}
         onClearSchedule={onClearSchedule}
         onRequestScheduleAccess={onRequestScheduleAccess}
@@ -385,7 +396,7 @@ export default function CleanupTraceCard({
               >
                 {count}
               </span>
-              <span>{count === 1 ? "trace found" : "traces found"}</span>
+              <span>{countUnit} found</span>
             </span>
           ) : (
             band.label
@@ -495,7 +506,7 @@ export default function CleanupTraceCard({
                 color: "var(--color-text-muted)",
               }}
             >
-              {count} {count === 1 ? "trace" : "traces"} found · open details to inspect
+              {count} {countUnit} found · open details to inspect
             </div>
           )}
           {error && !loading && (

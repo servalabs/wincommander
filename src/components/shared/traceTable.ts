@@ -72,7 +72,8 @@ function flattenRecord(
       row[label] = value;
     } else if (Array.isArray(value)) {
       if (includeCollectionSummary) {
-        row[label] = `${value.length} ${value.length === 1 ? "item" : "items"}`;
+        const unit = /^samples?$/i.test(key) ? (value.length === 1 ? "sample" : "samples") : (value.length === 1 ? "item" : "items");
+        row[label] = `${value.length} ${unit}`;
       }
     } else if (isRecord(value)) {
       Object.assign(row, flattenRecord(value, label, includeCollectionSummary));

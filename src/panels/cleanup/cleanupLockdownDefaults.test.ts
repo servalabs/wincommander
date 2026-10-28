@@ -57,7 +57,7 @@ function readQuotedValues(source: string, startMarker: string, endMarker: string
 
 describe("System Cleanup and Lockdown default exclusions", () => {
   test("all default-excluded cleanup targets stay off in Lockdown", async () => {
-    const cleanupUi = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const cleanupUi = await Bun.file("src/panels/cleanup/cleanupManualPolicy.ts").text();
     const cleanupSettings = await Bun.file("src-tauri/commander-free/src/settings.rs").text();
     const cleanupCategories = await Bun.file("src/panels/cleanup/cleanupCategories.ts").text();
     const lockdownUi = await Bun.file("src/types/lockdownSteps.ts").text();

@@ -781,14 +781,11 @@ export interface EventLogEntry {
   sizeMb: number | null;
 }
 
-export interface SRUMEntry {
+export interface SRUMFile {
   name: string;
-  pid: number;
   path: string;
-  owner: string;
-  cpuTime: number;
-  memoryKB: number;
-  threadCount: number;
+  sizeKB: number;
+  modified: string;
 }
 
 export interface PSHistoryEntry {
@@ -1524,8 +1521,8 @@ export function useBackend() {
     clearRDPHistory: () => execute(clearCommand("RDPHistory")),
     clearRDPPasswords: () => execute(clearCommand("RDPPasswords")),
     clearJumpLists: () => execute(clearCommand("JumpLists")),
-    clearBrowserFootprints: (browser?: string, profilePath?: string) => {
-        const params: Record<string, string> = {};
+    clearBrowserFootprints: (browser?: string, profilePath?: string, allowDefaultExcluded = false) => {
+        const params: Record<string, string | boolean> = { AllowDefaultExcluded: allowDefaultExcluded };
         if (browser) params.Browser = browser;
         if (profilePath) params.ProfilePath = profilePath;
         return execute(clearCommand("BrowserFootprints"), params);
@@ -1541,7 +1538,7 @@ export function useBackend() {
     invokeDiskCleanup: () => execute("Invoke-DiskCleanup"),
     invokeMasterPrivacyClean: () => execute(invokeCommand("MasterPrivacyClean")),
     getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles"),
-    removeWlanProfile: (name: string) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name }),
+    removeWlanProfile: (name: string, allowDefaultExcluded = false) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name, AllowDefaultExcluded: allowDefaultExcluded }),
     getBluetoothDevices: () => execute<{ devices: BluetoothDevice[] }>("Get-BluetoothDevices"),
     clearBluetoothHistory: () => execute(clearCommand("BluetoothDevices")),
     getNetworkDrives: () => execute<{ drives: NetworkDrive[] }>("Get-NetworkDrives"),
@@ -1567,6 +1564,7 @@ export function useBackend() {
       runAsSystem: boolean = false,
       preserveExisting: boolean = false,
       managedByAutoSet: boolean = false,
+      allowDefaultExcluded: boolean = false,
     ) =>
       execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean }>(
         "Set-AutoEraseSchedule",
@@ -1576,6 +1574,7 @@ export function useBackend() {
           RunAsSystem: runAsSystem,
           PreserveExisting: preserveExisting,
           ManagedByAutoSet: managedByAutoSet,
+          AllowDefaultExcluded: allowDefaultExcluded,
         },
       ),
     removeAutoEraseSchedule: (categoryId: string) =>
@@ -1653,6 +1652,7 @@ export function useBackend() {
     invokeCleanupClearAllUsers: (
       categoryIds: string[],
       targetUsers?: string[],
+      allowDefaultExcluded: boolean = false,
     ) =>
       execute<{
         status: string;
@@ -1668,6 +1668,7 @@ export function useBackend() {
       }>("Invoke-CleanupClearAllUsers", {
         CategoryIds: categoryIds.join(','),
         TargetUsers: (targetUsers ?? []).join(','),
+        AllowDefaultExcluded: allowDefaultExcluded,
       }),
     setMultiUserAutoEraseSchedule: (
       categoryId: string,
@@ -1717,7 +1718,7 @@ export function useBackend() {
     getShellBags: () => execute<{ entries: ShellBagEntry[] }>("Get-ShellBags"),
     clearShellBags: () => execute(clearCommand("ShellBags")),
     clearSRUM: () => execute(clearCommand("SRUM")),
-    getSRUMData: () => execute<{ entries: SRUMEntry[]; srumSizeMb: number | null; total: number }>("Get-SRUMData"),
+    getSRUMData: () => execute<{ files: SRUMFile[]; srumSizeMb: number | null; total: number; countUnit: string; historicalRecordsAvailable: false }>("Get-SRUMData"),
     clearEventLogs: () => execute(clearCommand("EventLogs")),
     getEventLogSummary: () => execute<{ logs: EventLogEntry[]; total: number }>("Get-EventLogSummary"),
     getPSHistory: () => execute<{ entries: PSHistoryEntry[]; historyPath: string | null; total: number; fileTotal: number }>("Get-PSHistory"),
@@ -1802,7 +1803,7 @@ export function useBackend() {
     clearRecycleBinMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RecycleBinMetadata")),
     clearNTUserTraces: () => execute<{ status: string; removedEntries: number }>(clearCommand("NTUserTraces")),
     clearConnectivityHistory: () => execute(clearCommand("ConnectivityHistory")),
-    clearNotepadState: () => execute<{ status: string; removedFiles: number; packaged: boolean }>(clearCommand("NotepadState")),
+    clearNotepadState: (allowDefaultExcluded = false) => execute<{ status: string; removedFiles: number; packaged: boolean }>(clearCommand("NotepadState"), { AllowDefaultExcluded: allowDefaultExcluded }),
     clearPCADatabase: () => execute<{ status: string; removedFiles: number }>(clearCommand("PCADatabase")),
     invokeCrashDumpErase: () => execute<{ status: string; removedItems: number }>(invokeCommand("CrashDumpErase")),
     invokeVirtualMemoryPurge: () => execute<{ status: string; results: Record<string, boolean> }>(invokeCommand("VirtualMemoryPurge")),
@@ -1821,11 +1822,11 @@ export function useBackend() {
     clearDeviceInstallLogs: () => execute<{ ok: boolean; stdout: string }>(clearCommand("DeviceInstallLogs")),
     clearUsageTraceLogs: () => execute<{ ok: boolean; stdout: string }>(clearCommand("UsageTraceLogs")),
     clearDefenderHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("DefenderHistory")),
-    clearWSLData: () => execute<{ ok: boolean; stdout: string }>(clearCommand("WSLData")),
-    clearDockerDesktopData: () => execute<{ ok: boolean; stdout: string }>(clearCommand("DockerDesktopData")),
-    clearVirtualMachineArtifacts: () => execute<{ ok: boolean; stdout: string }>(clearCommand("VirtualMachineArtifacts")),
-    clearDeveloperCaches: () => execute<{ ok: boolean; stdout: string }>(clearCommand("DeveloperCaches")),
-    clearCredentialManager: () => execute<{ ok: boolean; stdout: string }>(clearCommand("CredentialManager")),
+    clearWSLData: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("WSLData"), { AllowDefaultExcluded: allowDefaultExcluded }),
+    clearDockerDesktopData: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("DockerDesktopData"), { AllowDefaultExcluded: allowDefaultExcluded }),
+    clearVirtualMachineArtifacts: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("VirtualMachineArtifacts"), { AllowDefaultExcluded: allowDefaultExcluded }),
+    clearDeveloperCaches: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("DeveloperCaches"), { AllowDefaultExcluded: allowDefaultExcluded }),
+    clearCredentialManager: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("CredentialManager"), { AllowDefaultExcluded: allowDefaultExcluded }),
     clearNetworkWizardHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("NetworkWizardHistory")),
     clearWERHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("WERHistory")),
     clearInactiveUserProtectionMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("InactiveUserProtectionMetadata")),
@@ -1840,9 +1841,9 @@ export function useBackend() {
     clearCommunicationCaches: () => execute<{ ok: boolean; stdout: string }>(clearCommand("CommunicationCaches")),
     clearEditorHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("EditorHistory")),
     clearGitActivity: () => execute<{ ok: boolean; stdout: string }>(clearCommand("GitActivity")),
-    clearSSHState: () => execute<{ ok: boolean; stdout: string }>(clearCommand("SSHState")),
+    clearSSHState: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("SSHState"), { AllowDefaultExcluded: allowDefaultExcluded }),
     clearRemoteAccessLogs: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RemoteAccessLogs")),
-    clearPasswordManagerCaches: () => execute<{ ok: boolean; stdout: string }>(clearCommand("PasswordManagerCaches")),
+    clearPasswordManagerCaches: (allowDefaultExcluded = false) => execute<{ ok: boolean; stdout: string }>(clearCommand("PasswordManagerCaches"), { AllowDefaultExcluded: allowDefaultExcluded }),
     clearGameLauncherLogs: () => execute<{ ok: boolean; stdout: string }>(clearCommand("GameLauncherLogs")),
     clearAdobeRecent: () => execute<{ ok: boolean; stdout: string }>(clearCommand("AdobeRecent")),
     clearOfficeTempFiles: () => execute<{ ok: boolean; stdout: string }>(clearCommand("OfficeTempFiles")),

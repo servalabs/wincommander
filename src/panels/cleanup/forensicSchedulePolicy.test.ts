@@ -27,7 +27,7 @@ const DEFAULT_CLEANUP_EXCLUDED_IDS = new Set([
 
 describe("Secure persona scheduled trace wipes", () => {
   test("keeps every default-excluded schedulable cleanup target out of the recommendation", async () => {
-    const cleanup = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const cleanup = await Bun.file("src/panels/cleanup/cleanupManualPolicy.ts").text();
     const start = cleanup.indexOf("const DEFAULT_BULK_CLEAR_EXCLUDES = [");
     const end = cleanup.indexOf("];", start);
     expect(start).toBeGreaterThan(-1);

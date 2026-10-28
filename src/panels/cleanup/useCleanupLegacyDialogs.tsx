@@ -8,6 +8,7 @@ import { DURATION_S } from "../../components/shared/motion";
 import useBackend, { type WlanProfile, type BrowserFootprintBrowser } from "../../hooks/useBackend";
 import { showSuccess, showError } from "../../utils/toast";
 import { type CardData, updateCacheEntry } from "./useCleanupScan";
+import { getCleanupManualConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const formatSizeKB = (sizeKB: number) => {
@@ -55,11 +56,26 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         });
     };
 
+    const refreshWlanAfterClear = async (): Promise<WlanProfile[] | null> => {
+        const fresh = await getWlanProfiles();
+        if (!isCleanupCommandSuccessful(fresh) || !Array.isArray(fresh.data?.profiles)) {
+            showError('Wi-Fi cleanup could not be verified by a fresh scan.');
+            updateCacheEntry('wlanProfiles', { count: -1, items: [], loading: false, clearing: false, error: 'Post-clear scan failed.' });
+            return null;
+        }
+        const profiles = fresh.data.profiles;
+        setWlanProfiles(profiles);
+        updateCacheEntry('wlanProfiles', { count: profiles.length, items: profiles.map(profile => profile.name), loading: false, clearing: false, raw: fresh.data });
+        return profiles;
+    };
+
     const handleRemoveWlanProfile = async (name: string) => {
+        if (!await requestConfirm(getCleanupManualConfirmation({ id: 'wlanProfiles', label: `Wi-Fi network ${name}` }, 'clear'))) return;
         await runLocalOnly('wlanRemove', async () => {
-            const res = await removeWlanProfile(name);
-            if (res.success) {
-                setWlanProfiles(prev => prev.filter(p => p.name !== name));
+            const res = await removeWlanProfile(name, true);
+            if (isCleanupCommandSuccessful(res)) {
+                const fresh = await refreshWlanAfterClear();
+                if (fresh?.some(profile => profile.name === name)) showError('The Wi-Fi profile is still present after cleanup.');
             } else {
                 showError(res.error || "Failed to remove WLAN profile.");
             }
@@ -74,11 +90,11 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         });
         if (!accepted) return;
         await runLocalOnly('wlanErase', async () => {
-            const res = await removeWlanProfile("");
-            if (res.success) {
-                setWlanProfiles([]);
-                updateCacheEntry('wlanProfiles', { count: 0, items: [], loading: false, clearing: false });
-                showSuccess("All Wi-Fi profiles cleared.");
+            const res = await removeWlanProfile("", true);
+            if (isCleanupCommandSuccessful(res)) {
+                const fresh = await refreshWlanAfterClear();
+                if (fresh?.length === 0) showSuccess('A fresh scan found no saved Wi-Fi profiles.');
+                else if (fresh) showError(`${fresh.length} Wi-Fi profiles remain after cleanup.`);
             } else {
                 showError(res.error || "Failed to clear Wi-Fi profiles.");
             }
@@ -121,13 +137,29 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         });
     };
 
+    const refreshBrowserFootprintsAfterClear = async (): Promise<BrowserFootprintBrowser[] | null> => {
+        const fresh = await getBrowserFootprints();
+        if (!isCleanupCommandSuccessful(fresh) || !Array.isArray(fresh.data?.browsers)) {
+            setBrowserFootprintsError('Browser cleanup could not be verified by a fresh scan.');
+            showError('Browser cleanup could not be verified by a fresh scan.');
+            updateCacheEntry('browserFootprints', { count: -1, items: [], loading: false, clearing: false, error: 'Post-clear scan failed.' });
+            return null;
+        }
+        const next = fresh.data.browsers;
+        setBrowserFootprints(next);
+        setBrowserFootprintsError(null);
+        syncBrowserFootprintsCache(next);
+        return next;
+    };
+
     const handleClearBrowserFootprints = async () => {
+        if (!await requestConfirm(getCleanupManualConfirmation({ id: 'browserFootprints', label: 'Browser Audit' }, 'clear'))) return;
         await runLocalOnly('browserFootprintsClear', async () => {
-            const res = await clearBrowserFootprints();
-            if (res.success) {
-                setBrowserFootprints([]);
-                syncBrowserFootprintsCache([]);
-                showSuccess("Browser footprints cleared.");
+            const res = await clearBrowserFootprints(undefined, undefined, true);
+            if (isCleanupCommandSuccessful(res)) {
+                const fresh = await refreshBrowserFootprintsAfterClear();
+                if (fresh?.length === 0) showSuccess('A fresh scan found no browser footprints.');
+                else if (fresh) showError(`${fresh.length} browser profiles still report footprints after cleanup.`);
             } else {
                 showError(res.error || "Failed to clear browser footprints.");
             }
@@ -135,15 +167,14 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     };
 
     const handleClearBrowserFootprint = async (target: BrowserFootprintBrowser) => {
+        if (!await requestConfirm(getCleanupManualConfirmation({ id: 'browserFootprints', label: `${target.browser} browser profile` }, 'clear'))) return;
         await runLocalOnly(browserFootprintCacheKey(target), async () => {
-            const res = await clearBrowserFootprints(target.browser, target.profilePath);
-            if (res.success) {
-                const next = browserFootprints.filter(
-                    (b) => b.browser !== target.browser || b.profilePath !== target.profilePath
-                );
-                setBrowserFootprints(next);
-                syncBrowserFootprintsCache(next);
-                showSuccess(`Browser cleared: ${target.browser}`);
+            const res = await clearBrowserFootprints(target.browser, target.profilePath, true);
+            if (isCleanupCommandSuccessful(res)) {
+                const fresh = await refreshBrowserFootprintsAfterClear();
+                if (fresh?.some(browser => browser.browser === target.browser && browser.profilePath === target.profilePath)) {
+                    showError(`${target.browser}: footprints remain after cleanup.`);
+                } else if (fresh) showSuccess(`${target.browser}: a fresh scan found no footprints for this profile.`);
             } else {
                 showError(res.error || `Failed to clear browser ${target.browser}.`);
             }
