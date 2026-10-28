@@ -2,15 +2,17 @@ import { Button, Icon } from "@/components/ui/bp";
 import { useEffect, useRef } from "react";
 import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
-import { CleanupDisplayPicker } from "../../panels/cleanup/cleanupDisplay";
-import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, isCleanupScheduleUnavailable, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { isManualOnlyCleanupSchedule } from "../../panels/cleanup/cleanupManualPolicy";
+import CleanupRecordPreview, { getSafeCleanupPreview } from "./CleanupRecordPreview";
+import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, hasLimitedCleanupCoverage, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 
 type DetailCategory = Pick<CleanupCategory, "id" | "label" | "description" | "icon" | "severity" | "systemWide" | "scopeAware" | "clearDataKey" | "confirmMessage" | "regeneratesNote" | "schedulable">;
 
-export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, verification, scopeLabel, excludedFromBulk = false }: {
+export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, scheduleDisabled, verification, scopeLabel, excludedFromBulk = false }: {
   category: DetailCategory; mode: CleanupDisplayMode; count: number; items: string[]; rawData?: unknown; error?: string;
   clearing: boolean; clearDisabled?: boolean; clearLabel: string; onClose: () => void; onClear?: () => void;
   scheduleState?: "checking" | "verified" | "unavailable"; scheduleMinutes?: number | null;
+  scheduleDisabled?: boolean;
   excludedFromBulk?: boolean;
   verification?: CleanupVerification;
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
@@ -39,17 +41,23 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const summary = groupedItems?.length && !error ? summarizeCleanupGroups(count, groupedItems) : summarizeCleanupResult({ id: category.id, count, items, raw: rawData, error });
   const name = cleanupDisplayName(category, mode);
   const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
-  const coverage = summary.state === "partial" ? "Incomplete" : raw?.coverage === "complete" ? "Reported complete" : "Not reported";
+  const groupedLimited = groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
+  const limitedScope = hasLimitedCleanupCoverage(category.id, raw) || groupedLimited ? (category.id === "walFiles"
+    ? "Checks two app-data locations, up to five folder levels deep and 100 matches per location."
+    : category.id === "recallDb" ? "Checks four specified activity-data locations, up to 100 matches per location."
+      : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
+  const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : "Not reported";
   const receipt = cleanupVerificationText(verification);
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
   const dateValue = typeof raw?.scannedAt === "string" ? raw.scannedAt : typeof raw?.scanTime === "string" ? raw.scanTime : "";
   const scanTime = dateValue && Number.isFinite(Date.parse(dateValue)) ? new Date(dateValue).toLocaleString() : "Not reported";
-  const taskStatus = scheduleState === "verified" && scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable || isCleanupScheduleUnavailable(category.id) ? "; new schedules unavailable" : ""}` :
-    !category.schedulable || isCleanupScheduleUnavailable(category.id) ? "Not available for this card" : scheduleState === "checking" ? "Checking" :
-      scheduleState === "verified" ? "Off" : "Not verified";
-  const simpleScheduleStatus = scheduleState === "verified" && scheduleMinutes
-    ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable || isCleanupScheduleUnavailable(category.id) ? ". New schedules are unavailable for this cleanup." : "."}`
-    : scheduleState === "verified" ? "No automatic cleanup is scheduled."
+  const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" ? "Not verified" :
+    scheduleDisabled ? "Disabled" : scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable ? "; new schedules unavailable" : ""}` :
+      category.schedulable ? "Off" : "Not available for this card";
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
+    : scheduleState === "verified" && scheduleMinutes
+    ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable ? ". New schedules are unavailable for this cleanup." : "."}`
+    : scheduleState === "verified" ? (category.schedulable ? "No automatic cleanup is scheduled." : "Scheduling is not available for this cleanup.")
       : scheduleState === "checking" ? "Checking whether automatic cleanup is scheduled."
         : "Schedule status could not be verified.";
   return (
@@ -61,16 +69,20 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           <div className="trace-dialog__actions"><Button icon="cross" minimal aria-label={`Dismiss ${name} details`} onClick={onClose} /></div>
         </header>
         <div className="cleanup-readable-detail__body">
-          <CleanupDisplayPicker />
           <div className={`cleanup-readable-detail__result cleanup-readable-detail__result--${summary.state}`} role="status">
             <strong>{summary.message}</strong><span>{summary.nextStep}</span>
           </div>
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
           {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
+          {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
+          {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
           {summary.count !== null && summary.state !== "inconsistent" ? <p><strong>{summary.count} {cleanupCountUnit(category.id, summary.count)}</strong> reported by this scan.</p> : null}
+          {["found", "partial", "inconsistent"].includes(summary.state) ? <CleanupRecordPreview categoryId={category.id} rawData={rawData} mode={mode} /> : null}
           {category.clearDataKey ? <p className="cleanup-readable-detail__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
           {excludedFromBulk ? <p><strong>Bulk cleanup:</strong> This card is currently skipped by Clear all.</p> : null}
+          {category.schedulable && isManualOnlyCleanupSchedule(category.id) ? <p><strong>Auto-set:</strong> This card is skipped. You can schedule it individually from the card.</p> : null}
           {mode === "simple" ? <>
+            <p><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</p>
             <p><strong>Schedule:</strong> {simpleScheduleStatus}</p>
             <p><strong>Last check:</strong> {receipt}</p>
           </> : null}
@@ -83,16 +95,18 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
               <div><dt>Scan coverage</dt><dd>{coverage}</dd></div>
               <div><dt>Task status</dt><dd>{taskStatus}</dd></div>
               <div><dt>Verification</dt><dd>{receipt}{verifiedAt ? ` ${verifiedAt}` : ""}</dd></div>
-              <div><dt>Preview</dt><dd>{summary.sampleCount} {category.id === "amcache" ? "samples" : "rows"}{summary.previewLimited ? `; limited${summary.previewLimit !== null ? ` to ${summary.previewLimit}` : ""}` : " reported"}</dd></div>
+              <div><dt>Preview</dt><dd>{summary.sampleCount === null ? "Not reported" : <>{summary.sampleCount} {category.id === "amcache" ? (summary.sampleCount === 1 ? "sample" : "samples") : (summary.sampleCount === 1 ? "row" : "rows")}{summary.previewLimited ? `; limited${summary.previewLimit !== null ? ` to ${summary.previewLimit}` : ""}` : " reported"}</>}</dd></div>
             </dl>
             {summary.categories.length && ["found", "empty", "inconsistent"].includes(summary.state) ? <section aria-label="Record categories"><h3>Record categories</h3>
               <div className="cleanup-readable-detail__table"><table><thead><tr><th>Category</th><th>Records</th><th>Preview samples</th></tr></thead><tbody>
-                {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples}</td></tr>)}
+                {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples ?? "Not reported"}</td></tr>)}
               </tbody></table></div><p>Preview samples are a selection and may be fewer than the full record count.</p></section> : null}
             {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
             <p className="cleanup-readable-detail__privacy">Private record contents and credentials are not shown in this summary.</p>
           </> : null}
-          {mode === "advanced" && groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p></section> : null}
+          {mode === "advanced" && groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p>
+            {groupedItems.filter(group => group.count >= 0 && getSafeCleanupPreview(category.id, group.rawData).length > 0).map((group, index) => <div key={`${group.title}-preview-${index}`}><h4>{group.title}</h4><CleanupRecordPreview categoryId={category.id} rawData={group.rawData} mode={mode} /></div>)}
+          </section> : null}
         </div>
         <footer className="trace-dialog__footer"><Button text="Close" minimal onClick={onClose} />
           {onClear ? <Button text={clearLabel} intent="danger" loading={clearing} disabled={clearDisabled || clearing || summary.state !== "found"} onClick={onClear} /> : null}

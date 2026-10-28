@@ -17,14 +17,15 @@ import { useCleanupScan } from "./useCleanupScan";
 import { useCleanupLegacyDialogs } from "./useCleanupLegacyDialogs";
 import { useCleanupSessionState } from "./cleanupSessionState";
 import { VIEW_ONLY_CATEGORIES, type CleanupUsabilityTier } from "./cleanupCategories";
-import useVisibility from "../../hooks/useVisibility";
+import { useAppState } from "../../context/AppContext";
+import { getPersona } from "../../types/settings";
 import { CleanupDisplayProvider } from "./cleanupDisplay";
 import { summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "./cleanupDisplayModel";
 import "./cleanupDisplay.css";
 
 export default function SystemCleanupPanel() {
     const hasSafeguards = true;
-    const { density } = useVisibility();
+    const { appSettings } = useAppState();
     // A1-d — Investigator mode UI flip.
     //   When isInvestigator is true, render a top-banner explaining the
     //   mode, and the backend (A1-c) refuses every Clear-*/Erase-*/Remove-*
@@ -147,7 +148,7 @@ export default function SystemCleanupPanel() {
     }, [setActiveTab]);
 
     return (
-        <CleanupDisplayProvider defaultMode={density === "expert" ? "advanced" : "simple"}>
+        <CleanupDisplayProvider persona={getPersona(appSettings)}>
         <div data-cleanup-panel-root="true" className="relative h-full min-h-0 overflow-hidden">
         <div
             data-cleanup-scroll-root="true"
@@ -307,6 +308,7 @@ export default function SystemCleanupPanel() {
                     verification={(traceDetailData as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
                     scheduleState={scheduleState}
                     scheduleMinutes={scan.schedulesById[traceDetailCategory.id] ?? null}
+                    scheduleDisabled={scheduleState === "verified" && !!scan.disabledSchedulesById[traceDetailCategory.id]}
                     excludedFromBulk={scan.clearAllExcludes.has(traceDetailCategory.id)}
                     scopeLabel={traceDetailCategory.systemWide ? "This device" : selectedDisplay || "Current Windows user"}
                     clearing={traceDetailData?.clearing ?? false}
@@ -334,8 +336,6 @@ export default function SystemCleanupPanel() {
                     rawData={otherUserDataMap[otherDetail.catId]?.raw}
                     error={otherUserDataMap[otherDetail.catId]?.error}
                     verification={(otherUserDataMap[otherDetail.catId] as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
-                    scheduleState={scheduleState}
-                    scheduleMinutes={scan.schedulesById[otherDetail.catId] ?? null}
                     excludedFromBulk={scan.clearAllExcludes.has(otherDetail.catId)}
                     scopeLabel={selectedDisplay || "Selected Windows user"}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
@@ -374,10 +374,8 @@ export default function SystemCleanupPanel() {
                         count={d?.count ?? -1}
                         items={[]}
                         groupedItems={groupedItems}
-                        scheduleState={scheduleState}
-                        scheduleMinutes={scan.schedulesById[combinedDetail.catId] ?? null}
                         excludedFromBulk={scan.clearAllExcludes.has(combinedDetail.catId)}
-                        scopeLabel="All Windows users"
+                        scopeLabel="Detected Windows profiles"
                         clearing={false}
                         onClose={() => setCombinedDetail(null)}
                         onClear={!isInvestigator && canSwitchUsers
@@ -469,13 +467,13 @@ function CleanupTabNavigation({
                     small
                     intent="primary"
                     icon={autoSetSchedulesBusy ? undefined : "time"}
-                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : schedulesEnabled && scheduleState === "checking" ? "Checking scheduled wipes…" : schedulesEnabled && scheduleState === "unavailable" ? "Retry schedule status" : hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
-                    aria-label={scheduleState === "unavailable" ? "Retry schedule status" : hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
+                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : schedulesEnabled && scheduleState === "checking" ? "Checking scheduled wipes…" : schedulesEnabled && scheduleState === "unavailable" ? "Retry schedule status" : hasScheduledWipes ? "Turn off Auto-set wipes" : "Auto-set scheduled wipes"}
+                    aria-label={scheduleState === "unavailable" ? "Retry schedule status" : hasScheduledWipes ? "Turn off Auto-set wipes" : "Auto-set scheduled wipes"}
                     title={isInvestigator
                         ? "Scheduled wipes are unavailable in review mode"
                         : schedulesEnabled
                             ? hasScheduledWipes
-                                ? "Turn off all scheduled wipes after confirmation"
+                                ? "Turn off Auto-set wipes after confirmation; individually configured schedules stay on"
                                 : "Set safe default intervals without changing existing schedules"
                             : "Unlock scheduled wipes"}
                     loading={autoSetSchedulesBusy}
@@ -512,14 +510,14 @@ function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan>
     const states = orderedScanCategories.map(cat => {
         const data = !cat.scopeAware || isViewingCurrentUser ? cardDataMap[cat.id] : isViewingAllUsers ? combinedDataMap[cat.id] : otherUserDataMap[cat.id];
         if (cat.scopeAware && isViewingAllUsers && allUsersRaw.length) {
-            return summarizeCleanupGroups(data?.count ?? -1, allUsersRaw.map(user => ({ count: user.categories[cat.id]?.count ?? -1, items: user.categories[cat.id]?.items ?? [] }))).state;
+            return summarizeCleanupGroups(data?.count ?? -1, allUsersRaw.map(user => ({ count: user.categories[cat.id]?.count ?? -1, items: user.categories[cat.id]?.items ?? [], rawData: user.categories[cat.id]?.raw }))).state;
         }
         return summarizeCleanupResult({ id: cat.id, count: data?.count ?? -1, items: data?.items, raw: data?.raw, error: data?.error, loading: data?.loading }).state;
     });
     const scanningCount = states.filter(state => state === "scanning").length;
     const findingsCount = states.filter(state => state === "found").length;
     const emptyCount = states.filter(state => state === "empty").length;
-    const attentionCount = states.filter(state => ["error", "partial", "inconsistent", "unavailable"].includes(state)).length;
+    const attentionCount = states.filter(state => ["error", "partial", "limited", "inconsistent", "unavailable"].includes(state)).length;
     return (
         <dl
             className="flex items-center gap-5 flex-wrap px-3 py-2.5 rounded-lg"
@@ -544,7 +542,7 @@ function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan>
                 </dd>
             </div>
             <div className="flex min-w-[72px] flex-col items-center gap-0.5">
-                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">Needs a rescan</dt>
+                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">Needs review</dt>
                 <dd className="order-1 font-mono text-[20px] font-bold leading-none text-[var(--color-warning)]">{attentionCount}</dd>
             </div>
             <div className="flex min-w-[72px] flex-col items-center gap-0.5">

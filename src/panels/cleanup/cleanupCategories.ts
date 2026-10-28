@@ -250,6 +250,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'clipboardHistory',
     label: 'Clipboard History',
+    countUnits: { singular: 'clipboard item', plural: 'clipboard items' },
     description: 'Windows clipboard & cloud sync history status',
     icon: 'clipboard',
     color: '#4b5563',
@@ -313,6 +314,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'wlanProfiles',
     label: 'Wi-Fi Profiles',
+    countUnits: { singular: 'Wi-Fi profile', plural: 'Wi-Fi profiles' },
     description: 'Saved network profiles',
     icon: 'feed',
     color: '#10b981',
@@ -493,6 +495,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'browserFootprints',
     label: 'Browser Audit',
+    countUnits: { singular: 'browser', plural: 'browsers' },
     description: 'Footprint sizes per browser',
     icon: 'globe',
     color: '#06b6d4',

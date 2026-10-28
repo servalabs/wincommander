@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "./cleanupCategories";
-import { CleanupDisplayProvider, parseCleanupDisplayPreference } from "./cleanupDisplay";
+import { cleanupModeForPersona } from "./cleanupDisplay";
 import { cleanupDisplayName, deriveCleanupVerification, summarizeCleanupGroups, summarizeCleanupResult } from "./cleanupDisplayModel";
 import CleanupDisplayDetails from "../../components/cleanup/CleanupDisplayDetails";
 
@@ -9,10 +9,9 @@ const category = ALL_CATEGORIES.find(item => item.id === "amcache")!;
 const base = { id: "amcache", count: 15, items: [], raw: { total: 15, entries: [{ category: "InventoryApplication", count: 15, sample: [] }] } };
 
 describe("System Cleanup display projection", () => {
-  test("uses a display-only preference and rejects unknown stored values", () => {
-    expect(parseCleanupDisplayPreference("simple")).toBe("simple");
-    expect(parseCleanupDisplayPreference("advanced")).toBe("advanced");
-    expect(parseCleanupDisplayPreference("admin")).toBeNull();
+  test("uses the existing persona for presentation", () => {
+    expect(cleanupModeForPersona("casual")).toBe("simple");
+    expect(cleanupModeForPersona("secure")).toBe("advanced");
   });
 
   test("keeps unknown, failed, partial and empty states distinct", () => {
@@ -24,13 +23,13 @@ describe("System Cleanup display projection", () => {
     expect(partial.count).toBeNull();
     expect(summarizeCleanupResult({ id: "x", count: 0, raw: { total: 0, entries: [] } }).state).toBe("empty");
     expect(summarizeCleanupResult({ id: "x", count: 2, raw: { total: 2 }, loading: true }).state).toBe("scanning");
-    expect(summarizeCleanupResult({ id: "x", count: 0, raw: { total: 15 } }).state).toBe("inconsistent");
-    expect(summarizeCleanupResult({ id: "amcache", count: 15, raw: { total: 15, entries: [] } }).state).toBe("inconsistent");
+    expect(summarizeCleanupResult({ id: "x", count: 0, raw: { total: 15 } }).state).toBe("unavailable");
+    expect(summarizeCleanupResult({ id: "amcache", count: 15, raw: { total: 15, entries: [] } }).state).toBe("unavailable");
     expect(summarizeCleanupResult({ id: "dnsCache", count: 0, raw: { total: 0, entries: [], complete: false } }).state).toBe("partial");
     expect(summarizeCleanupResult({ id: "dnsCache", count: 0, raw: { total: 0, entries: [], status: "error" } }).state).toBe("error");
     expect(summarizeCleanupResult({ id: "dnsCache", count: 15, raw: { total: 15, entries: [] } }).state).toBe("unavailable");
     expect(summarizeCleanupResult({ id: "dnsCache", count: 15, items: [], raw: { total: 15 } }).state).toBe("unavailable");
-    expect(summarizeCleanupResult({ id: "dnsCache", count: 15, raw: { total: 99, entries: [{}] } }).state).toBe("inconsistent");
+    expect(summarizeCleanupResult({ id: "ntfsJournals", count: 1, raw: { total: 2, journals: [{ present: true }, { present: false }] } }).state).toBe("found");
     expect(summarizeCleanupResult({ id: "dnsCache", count: 15, raw: { total: 15, entries: [], previewLimit: 0 } }).state).toBe("found");
   });
 
@@ -40,6 +39,12 @@ describe("System Cleanup display projection", () => {
     expect(valid.count).toBe(15);
     expect(valid.sampleCount).toBe(0);
     expect(summarizeCleanupResult({ ...base, raw: { total: 15, entries: [{ category: "InventoryApplication", count: 0, sample: [] }] } }).state).toBe("inconsistent");
+    expect(summarizeCleanupResult({ ...base, raw: { total: 15, entries: [{ category: "InventoryApplication", sample: [] }] } }).state).toBe("unavailable");
+    expect(summarizeCleanupResult({ id: "amcache", count: 0, raw: { total: 0, entries: [{ category: "InventoryApplication", count: 0, sample: [] }] } }).state).toBe("empty");
+    expect(summarizeCleanupResult({ id: "ntUserTraces", count: 3, raw: { total: 3, sections: [{ name: "RunMRU", count: 2, entries: [{}, {}] }, { name: "TypedPaths", count: 1, entries: [{}] }] } }).state).toBe("found");
+    expect(summarizeCleanupResult({ id: "ntUserTraces", count: 3, raw: { total: 3, sections: [{ name: "RunMRU", count: 3, entries: [] }] } }).state).toBe("found");
+    expect(summarizeCleanupResult({ id: "ntUserTraces", count: 12, raw: { total: 12, sections: [{ name: "RunMRU", count: 0, entries: [] }] } }).state).toBe("inconsistent");
+    expect(summarizeCleanupResult({ id: "wlanProfiles", count: 1, items: [], raw: { profiles: [{}] } }).sampleCount).toBe(1);
   });
 
   test("renders the same findings in both views without leaking raw content", () => {
@@ -127,15 +132,8 @@ describe("System Cleanup display projection", () => {
     }
   });
 
-  test("the audience selector lives in the detail view and keeps the standard card screen clear", () => {
-    const html = renderToStaticMarkup(<CleanupDisplayProvider defaultMode="simple"><CleanupDisplayDetails category={category} mode="simple" count={15} items={[]} rawData={base.raw} clearing={false} clearLabel="Clear" onClose={() => {}} /></CleanupDisplayProvider>);
-    expect(html).toContain("Casual");
-    expect(html).toContain("Security profile");
-    expect(html).toContain("Cleanup detail level");
-  });
-
   test("reports supplied post-clear receipts without exposing their contents", () => {
-    const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={0} items={[]} rawData={{ total: 0, entries: [] }} verification={{ status: "cleared" }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={0} items={[]} rawData={{ total: 0, entries: [{ category: "InventoryApplication", count: 0, sample: [] }] }} verification={{ status: "cleared" }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(html).toContain("A fresh scan found no remaining items.");
     expect(html).not.toContain("No verification receipt reported");
   });

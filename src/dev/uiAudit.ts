@@ -227,6 +227,8 @@ function cleanupAuditResponse(command: string): unknown | undefined {
         historyPath: "C:\\Users\\AuditAnalyst\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt",
         total: 2,
         fileTotal: 2,
+        sampleCount: 2,
+        previewLimit: 300,
       };
     case "Get-RecentFiles":
       return {
@@ -330,6 +332,9 @@ function cleanupAuditResponse(command: string): unknown | undefined {
         ],
         total: 2,
         totalSizeMB: 0.16,
+        coverage: "limited",
+        partial: false,
+        truncated: false,
       };
     case "Get-RecallDatabaseInfo":
       return {
@@ -339,7 +344,12 @@ function cleanupAuditResponse(command: string): unknown | undefined {
         ],
         total: 2,
         totalSizeMB: 5.5,
+        coverage: "limited",
+        partial: false,
+        truncated: false,
       };
+    case "Get-DeveloperCachesInfo":
+      return { ...structuredClone(AUDIT_FILE_TRACE), previewLimit: 200, truncated: false };
     case "Get-RecycleBinInfo":
       return {
         items: [
@@ -353,9 +363,10 @@ function cleanupAuditResponse(command: string): unknown | undefined {
       return {
         clipboardHistoryDisabled: false,
         cloudClipboardDisabled: true,
+        historyReadStatus: "complete",
         historyItems: [
-          { type: "text", preview: "Audit clipboard record", charCount: 22 },
-          { type: "html", preview: "Case evidence table", charCount: 148 },
+          { type: "text", preview: "[content hidden]", charCount: 22 },
+          { type: "html", preview: "[content hidden]", charCount: 148 },
         ],
         total: 2,
       };

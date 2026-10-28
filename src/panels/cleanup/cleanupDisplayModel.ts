@@ -1,9 +1,13 @@
 import type { CleanupCategory } from "./cleanupCategories";
 
-export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "inconsistent" | "empty" | "found";
+export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "limited" | "inconsistent" | "empty" | "found";
 export type CleanupVerification = { status: "cleared" | "reduced" | "reset" | "unchanged" | "deferred" | "failed" | "unverified"; verifiedAt?: string };
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
+
+export function hasLimitedCleanupCoverage(id: string, raw: unknown): boolean {
+  return object(raw) && (raw.coverage === "limited" || (id === "searchIndex" && typeof raw.coverage === "string" && raw.coverage.length > 0));
+}
 
 const SIMPLE_NAMES: Record<string, string> = {
   shellBags: "Folder history", usbHistory: "USB device history", dnsCache: "Web address cache",
@@ -46,7 +50,7 @@ export function cleanupDisplayDescription(category: Pick<CleanupCategory, "id" |
 
 const CLEAR_EXPLANATIONS: Record<string, string> = {
   wlanProfiles: "Removes saved Wi-Fi profiles. You may need to reconnect and enter their passwords again.",
-  browserFootprints: "Removes browser history, cookies and other saved browser data. This can sign you out and may remove saved passwords.",
+  browserFootprints: "Removes browser data across supported browsers and profiles, including legacy Windows browser stores. The scan may not show every profile. This can sign you out and may remove saved passwords.",
   notepadState: "Removes temporary Notepad state, including unsaved tabs.",
   netDrives: "Removes saved network-drive connections. You may need to reconnect them.",
   eventLogs: "Clears Windows event records, including records used for troubleshooting or security review.",
@@ -75,6 +79,7 @@ export function cleanupDisplayName(category: Pick<CleanupCategory, "id" | "label
 export function cleanupCountUnit(id: string, count: number): string {
   const units: Record<string, [string, string]> = {
     amcache: ["record", "records"], eventLogs: ["event record", "event records"],
+    browserFootprints: ["browser", "browsers"], wlanProfiles: ["Wi-Fi profile", "Wi-Fi profiles"], clipboardHistory: ["clipboard item", "clipboard items"],
     psHistory: ["command line", "command lines"], srumData: ["database file", "database files"],
     appLaunchHistory: ["tracked program", "tracked programs"], ntfsJournals: ["active journal", "active journals"],
   };
@@ -104,27 +109,13 @@ export function deriveCleanupVerification(input: { id: string; before: number; r
   return "unchanged";
 }
 
-const SCHEDULE_REASONS: Record<string, string> = {
-  wlanProfiles: "A verified Wi-Fi profile scheduler is not available.", browserFootprints: "A verified browser scheduler is not available.",
-  wslData: "Linux distribution targets need a verified scheduler.", dockerDesktopData: "Docker storage needs a verified local target.",
-  virtualMachineArtifacts: "Virtual machine snapshots need provider-aware checks.", credentialManager: "Saved credentials need a verified scheduler.",
-  inactiveUserProtectionMetadata: "Other users' encryption data needs an identity-bound decision.", gitActivity: "Git credentials need a verified scheduler.",
-  cloudPlaceholders: "Cloud files need provider-aware checks.", cellularHistory: "Mobile profiles need a verified reader.",
-  ntfsJournals: "Drive journals need a verified reset action.",
-};
-
-export function cleanupScheduleReason(id: string): string {
-  return SCHEDULE_REASONS[id] ?? "A reviewed scheduled action is not available for this card.";
-}
-
-export function isCleanupScheduleUnavailable(id: string): boolean {
-  return Object.hasOwn(SCHEDULE_REASONS, id);
-}
-
 const AM_CACHE_NAMES: Record<string, string> = {
   InventoryApplication: "Applications", InventoryApplicationFile: "Application files",
   InventoryApplicationShortcut: "Shortcuts", InventoryDeviceContainer: "Devices",
   InventoryDriverBinary: "Drivers", Application: "Applications",
+};
+const USER_TRACE_NAMES: Record<string, string> = {
+  RunMRU: "Run history", TypedPaths: "Typed folder paths", TypedURLs: "Typed web addresses", WordWheelQuery: "File Explorer searches",
 };
 
 export interface CleanupDisplaySummary {
@@ -132,20 +123,24 @@ export interface CleanupDisplaySummary {
   message: string;
   nextStep: string;
   count: number | null;
-  sampleCount: number;
-  categories: Array<{ label: string; count: number; samples: number }>;
+  sampleCount: number | null;
+  categories: Array<{ label: string; count: number; samples: number | null }>;
   datasets: Array<{ label: string; rows: number }>;
   previewLimited: boolean;
   previewLimit: number | null;
 }
 
-export function summarizeCleanupGroups(count: number, groups: Array<{ count: number; items: string[] }>): CleanupDisplaySummary {
-  const base = { count: null, sampleCount: groups.reduce((sum, group) => sum + group.items.length, 0), categories: [], datasets: [], previewLimited: false, previewLimit: null };
+export function summarizeCleanupGroups(count: number, groups: Array<{ count: number; items: string[]; rawData?: unknown }>): CleanupDisplaySummary {
+  const groupRecords = groups.map(group => object(group.rawData) && Array.isArray(group.rawData.records) ? group.rawData.records : null);
+  const sampleCount = groupRecords.length > 0 && groupRecords.every(records => records !== null)
+    ? groupRecords.reduce<number>((sum, records) => sum + (records?.length ?? 0), 0) : null;
+  const base = { count: null, sampleCount, categories: [], datasets: [], previewLimited: false, previewLimit: null };
   if (!Number.isFinite(count) || count < 0 || groups.some(group => !Number.isFinite(group.count) || group.count < 0)) {
     return { ...base, state: "partial", message: "Account scan incomplete", nextStep: "Review account coverage and scan again." };
   }
   if (!groups.length) return { ...base, state: "unavailable", message: "Account details unavailable", nextStep: "Scan again to verify the result." };
   if (groups.reduce((sum, group) => sum + group.count, 0) !== count) return { ...base, state: "inconsistent", message: "Counts do not agree", nextStep: "Scan again before clearing." };
+  if (count === 0 && groups.some(group => object(group.rawData) && group.rawData.coverage === "limited")) return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
   if (count === 0) return { ...base, count, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, count, state: "found", message: `${count} ${count === 1 ? "item" : "items"} reported`, nextStep: "Review the account breakdown before clearing." };
 }
@@ -153,30 +148,47 @@ export function summarizeCleanupGroups(count: number, groups: Array<{ count: num
 /** A display projection only. It never changes the scan data or authorizes an operation. */
 export function summarizeCleanupResult(input: { id: string; count: number; items?: string[]; raw?: unknown; error?: string; loading?: boolean }): CleanupDisplaySummary {
   const raw = object(input.raw) ? input.raw : undefined;
-  const rows = input.id === "amcache" && Array.isArray(raw?.entries) ? raw.entries.filter(object) : [];
+  const groupedKey = input.id === "amcache" ? "entries" : input.id === "ntUserTraces" ? "sections" : null;
+  const groupedValue = groupedKey && raw ? raw[groupedKey] : undefined;
+  const rows = Array.isArray(groupedValue) ? groupedValue.filter(object) : [];
   const categories = rows.map(row => ({
-    label: typeof row.category === "string" ? (AM_CACHE_NAMES[row.category] ?? "Other record category") : "Other record category",
-    count: typeof row.count === "number" && Number.isFinite(row.count) && row.count >= 0 ? row.count : -1,
-    samples: Array.isArray(row.sample) ? row.sample.length : 0,
+    label: input.id === "amcache"
+      ? (typeof row.category === "string" ? (AM_CACHE_NAMES[row.category] ?? "Other record category") : "Other record category")
+      : (typeof row.name === "string" ? (USER_TRACE_NAMES[row.name] ?? "Other activity") : "Other activity"),
+    count: typeof row.count === "number" && Number.isInteger(row.count) && row.count >= 0 ? row.count : -1,
+    samples: Array.isArray(input.id === "amcache" ? row.sample : row.entries) ? (input.id === "amcache" ? row.sample as unknown[] : row.entries as unknown[]).length : null,
   }));
   const datasetNames: Record<string, string> = { entries: "Entries", files: "Files", records: "Records", logs: "Log channels", sections: "Sections", devices: "Devices", journals: "Journals", browsers: "Browsers", profiles: "Profiles", copies: "Recovery copies", dumps: "Crash reports", databases: "Databases", processes: "Processes", paths: "Paths" };
   const datasets = raw ? Object.entries(datasetNames).flatMap(([key, label]) => Array.isArray(raw[key]) ? [{ label, rows: (raw[key] as unknown[]).length }] : []) : [];
-  const sampleCount = categories.length ? categories.reduce((sum, row) => sum + row.samples, 0) : (input.items?.length ?? 0);
+  const previewKeys = input.id === "wlanProfiles" ? ["profiles"] : input.id === "browserFootprints" ? ["browsers"] : ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems"];
+  const previewArrays = raw ? previewKeys.map(key => raw[key]).filter(Array.isArray) : [];
+  const previewRows = previewArrays.find(rows => rows.length > 0) ?? previewArrays[0];
+  const sampleCount = groupedKey
+    ? (categories.length && categories.every(row => row.samples !== null) ? categories.reduce((sum, row) => sum + (row.samples ?? 0), 0) : null)
+    : previewRows?.length ?? null;
   const previewLimit = typeof raw?.previewLimit === "number" && Number.isFinite(raw.previewLimit) && raw.previewLimit >= 0 ? raw.previewLimit : null;
   const base = { count: Number.isFinite(input.count) && input.count >= 0 ? input.count : null, sampleCount, categories, datasets, previewLimited: raw?.truncated === true, previewLimit };
   if (input.loading) return { ...base, state: "scanning", count: null, message: "Scan in progress", nextStep: "Wait for the scan to finish." };
-  if (input.error || raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
+  if (raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (raw?.status === "unavailable") return { ...base, state: "unavailable", count: null, message: "Scan unavailable", nextStep: "Try again when the source is available." };
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) return { ...base, state: "partial", count: null, message: "Scan incomplete", nextStep: "Review coverage and scan again." };
-  if (input.id === "amcache" && input.count >= 0 && raw && (!Array.isArray(raw.entries) || (input.count > 0 && !categories.length) || categories.some(row => row.count < 0) || categories.reduce((sum, row) => sum + row.count, 0) !== input.count || (typeof raw.total === "number" && raw.total !== input.count))) {
-    return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
-  }
+  if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
-  if (typeof raw.total === "number" && Number.isFinite(raw.total) && raw.total !== input.count) return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
+  if (groupedKey) {
+    // Only compare counts that the producer defines in the same units.
+    // An absent or malformed breakdown is unknown, not evidence of zero.
+    if (!Array.isArray(groupedValue) || rows.length !== groupedValue.length || typeof raw.total !== "number" || !Number.isInteger(raw.total) || raw.total < 0 || categories.some(row => row.count < 0) || categories.length === 0) {
+      return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+    }
+    if (raw.total !== input.count || categories.reduce((sum, row) => sum + row.count, 0) !== input.count) {
+      return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
+    }
+  }
   if (input.count > 0 && !Object.values(raw).some(Array.isArray) && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.count > 0 && datasets.length && datasets.every(dataset => dataset.rows === 0) && raw.truncated !== true && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.count === 0 && !Object.values(raw).some(Array.isArray) && raw.fileExists !== false && raw.hveFileExists !== false) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (input.count === 0 && hasLimitedCleanupCoverage(input.id, raw)) return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
   if (input.count === 0) return { ...base, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, state: "found", message: `${input.count} ${cleanupCountUnit(input.id, input.count)} found`, nextStep: "Review details before clearing." };
 }

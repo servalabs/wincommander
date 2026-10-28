@@ -20,8 +20,7 @@ import {
   useCleanupScan,
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
-import { useCleanupDisplay } from "./cleanupDisplay";
-import type { CleanupVerification } from "./cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -51,8 +50,6 @@ export default function CleanupCategoryGrid({
   onOpenCombinedDetail,
   onOpenOtherDetail,
 }: Props) {
-  const displayMode = useCleanupDisplay();
-  const { scheduleState } = scan;
   const {
     cardDataMap,
     orderedScanCategories,
@@ -81,9 +78,11 @@ export default function CleanupCategoryGrid({
     handleOtherUserClear,
     handleCardClearAllUsers,
     schedulesById,
+    disabledSchedulesById,
     scheduleState,
     refreshSchedules,
     scheduleBusyId,
+    autoSetSchedulesBusy,
     handleSetSchedule,
     handleClearSchedule,
   } = scan;
@@ -98,7 +97,7 @@ export default function CleanupCategoryGrid({
   );
   const isClean = (cat: CleanupCategory) => {
     const data = cardDataMap[cat.id];
-    return !displayMode && !cat.actionOnly && data?.count === 0 && !data.loading && !data.error;
+    return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw);
   };
   const orderActiveCards = (categories: CleanupCategory[]) =>
     [...categories].sort((left, right) => {
@@ -142,12 +141,11 @@ export default function CleanupCategoryGrid({
         clearDisabled={isInvestigator}
         onViewDetails={detailOpenerMap[cat.id]}
         onLoad={() => handleCardLoad(cat)}
-        scheduleMinutes={
-          cat.schedulable ? (schedulesById[cat.id] ?? null) : undefined
-        }
+        scheduleMinutes={scheduleState === "verified" ? (schedulesById[cat.id] ?? null) : undefined}
+        scheduleDisabled={scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
         scheduleState={scheduleState}
         onRefreshSchedule={() => void refreshSchedules()}
-        scheduleBusy={cat.schedulable && scheduleBusyId === cat.id}
+        scheduleBusy={autoSetSchedulesBusy || scheduleBusyId === cat.id}
         onSetSchedule={
           cat.schedulable && schedulesEnabled
             ? (m: number) =>
@@ -155,7 +153,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          schedulesEnabled && !!schedulesById[cat.id]
+          schedulesEnabled && scheduleState === "verified" && (!!schedulesById[cat.id] || !!disabledSchedulesById[cat.id])
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
@@ -197,7 +195,8 @@ export default function CleanupCategoryGrid({
   };
   const isUserClean = (cat: CleanupCategory) => {
     const data = userCardData(cat);
-    return !displayMode && !cat.actionOnly && data.count === 0 && !data.loading && !data.error;
+    return !cat.actionOnly && data.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw) &&
+      !(isViewingAllUsers && allUsersRaw.some(user => hasLimitedCleanupCoverage(cat.id, user.categories[cat.id]?.raw)));
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
@@ -258,14 +257,15 @@ export default function CleanupCategoryGrid({
               : loadUserView(selectedUser, [cat.id])
         }
         scheduleMinutes={
-          isViewingCurrentUser
+          isViewingCurrentUser && scheduleState === "verified"
             ? (schedulesById[cat.id] ?? null)
             : undefined
         }
+        scheduleDisabled={isViewingCurrentUser && scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
         scheduleState={isViewingCurrentUser ? scheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
-          isViewingCurrentUser && scheduleBusyId === cat.id
+          autoSetSchedulesBusy || (isViewingCurrentUser && scheduleBusyId === cat.id)
         }
         onSetSchedule={
           isViewingCurrentUser && cat.schedulable && schedulesEnabled
@@ -274,7 +274,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          isViewingCurrentUser && schedulesEnabled && !!schedulesById[cat.id]
+          isViewingCurrentUser && schedulesEnabled && scheduleState === "verified" && (!!schedulesById[cat.id] || !!disabledSchedulesById[cat.id])
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
@@ -342,7 +342,7 @@ export default function CleanupCategoryGrid({
                         return next;
                       })
                     }
-                    title={isDefaultExcludedCleanup(id) ? "Default exclusion from Clear All and Auto-set. An individual clear or schedule requires confirmation." : "Remove from exclusions"}
+                    title={isDefaultExcludedCleanup(id) ? "Default exclusion from Clear All and Auto-set. Available individual actions require confirmation." : "Remove from exclusions"}
                     aria-label={isDefaultExcludedCleanup(id)
                       ? `${orderedScanCategories.find((c) => c.id === id)?.label ?? id} is excluded from bulk cleanup and automatic schedule setup by default`
                       : `Remove ${orderedScanCategories.find((c) => c.id === id)?.label ?? id} from bulk-clear exclusions`}

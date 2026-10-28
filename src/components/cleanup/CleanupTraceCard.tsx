@@ -8,8 +8,9 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import type { CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
+import { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import RunOnceButton from "./RunOnceButton";
 import "./CleanupTraceCard.css";
 
@@ -28,6 +29,7 @@ interface CleanupTraceCardProps {
   onViewDetails?: () => void;
   onLoad?: () => void;
   scheduleMinutes?: number | null;
+  scheduleDisabled?: boolean;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -43,7 +45,7 @@ interface CleanupTraceCardProps {
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "scanning" | "error" | "not-scanned" | "action-only";
+type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "not-scanned" | "action-only";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -81,6 +83,14 @@ const BAND: Record<BandState, BandDef> = {
     icon: "error",
     label: "Scan failed",
   },
+  incomplete: {
+    bg: "var(--color-warning-dim)", borderColor: "color-mix(in srgb, var(--color-warning) 28%, transparent)",
+    labelColor: "var(--color-warning)", icon: "warning-sign", label: "Scan incomplete",
+  },
+  limited: {
+    bg: "var(--color-warning-dim)", borderColor: "color-mix(in srgb, var(--color-warning) 28%, transparent)",
+    labelColor: "var(--color-warning)", icon: "info-sign", label: "Limited scan",
+  },
   "not-scanned": {
     bg: "var(--color-bg-secondary)",
     borderColor: "var(--color-border)",
@@ -100,14 +110,16 @@ const BAND: Record<BandState, BandDef> = {
 export default function CleanupTraceCard({
   category,
   count,
-  preview,
   loading,
   clearing,
   error,
+  rawData,
+  groupedItems,
   onClear,
   onViewDetails,
   onLoad,
   scheduleMinutes,
+  scheduleDisabled,
   scheduleBusy,
   scheduleState,
   onRefreshSchedule,
@@ -122,8 +134,12 @@ export default function CleanupTraceCard({
   const [showParticles, setShowParticles] = useState(false);
   const minInterval = category.minIntervalMinutes ?? 5;
   const showScheduler =
-    (!!onSetSchedule || !!onRequestScheduleAccess) && !!category.schedulable;
-  const isEmpty = count === 0;
+    ((!!onSetSchedule || !!onRequestScheduleAccess) && !!category.schedulable) ||
+    (!!scheduleMinutes && !!onClearSchedule) || !!scheduleDisabled;
+  const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
+  const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
+  const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
+  const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
   const hasData = count > 0;
   const hasClear = !!category.clearDataKey;
@@ -131,15 +147,22 @@ export default function CleanupTraceCard({
   const hasScanOutput = !isActionOnly && (count >= 0 || !!error);
   const infoText = category.description;
   const countUnit = category.countUnits?.[count === 1 ? 'singular' : 'plural'] ?? (count === 1 ? 'trace' : 'traces');
+  const safePreview = category.id === "amcache"
+    ? summarizeCleanupResult({ id: category.id, count, raw: rawData, error }).categories.map(row => `${row.label}: ${row.count} records`).slice(0, 3)
+    : getSafeCleanupPreview(category.id, rawData).slice(0, 3).map(row => [row.label, ...row.facts].join(" · "));
   const scheduleReason = getCleanupScheduleUnavailableReason(category);
   const bandState: BandState = isActionOnly
     ? "action-only"
     : loading
       ? "scanning"
+      : incomplete
+        ? "incomplete"
       : error
         ? "error"
       : hasData
         ? "has"
+        : limited
+          ? "limited"
         : isEmpty
           ? "clean"
           : "not-scanned";
@@ -181,12 +204,20 @@ export default function CleanupTraceCard({
       </TooltipContent>
     </Tooltip>
   );
+  const compactDetailsButton = onViewDetails ? (
+    <button type="button" onClick={event => { event.stopPropagation(); onViewDetails(); }}
+      className="grid place-items-center flex-shrink-0 rounded" style={{ width: 22, height: 22, border: "none" }}
+      data-trace-card-action="details" aria-label={`View details for ${category.label}`} title={`View details for ${category.label}`}>
+      <Icon icon="eye-open" size={14} />
+    </button>
+  ) : null;
   const scheduleControl =
     showScheduler && !isActionOnly ? (
       <CleanupScheduleControl
         categoryLabel={category.label}
         minInterval={minInterval}
         scheduleMinutes={scheduleMinutes}
+        scheduleDisabled={scheduleDisabled}
         scheduleBusy={scheduleBusy}
         scheduleState={scheduleState}
         onRefreshSchedule={onRefreshSchedule}
@@ -221,7 +252,7 @@ export default function CleanupTraceCard({
 
   // Footer is only rendered when there's something actionable
   const showFooter =
-    isActionOnly || (!loading && hasData && (!!onViewDetails || hasClear));
+    isActionOnly || (!loading && ((hasData && (!!onViewDetails || hasClear)) || ((limited || incomplete || !!error) && !!onViewDetails)));
 
   const iconBg = `${category.color}1e`;
 
@@ -269,6 +300,7 @@ export default function CleanupTraceCard({
             </span>
             {scheduleControl}
             {infoTooltip}
+            {compactDetailsButton}
             {rescanButton}
           </div>
         ) : (
@@ -295,6 +327,7 @@ export default function CleanupTraceCard({
               <span className="flex items-center gap-0.5">
                 {infoTooltip}
                 {scheduleControl}
+                {compactDetailsButton}
                 {rescanButton}
               </span>
             </div>
@@ -474,7 +507,7 @@ export default function CleanupTraceCard({
           {!loading && hasData && (
             <AnimatePresence>
               <div className="flex flex-col gap-0.5">
-                {preview.slice(0, 3).map((item, i) => (
+                {safePreview.map((item, i) => (
                   <motion.span
                     key={`${category.id}-${i}-${item}`}
                     initial={{ opacity: 1, x: 0 }}
@@ -499,7 +532,7 @@ export default function CleanupTraceCard({
               </div>
             </AnimatePresence>
           )}
-          {!loading && hasData && preview.length === 0 && (
+          {!loading && hasData && safePreview.length === 0 && (
             <div
               className="font-mono"
               style={{
@@ -513,11 +546,12 @@ export default function CleanupTraceCard({
               {count} {countUnit} found · open details to inspect
             </div>
           )}
+          {!loading && limited && count === 0 && <span>No items found in the checked locations.</span>}
           {error && !loading && (
             <div
               className="font-mono line-clamp-2"
               role="alert"
-              title={error}
+              title={incomplete ? "The scan did not finish checking its sources." : "The scan could not be completed."}
               style={{
                 fontSize: 8.5,
                 padding: "2px 6px",
@@ -526,7 +560,7 @@ export default function CleanupTraceCard({
                 color: "var(--color-danger)",
               }}
             >
-              {error}
+              {incomplete ? "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at
@@ -610,7 +644,7 @@ export default function CleanupTraceCard({
           }}
         >
           {/* Details — only when hasData */}
-          {!isActionOnly && onViewDetails && hasData && (
+          {!isActionOnly && onViewDetails && (hasData || limited || incomplete || !!error) && (
             <button
               type="button"
               onClick={(e) => {
