@@ -76,6 +76,19 @@ export interface BlocklistFeature extends FeatureDef {
 
 export const BLOCKLISTS: BlocklistFeature[] = [
   {
+    id: "blocklist.remote-access",
+    panel: "network",
+    label: "Remote Access",
+    description: "Block listed remote-access domains. Other addresses and direct connections may still work.",
+    tier: "free",
+    needsAdmin: true,
+    irreversible: false,
+    reducesSecurity: false,
+    defenderFlagged: false,
+    icon: "ban-circle",
+    logo: software["anydesk.png"],
+  },
+  {
     id: "blocklist.telemetry-blocklist",
     panel: "network",
     label: "Telemetry",

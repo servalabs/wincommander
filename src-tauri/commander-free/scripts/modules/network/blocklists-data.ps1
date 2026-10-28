@@ -9,6 +9,25 @@ function Get-HardcodedBlocklists {
         if ($script:CachedHardcodedBlocklists) { return $script:CachedHardcodedBlocklists }
 
         $script:CachedHardcodedBlocklists = @{
+                'remote-access' = @'
+0.0.0.0 anydesk.com
+0.0.0.0 www.anydesk.com
+0.0.0.0 teamviewer.com
+0.0.0.0 www.teamviewer.com
+0.0.0.0 configdl.teamviewer.com
+0.0.0.0 webapi.teamviewer.com
+0.0.0.0 rustdesk.com
+0.0.0.0 splashtop.com
+0.0.0.0 screenconnect.com
+0.0.0.0 relay.screenconnect.com
+0.0.0.0 dwservice.net
+0.0.0.0 remoteutilities.com
+0.0.0.0 zohoassist.com
+0.0.0.0 assist.zoho.com
+0.0.0.0 api.parsec.app
+0.0.0.0 remotedesktop.google.com
+0.0.0.0 remotedesktop-pa.googleapis.com
+'@
                 'piracy-torrent'      = @'
 0.0.0.0 0.arenabg.com
 0.0.0.0 00-torrnets.com
