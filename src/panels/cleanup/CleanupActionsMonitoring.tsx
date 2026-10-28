@@ -9,6 +9,8 @@ import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
 import RunOnceButton from "../../components/cleanup/RunOnceButton";
 import { ACTION_CATEGORIES, VIEW_ONLY_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import type { CardData } from "./useCleanupScan";
+import { useCleanupDisplay } from "./cleanupDisplay";
+import { cleanupDisplayName } from "./cleanupDisplayModel";
 
 interface Props {
     cardDataMap: Record<string, CardData>;
@@ -31,6 +33,7 @@ export default function CleanupActionsMonitoring({
     diskActions,
     repairActions,
 }: Props) {
+    const displayMode = useCleanupDisplay();
     return (
         <SectionCard title="One-Time Actions & Monitoring" style={{ marginBottom: '32px' }}>
             <div className="flex flex-col gap-8">
@@ -45,6 +48,7 @@ export default function CleanupActionsMonitoring({
                     <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-2 md:grid-cols-2 xl:grid-cols-3">
                         {ACTION_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
+                            const label = cleanupDisplayName(cat, displayMode ?? "advanced");
                             return (
                                 <div
                                     key={cat.id}
@@ -57,12 +61,13 @@ export default function CleanupActionsMonitoring({
                                         <Icon icon={cat.icon as any} size={15} style={{ color: cat.color }} />
                                     </div>
                                     <div className="flex flex-col min-w-0 flex-1">
-                                        <span className="font-bold uppercase truncate" style={{ fontSize: 11, letterSpacing: '0.4px', color: 'var(--color-text-primary)' }}>
-                                            {cat.label}
+                                        <span className="font-bold" style={{ fontSize: 12, color: 'var(--color-text-primary)' }}>
+                                            {label}
                                         </span>
-                                        <span className="truncate" style={{ fontSize: 10.5, color: 'var(--color-text-muted)' }}>
+                                        <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
                                             {cat.description}
                                         </span>
+                                        {cat.confirmMessage ? <span style={{ fontSize: 11, color: 'var(--color-warning)' }}>{cat.confirmMessage}</span> : null}
                                     </div>
                                     <RunOnceButton
                                         isRunning={d.clearing}
@@ -102,6 +107,7 @@ export default function CleanupActionsMonitoring({
                                     loading={d.loading}
                                     clearing={d.clearing}
                                     error={d.error}
+                                    rawData={d.raw}
                                     onClear={() => handleCardClear(cat)}
                                     clearDisabled={isInvestigator}
                                     onViewDetails={detailOpenerMap[cat.id]}

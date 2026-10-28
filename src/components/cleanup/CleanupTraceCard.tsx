@@ -9,7 +9,10 @@ import {
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
 import CleanupScheduleControl from "./CleanupScheduleControl";
+import CleanupReadableCard from "./CleanupReadableCard";
 import RunOnceButton from "./RunOnceButton";
+import { useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
+import type { CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import "./CleanupTraceCard.css";
 
 interface CleanupTraceCardProps {
@@ -19,6 +22,10 @@ interface CleanupTraceCardProps {
   loading: boolean;
   clearing: boolean;
   error?: string;
+  rawData?: unknown;
+  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
+  verification?: CleanupVerification;
+  excludedFromBulk?: boolean;
   onClear: () => void;
   onViewDetails?: () => void;
   onLoad?: () => void;
@@ -99,6 +106,10 @@ export default function CleanupTraceCard({
   loading,
   clearing,
   error,
+  rawData,
+  groupedItems,
+  verification,
+  excludedFromBulk,
   onClear,
   onViewDetails,
   onLoad,
@@ -115,6 +126,15 @@ export default function CleanupTraceCard({
   compact = false,
 }: CleanupTraceCardProps) {
   const [showParticles, setShowParticles] = useState(false);
+  const display = useCleanupDisplay();
+  if (display) {
+    return <CleanupReadableCard mode={display} category={category} count={count} preview={preview} rawData={rawData} groupedItems={groupedItems} verification={verification}
+      loading={loading} clearing={clearing} error={error} excludedFromBulk={excludedFromBulk} onClear={onClear}
+      onClearAllUsers={onClearAllUsers} clearScopeLabel={clearScopeLabel} clearDisabled={clearDisabled}
+      onViewDetails={onViewDetails} onLoad={onLoad} scheduleMinutes={scheduleMinutes} scheduleState={scheduleState}
+      scheduleBusy={scheduleBusy} onSetSchedule={onSetSchedule} onClearSchedule={onClearSchedule}
+      onRequestScheduleAccess={onRequestScheduleAccess} />;
+  }
 
   const minInterval = category.minIntervalMinutes ?? 5;
   const showScheduler =

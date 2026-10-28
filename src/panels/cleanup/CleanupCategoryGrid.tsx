@@ -20,6 +20,8 @@ import {
   useCleanupScan,
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
+import { useCleanupDisplay } from "./cleanupDisplay";
+import type { CleanupVerification } from "./cleanupDisplayModel";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -49,6 +51,8 @@ export default function CleanupCategoryGrid({
   onOpenCombinedDetail,
   onOpenOtherDetail,
 }: Props) {
+  const displayMode = useCleanupDisplay();
+  const { scheduleState } = scan;
   const {
     cardDataMap,
     orderedScanCategories,
@@ -61,6 +65,7 @@ export default function CleanupCategoryGrid({
     isAdminUser,
     selectedUser,
     otherUserDataMap,
+    allUsersRaw,
     otherUserLoading,
     combinedDataMap,
     isViewingAllUsers,
@@ -93,7 +98,7 @@ export default function CleanupCategoryGrid({
   );
   const isClean = (cat: CleanupCategory) => {
     const data = cardDataMap[cat.id];
-    return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error;
+    return !displayMode && !cat.actionOnly && data?.count === 0 && !data.loading && !data.error;
   };
   const orderActiveCards = (categories: CleanupCategory[]) =>
     [...categories].sort((left, right) => {
@@ -124,6 +129,9 @@ export default function CleanupCategoryGrid({
         loading={d.loading}
         clearing={d.clearing}
         error={d.error}
+        rawData={d.raw}
+        verification={(d as typeof d & { verification?: CleanupVerification }).verification}
+        excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
         onClear={() =>
           handleCardClear(
@@ -147,7 +155,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          cat.schedulable && schedulesEnabled
+          schedulesEnabled && !!schedulesById[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
@@ -189,7 +197,7 @@ export default function CleanupCategoryGrid({
   };
   const isUserClean = (cat: CleanupCategory) => {
     const data = userCardData(cat);
-    return !cat.actionOnly && data.count === 0 && !data.loading && !data.error;
+    return !displayMode && !cat.actionOnly && data.count === 0 && !data.loading && !data.error;
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
@@ -198,11 +206,20 @@ export default function CleanupCategoryGrid({
       <CleanupTraceCard
         key={cat.id}
         category={cat}
-        count={data.count}
+        count={isViewingAllUsers && allUsersRaw.length === 0 ? -1 : data.count}
         preview={(data.items || []).slice(0, 3)}
         loading={data.loading}
         clearing={data.clearing}
         error={data.error}
+        rawData={data.raw}
+        groupedItems={isViewingAllUsers ? allUsersRaw.map(user => ({
+          title: user.displayName || user.username,
+          count: user.categories[cat.id]?.count ?? -1,
+          items: user.categories[cat.id]?.items ?? [],
+          rawData: user.categories[cat.id]?.raw,
+        })) : undefined}
+        verification={(data as typeof data & { verification?: CleanupVerification }).verification}
+        excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
         onClear={() =>
           isViewingAllUsers
@@ -241,14 +258,14 @@ export default function CleanupCategoryGrid({
               : loadUserView(selectedUser, [cat.id])
         }
         scheduleMinutes={
-          isViewingCurrentUser && cat.schedulable
+          isViewingCurrentUser
             ? (schedulesById[cat.id] ?? null)
             : undefined
         }
-        scheduleState={scheduleState}
+        scheduleState={isViewingCurrentUser ? scheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
-          isViewingCurrentUser && cat.schedulable && scheduleBusyId === cat.id
+          isViewingCurrentUser && scheduleBusyId === cat.id
         }
         onSetSchedule={
           isViewingCurrentUser && cat.schedulable && schedulesEnabled
@@ -257,7 +274,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          isViewingCurrentUser && cat.schedulable && schedulesEnabled
+          isViewingCurrentUser && schedulesEnabled && !!schedulesById[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }

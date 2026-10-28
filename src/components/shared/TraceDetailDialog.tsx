@@ -12,18 +12,26 @@ import {
   type TraceTableRow,
 } from "./traceTable";
 import { showError, showSuccess } from "../../utils/toast";
+import { useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
+import CleanupDisplayDetails from "../cleanup/CleanupDisplayDetails";
+import type { CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import "./TraceDetailDialog.css";
 
 interface TraceDetailDialogProps {
   category: Pick<CleanupCategory,
     "label" | "description" | "icon" | "severity" | "scopeAware" | "systemWide" |
     "id" | "schedulable" | "minIntervalMinutes" | "schedulerRunAsSystem" | "regeneratesNote" |
-    "clearDataKey"
+    "clearDataKey" | "confirmMessage"
   >;
   isOpen: boolean;
   count: number;
   items: string[];
   rawData?: unknown;
+  error?: string;
+  verification?: CleanupVerification;
+  scheduleState?: "checking" | "verified" | "unavailable";
+  scheduleMinutes?: number | null;
+  scopeLabel?: string;
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   clearing: boolean;
   onClose: () => void;
@@ -38,6 +46,11 @@ export default function TraceDetailDialog({
   count,
   items,
   rawData,
+  error,
+  verification,
+  scheduleState,
+  scheduleMinutes,
+  scopeLabel,
   groupedItems,
   clearing,
   onClose,
@@ -46,6 +59,7 @@ export default function TraceDetailDialog({
   clearLabel = "Clear",
 }: TraceDetailDialogProps) {
   const [query, setQuery] = useState("");
+  const displayMode = useCleanupDisplay();
   const view = useMemo(() => buildTraceView(rawData, items), [rawData, items]);
   const isPreviewTruncated = !!(
     rawData &&
@@ -66,6 +80,12 @@ export default function TraceDetailDialog({
 
   if (!isOpen) {
     return null;
+  }
+
+  if (displayMode) {
+    return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems}
+      error={error} clearing={clearing} clearDisabled={clearDisabled} clearLabel={clearLabel} onClose={onClose} onClear={onClear}
+      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} verification={verification} scopeLabel={scopeLabel} />;
   }
 
   const datasetCount = groupedViews.length
