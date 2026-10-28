@@ -1,4 +1,5 @@
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
+import { useMemo, useState } from "react";
 
 type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
@@ -83,6 +84,19 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   if (id === "wlanProfiles" && Array.isArray(input.profiles)) {
     return input.profiles.slice(0, 20).map((_, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: ["Network name and password hidden"] }));
   }
+  if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
+    return input.historyItems.slice(0, 20).map((_, index) => ({ label: `Clipboard item ${index + 1}`, facts: ["Content hidden"] }));
+  }
+  if (id === "netDrives" && Array.isArray(input.drives)) {
+    return input.drives.slice(0, 20).map((value, index) => {
+      const candidate = isObject(value) ? value.Name ?? value.localName : null;
+      const drive = typeof candidate === "string" && /^[A-Za-z]:?$/.test(candidate.trim()) ? candidate.trim().replace(/:?$/, ":").toUpperCase() : null;
+      return { label: drive ? `Drive ${drive}` : `Network drive ${index + 1}`, facts: ["Network location hidden"] };
+    });
+  }
+  if (id === "recycleBin" && Array.isArray(input.items)) {
+    return input.items.slice(0, 20).map((_, index) => ({ label: `Recycle Bin record ${index + 1}`, facts: ["File details hidden"] }));
+  }
   if (id === "browserFootprints" && Array.isArray(input.browsers)) {
     return input.browsers.filter(isObject).slice(0, 20).map((browser, index) => {
       const name = typeof browser.browser === "string" ? browserNames[browser.browser.trim().toLowerCase()] : undefined;
@@ -97,7 +111,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     });
   }
   // For other sources, expose only bounded numeric/date metadata from known collections.
-  for (const key of ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes"]) {
+  for (const key of ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems", "drives", "items", "paths"]) {
     const values = input[key];
     if (!Array.isArray(values) || !values.length) continue;
     return values.slice(0, 20).map((value, index) => ({ label: `Record ${index + 1}`, facts: isObject(value) ? metadata(value) : [] }));
@@ -105,13 +119,30 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   return [];
 }
 
-export default function CleanupRecordPreview({ categoryId, rawData, mode }: { categoryId: string; rawData: unknown; mode: CleanupDisplayMode }) {
-  const all = getSafeCleanupPreview(categoryId, rawData);
+export default function CleanupRecordPreview({ categoryId, rawData, mode, accountLabel }: { categoryId: string; rawData: unknown; mode: CleanupDisplayMode; accountLabel?: string }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [sortDescending, setSortDescending] = useState(false);
+  const all = useMemo(() => getSafeCleanupPreview(categoryId, rawData), [categoryId, rawData]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return all.filter(row => `${row.label} ${row.facts.join(" ")}`.toLocaleLowerCase().includes(needle))
+      .sort((a, b) => (sortDescending ? -1 : 1) * a.label.localeCompare(b.label, undefined, { numeric: true }));
+  }, [all, query, sortDescending]);
   if (!all.length) return null;
-  const rows = all.slice(0, mode === "simple" ? 5 : 20);
+  const pageSize = mode === "simple" ? 5 : 10;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
+  const rows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   return <section className="cleanup-record-preview" aria-label="Record preview">
-    <h3>Record preview</h3>
-    <p>Showing the first {rows.length} {rows.length === 1 ? "preview row" : "preview rows"} supplied by this scan. The total is shown above. Paths, credentials and private contents are hidden.</p>
-    <ul>{rows.map((row, index) => <li key={`${row.label}:${index}`}><strong>{row.label}</strong>{row.facts.length ? <span>{row.facts.join(" · ")}</span> : <span>Additional details are hidden for privacy.</span>}</li>)}</ul>
+    <div className="cleanup-record-preview__header">
+      <div><h3>Record preview</h3><p>{all.length} preview {all.length === 1 ? "row" : "rows"} available here{all.length === 20 ? " (up to 20 shown)" : ""}; the scan total is above.</p></div>
+      <label><span className="sr-only">Filter record preview</span><input type="search" value={query} placeholder="Filter preview" aria-label={accountLabel ? `Filter ${accountLabel} record preview` : "Filter record preview"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
+    </div>
+    <div className="cleanup-readable-detail__table"><table>
+      <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort preview records ${sortDescending ? "ascending" : "descending"}`}>Record {sortDescending ? "↓" : "↑"}</button></th><th scope="col">{mode === "simple" ? "Details" : "Preview details"}</th></tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={`${row.label}:${index}`}><td>{row.label}</td><td>{row.facts.length ? row.facts.join(" · ") : "Details hidden for privacy"}</td></tr>)}</tbody>
+    </table></div>
+    {!rows.length ? <p role="status">No preview rows match this filter.</p> : null}
+    {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Record preview pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} preview rows</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
   </section>;
 }

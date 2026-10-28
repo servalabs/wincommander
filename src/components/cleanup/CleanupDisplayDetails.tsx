@@ -28,7 +28,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       if (event.key !== "Tab" || !dialog) return;
-      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])'))
         .filter(element => element.getClientRects().length > 0);
       if (!controls.length) { event.preventDefault(); dialog.focus(); return; }
       const index = controls.indexOf(document.activeElement as HTMLElement);
@@ -68,27 +68,25 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           <div><h2>{name}</h2><p>{cleanupDisplayDescription(category, mode)}</p></div>
           <div className="trace-dialog__actions"><Button icon="cross" minimal aria-label={`Dismiss ${name} details`} onClick={onClose} /></div>
         </header>
+        <div className={`cleanup-readable-detail__result cleanup-readable-detail__result--${summary.state}`} role="status">
+          <strong>{groupedItems?.length && summary.state === "found" && summary.count !== null ? `${summary.count} ${cleanupCountUnit(category.id, summary.count)} reported` : summary.message}</strong><span>{summary.nextStep}</span>
+        </div>
         <div className="cleanup-readable-detail__body">
-          <div className={`cleanup-readable-detail__result cleanup-readable-detail__result--${summary.state}`} role="status">
-            <strong>{summary.message}</strong><span>{summary.nextStep}</span>
-          </div>
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
           {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
-          {summary.count !== null && summary.state !== "inconsistent" ? <p><strong>{summary.count} {cleanupCountUnit(category.id, summary.count)}</strong> reported by this scan.</p> : null}
-          {["found", "partial", "inconsistent"].includes(summary.state) ? <CleanupRecordPreview categoryId={category.id} rawData={rawData} mode={mode} /> : null}
+          {["found", "partial", "limited", "inconsistent"].includes(summary.state) && !groupedItems?.length ? <CleanupRecordPreview categoryId={category.id} rawData={rawData} mode={mode} /> : null}
+          {summary.count !== null && summary.count > 0 && summary.sampleCount === 0 && !groupedItems?.length ? <p>No preview samples were supplied. The scan still reported {summary.count} {cleanupCountUnit(category.id, summary.count)}.</p> : null}
+          {summary.count !== null && summary.count > 0 && summary.sampleCount !== 0 && !groupedItems?.length && getSafeCleanupPreview(category.id, rawData).length === 0 ? <p>No preview details are available; the scan total remains above.</p> : null}
           {category.clearDataKey ? <p className="cleanup-readable-detail__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
           {excludedFromBulk ? <p><strong>Bulk cleanup:</strong> This card is currently skipped by Clear all.</p> : null}
           {category.schedulable && isManualOnlyCleanupSchedule(category.id) ? <p><strong>Auto-set:</strong> This card is skipped. You can schedule it individually from the card.</p> : null}
-          {mode === "simple" ? <>
-            <p><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</p>
-            <p><strong>Schedule:</strong> {simpleScheduleStatus}</p>
-            <p><strong>Last check:</strong> {receipt}</p>
-          </> : null}
+          <div className="cleanup-readable-detail__context"><span><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</span><span><strong>Schedule:</strong> {simpleScheduleStatus}</span></div>
+          {mode === "simple" && verification ? <p><strong>Last check:</strong> {receipt}</p> : null}
           {category.regeneratesNote ? <p>{category.regeneratesNote}</p> : null}
           {mode === "advanced" ? <>
-            <dl className="cleanup-readable-detail__facts">
+            <details className="cleanup-readable-detail__disclosure"><summary>Scan information and verification</summary><dl className="cleanup-readable-detail__facts">
               <div><dt>Source</dt><dd>{cleanupDisplayDescription(category, "advanced")}</dd></div>
               <div><dt>Scope</dt><dd>{scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</dd></div>
               <div><dt>Scan time</dt><dd>{scanTime}</dd></div>
@@ -96,7 +94,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
               <div><dt>Task status</dt><dd>{taskStatus}</dd></div>
               <div><dt>Verification</dt><dd>{receipt}{verifiedAt ? ` ${verifiedAt}` : ""}</dd></div>
               <div><dt>Preview</dt><dd>{summary.sampleCount === null ? "Not reported" : <>{summary.sampleCount} {category.id === "amcache" ? (summary.sampleCount === 1 ? "sample" : "samples") : (summary.sampleCount === 1 ? "row" : "rows")}{summary.previewLimited ? `; limited${summary.previewLimit !== null ? ` to ${summary.previewLimit}` : ""}` : " reported"}</>}</dd></div>
-            </dl>
+            </dl></details>
             {summary.categories.length && ["found", "empty", "inconsistent"].includes(summary.state) ? <section aria-label="Record categories"><h3>Record categories</h3>
               <div className="cleanup-readable-detail__table"><table><thead><tr><th>Category</th><th>Records</th><th>Preview samples</th></tr></thead><tbody>
                 {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples ?? "Not reported"}</td></tr>)}
@@ -104,8 +102,10 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
             {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
             <p className="cleanup-readable-detail__privacy">Private record contents and credentials are not shown in this summary.</p>
           </> : null}
-          {mode === "advanced" && groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p>
-            {groupedItems.filter(group => group.count >= 0 && getSafeCleanupPreview(category.id, group.rawData).length > 0).map((group, index) => <div key={`${group.title}-preview-${index}`}><h4>{group.title}</h4><CleanupRecordPreview categoryId={category.id} rawData={group.rawData} mode={mode} /></div>)}
+          {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><p>Only reported accounts are shown.</p>
+            {groupedItems.map((group, index) => <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
+              {group.count >= 0 && getSafeCleanupPreview(category.id, group.rawData).length > 0 ? <CleanupRecordPreview categoryId={category.id} rawData={group.rawData} mode={mode} accountLabel={group.title} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : group.count < 0 ? <p>This account could not be checked.</p> : null}
+            </div>)}
           </section> : null}
         </div>
         <footer className="trace-dialog__footer"><Button text="Close" minimal onClick={onClose} />

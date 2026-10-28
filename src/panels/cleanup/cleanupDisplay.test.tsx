@@ -92,7 +92,8 @@ describe("System Cleanup display projection", () => {
     expect(html).not.toContain("private trace");
     const casual = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="simple" count={3} items={[]} groupedItems={groups} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(casual).toContain("3 records");
-    expect(casual).not.toContain("Account A");
+    expect(casual).toContain("Account A");
+    expect(casual).toContain("Preview details are unavailable for this account");
     expect(casual).not.toContain("private trace");
   });
 
