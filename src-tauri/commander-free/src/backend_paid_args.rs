@@ -10,6 +10,47 @@ pub(super) fn paid_command_args(
         .iter()
         .map(|(key, value)| (key.clone(), Value::String(value.clone())))
         .collect();
+    let schedule = matches_parts(command, &["Set-~", "Auto~", "Erase~", "Schedule~"])
+        || matches_parts(
+            command,
+            &["Set-~", "Multi~", "User~", "Auto~", "Erase~", "Schedule~"],
+        );
+    let manual_cleanup = [
+        &["Remove-~", "Wlan~", "Profile~"][..],
+        &["Clear-~", "All~", "Wireless~", "Profiles~"][..],
+        &["Clear-~", "Fixture~", "Wireless~", "Profiles~"][..],
+        &["Clear-~", "Browser~", "Footprints~"][..],
+        &["Clear-~", "Notepad~", "State~"][..],
+        &["Clear-~", "WSL~", "Data~"][..],
+        &["Clear-~", "Docker~", "Desktop~", "Data~"][..],
+        &["Clear-~", "Virtual~", "Machine~", "Artifacts~"][..],
+        &["Clear-~", "Developer~", "Caches~"][..],
+        &["Clear-~", "Credential~", "Manager~"][..],
+        &["Clear-~", "SSH~", "State~"][..],
+        &["Clear-~", "Password~", "Manager~", "Caches~"][..],
+    ]
+    .iter()
+    .any(|parts| matches_parts(command, parts));
+    for key in [
+        "AllowDefaultExcluded",
+        "ManagedByAutoSet",
+        "PreserveExisting",
+        "RunAsSystem",
+    ] {
+        if !schedule
+            && !(manual_cleanup && matches!(key, "AllowDefaultExcluded" | "ManagedByAutoSet"))
+        {
+            continue;
+        }
+        if let Some(raw) = params.get(key) {
+            let flag = match raw.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err(format!("{key} must be true or false")),
+            };
+            args.insert(key.into(), Value::Bool(flag));
+        }
+    }
     if matches_parts(command, &["Attach-~", "Stego~", "Container~"])
         || matches_parts(command, &["Restore-~", "Stego~", "Container~"])
         || matches_parts(command, &["Refresh-~", "Stego~", "Container~"])
@@ -46,6 +87,95 @@ mod tests {
 
     const MOUNT_COMMAND: &str = "Mount-EncryptionVolume";
     const REPAIR_PARAM: &str = "RepairCurrentAccountAccess";
+
+    #[test]
+    fn cleanup_consent_and_schedule_ownership_survive_string_transport() {
+        for command in ["Set-AutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
+            for flag in [false, true] {
+                let params = HashMap::from([
+                    ("AllowDefaultExcluded".into(), flag.to_string()),
+                    ("ManagedByAutoSet".into(), flag.to_string()),
+                    ("PreserveExisting".into(), flag.to_string()),
+                    ("RunAsSystem".into(), flag.to_string()),
+                    ("TargetUsers".into(), "true".into()),
+                ]);
+                let args = paid_command_args(command, &params).unwrap();
+                for key in [
+                    "AllowDefaultExcluded",
+                    "ManagedByAutoSet",
+                    "PreserveExisting",
+                    "RunAsSystem",
+                ] {
+                    assert_eq!(args[key].as_bool(), Some(flag), "{command}: {key}");
+                }
+                assert_eq!(args["TargetUsers"].as_str(), Some("true"));
+            }
+        }
+        for command in [
+            "Remove-WlanProfile",
+            "Clear-AllWirelessProfiles",
+            "Clear-FixtureWirelessProfiles",
+            "Clear-BrowserFootprints",
+            "Clear-NotepadState",
+            "Clear-WSLData",
+            "Clear-DockerDesktopData",
+            "Clear-VirtualMachineArtifacts",
+            "Clear-DeveloperCaches",
+            "Clear-CredentialManager",
+            "Clear-SSHState",
+            "Clear-PasswordManagerCaches",
+        ] {
+            let args = paid_command_args(
+                command,
+                &HashMap::from([("AllowDefaultExcluded".into(), "true".into())]),
+            )
+            .unwrap();
+            assert_eq!(
+                args["AllowDefaultExcluded"].as_bool(),
+                Some(true),
+                "{command}"
+            );
+            assert!(paid_command_args(command, &HashMap::new())
+                .unwrap()
+                .get("AllowDefaultExcluded")
+                .is_none());
+            for invalid in ["", "1", "True", " true ", "yes"] {
+                assert!(paid_command_args(
+                    command,
+                    &HashMap::from([("AllowDefaultExcluded".into(), invalid.into())])
+                )
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_flags_are_not_coerced_for_unrelated_or_aggregate_commands() {
+        let params = HashMap::from([("AllowDefaultExcluded".into(), "true".into())]);
+        for command in [
+            "Get-EncryptionStatus",
+            "run_destruct_step",
+            "Invoke-ForensicClearAllUsers",
+        ] {
+            assert_eq!(
+                paid_command_args(command, &params).unwrap()["AllowDefaultExcluded"].as_str(),
+                Some("true")
+            );
+        }
+        for command in ["Set-AutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
+            for key in [
+                "AllowDefaultExcluded",
+                "ManagedByAutoSet",
+                "PreserveExisting",
+                "RunAsSystem",
+            ] {
+                assert!(
+                    paid_command_args(command, &HashMap::from([(key.into(), "yes".into())]))
+                        .is_err()
+                );
+            }
+        }
+    }
 
     #[test]
     fn stego_replacement_confirmation_survives_the_string_transport() {
