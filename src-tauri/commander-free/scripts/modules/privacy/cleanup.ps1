@@ -26,6 +26,36 @@ function Clear-Clipboard {
     }
 }
 
+function Convert-CleanupClipboardHistoryResult {
+    param($Result)
+    if ($null -eq $Result) { return @{ status = 'unavailable'; items = @() } }
+    $status = [string]$Result.Status
+    if ($status -eq 'ClipboardHistoryDisabled') { return @{ status = 'disabled'; items = @() } }
+    if ($status -ne 'Success' -or $null -eq $Result.Items) { return @{ status = 'unavailable'; items = @() } }
+    # Record only the number of entries. Clipboard content may contain secrets.
+    $items = @($Result.Items | ForEach-Object { @{ type = 'item'; preview = '[Clipboard item]'; charCount = 0 } })
+    return @{ status = 'complete'; items = $items }
+}
+
+function Get-CleanupClipboardHistory {
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable'; items = @() } }
+        $asyncOp = [Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()
+        $resultTy = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]
+        $task = $asTask.MakeGenericMethod($resultTy).Invoke($null, @($asyncOp))
+        if (-not $task.Wait(2000)) { return @{ status = 'unavailable'; items = @() } }
+        return (Convert-CleanupClipboardHistoryResult -Result $task.Result)
+    } catch {
+        return @{ status = 'unavailable'; items = @() }
+    }
+}
+
 function Get-ClipboardHistoryStatus {
     try {
         $cb    = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -EA SilentlyContinue
@@ -36,52 +66,18 @@ function Get-ClipboardHistoryStatus {
         $histDisabled  = ($cb.EnableClipboardHistory -eq 0 -or $polH.AllowClipboardHistory    -eq 0)
         $cloudDisabled = ($cb.EnableCloudClipboard   -eq 0 -or $polC.AllowCrossDeviceClipboard -eq 0)
 
-        # Enumerate actual clipboard history items via WinRT (Windows 10 1809+).
-        # Falls back to an empty array gracefully if the API is unavailable.
-        $historyItems = @()
-        if (-not $histDisabled) {
-            try {
-                Add-Type -AssemblyName System.Runtime.WindowsRuntime -EA SilentlyContinue
-                $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-                $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-                $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-
-                $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-                    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
-                } | Select-Object -First 1
-
-                if ($asTask) {
-                    $asyncOp   = [Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()
-                    $resultTy  = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]
-                    $task      = $asTask.MakeGenericMethod($resultTy).Invoke($null, @($asyncOp))
-
-                    if ($task.Wait(2000) -and $task.Result -and $task.Result.Items) {
-                        $sdfText = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text
-                        foreach ($item in $task.Result.Items) {
-                            try {
-                                $dpv = $item.Content
-                                if ($dpv.Contains($sdfText)) {
-                                    $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($dpv.GetTextAsync()))
-                                    if ($textTask.Wait(500)) {
-                                        $raw     = $textTask.Result
-                                        $preview = ($raw -replace '[\r\n\t]+', ' ').Trim()
-                                        if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + '…' }
-                                        $historyItems += @{ type = 'text'; preview = $preview; charCount = $raw.Length }
-                                    }
-                                } else {
-                                    $historyItems += @{ type = 'other'; preview = '[Image or other content]'; charCount = 0 }
-                                }
-                            } catch {}
-                        }
-                    }
-                }
-            } catch {}
-        }
+        # A disabled setting alone does not establish whether stored history is
+        # empty. Only a successful inventory can establish the record count.
+        $history = Get-CleanupClipboardHistory
+        if ($history.status -eq 'disabled') { $histDisabled = $true }
 
         @{
             clipboardHistoryDisabled = $histDisabled
             cloudClipboardDisabled   = $cloudDisabled
-            historyItems             = $historyItems
+            historyItems             = @($history.items)
+            historyReadStatus        = $history.status
+            partial                  = ($history.status -ne 'complete')
+            message                  = if ($history.status -eq 'disabled') { 'Clipboard history is disabled and stored history could not be read.' } elseif ($history.status -ne 'complete') { 'Clipboard history could not be read.' } else { '' }
         }
     }
     catch {
@@ -2672,7 +2668,11 @@ function Get-AmcacheEntries {
             }
             $entries += @{ category = $cat.name; count = $count; sample = $sample }
         }
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = ($entries | Measure-Object -Property count -Sum).Sum }
+        # Windows PowerShell 5.1 resolves a hashtable's Count as its number
+        # of keys. Read the record-count key explicitly instead.
+        $totalCount = 0
+        foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = $totalCount }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -2817,7 +2817,8 @@ function Get-NTUserTraces {
         }
         $sections += @{ name = 'WordWheelQuery'; count = $wwq.Count; entries = $wwq }
 
-        $totalCount = ($sections | Measure-Object -Property count -Sum).Sum
+        $totalCount = 0
+        foreach ($section in $sections) { $totalCount += [int]$section['count'] }
         @{ sections = $sections; total = $totalCount }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -2908,12 +2909,16 @@ function Get-SQLiteWALList {
     # Uses -Depth 5 to avoid extremely deep recursive scans that can time out
     try {
         $found = @()
+        $limitReached = $false
         $roots = @($env:LOCALAPPDATA, $env:APPDATA)
         foreach ($root in $roots) {
-            if (-not (Test-Path $root)) { continue }
-            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -Force -ErrorAction SilentlyContinue |
+            try { $null = Get-Item -LiteralPath $root -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            $rootCount = 0
+            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -Force -ErrorAction Stop |
                 Select-Object -First 100 |
                 ForEach-Object {
+                    $rootCount++
                     $found += @{
                         name     = $_.Name
                         sizeKB   = [math]::Round($_.Length/1KB,1)
@@ -2921,8 +2926,15 @@ function Get-SQLiteWALList {
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                     }
                 }
+            if ($rootCount -ge 100) { $limitReached = $true }
         }
-        @{ files = $found; total = $found.Count; totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        @{
+            files = $found; total = $found.Count
+            totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
+            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5, with at most 100 matching files per root.'
+            partial = $limitReached; truncated = $limitReached
+            message = if ($limitReached) { 'A per-root limit was reached; additional matching files may exist.' } else { 'This count covers the stated depth-limited scope.' }
+        }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -2931,6 +2943,7 @@ function Get-RecallDatabaseInfo {
     # Returns Recall/Timeline/notification DB file listing
     try {
         $dbs = @()
+        $limitReached = $false
         $sources = @(
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\CoreAIPlatform.00" },
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\Microsoft\Windows\Recall" },
@@ -2938,20 +2951,29 @@ function Get-RecallDatabaseInfo {
             @{ label = 'ActionCenter'; path = "$env:LOCALAPPDATA\Microsoft\Windows\ActionCenter" }
         )
         foreach ($src in $sources) {
-            if (Test-Path $src.path) {
-                Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -Force -ErrorAction SilentlyContinue |
-                    Select-Object -First 100 |
-                    ForEach-Object {
-                        $dbs += @{
-                            source   = $src.label
-                            name     = $_.Name
-                            sizeKB   = [math]::Round($_.Length/1KB,1)
-                            modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                        }
+            try { $null = Get-Item -LiteralPath $src.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            $sourceCount = 0
+            Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -Force -ErrorAction Stop |
+                Select-Object -First 100 |
+                ForEach-Object {
+                    $sourceCount++
+                    $dbs += @{
+                        source   = $src.label
+                        name     = $_.Name
+                        sizeKB   = [math]::Round($_.Length/1KB,1)
+                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                     }
-            }
+                }
+            if ($sourceCount -ge 100) { $limitReached = $true }
         }
-        @{ databases = $dbs; total = $dbs.Count; totalSizeMB = [math]::Round(($dbs | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        @{
+            databases = $dbs; total = $dbs.Count
+            totalSizeMB = [math]::Round(($dbs | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
+            coverage = 'limited'; coverageNote = 'Scans four specified Recall, Timeline and notification locations, with at most 100 matching files per location.'
+            partial = $limitReached; truncated = $limitReached
+            message = if ($limitReached) { 'A per-location limit was reached; additional matching files may exist.' } else { 'This count covers the stated locations only.' }
+        }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -5589,6 +5611,24 @@ function Invoke-CleanupClearAllUsers {
 # Invoke-WithUserHive for offline users (requires admin).
 # ============================================================================
 
+function New-CleanupSummaryCategoryRecord {
+    param([string]$Category, [int]$Count, $items, $records, [string]$ScanError, [int]$previewMax)
+    # Both delegated current-user scans and direct other-user scans are scoped
+    # for these categories, even when they find no entries in that scope.
+    $limited = $Category -in @('walFiles', 'recallDb')
+    $record = @{
+        id = $Category; count = $Count
+        items = @($items | Select-Object -First $previewMax)
+        records = @($records | Select-Object -First $previewMax)
+        status = if ($ScanError) { 'error' } elseif ($limited) { 'scoped' } else { 'complete' }
+        error = [bool]$ScanError; message = $ScanError
+        sampleCount = @($records | Select-Object -First $previewMax).Count
+        previewLimit = $previewMax
+    }
+    if ($limited) { $record.coverage = 'limited' }
+    return $record
+}
+
 function Get-CleanupSummaryAllUsers {
     [CmdletBinding()]
     param(
@@ -6239,17 +6279,7 @@ function Get-CleanupSummaryAllUsers {
                     [pscustomobject]@{ entry = [string]$_ }
                 })
             }
-            $categories += @{
-                id      = $cat
-                count   = $count
-                items   = @($items | Select-Object -First $previewMax)
-                records = @($records | Select-Object -First $previewMax)
-                status = if ($scanError) { 'error' } else { 'complete' }
-                error = [bool]$scanError
-                message = $scanError
-                sampleCount = @($records | Select-Object -First $previewMax).Count
-                previewLimit = $previewMax
-            }
+            $categories += (New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax)
         }
 
         # Unload hive if we loaded it
