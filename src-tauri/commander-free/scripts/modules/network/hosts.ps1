@@ -17,7 +17,7 @@ function Invoke-WithHostsMutex {
 }
 
 function Get-HostsBlocklistNames {
-    return @('telemetry-blocklist', 'ai-sites', 'piracy-torrent', 'glasswire', 'lightburn', 'corel', 'adobe', 'autodesk', 'altium', 'solidworks', 'cloud-upload')
+    return @('telemetry-blocklist', 'ai-sites', 'piracy-torrent', 'glasswire', 'lightburn', 'corel', 'adobe', 'autodesk', 'altium', 'solidworks', 'cloud-upload', 'remote-access')
 }
 
 function Get-AppliedBlocklistsFromContent {
@@ -111,6 +111,6 @@ function Remove-BlocklistFromHosts {
 
 function Set-HostsRecommendedProtection {
     param([bool]$Enabled)
-    $names = @(Get-HostsBlocklistNames | Where-Object { $_ -notin @('piracy-torrent', 'cloud-upload', 'ai-sites') })
+    $names = @(Get-HostsBlocklistNames | Where-Object { $_ -notin @('piracy-torrent', 'cloud-upload', 'ai-sites', 'remote-access') })
     return Set-HostsBlocklist $names $Enabled 'Recommended hosts protection'
 }

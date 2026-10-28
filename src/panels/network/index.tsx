@@ -81,6 +81,7 @@ const BRAND_LOGOS: Record<string, string[]> = {
     'ai-sites': [companyLogos['openai-logo.svg'], companyLogos['meta-logo.png'], companyLogos['google-logo.svg']],
     'telemetry-blocklist': [companyLogos['microsoft-logo.svg'], companyLogos['nvidia-logo.svg'], companyLogos['google-logo.svg']],
     'cloud-upload': [companyLogos['google-logo.svg'], companyLogos['microsoft-logo.svg']],
+    'remote-access': [software['anydesk.png']],
 };
 
 const LOGOS_NEEDING_INVERSION = [
@@ -1077,7 +1078,7 @@ function NetworkSecurityControls() {
         }
     };
 
-    const group2Names = ['piracy-torrent', 'cloud-upload', 'ai-sites'];
+    const group2Names = ['piracy-torrent', 'cloud-upload', 'ai-sites', 'remote-access'];
     const group1 = status?.available?.filter(item => !group2Names.includes(item.name)) || [];
     const group2 = status?.available?.filter(item => group2Names.includes(item.name)) || [];
 
@@ -1194,7 +1195,7 @@ function NetworkSecurityControls() {
                                     <div className="blocklist-group">
                                         <div className="group-header">
                                             <span className="group-title">CONTENT FILTERING</span>
-                                            <span className="group-desc">Advanced blocks for AI, piracy, and cloud uploads</span>
+                                            <span className="group-desc">Optional blocks for AI, piracy, cloud uploads, and remote access</span>
                                         </div>
                                         <div className="blocklists-grid three-columns">
                                             {group2.map(item => (
