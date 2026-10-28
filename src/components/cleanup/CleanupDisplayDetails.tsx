@@ -1,0 +1,91 @@
+import { Button, Icon } from "@/components/ui/bp";
+import { useEffect, useRef } from "react";
+import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
+import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
+import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, isCleanupScheduleUnavailable, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+
+type DetailCategory = Pick<CleanupCategory, "id" | "label" | "description" | "icon" | "severity" | "systemWide" | "scopeAware" | "clearDataKey" | "confirmMessage" | "regeneratesNote" | "schedulable">;
+
+export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, verification, scopeLabel }: {
+  category: DetailCategory; mode: CleanupDisplayMode; count: number; items: string[]; rawData?: unknown; error?: string;
+  clearing: boolean; clearDisabled?: boolean; clearLabel: string; onClose: () => void; onClear?: () => void;
+  scheduleState?: "checking" | "verified" | "unavailable"; scheduleMinutes?: number | null;
+  verification?: CleanupVerification;
+  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
+  scopeLabel?: string;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    dialog?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
+      if (event.key !== "Tab" || !dialog) return;
+      const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+        .filter(element => element.getClientRects().length > 0);
+      if (!controls.length) { event.preventDefault(); dialog.focus(); return; }
+      const index = controls.indexOf(document.activeElement as HTMLElement);
+      if (event.shiftKey && index <= 0) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && (index === -1 || index === controls.length - 1)) { event.preventDefault(); controls[0].focus(); }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => { document.removeEventListener("keydown", handleKey); previous?.focus(); };
+  }, []);
+  const summary = groupedItems?.length && !error ? summarizeCleanupGroups(count, groupedItems) : summarizeCleanupResult({ id: category.id, count, items, raw: rawData, error });
+  const name = cleanupDisplayName(category, mode);
+  const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
+  const coverage = summary.state === "partial" ? "Incomplete" : raw?.coverage === "complete" ? "Reported complete" : "Not reported";
+  const receipt = cleanupVerificationText(verification);
+  const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
+  const dateValue = typeof raw?.scannedAt === "string" ? raw.scannedAt : typeof raw?.scanTime === "string" ? raw.scanTime : "";
+  const scanTime = dateValue && Number.isFinite(Date.parse(dateValue)) ? new Date(dateValue).toLocaleString() : "Not reported";
+  const taskStatus = scheduleState === "verified" && scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable || isCleanupScheduleUnavailable(category.id) ? "; new schedules unavailable" : ""}` :
+    !category.schedulable || isCleanupScheduleUnavailable(category.id) ? "Not available for this card" : scheduleState === "checking" ? "Checking" :
+      scheduleState === "verified" ? "Off" : "Not verified";
+  return (
+    <div ref={dialogRef} tabIndex={-1} className="trace-dialog" role="dialog" aria-modal="true" aria-label={`${name} details`}>
+      <div className="trace-dialog__panel cleanup-readable-detail">
+        <header className="trace-dialog__header">
+          <div className={`trace-dialog__icon trace-dialog__icon--${category.severity}`}><Icon icon={category.icon as never} size={18} /></div>
+          <div><h2>{name}</h2><p>{cleanupDisplayDescription(category, mode)}</p></div>
+          <div className="trace-dialog__actions"><Button icon="cross" minimal aria-label={`Dismiss ${name} details`} onClick={onClose} /></div>
+        </header>
+        <div className="cleanup-readable-detail__body">
+          <div className={`cleanup-readable-detail__result cleanup-readable-card__status--${summary.state}`} role="status">
+            <strong>{summary.message}</strong><span>{summary.nextStep}</span>
+          </div>
+          {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
+          {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
+          {summary.count !== null && summary.state !== "inconsistent" ? <p><strong>{summary.count} {cleanupCountUnit(category.id, summary.count)}</strong> reported by this scan.</p> : null}
+          {category.clearDataKey ? <p className="cleanup-readable-card__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
+          {mode === "simple" ? <p><strong>Last verification:</strong> {receipt}</p> : null}
+          {category.regeneratesNote ? <p>{category.regeneratesNote}</p> : null}
+          {mode === "advanced" ? <>
+            <dl className="cleanup-readable-detail__facts">
+              <div><dt>Source</dt><dd>{cleanupDisplayDescription(category, "advanced")}</dd></div>
+              <div><dt>Scope</dt><dd>{scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</dd></div>
+              <div><dt>Scan time</dt><dd>{scanTime}</dd></div>
+              <div><dt>Scan coverage</dt><dd>{coverage}</dd></div>
+              <div><dt>Task status</dt><dd>{taskStatus}</dd></div>
+              <div><dt>Verification</dt><dd>{receipt}{verifiedAt ? ` ${verifiedAt}` : ""}</dd></div>
+              <div><dt>Preview</dt><dd>{summary.sampleCount} {category.id === "amcache" ? "samples" : "rows"}{summary.previewLimited ? `; limited${summary.previewLimit !== null ? ` to ${summary.previewLimit}` : ""}` : " reported"}</dd></div>
+            </dl>
+            {summary.categories.length && ["found", "empty", "inconsistent"].includes(summary.state) ? <section aria-label="Record categories"><h3>Record categories</h3>
+              <div className="cleanup-readable-detail__table"><table><thead><tr><th>Category</th><th>Records</th><th>Preview samples</th></tr></thead><tbody>
+                {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples}</td></tr>)}
+              </tbody></table></div><p>Preview samples are a selection and may be fewer than the full record count.</p></section> : null}
+            {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
+            <p className="cleanup-readable-detail__privacy">Private record contents and credentials are not shown in this summary.</p>
+          </> : null}
+          {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p></section> : null}
+        </div>
+        <footer className="trace-dialog__footer"><Button text="Close" minimal onClick={onClose} />
+          {onClear ? <Button text={clearLabel} intent="danger" loading={clearing} disabled={clearDisabled || clearing || summary.state !== "found"} onClick={onClear} /> : null}
+        </footer>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,182 @@
+import type { CleanupCategory } from "./cleanupCategories";
+
+export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "inconsistent" | "empty" | "found";
+export type CleanupVerification = { status: "cleared" | "reduced" | "reset" | "unchanged" | "deferred" | "failed" | "unverified"; verifiedAt?: string };
+type RecordValue = Record<string, unknown>;
+const object = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
+
+const SIMPLE_NAMES: Record<string, string> = {
+  shellBags: "Folder history", usbHistory: "USB device history", dnsCache: "Web address cache",
+  execCache: "App execution history", netDrives: "Saved network drives", rdpHistory: "Remote desktop history",
+  jumpLists: "App recent and pinned items", prefetchFiles: "App startup history", shadowCopies: "Recovery snapshots",
+  ntfsJournals: "Drive change journals", amcache: "App launch records", ntUserTraces: "Windows activity history",
+  pcaDatabase: "App compatibility history", srumData: "Resource usage database", walFiles: "Temporary database files",
+  webCache: "Browser data store", branchCache: "Shared download cache", eventTranscript: "Diagnostics history",
+  rdpBitmapCache: "Remote desktop image cache", servicingLogs: "Windows update history logs", usageTraceLogs: "Device usage logs",
+  wslData: "Linux data on Windows", dockerDesktopData: "Docker data", virtualMachineArtifacts: "Virtual machine data",
+  inactiveUserProtectionMetadata: "Other users' encryption data", oneDriveMetadata: "OneDrive sync data",
+  communicationCaches: "Chat and meeting app caches", gitActivity: "Git credentials and activity", sshState: "SSH connections and keys",
+  neighborCache: "Nearby network devices", netbiosCache: "Local network name cache", geolocationCache: "Location cache",
+  vpnPhonebooks: "Saved VPN connections", proxyCache: "Proxy connection settings", cloudPlaceholders: "Cloud sync placeholders",
+  bitsQueue: "Background download queue", appLaunchHistory: "Programs launched", officeMru: "Office recent documents",
+  embeddedWebCache: "In-app browser data", p2pUpdateCache: "Shared update cache", explorerSearchHistory: "File Explorer searches",
+  searchPersonalization: "Search and typing history", unallocatedErase: "Erase free space", virtualMemory: "Memory files",
+};
+
+const SIMPLE_DESCRIPTIONS: Record<string, string> = {
+  dnsCache: "Recently looked-up website and network addresses.", execCache: "Records Windows keeps when programs run.",
+  prefetchFiles: "Files Windows uses to help apps start and records of recent starts.",
+  shadowCopies: "Saved recovery snapshots that can help restore files.", ntfsJournals: "A record of changes made on a drive.",
+  amcache: "Records Windows keeps about applications.", ntUserTraces: "Recent Run commands, typed paths and file picker history.",
+  srumData: "The local resource usage database file; individual history records are not shown.",
+  branchCache: "Copies of shared downloads stored on this device.", eventTranscript: "Windows diagnostics history.",
+  wslData: "Linux distributions and their local storage.", dockerDesktopData: "Docker containers, images, storage and logs.",
+  virtualMachineArtifacts: "Virtual machine snapshots, logs and settings.", inactiveUserProtectionMetadata: "Encryption data belonging to other Windows users.",
+  gitActivity: "Saved Git credentials and repository activity.", sshState: "Saved SSH host information and agent state.",
+  neighborCache: "Recently discovered devices and addresses on your network.", netbiosCache: "Names of devices recently found on your local network.",
+  cloudPlaceholders: "Local placeholders used by cloud storage applications.", bitsQueue: "Windows background transfers and their queue files.",
+  appLaunchHistory: "A Windows record of programs launched by users.", embeddedWebCache: "Browsing data stored inside other applications.",
+  p2pUpdateCache: "Update files stored for sharing with other devices.",
+};
+
+export function cleanupDisplayDescription(category: Pick<CleanupCategory, "id" | "description">, mode: "simple" | "advanced"): string {
+  if (category.id === "srumData") return SIMPLE_DESCRIPTIONS.srumData;
+  return mode === "simple" ? (SIMPLE_DESCRIPTIONS[category.id] ?? category.description) : category.description;
+}
+
+const CLEAR_EXPLANATIONS: Record<string, string> = {
+  wlanProfiles: "Removes saved Wi-Fi profiles. You may need to reconnect and enter their passwords again.",
+  browserFootprints: "Removes browser history, cookies and other saved browser data. This can sign you out and may remove saved passwords.",
+  notepadState: "Removes temporary Notepad state, including unsaved tabs.",
+  netDrives: "Removes saved network-drive connections. You may need to reconnect them.",
+  eventLogs: "Clears Windows event records, including records used for troubleshooting or security review.",
+  amcache: "Removes app launch records. Windows may create new records as programs run.",
+  psHistory: "Removes saved terminal command history.",
+  recentFiles: "Removes Windows recent-file shortcuts; it does not target the original files.",
+  jumpLists: "Removes app recent and pinned-item lists.",
+  printSpooler: "Removes temporary print queue files and may affect queued print jobs.",
+  ntfsJournals: "Requests a reset of drive change journals. Apps that rely on them may need to rescan.",
+  walFiles: "Removes temporary database files. Close affected apps first to reduce the risk of lost work.",
+  webCache: "Removes cached web data and cookies, which can sign you out.",
+  notificationDb: "Removes saved notification history.",
+  rdpBitmapCache: "Removes cached images from remote desktop sessions.",
+  officeMru: "Removes Office recent-document and trust records.",
+  embeddedWebCache: "Removes browser data stored by apps and can sign you out.",
+};
+
+export function cleanupClearExplanation(category: Pick<CleanupCategory, "id" | "description" | "confirmMessage">, mode: "simple" | "advanced"): string {
+  return CLEAR_EXPLANATIONS[category.id] ?? category.confirmMessage ?? `Requests removal of ${cleanupDisplayDescription(category, mode).replace(/[.]+$/, "").toLowerCase()}. Some items may return.`;
+}
+
+export function cleanupDisplayName(category: Pick<CleanupCategory, "id" | "label">, mode: "simple" | "advanced"): string {
+  return mode === "simple" ? (SIMPLE_NAMES[category.id] ?? category.label) : category.label;
+}
+
+export function cleanupCountUnit(id: string, count: number): string {
+  const units: Record<string, [string, string]> = {
+    amcache: ["record", "records"], eventLogs: ["event record", "event records"],
+    psHistory: ["command line", "command lines"], srumData: ["database file", "database files"],
+    appLaunchHistory: ["tracked program", "tracked programs"], ntfsJournals: ["active journal", "active journals"],
+  };
+  const [one, many] = units[id] ?? ["item", "items"];
+  return count === 1 ? one : many;
+}
+
+export function cleanupVerificationText(receipt?: CleanupVerification): string {
+  switch (receipt?.status) {
+    case "cleared": return "A fresh scan found no remaining items.";
+    case "reduced": return "A fresh scan found fewer items.";
+    case "reset": return "The reset was verified.";
+    case "unchanged": return "The fresh scan did not confirm a change.";
+    case "deferred": return "The action is pending; verify after restart.";
+    case "failed": return "The clear or verification failed.";
+    case "unverified": return "The result could not be verified by a fresh scan.";
+    default: return "No verification receipt reported.";
+  }
+}
+
+export function deriveCleanupVerification(input: { id: string; before: number; result: CleanupDisplaySummary; backendSucceeded: boolean; deferred: boolean }): Exclude<CleanupVerification["status"], "reset"> {
+  if (!input.backendSucceeded) return "failed";
+  if (input.deferred) return "deferred";
+  if (input.id === "ntfsJournals" || input.result.count === null || !["found", "empty"].includes(input.result.state)) return "unverified";
+  if (input.result.count === 0) return "cleared";
+  if (input.result.count < input.before) return "reduced";
+  return "unchanged";
+}
+
+const SCHEDULE_REASONS: Record<string, string> = {
+  wlanProfiles: "A verified Wi-Fi profile scheduler is not available.", browserFootprints: "A verified browser scheduler is not available.",
+  wslData: "Linux distribution targets need a verified scheduler.", dockerDesktopData: "Docker storage needs a verified local target.",
+  virtualMachineArtifacts: "Virtual machine snapshots need provider-aware checks.", credentialManager: "Saved credentials need a verified scheduler.",
+  inactiveUserProtectionMetadata: "Other users' encryption data needs an identity-bound decision.", gitActivity: "Git credentials need a verified scheduler.",
+  cloudPlaceholders: "Cloud files need provider-aware checks.", cellularHistory: "Mobile profiles need a verified reader.",
+  ntfsJournals: "Drive journals need a verified reset action.",
+};
+
+export function cleanupScheduleReason(id: string): string {
+  return SCHEDULE_REASONS[id] ?? "A reviewed scheduled action is not available for this card.";
+}
+
+export function isCleanupScheduleUnavailable(id: string): boolean {
+  return Object.hasOwn(SCHEDULE_REASONS, id);
+}
+
+const AM_CACHE_NAMES: Record<string, string> = {
+  InventoryApplication: "Applications", InventoryApplicationFile: "Application files",
+  InventoryApplicationShortcut: "Shortcuts", InventoryDeviceContainer: "Devices",
+  InventoryDriverBinary: "Drivers", Application: "Applications",
+};
+
+export interface CleanupDisplaySummary {
+  state: CleanupDisplayState;
+  message: string;
+  nextStep: string;
+  count: number | null;
+  sampleCount: number;
+  categories: Array<{ label: string; count: number; samples: number }>;
+  datasets: Array<{ label: string; rows: number }>;
+  previewLimited: boolean;
+  previewLimit: number | null;
+}
+
+export function summarizeCleanupGroups(count: number, groups: Array<{ count: number; items: string[] }>): CleanupDisplaySummary {
+  const base = { count: null, sampleCount: groups.reduce((sum, group) => sum + group.items.length, 0), categories: [], datasets: [], previewLimited: false, previewLimit: null };
+  if (!Number.isFinite(count) || count < 0 || groups.some(group => !Number.isFinite(group.count) || group.count < 0)) {
+    return { ...base, state: "partial", message: "Account scan incomplete", nextStep: "Review account coverage and scan again." };
+  }
+  if (!groups.length) return { ...base, state: "unavailable", message: "Account details unavailable", nextStep: "Scan again to verify the result." };
+  if (groups.reduce((sum, group) => sum + group.count, 0) !== count) return { ...base, state: "inconsistent", message: "Counts do not agree", nextStep: "Scan again before clearing." };
+  if (count === 0) return { ...base, count, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
+  return { ...base, count, state: "found", message: `${count} ${count === 1 ? "item" : "items"} reported`, nextStep: "Review the account breakdown before clearing." };
+}
+
+/** A display projection only. It never changes the scan data or authorizes an operation. */
+export function summarizeCleanupResult(input: { id: string; count: number; items?: string[]; raw?: unknown; error?: string; loading?: boolean }): CleanupDisplaySummary {
+  const raw = object(input.raw) ? input.raw : undefined;
+  const rows = input.id === "amcache" && Array.isArray(raw?.entries) ? raw.entries.filter(object) : [];
+  const categories = rows.map(row => ({
+    label: typeof row.category === "string" ? (AM_CACHE_NAMES[row.category] ?? "Other record category") : "Other record category",
+    count: typeof row.count === "number" && Number.isFinite(row.count) && row.count >= 0 ? row.count : -1,
+    samples: Array.isArray(row.sample) ? row.sample.length : 0,
+  }));
+  const datasetNames: Record<string, string> = { entries: "Entries", files: "Files", records: "Records", logs: "Log channels", sections: "Sections", devices: "Devices", journals: "Journals", browsers: "Browsers", profiles: "Profiles", copies: "Recovery copies", dumps: "Crash reports", databases: "Databases", processes: "Processes", paths: "Paths" };
+  const datasets = raw ? Object.entries(datasetNames).flatMap(([key, label]) => Array.isArray(raw[key]) ? [{ label, rows: (raw[key] as unknown[]).length }] : []) : [];
+  const sampleCount = categories.length ? categories.reduce((sum, row) => sum + row.samples, 0) : (input.items?.length ?? 0);
+  const previewLimit = typeof raw?.previewLimit === "number" && Number.isFinite(raw.previewLimit) && raw.previewLimit >= 0 ? raw.previewLimit : null;
+  const base = { count: Number.isFinite(input.count) && input.count >= 0 ? input.count : null, sampleCount, categories, datasets, previewLimited: raw?.truncated === true, previewLimit };
+  if (input.loading) return { ...base, state: "scanning", count: null, message: "Scan in progress", nextStep: "Wait for the scan to finish." };
+  if (input.error || raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
+  if (raw?.status === "unavailable") return { ...base, state: "unavailable", count: null, message: "Scan unavailable", nextStep: "Try again when the source is available." };
+  if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) return { ...base, state: "partial", count: null, message: "Scan incomplete", nextStep: "Review coverage and scan again." };
+  if (input.id === "amcache" && input.count >= 0 && raw && (!Array.isArray(raw.entries) || (input.count > 0 && !categories.length) || categories.some(row => row.count < 0) || categories.reduce((sum, row) => sum + row.count, 0) !== input.count || (typeof raw.total === "number" && raw.total !== input.count))) {
+    return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
+  }
+  if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
+  if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (typeof raw.total === "number" && Number.isFinite(raw.total) && raw.total !== input.count) return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
+  if (input.count > 0 && !Object.values(raw).some(Array.isArray) && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (input.count > 0 && datasets.length && datasets.every(dataset => dataset.rows === 0) && raw.truncated !== true && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (input.count === 0 && !Object.values(raw).some(Array.isArray) && raw.fileExists !== false && raw.hveFileExists !== false) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (input.count === 0) return { ...base, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
+  return { ...base, state: "found", message: `${input.count} ${cleanupCountUnit(input.id, input.count)} found`, nextStep: "Review details before clearing." };
+}
