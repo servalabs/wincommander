@@ -9,7 +9,7 @@ describe("Dashboard scheduled trace wipe finding", () => {
     const dashboard = await Bun.file("src/panels/dashboard/index.tsx").text();
 
     expect(dashboard).toContain("f.id === 'auto-schedule-wipes'");
-    expect(dashboard).toContain("ensureForensicTraceSchedules(setAutoEraseSchedule)");
+    expect(dashboard).toContain("ensureForensicTraceSchedules(setManagedAutoEraseSchedule, getAutoEraseSchedules)");
     expect(dashboard).toContain("invalidateDiskCleanupScheduleStatus()");
     expect(dashboard).toContain("summary.firstFailure");
   });

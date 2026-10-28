@@ -12,6 +12,8 @@ export interface DiskCleanupSchedule {
   categoryId: string;
   taskName: string;
   enabled: boolean;
+  state?: string;
+  scope?: "system" | "current-user" | "other-user";
   intervalMinutes: number;
   managedByAutoSet?: boolean;
   targetUser: string | null;

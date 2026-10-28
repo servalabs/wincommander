@@ -8,6 +8,8 @@ import useBackend from "../../hooks/useBackend";
 import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
+import { createCleanupScheduleReadGate } from "./cleanupScheduleReadGate";
+import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope } from "./cleanupScheduleReadback";
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
@@ -29,6 +31,7 @@ const SCHEDULE_CACHE_KEY = "wincommander.cleanup.schedule-cache.v1";
 // no cleanup card reads this synthetic id.
 const AUTO_SCHEDULE_TRIM_ID = "maintenanceTrim";
 const AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES = 1440;
+const CLEANUP_SCHEDULE_IDS = new Set([...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES].map(category => category.id).concat(AUTO_SCHEDULE_TRIM_ID));
 
 function readScheduleCache(): Record<string, number> {
     if (typeof window === "undefined") return {};
@@ -105,6 +108,7 @@ export interface CleanupClearReconciliation {
 export interface AutoSetScheduleSummary {
     created: number;
     alreadyConfigured: number;
+    disabledExisting: number;
     disabled: number;
     skipped: number;
     failed: number;
@@ -113,7 +117,7 @@ export interface AutoSetScheduleSummary {
 export const formatAutoSetScheduleSummary = (summary: AutoSetScheduleSummary) =>
     summary.disabled > 0
         ? `Scheduled wipes: ${summary.disabled} disabled, ${summary.skipped} skipped, ${summary.failed} failed.`
-        : `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.`;
+        : `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already active, ${summary.disabledExisting} existing but disabled, ${summary.skipped} skipped, ${summary.failed} failed.`;
 
 /**
  * A reduced post-clear count proves progress, but a failed cleaner cannot be
@@ -299,8 +303,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         clearDeviceInstallLogs,
         clearUsageTraceLogs,
         clearDefenderHistory,
-        setAutoEraseSchedule,
+        setIndividualAutoEraseSchedule,
+        setManagedAutoEraseSchedule,
         removeAutoEraseSchedule,
+        removeManagedAutoEraseSchedule,
         getAutoEraseSchedules,
         invokeAutoEraseMigration,
         getUserProfiles,
@@ -510,35 +516,30 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Render the last verified snapshot immediately. Task Scheduler remains
     // authoritative and replaces this cache silently after panel startup.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>(readScheduleCache);
+    const [disabledSchedulesById, setDisabledSchedulesById] = useState<Record<string, { intervalMinutes: number | null; managedByAutoSet: boolean; scope: CleanupScheduleScope }>>({});
     const [scheduleState, setScheduleState] = useState<"checking" | "verified" | "unavailable">("checking");
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const migrationStarted = useRef(false);
+    const scheduleReadGate = useRef(createCleanupScheduleReadGate());
 
     const refreshSchedules = async () => {
+        const ticket = scheduleReadGate.current.begin();
         setScheduleState("checking");
         let res;
         try { res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true); }
-        catch { setScheduleState("unavailable"); return null; }
+        catch { if (scheduleReadGate.current.isCurrent(ticket)) setScheduleState("unavailable"); return null; }
+        if (!scheduleReadGate.current.isCurrent(ticket)) return null;
         if (isCleanupCommandSuccessful(res) && Array.isArray(res.data?.schedules)) {
-            const map: Record<string, number> = {};
-            const autoSetIds = new Set<string>();
-            for (const s of res.data.schedules) {
-                // Multi-user tasks use suffixed task names and a targetUser.
-                // They must not make the current-profile card look scheduled.
-                if (s.targetUser) continue;
-                if (s.enabled && s.intervalMinutes > 0) {
-                    const uiId = s.categoryId === 'clipboard' ? 'clipboardHistory' : s.categoryId;
-                    map[uiId] = s.intervalMinutes;
-                    if (s.managedByAutoSet) autoSetIds.add(uiId);
-                }
-            }
-            setSchedulesById(map);
-            writeScheduleCache(map);
-            setAutoSetScheduleIds(autoSetIds);
+            const snapshot = readCleanupScheduleSnapshot(res.data.schedules, CLEANUP_SCHEDULE_IDS);
+            if (!snapshot) { setScheduleState("unavailable"); return null; }
+            setSchedulesById(snapshot.schedules);
+            setDisabledSchedulesById(snapshot.disabledSchedules);
+            writeScheduleCache(snapshot.schedules);
+            setAutoSetScheduleIds(snapshot.managedIds);
             setScheduleState("verified");
-            return map;
+            return snapshot;
         }
         setScheduleState("unavailable");
         return null;
@@ -590,25 +591,26 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     const handleSetSchedule = async (categoryId: string, minutes: number, runAsSystem: boolean) => {
         const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
-        if (!category?.schedulable || !schedulesEnabled) return false;
+        if (!category?.schedulable || !schedulesEnabled || scheduleState !== "verified") return false;
         const allowDefaultExcluded = isDefaultExcludedCleanup(categoryId);
         if (!await requestCleanupManualAuthorization(category, 'schedule', requestConfirm, minutes)) return false;
         setScheduleBusyId(categoryId);
         try {
             const schedulerId = getSchedulerCategoryId(categoryId);
-            const res = await setAutoEraseSchedule(schedulerId, minutes, runAsSystem, false, false, allowDefaultExcluded);
+            const res = await setIndividualAutoEraseSchedule(schedulerId, minutes, runAsSystem, allowDefaultExcluded);
             if (!isCleanupCommandSuccessful(res)) {
                 showError(res.error || `Failed to schedule auto-clean for ${category.label}`);
                 return false;
             }
             invalidateDiskCleanupScheduleStatus();
             const verified = await refreshSchedules();
-            const registeredMinutes = res.data?.intervalMinutes ?? minutes;
-            if (verified?.[categoryId] !== registeredMinutes) {
+            const registeredMinutes = res.data?.intervalMinutes;
+            const record = verified?.records[categoryId];
+            if (!isVerifiedIndividualSchedule(record, minutes, registeredMinutes, runAsSystem ? 'system' : 'current-user')) {
                 showError(`${category.label}: the enabled schedule could not be confirmed. Check Task Scheduler and retry.`);
                 return false;
             }
-            showSuccess(`Auto-clean scheduled every ${registeredMinutes} min for ${category.label}`);
+            showSuccess(`Auto-clean scheduled every ${minutes} min for ${category.label}`);
             return true;
         } finally {
             setScheduleBusyId(null);
@@ -626,7 +628,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             }
             invalidateDiskCleanupScheduleStatus();
             const verified = await refreshSchedules();
-            if (!verified || verified[categoryId] !== undefined) {
+            if (!verified || verified.records[categoryId] !== undefined) {
                 showError(`${categoryId}: schedule removal could not be confirmed. Check Task Scheduler and retry.`);
                 return false;
             }
@@ -939,6 +941,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const summary: AutoSetScheduleSummary = {
             created: 0,
             alreadyConfigured: 0,
+            disabledExisting: 0,
             disabled: 0,
             skipped: 0,
             failed: 0,
@@ -949,26 +952,24 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
 
         setAutoSetSchedulesBusy(true);
+        const createdIds: Array<{ id: string; interval: number; scope: CleanupScheduleScope }> = [];
+        const disabledIds: string[] = [];
+        const noOpRemovalIds: string[] = [];
+        const existingActiveIds: string[] = [];
+        const existingDisabledIds: string[] = [];
+        let verifyTrimCreation = false;
         try {
-            const scheduledIds = Object.keys(schedulesById);
-            if (scheduledIds.length > 0) {
-                const individuallyConfigured = scheduledIds.filter(id => !autoSetScheduleIds.has(id));
-                if (individuallyConfigured.length > 0) {
-                    const accepted = await requestConfirm({
-                        title: 'Turn off all scheduled wipes?',
-                        description: `This will remove ${scheduledIds.length} scheduled wipe${scheduledIds.length === 1 ? '' : 's'}, including ${individuallyConfigured.length} configured individually. You can set any of them again from its card.`,
-                        confirmLabel: 'Turn off all wipes',
-                    });
-                    if (!accepted) {
-                        summary.skipped = scheduledIds.length;
-                        return summary;
-                    }
-                }
-                for (const categoryId of scheduledIds) {
+            const managedIds = Array.from(autoSetScheduleIds);
+            if (managedIds.length > 0) {
+                for (const categoryId of managedIds) {
                     try {
-                        const res = await removeAutoEraseSchedule(getSchedulerCategoryId(categoryId));
-                        if (isCleanupCommandSuccessful(res)) summary.disabled++;
-                        else {
+                        // A distinct backend command fails closed against an older
+                        // sidecar and removes only tasks bearing the managed marker.
+                        const res = await removeManagedAutoEraseSchedule(getSchedulerCategoryId(categoryId));
+                        if (isCleanupCommandSuccessful(res) && Array.isArray(res.data?.removed)) {
+                            if (res.data.removed.length > 0) { summary.disabled++; disabledIds.push(categoryId); }
+                            else { summary.skipped++; noOpRemovalIds.push(categoryId); }
+                        } else {
                             summary.failed++;
                             firstFailure ??= res.error || `Failed to turn off ${categoryId}.`;
                         }
@@ -994,16 +995,19 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         cardDataMap[category.id]?.count,
                     );
                     try {
-                        const res = await setAutoEraseSchedule(
+                        const res = await setManagedAutoEraseSchedule(
                             getSchedulerCategoryId(category.id),
                             interval,
                             !!category.schedulerRunAsSystem,
-                            true,
-                            true,
                         );
                         if (isCleanupCommandSuccessful(res) && res.data?.status === "alreadyConfigured") {
-                            summary.alreadyConfigured++;
-                        } else if (isCleanupCommandSuccessful(res)) summary.created++;
+                            if (res.data.taskState === 'Disabled') { summary.disabledExisting++; existingDisabledIds.push(category.id); }
+                            else if (['Ready', 'Running', 'Queued'].includes(res.data.taskState ?? '')) { summary.alreadyConfigured++; existingActiveIds.push(category.id); }
+                            else { summary.failed++; firstFailure ??= `Existing schedule status for ${category.label} is unknown.`; }
+                        } else if (isCleanupCommandSuccessful(res)) {
+                            summary.created++;
+                            createdIds.push({ id: category.id, interval, scope: category.schedulerRunAsSystem ? 'system' : 'current-user' });
+                        }
                         else {
                             summary.failed++;
                             firstFailure ??= res.error || `Failed to schedule ${category.label}.`;
@@ -1018,17 +1022,19 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 // so it continues after navigating away from Cleanup or
                 // closing WinCommander.  The embedded action skips HDDs.
                 try {
-                    const trim = await setAutoEraseSchedule(
+                    const trim = await setManagedAutoEraseSchedule(
                         AUTO_SCHEDULE_TRIM_ID,
                         AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES,
-                        true,
-                        true,
                         true,
                     );
                     if (!isCleanupCommandSuccessful(trim)) {
                         summary.failed++;
                         firstFailure ??= trim.error || "Failed to schedule automatic SSD trim.";
-                    }
+                    } else if (trim.data?.status === 'alreadyConfigured') {
+                        if (trim.data.taskState === 'Disabled') { summary.disabledExisting++; existingDisabledIds.push(AUTO_SCHEDULE_TRIM_ID); }
+                        else if (['Ready', 'Running', 'Queued'].includes(trim.data.taskState ?? '')) { summary.alreadyConfigured++; existingActiveIds.push(AUTO_SCHEDULE_TRIM_ID); }
+                        else { summary.failed++; firstFailure ??= 'Existing SSD maintenance schedule status is unknown.'; }
+                    } else verifyTrimCreation = true;
                 } catch {
                     summary.failed++;
                     firstFailure ??= "Failed to schedule automatic SSD trim.";
@@ -1038,7 +1044,42 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             // Always re-read the source of truth so every clock icon reflects
             // both successful tasks and any pre-existing/manual configuration.
             invalidateDiskCleanupScheduleStatus();
-            try { await refreshSchedules(); } catch {}
+            let readback: Awaited<ReturnType<typeof refreshSchedules>> = null;
+            try { readback = await refreshSchedules(); } catch {}
+            for (const { id, interval, scope } of createdIds) {
+                if (!readback || !isVerifiedManagedSchedule(readback.records[id], interval, scope)) {
+                    summary.created--; summary.failed++;
+                    firstFailure ??= 'One or more created schedules could not be verified.';
+                }
+            }
+            for (const id of existingActiveIds) {
+                if (!readback?.records[id]?.enabled) {
+                    summary.alreadyConfigured--; summary.failed++;
+                    firstFailure ??= 'One or more existing schedules could not be verified as active.';
+                }
+            }
+            for (const id of existingDisabledIds) {
+                if (!readback?.records[id] || readback.records[id].enabled) {
+                    summary.disabledExisting--; summary.failed++;
+                    firstFailure ??= 'One or more existing schedules could not be verified as disabled.';
+                }
+            }
+            for (const id of disabledIds) {
+                if (!readback || readback.managedIds.has(id)) {
+                    summary.disabled--; summary.failed++;
+                    firstFailure ??= 'One or more removed schedules could not be verified.';
+                }
+            }
+            for (const id of noOpRemovalIds) {
+                if (!readback || readback.managedIds.has(id)) {
+                    summary.skipped--; summary.failed++;
+                    firstFailure ??= 'One or more schedules could not be confirmed as off.';
+                }
+            }
+            if (verifyTrimCreation && (!readback || !isVerifiedManagedSchedule(readback.records[AUTO_SCHEDULE_TRIM_ID], AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES, 'system'))) {
+                summary.failed++;
+                firstFailure ??= 'The SSD maintenance schedule could not be verified.';
+            }
             setAutoSetSchedulesBusy(false);
         }
 
@@ -1218,7 +1259,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
         const accepted = await requestConfirm({
             title: `Clear ${cat.label} for all users?`,
-            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all ${availableUsers.length} user profiles on this machine? This cannot be undone.`,
+            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all user profiles the backend can access? The ${availableUsers.length} detected profiles shown here may not include every account; this action may affect profiles beyond the list. This cannot be undone.`,
             confirmLabel: "Clear all users",
         });
         if (!accepted) return;
@@ -1258,9 +1299,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleOtherUserClear,
         handleCardClearAllUsers,
         schedulesById,
+        disabledSchedulesById,
         scheduleState,
         refreshSchedules,
-        hasScheduledWipes: scheduleState === "verified" && Object.keys(schedulesById).length > 0,
+        hasScheduledWipes: scheduleState === "verified" && autoSetScheduleIds.size > 0,
         scheduleBusyId,
         autoSetSchedulesBusy,
         handleSetSchedule,

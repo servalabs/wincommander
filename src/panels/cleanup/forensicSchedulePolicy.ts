@@ -1,5 +1,9 @@
 import { SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
+import { isAutomaticCleanupExcluded, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
+import { isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleRow, type CleanupScheduleScope } from "./cleanupScheduleReadback";
+
+const NO_ADDITIONAL_EXCLUSIONS = new Set<string>();
 
 export interface AutoEraseScheduleSnapshot {
   categoryId: string;
@@ -11,6 +15,7 @@ export interface AutoEraseScheduleSnapshot {
 export interface ForensicScheduleSummary {
   created: number;
   alreadyConfigured: number;
+  disabledExisting: number;
   skipped: number;
   failed: number;
   firstFailure?: string;
@@ -20,9 +25,8 @@ export type AutoEraseScheduleWriter = (
   categoryId: string,
   intervalMinutes: number,
   runAsSystem: boolean,
-  preserveExisting: boolean,
-  managedByAutoSet: boolean,
-) => Promise<{ success: boolean; error?: string; data?: { status?: string } }>;
+) => Promise<{ success: boolean; error?: string; data?: { status?: string; taskState?: string } }>;
+export type AutoEraseScheduleReader = () => Promise<{ success: boolean; error?: string; data?: { schedules: CleanupScheduleRow[] } }>;
 
 // The auto-schedule path is deliberately narrower than Cleanup's category
 // catalogue. These are the only recurring clears reviewed as forensic traces;
@@ -96,7 +100,9 @@ export function getForensicTraceScheduleCategories(
       && FORENSIC_SCHEDULE_ALLOWED_IDS.has(schedulerId)
       && category.usabilityTier !== "data-accounts-recovery"
       && !FORENSIC_SCHEDULE_PROTECTED_IDS.has(category.id)
-      && !FORENSIC_SCHEDULE_PROTECTED_IDS.has(schedulerId);
+      && !FORENSIC_SCHEDULE_PROTECTED_IDS.has(schedulerId)
+      && !isAutomaticCleanupExcluded(category.id, NO_ADDITIONAL_EXCLUSIONS)
+      && !isAutomaticCleanupExcluded(schedulerId, NO_ADDITIONAL_EXCLUSIONS);
   });
 }
 
@@ -118,18 +124,23 @@ export function getMissingForensicTraceScheduleCategories(
   );
 }
 
-/** Adds only missing trace schedules; preserveExisting keeps manual cadences intact. */
+/** Uses the managed-only backend command, which preserves existing schedules. */
 export async function ensureForensicTraceSchedules(
   writeSchedule: AutoEraseScheduleWriter,
+  readSchedules: AutoEraseScheduleReader,
   categories: CleanupCategory[] = getForensicTraceScheduleCategories(),
 ): Promise<ForensicScheduleSummary> {
   const eligibleCategories = getForensicTraceScheduleCategories(categories);
   const summary: ForensicScheduleSummary = {
     created: 0,
     alreadyConfigured: 0,
+    disabledExisting: 0,
     skipped: categories.length - eligibleCategories.length,
     failed: 0,
   };
+  const created: Array<{ id: string; interval: number; scope: CleanupScheduleScope }> = [];
+  const existingActive: string[] = [];
+  const existingDisabled: string[] = [];
 
   for (const category of eligibleCategories) {
     if (!category.schedulable || !category.clearDataKey) {
@@ -138,17 +149,19 @@ export async function ensureForensicTraceSchedules(
     }
 
     try {
+      const interval = getAutoScheduleInterval(category, undefined);
       const result = await writeSchedule(
         category.schedulerCategoryId ?? category.id,
-        getAutoScheduleInterval(category, undefined),
+        interval,
         category.schedulerRunAsSystem === true,
-        true,
-        true,
       );
-      if (result.success && result.data?.status === "alreadyConfigured") {
-        summary.alreadyConfigured++;
-      } else if (result.success) {
+      if (isCleanupCommandSuccessful(result) && result.data?.status === "alreadyConfigured") {
+        if (result.data.taskState === "Disabled") { summary.disabledExisting++; existingDisabled.push(category.id); }
+        else if (["Ready", "Running", "Queued"].includes(result.data.taskState ?? "")) { summary.alreadyConfigured++; existingActive.push(category.id); }
+        else { summary.failed++; summary.firstFailure ??= `Existing schedule status for ${category.label} is unknown.`; }
+      } else if (isCleanupCommandSuccessful(result)) {
         summary.created++;
+        created.push({ id: category.id, interval, scope: category.schedulerRunAsSystem ? "system" : "current-user" });
       } else {
         summary.failed++;
         summary.firstFailure ??= result.error || `Failed to schedule ${category.label}.`;
@@ -156,6 +169,31 @@ export async function ensureForensicTraceSchedules(
     } catch (error) {
       summary.failed++;
       summary.firstFailure ??= error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (created.length || existingActive.length || existingDisabled.length) {
+    let snapshot: ReturnType<typeof readCleanupScheduleSnapshot> = null;
+    try {
+      const readback = await readSchedules();
+      if (isCleanupCommandSuccessful(readback) && Array.isArray(readback.data?.schedules)) {
+        snapshot = readCleanupScheduleSnapshot(readback.data.schedules, new Set(eligibleCategories.map(category => category.id)));
+      }
+    } catch { /* An unavailable readback cannot verify a schedule. */ }
+    for (const { id, interval, scope } of created) {
+      if (!snapshot || !isVerifiedManagedSchedule(snapshot.records[id], interval, scope)) {
+        summary.created--; summary.failed++; summary.firstFailure ??= "A created schedule could not be verified.";
+      }
+    }
+    for (const id of existingActive) {
+      if (!snapshot?.records[id]?.enabled) {
+        summary.alreadyConfigured--; summary.failed++; summary.firstFailure ??= "An existing schedule could not be verified as active.";
+      }
+    }
+    for (const id of existingDisabled) {
+      if (!snapshot?.records[id] || snapshot.records[id].enabled) {
+        summary.disabledExisting--; summary.failed++; summary.firstFailure ??= "An existing schedule could not be verified as disabled.";
+      }
     }
   }
 

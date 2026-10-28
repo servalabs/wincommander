@@ -1526,7 +1526,7 @@ fn get_required_frontend_module(command: &str) -> Option<&'static str> {
         // Belongs to the privacy-clean module gate, not privacyShield,
         // because the picker lives in the Privacy Clean panel and
         // each schedule maps 1:1 to a privacy-clean trace category.
-        | "Set-AutoEraseSchedule" | "Remove-AutoEraseSchedule"
+        | "Set-AutoEraseSchedule" | "Set-IndividualAutoEraseSchedule" | "Set-ManagedAutoEraseSchedule" | "Remove-AutoEraseSchedule" | "Remove-ManagedAutoEraseSchedule"
         | "Get-AutoEraseSchedules" | "Get-AutoEraseSupportedCategories"
         | "Invoke-AutoEraseMigration"
         // ── Multi-user scheduler + cleanup ────────────────────────
@@ -1681,7 +1681,7 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         // the panel can't render existing schedules until the Pro
         // sidecar has warm-started after a reboot, leaving the clock
         // icons blank on cold boot.
-        | "Set-AutoEraseSchedule" | "Remove-AutoEraseSchedule"
+        | "Set-AutoEraseSchedule" | "Set-IndividualAutoEraseSchedule" | "Set-ManagedAutoEraseSchedule" | "Remove-AutoEraseSchedule" | "Remove-ManagedAutoEraseSchedule"
         | "Invoke-AutoEraseMigration"
         // ── Multi-user scheduler (paid · A I F) ── same tier as single-user
         | "Set-MultiUserAutoEraseSchedule" | "Remove-MultiUserAutoEraseSchedule"
@@ -1834,6 +1834,15 @@ mod command_tier_tests {
         assert_eq!(get_command_tier("Get-EncryptedBackupTargetStatus"), "paid");
         assert_eq!(get_command_tier("Provision-EncryptedBackupTarget"), "paid");
         assert_eq!(get_command_tier("Clear-EncryptedBackupTarget"), "paid");
+    }
+
+    #[test]
+    fn managed_cleanup_schedule_commands_remain_paid_and_cleanup_gated() {
+        for command in ["Set-IndividualAutoEraseSchedule", "Set-ManagedAutoEraseSchedule", "Remove-ManagedAutoEraseSchedule"] {
+            assert_eq!(get_command_tier(command), "paid");
+            assert_eq!(get_required_frontend_module(command), Some("cleanup"));
+            assert_eq!(get_module_for_command(command), Some("privacy/cleanup"));
+        }
     }
 
     #[test]
@@ -2019,7 +2028,10 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-CloudClipboardSync" => Some("privacy/cleanup"),
         "Enable-CloudClipboardSync" => Some("privacy/cleanup"),
         "Set-AutoEraseSchedule" => Some("privacy/cleanup"),
+        "Set-IndividualAutoEraseSchedule" => Some("privacy/cleanup"),
+        "Set-ManagedAutoEraseSchedule" => Some("privacy/cleanup"),
         "Remove-AutoEraseSchedule" => Some("privacy/cleanup"),
+        "Remove-ManagedAutoEraseSchedule" => Some("privacy/cleanup"),
         "Get-AutoEraseSchedules" => Some("privacy/cleanup"),
         "Get-AutoEraseSupportedCategories" => Some("privacy/cleanup"),
         "Invoke-AutoEraseMigration" => Some("privacy/cleanup"),
@@ -4567,10 +4579,12 @@ mod param_env_tests {
     fn value_types_are_coerced() {
         let mut p = HashMap::new();
         p.insert("flag".into(), "true".into());
+        p.insert("IncludeSecrets".into(), "false".into());
         p.insert("count".into(), "42".into());
         p.insert("name".into(), "hello".into());
         let parsed: serde_json::Value = serde_json::from_str(&params_to_json_env(&p)).unwrap();
         assert_eq!(parsed["flag"], serde_json::json!(true));
+        assert_eq!(parsed["IncludeSecrets"], serde_json::json!(false));
         assert_eq!(parsed["count"], serde_json::json!(42));
         assert_eq!(parsed["name"], serde_json::json!("hello"));
     }

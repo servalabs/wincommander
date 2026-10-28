@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 $catalogOutput = & bun -e "import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES } from './src/panels/cleanup/cleanupCategories.ts'; console.log(JSON.stringify([...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES].map(c => ({id:c.id,schedulable:!!c.schedulable,schedulerId:c.schedulerCategoryId,min:c.minIntervalMinutes,system:!!c.schedulerRunAsSystem}))))"
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the public cleanup catalog.' }
 $catalog = $catalogOutput | ConvertFrom-Json
+$manualOnlyOutput = & bun -e "import { MANUAL_ONLY_SCHEDULE_IDS } from './src/panels/cleanup/cleanupManualPolicy.ts'; console.log(JSON.stringify(MANUAL_ONLY_SCHEDULE_IDS))"
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the manual-only scheduling policy.' }
+$frontendManualOnly = @($manualOnlyOutput | ConvertFrom-Json)
+if (@(Compare-Object ($frontendManualOnly | Sort-Object) ($script:AutoEraseManualOnlyCategories | Sort-Object)).Count) { throw 'Frontend/backend manual-only schedule policies differ.' }
 $catalogIds = @($catalog | ForEach-Object id)
 $support = Get-AutoEraseSupportedCategories
 $manual = @($support.schedulableCategories)
@@ -30,4 +34,5 @@ foreach ($id in $script:AutoEraseScripts.Keys) {
     if ($parseErrors.Count) { throw "Payload syntax is invalid for $id" }
 }
 if (@($support.categories | Where-Object { $_ -in $script:AutoEraseProtectedCategories }).Count) { throw 'Auto-set advertises a default-excluded card.' }
+if (@($support.categories | Where-Object { $_ -in $script:AutoEraseManualOnlyCategories }).Count) { throw 'Auto-set advertises an individual-only card.' }
 Write-Output "Passed: all 80 cards classified; $($manual.Count) manual payloads, $($support.categories.Count) auto-set, $($unsupported.Count) explicit unsupported reasons; unique task codes and valid payload syntax."

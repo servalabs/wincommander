@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'auto-erase.ps1')
 function Assert-AutoEraseAdmin {}
+function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) $script:locks += $CategoryId; & $Operation }
+$script:locks = @()
 function Initialize-SystemMaintenanceTaskFolder {}
 function ConvertTo-AutoEraseComparableTaskXml { param([xml]$Document) $Document }
 function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId=$Task.Category; ownerSid='S-1-5-21-1-2-3-1001'; taskName=$Task.TaskName } }
@@ -59,4 +61,5 @@ $script:task.Category = 'browserFootprints'; $script:task.State = 'Ready'
 $script:task.TaskName = 'ProtectedSyntheticTask'; $script:registrations = 0
 $result = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($result.error -or $script:disabled.Count -ne 1 -or $script:registrations -or $result.disabledProtected.Count -ne 1) { throw 'Protected legacy task was not disabled without rewriting its payload.' }
+if ($script:locks.Count -ne 2 -or $script:locks[0] -ne 'dnsCache' -or $script:locks[1] -ne 'browserFootprints') { throw 'Migration did not acquire the category lock.' }
 Write-Output 'Passed: v4 payload upgrade preserves interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'

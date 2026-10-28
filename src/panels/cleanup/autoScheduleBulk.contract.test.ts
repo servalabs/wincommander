@@ -10,17 +10,17 @@ describe("Auto-set scheduled wipes frontend contract", () => {
 
     expect(scan).toContain("SCHEDULABLE_CATEGORIES");
     expect(scan).toContain("if (!category.schedulable || !category.clearDataKey || isAutomaticCleanupExcluded(category.id, clearAllExcludes))");
-    expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
+    expect(scan).toContain("const managedIds = Array.from(autoSetScheduleIds)");
     expect(scan).toContain("summary.alreadyConfigured++");
     expect(scan).toContain('res.data?.status === "alreadyConfigured"');
-    expect(scan).toContain("!!category.schedulerRunAsSystem,\n                            true,\n                            true,");
+    expect(scan).toContain("setManagedAutoEraseSchedule(");
   });
 
   test("uses category policy, the existing backend scheduler, and refreshes card clocks", async () => {
     const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("getAutoScheduleInterval(");
-    expect(scan).toContain("setAutoEraseSchedule(");
+    expect(scan).toContain("setManagedAutoEraseSchedule(");
     expect(scan).toContain("!!category.schedulerRunAsSystem");
     expect(scan).toContain("await refreshSchedules()");
   });
@@ -31,7 +31,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("SCHEDULE_CACHE_KEY");
     expect(scan).toContain("useState<Record<string, number>>(readScheduleCache)");
     expect(scan).toContain("void refreshSchedules()");
-    expect(scan).toContain("writeScheduleCache(map)");
+    expect(scan).toContain("writeScheduleCache(snapshot.schedules)");
   });
 
   test("reports every outcome, including backend failures", async () => {
@@ -47,16 +47,15 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("if (summary.failed > 0) showError(message)");
   });
 
-  test("turns off all scheduled wipes, confirming before removing individual schedules", async () => {
+  test("turns off only Auto-set-managed scheduled wipes", async () => {
     const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
     const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text().then(text => text.replace(/\r\n/g, "\n"));
 
-    expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
-    expect(scan).toContain("Turn off all scheduled wipes?");
-    expect(scan).toContain("Turn off all wipes");
-    expect(scan).toContain("removeAutoEraseSchedule(getSchedulerCategoryId(categoryId))");
+    expect(scan).toContain("const managedIds = Array.from(autoSetScheduleIds)");
+    expect(scan).toContain("removeManagedAutoEraseSchedule(getSchedulerCategoryId(categoryId))");
+    expect(scan).toContain("autoSetScheduleIds.size > 0");
     expect(scheduler).toContain("[switch]$ManagedByAutoSet");
-    expect(scheduler).toContain("managedByAutoSet =");
+    expect(scheduler).toContain("managedByAutoSet = (Test-AutoEraseManagedTask $t)");
     expect(scheduler).toContain("$identity.ownerSid -notin @($currentSid, 'S-1-5-18')");
   });
 

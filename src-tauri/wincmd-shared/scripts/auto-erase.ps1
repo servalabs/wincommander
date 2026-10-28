@@ -951,6 +951,17 @@ $script:AutoEraseProtectedCategories = @(
     'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches',
     'credentialManager', 'sshState', 'passwordManagerCaches'
 )
+# Newly supported cards require a per-card schedule; the bulk shortcut must
+# never create these tasks, even when a client bypasses the UI. Keep this list
+# in sync with MANUAL_ONLY_SCHEDULE_IDS in cleanupManualPolicy.ts.
+$script:AutoEraseManualOnlyCategories = @(
+    'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'recallDb',
+    'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
+    'spotlightCache', 'fontCache', 'legacyIconCache', 'gameCaptures', 'photosCache', 'xboxCache',
+    'communicationCaches', 'editorHistory', 'sshState', 'remoteAccessLogs', 'passwordManagerCaches',
+    'gameLauncherLogs', 'adobeRecent', 'officeTempFiles', 'neighborCache', 'netbiosCache',
+    'geolocationCache', 'vpnPhonebooks', 'proxyCache', 'bitsQueue'
+)
 $script:AutoEraseUnsupportedCategories = [ordered]@{
     wslData = 'Requires distribution unregister and lifecycle verification.'
     dockerDesktopData = 'Requires Docker and virtual-disk lifecycle verification.'
@@ -967,7 +978,7 @@ $script:AutoEraseUnsupportedCategories = [ordered]@{
 function Get-AutoEraseSupportedCategories {
     $all = @($script:AutoEraseScripts.Keys | Where-Object { $_ -notin @('maintenanceTrim','diskCleanup') -and -not $script:AutoEraseUnsupportedCategories.Contains($_) } | ForEach-Object { if ($_ -eq 'clipboard') { 'clipboardHistory' } else { $_ } } | Sort-Object)
     @{
-        categories = @($all | Where-Object { $_ -notin $script:AutoEraseProtectedCategories })
+        categories = @($all | Where-Object { $_ -notin $script:AutoEraseProtectedCategories -and $_ -notin $script:AutoEraseManualOnlyCategories })
         schedulableCategories = $all
         unsupportedCategories = @($script:AutoEraseUnsupportedCategories.Keys | ForEach-Object { @{ categoryId=$_; reason=$script:AutoEraseUnsupportedCategories[$_] } })
     }
@@ -1304,7 +1315,26 @@ function Get-AutoEraseTaskIdentity {
     @{ categoryId = $category; ownerSid = $sid; taskName = $canonical }
 }
 
-function Set-AutoEraseSchedule {
+function Invoke-AutoEraseScheduleLock {
+    param([string]$CategoryId, [scriptblock]$Operation)
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    try { $code = Get-AutoEraseCategoryCode $CategoryId }
+    catch { return @{ error = $true; message = 'Unknown cleanup schedule category.' } }
+    $mutex = $null; $acquired = $false
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, "Global\WinCommander.CleanupSchedule.$code")
+        try { $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds(15)) }
+        catch [System.Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { return @{ error = $true; message = 'Another schedule update is still in progress.' } }
+        & $Operation
+    } catch { @{ error = $true; message = "Could not safely update the cleanup schedule: $($_.Exception.Message)" } }
+    finally {
+        if ($acquired -and $mutex) { try { $mutex.ReleaseMutex() } catch {} }
+        if ($mutex) { $mutex.Dispose() }
+    }
+}
+
+function Set-AutoEraseScheduleCore {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string]$CategoryId,
@@ -1324,6 +1354,9 @@ function Set-AutoEraseSchedule {
         [switch]$AllowDefaultExcluded
     )
     if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    if ($ManagedByAutoSet -and $CategoryId -in $script:AutoEraseManualOnlyCategories) {
+        return @{ error = $true; message = "Category '$CategoryId' requires an individual schedule and cannot be auto-set" }
+    }
     if ($CategoryId -in $script:AutoEraseProtectedCategories -and ($ManagedByAutoSet -or -not $AllowDefaultExcluded)) {
         return @{ error = $true; message = "Category '$CategoryId' requires explicit per-card authorization and cannot be auto-set" }
     }
@@ -1346,7 +1379,7 @@ function Set-AutoEraseSchedule {
 
     try {
         $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
-        $migration = Invoke-AutoEraseMigration -CategoryId $CategoryId
+        $migration = Invoke-AutoEraseMigrationCore -CategoryId $CategoryId
         if ($migration.error) { throw $migration.message }
         Initialize-SystemMaintenanceTaskFolder
         $taskName = Get-AutoEraseTaskName $CategoryId $ownerSid
@@ -1363,6 +1396,7 @@ function Set-AutoEraseSchedule {
                 intervalMinutes = $IntervalMinutes
                 runAsSystem     = [bool]$RunAsSystem
                 targetUser      = $TargetUser
+                taskState       = [string]$existing.State
             }
         }
 
@@ -1433,6 +1467,66 @@ function Set-AutoEraseSchedule {
     }
 }
 
+function Set-AutoEraseSchedule {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$CategoryId,
+        [Parameter(Mandatory)] [int]$IntervalMinutes,
+        [bool]$RunAsSystem = $false,
+        [string]$TargetUser = $env:USERNAME,
+        [switch]$PreserveExisting,
+        [switch]$ManagedByAutoSet,
+        [switch]$AllowDefaultExcluded
+    )
+    $forward = @{ CategoryId=$CategoryId; IntervalMinutes=$IntervalMinutes; RunAsSystem=$RunAsSystem; TargetUser=$TargetUser; PreserveExisting=[bool]$PreserveExisting; ManagedByAutoSet=[bool]$ManagedByAutoSet; AllowDefaultExcluded=[bool]$AllowDefaultExcluded }
+    Invoke-AutoEraseScheduleLock -CategoryId $CategoryId -Operation { Set-AutoEraseScheduleCore @forward }
+}
+
+# This separate command rejects an older sidecar that cannot enforce explicit
+# per-card consent for a default-excluded target.
+function Set-IndividualAutoEraseSchedule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$CategoryId, [Parameter(Mandatory)] [int]$IntervalMinutes, [bool]$RunAsSystem = $false, [switch]$AllowDefaultExcluded)
+    Set-AutoEraseSchedule -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -RunAsSystem $RunAsSystem -AllowDefaultExcluded:$AllowDefaultExcluded
+}
+
+# This separate command prevents an older sidecar from silently ignoring the
+# flags that protect existing individual tasks during Auto-set.
+function Set-ManagedAutoEraseSchedule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$CategoryId, [Parameter(Mandatory)] [int]$IntervalMinutes, [bool]$RunAsSystem = $false)
+    Invoke-AutoEraseScheduleLock -CategoryId $CategoryId -Operation {
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    if ($CategoryId -in $script:AutoEraseProtectedCategories -or $CategoryId -in $script:AutoEraseManualOnlyCategories) {
+        return @{ error = $true; message = "Category '$CategoryId' requires an individual schedule and cannot be auto-set" }
+    }
+    if ($script:AutoEraseUnsupportedCategories.Contains($CategoryId) -or -not $script:AutoEraseScripts.ContainsKey($CategoryId)) {
+        return @{ error = $true; message = "Category '$CategoryId' is not supported for auto-erase" }
+    }
+    if ($IntervalMinutes -lt 1 -or ($CategoryId -in $script:AutoEraseHourlyCategories -and $IntervalMinutes -lt 60)) {
+        return @{ error = $true; message = 'The requested schedule interval is invalid.' }
+    }
+    Assert-AutoEraseAdmin
+    try {
+        # Preserve a current-user OR SYSTEM task for this category, including
+        # disabled tasks, before choosing an execution account for the new task.
+        $currentSid = Resolve-AutoEraseSid $env:USERNAME
+        $existingTasks = @()
+        foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+            $identity = Get-AutoEraseTaskIdentity $task
+            if ($identity -and $identity.categoryId -eq $CategoryId -and $identity.ownerSid -in @($currentSid, 'S-1-5-18')) { $existingTasks += $task }
+        }
+        if ($existingTasks.Count -gt 1) { return @{ error = $true; message = 'Multiple existing schedules need review before Auto-set.' } }
+        if ($existingTasks.Count -eq 1) {
+            $state = [string]$existingTasks[0].State
+            if ($state -notin @('Ready', 'Running', 'Queued', 'Disabled')) { return @{ error = $true; message = 'Existing schedule state could not be verified.' } }
+            return @{ status = 'alreadyConfigured'; categoryId = $CategoryId; taskState = $state; taskName = $existingTasks[0].TaskName }
+        }
+    } catch { return @{ error = $true; message = "Could not verify existing schedules for '$CategoryId': $($_.Exception.Message)" } }
+    Set-AutoEraseScheduleCore -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -RunAsSystem $RunAsSystem -PreserveExisting -ManagedByAutoSet
+    }
+}
+
 # Set-MultiUserAutoEraseSchedule: create one scheduled task per target user
 # per category. Each task runs as that user's S4U context so $env:APPDATA
 # and HKCU resolve correctly without any hive loading.
@@ -1450,6 +1544,12 @@ function Set-MultiUserAutoEraseSchedule {
         [switch]$AllowDefaultExcluded
     )
     if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
+    # Bulk setup has no cross-user UI and cannot safely preserve every user's
+    # existing choice through this legacy path. Require per-user setup instead.
+    if ($ManagedByAutoSet) { return @{ error = $true; status = 'failed'; message = 'Managed multi-user schedules are not supported.' } }
+    if ($ManagedByAutoSet -and $CategoryId -in $script:AutoEraseManualOnlyCategories) {
+        return @{ error = $true; message = "Category '$CategoryId' requires an individual schedule and cannot be auto-set" }
+    }
     if ($CategoryId -in $script:AutoEraseProtectedCategories -and ($ManagedByAutoSet -or -not $AllowDefaultExcluded)) {
         return @{ error = $true; message = "Category '$CategoryId' requires explicit per-card authorization and cannot be auto-set" }
     }
@@ -1481,6 +1581,7 @@ function Set-MultiUserAutoEraseSchedule {
             -TargetUser      'SYSTEM' `
             -ManagedByAutoSet:$ManagedByAutoSet `
             -AllowDefaultExcluded:$AllowDefaultExcluded
+        if ($r.error) { return @{ error = $true; status = 'failed'; results = @($r); total = 1 } }
         return @{ status = 'ok'; results = @($r); total = 1 }
     }
 
@@ -1495,43 +1596,61 @@ function Set-MultiUserAutoEraseSchedule {
             -AllowDefaultExcluded:$AllowDefaultExcluded
         $results += $r
     }
+    if (@($results | Where-Object { $_.error }).Count) { return @{ error = $true; status = 'failed'; results = $results; total = $results.Count } }
     @{ status = 'ok'; results = $results; total = $results.Count }
 }
 
 # Remove-MultiUserAutoEraseSchedule: remove per-user tasks created by
 # Set-MultiUserAutoEraseSchedule. Pass the same TargetUsers list used when
 # creating; empty = remove for all users (finds all matching task names).
-function Remove-MultiUserAutoEraseSchedule {
+function Remove-MultiUserAutoEraseScheduleCore {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '')
+    param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '', [switch]$ManagedOnly)
     Assert-AutoEraseAdmin
     try {
         $owners = @($TargetUsers -split ',' | Where-Object { $_.Trim() } |
             ForEach-Object { Resolve-AutoEraseSid $_.Trim() })
         $removed = @()
+        $removedOwnerSids = @()
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or $identity.categoryId -ne $CategoryId) { continue }
             if ($owners.Count -gt 0 -and $identity.ownerSid -notin $owners) { continue }
+            if ($ManagedOnly -and -not (Test-AutoEraseManagedTask $task)) { continue }
             Unregister-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -Confirm:$false -ErrorAction Stop
             $removed += $task.TaskName
+            $removedOwnerSids += $identity.ownerSid
         }
-        @{ status = 'disabled'; categoryId = $CategoryId; removed = $removed }
+        @{ status = 'disabled'; categoryId = $CategoryId; removed = $removed; removedOwnerSids = $removedOwnerSids }
     } catch { @{ error = $true; message = "Failed to remove schedule: $($_.Exception.Message)" } }
 }
 
-function Remove-AutoEraseSchedule {
+function Remove-MultiUserAutoEraseSchedule {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string]$CategoryId)
+    param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '', [switch]$ManagedOnly)
+    $forward = @{ CategoryId=$CategoryId; TargetUsers=$TargetUsers; ManagedOnly=[bool]$ManagedOnly }
+    Invoke-AutoEraseScheduleLock -CategoryId $CategoryId -Operation { Remove-MultiUserAutoEraseScheduleCore @forward }
+}
+
+function Get-AutoEraseRemovedScopeKeys {
+    param([string]$CurrentSid, [string]$CurrentUser, [string[]]$RemovedOwnerSids, [switch]$ManagedOnly)
+    if (-not $ManagedOnly -or $CurrentSid -in $RemovedOwnerSids) { "user-$CurrentUser" }
+    if (-not $ManagedOnly -or 'S-1-5-18' -in $RemovedOwnerSids) { 'system' }
+}
+
+function Remove-AutoEraseScheduleCore {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$CategoryId, [switch]$ManagedOnly)
     Assert-AutoEraseAdmin
     try {
-        $owners = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18')
-        $result = Remove-MultiUserAutoEraseSchedule -CategoryId $CategoryId -TargetUsers ($owners -join ',')
+        $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $owners = @($currentSid, 'S-1-5-18')
+        $result = Remove-MultiUserAutoEraseScheduleCore -CategoryId $CategoryId -TargetUsers ($owners -join ',') -ManagedOnly:$ManagedOnly
         if ($result.error) { throw $result.message }
         # A disabled schedule must not leave a catch-up marker behind. Limit
         # cleanup to this caller's base task plus the system scope; explicitly
         # selected other-user schedules have their own remove command/state.
-        $scopeKeys = @("user-$env:USERNAME", 'system')
+        $scopeKeys = @(Get-AutoEraseRemovedScopeKeys -CurrentSid $currentSid -CurrentUser $env:USERNAME -RemovedOwnerSids @($result.removedOwnerSids) -ManagedOnly:$ManagedOnly)
         foreach ($root in @(
             (Join-Path $env:LOCALAPPDATA 'WinCommander\auto-erase'),
             (Join-Path $env:ProgramData 'WinCommander\auto-erase\state')
@@ -1541,11 +1660,36 @@ function Remove-AutoEraseSchedule {
                 Remove-Item -LiteralPath (Join-Path $root "$CategoryId.$scopeKey.last") -Force -ErrorAction SilentlyContinue
             }
         }
-        @{ status = 'disabled'; categoryId = $CategoryId }
+        @{ status = 'disabled'; categoryId = $CategoryId; removed = @($result.removed) }
     }
     catch {
         @{ error = $true; message = "Failed to remove auto-erase schedule for '$CategoryId': $($_.Exception.Message)" }
     }
+}
+
+function Remove-AutoEraseSchedule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$CategoryId, [switch]$ManagedOnly)
+    $forward = @{ CategoryId=$CategoryId; ManagedOnly=[bool]$ManagedOnly }
+    Invoke-AutoEraseScheduleLock -CategoryId $CategoryId -Operation { Remove-AutoEraseScheduleCore @forward }
+}
+
+# Separate command identity makes an older sidecar reject this request instead
+# of ignoring an unknown flag and removing a manually configured task.
+function Remove-ManagedAutoEraseSchedule {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string]$CategoryId)
+    Remove-AutoEraseSchedule -CategoryId $CategoryId -ManagedOnly
+}
+
+function Test-AutoEraseManagedTask {
+    param($Task)
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v[456] \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+}
+
+function Test-AutoEraseTaskEnabled {
+    param([string]$State)
+    return $State -in @('Ready', 'Running', 'Queued')
 }
 
 function Get-AutoEraseSchedules {
@@ -1561,11 +1705,13 @@ function Get-AutoEraseSchedules {
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
                 taskName         = $t.TaskName
-                enabled          = ($t.State -ne 'Disabled')
+                state            = [string]$t.State
+                enabled          = (Test-AutoEraseTaskEnabled ([string]$t.State))
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
+                scope            = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
                 ownerAccount     = $t.Principal.UserId
-                managedByAutoSet = ($t.Description -match '^System Maintenance scheduled cleanup v[456] \(managed\)$' -or $t.Description -like 'WinCommander Auto-set scheduled wipe*')
+                managedByAutoSet = (Test-AutoEraseManagedTask $t)
                 lastRun          = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun          = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
@@ -1610,7 +1756,7 @@ function ConvertTo-AutoEraseComparableTaskXml {
 
 # Copy task XML instead of recreating schedules: dates, disabled state, selected
 # account, scope and settings belong to the user and survive a naming migration.
-function Invoke-AutoEraseMigration {
+function Invoke-AutoEraseMigrationCore {
     [CmdletBinding()]
     param([string]$CategoryId = '')
     Assert-AutoEraseAdmin
@@ -1685,4 +1831,30 @@ function Invoke-AutoEraseMigration {
     }
     if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; disabledProtected = $disabledProtected; message = ($errors -join ' '); errors = $errors } }
     @{ status = 'ok'; migrated = $migrated; disabledProtected = $disabledProtected }
+}
+
+# A migration can rewrite an existing task. Serialize each category with
+# create and remove so it cannot overwrite a newly chosen individual cadence.
+function Invoke-AutoEraseMigration {
+    [CmdletBinding()]
+    param([string]$CategoryId = '')
+    if ($CategoryId) {
+        return Invoke-AutoEraseScheduleLock -CategoryId $CategoryId -Operation { Invoke-AutoEraseMigrationCore -CategoryId $CategoryId }
+    }
+    Assert-AutoEraseAdmin
+    try {
+        $ids = @(@(Get-ScheduledTask -ErrorAction Stop) | ForEach-Object {
+            $identity = Get-AutoEraseTaskIdentity $_
+            if ($identity) { $identity.categoryId }
+        } | Sort-Object -Unique)
+        $migrated = @(); $disabledProtected = @(); $errors = @()
+        foreach ($id in $ids) {
+            $result = Invoke-AutoEraseScheduleLock -CategoryId $id -Operation { Invoke-AutoEraseMigrationCore -CategoryId $id }
+            if ($result.migrated) { $migrated += @($result.migrated) }
+            if ($result.disabledProtected) { $disabledProtected += @($result.disabledProtected) }
+            if ($result.error) { $errors += [string]$result.message }
+        }
+        if ($errors.Count) { return @{ error=$true; status='partial'; migrated=$migrated; disabledProtected=$disabledProtected; errors=$errors; message=($errors -join ' ') } }
+        @{ status='ok'; migrated=$migrated; disabledProtected=$disabledProtected }
+    } catch { @{ error=$true; status='failed'; message="Could not inspect cleanup schedules for migration: $($_.Exception.Message)" } }
 }

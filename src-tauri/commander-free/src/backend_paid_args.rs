@@ -11,6 +11,8 @@ pub(super) fn paid_command_args(
         .map(|(key, value)| (key.clone(), Value::String(value.clone())))
         .collect();
     let schedule = matches_parts(command, &["Set-~", "Auto~", "Erase~", "Schedule~"])
+        || matches_parts(command, &["Set-~", "Individual~", "Auto~", "Erase~", "Schedule~"])
+        || matches_parts(command, &["Set-~", "Managed~", "Auto~", "Erase~", "Schedule~"])
         || matches_parts(
             command,
             &["Set-~", "Multi~", "User~", "Auto~", "Erase~", "Schedule~"],
@@ -90,7 +92,7 @@ mod tests {
 
     #[test]
     fn cleanup_consent_and_schedule_ownership_survive_string_transport() {
-        for command in ["Set-AutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
+        for command in ["Set-AutoEraseSchedule", "Set-IndividualAutoEraseSchedule", "Set-ManagedAutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
             for flag in [false, true] {
                 let params = HashMap::from([
                     ("AllowDefaultExcluded".into(), flag.to_string()),
@@ -162,7 +164,7 @@ mod tests {
                 Some("true")
             );
         }
-        for command in ["Set-AutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
+        for command in ["Set-AutoEraseSchedule", "Set-IndividualAutoEraseSchedule", "Set-ManagedAutoEraseSchedule", "Set-MultiUserAutoEraseSchedule"] {
             for key in [
                 "AllowDefaultExcluded",
                 "ManagedByAutoSet",

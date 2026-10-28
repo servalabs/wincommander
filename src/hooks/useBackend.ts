@@ -1537,7 +1537,7 @@ export function useBackend() {
     clearExecutionCache: () => execute(clearCommand("ExecutionCache")),
     invokeDiskCleanup: () => execute("Invoke-DiskCleanup"),
     invokeMasterPrivacyClean: () => execute(invokeCommand("MasterPrivacyClean")),
-    getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles"),
+    getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: false }),
     removeWlanProfile: (name: string, allowDefaultExcluded = false) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name, AllowDefaultExcluded: allowDefaultExcluded }),
     getBluetoothDevices: () => execute<{ devices: BluetoothDevice[] }>("Get-BluetoothDevices"),
     clearBluetoothHistory: () => execute(clearCommand("BluetoothDevices")),
@@ -1577,9 +1577,24 @@ export function useBackend() {
           AllowDefaultExcluded: allowDefaultExcluded,
         },
       ),
+    setManagedAutoEraseSchedule: (categoryId: string, intervalMinutes: number, runAsSystem: boolean = false) =>
+      execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean; taskState?: string }>(
+        "Set-ManagedAutoEraseSchedule",
+        { CategoryId: categoryId, IntervalMinutes: intervalMinutes, RunAsSystem: runAsSystem },
+      ),
+    setIndividualAutoEraseSchedule: (categoryId: string, intervalMinutes: number, runAsSystem: boolean = false, allowDefaultExcluded: boolean = false) =>
+      execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean }>(
+        "Set-IndividualAutoEraseSchedule",
+        { CategoryId: categoryId, IntervalMinutes: intervalMinutes, RunAsSystem: runAsSystem, AllowDefaultExcluded: allowDefaultExcluded },
+      ),
     removeAutoEraseSchedule: (categoryId: string) =>
       execute<{ status: string; categoryId: string }>(
         "Remove-AutoEraseSchedule",
+        { CategoryId: categoryId },
+      ),
+    removeManagedAutoEraseSchedule: (categoryId: string) =>
+      execute<{ status: string; categoryId: string; removed: string[] }>(
+        "Remove-ManagedAutoEraseSchedule",
         { CategoryId: categoryId },
       ),
     getAutoEraseSchedules: () =>
@@ -1588,6 +1603,8 @@ export function useBackend() {
           categoryId: string;
           taskName: string;
           enabled: boolean;
+          state?: string;
+          scope?: "system" | "current-user" | "other-user";
           intervalMinutes: number;
           targetUser: string | null;
           ownerAccount?: string | null;

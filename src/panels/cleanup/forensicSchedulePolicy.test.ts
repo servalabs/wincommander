@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { SCHEDULABLE_CATEGORIES } from "./cleanupCategories";
+import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import {
   ensureForensicTraceSchedules,
   FORENSIC_SCHEDULE_ALLOWED_IDS,
@@ -135,17 +136,21 @@ describe("Secure persona scheduled trace wipes", () => {
 
   test("applies schedules idempotently without overwriting an existing cadence", async () => {
     const categories = getForensicTraceScheduleCategories().slice(0, 2);
-    const calls: Array<[string, number, boolean, boolean, boolean]> = [];
+    const calls: Array<[string, number, boolean]> = [];
     const summary = await ensureForensicTraceSchedules(async (...args) => {
       calls.push(args);
       return calls.length === 1
         ? { success: true, data: { status: "created" } }
-        : { success: true, data: { status: "alreadyConfigured" } };
-    }, categories);
+        : { success: true, data: { status: "alreadyConfigured", taskState: "Ready" } };
+    }, async () => ({ success: true, data: { schedules: categories.map((category, index) => ({
+      categoryId: category.schedulerCategoryId ?? category.id, enabled: true, state: "Ready", targetUser: null,
+      scope: category.schedulerRunAsSystem ? "system" as const : "current-user" as const,
+      intervalMinutes: getAutoScheduleInterval(category, undefined), managedByAutoSet: index === 0,
+    })) } }), categories);
 
     expect(calls.length).toBe(2);
-    expect(calls.every(([, , , preserveExisting, managedByAutoSet]) => preserveExisting && managedByAutoSet)).toBe(true);
-    expect(summary).toEqual({ created: 1, alreadyConfigured: 1, skipped: 0, failed: 0 });
+    expect(calls.every(call => call.length === 3)).toBe(true);
+    expect(summary).toEqual({ created: 1, alreadyConfigured: 1, disabledExisting: 0, skipped: 0, failed: 0 });
   });
 
   test("refuses protected categories passed directly to the scheduler helper", async () => {
@@ -156,18 +161,45 @@ describe("Secure persona scheduled trace wipes", () => {
     const summary = await ensureForensicTraceSchedules(async () => {
       writeCount++;
       return { success: true, data: { status: "created" } };
-    }, [rdpHistory!]);
+    }, async () => ({ success: true, data: { schedules: [] } }), [rdpHistory!]);
 
     expect(writeCount).toBe(0);
-    expect(summary).toEqual({ created: 0, alreadyConfigured: 0, skipped: 1, failed: 0 });
+    expect(summary).toEqual({ created: 0, alreadyConfigured: 0, disabledExisting: 0, skipped: 1, failed: 0 });
+  });
+
+  test("refuses individual-only cards even when passed with an allowed scheduler ID", async () => {
+    const original = SCHEDULABLE_CATEGORIES.find(category => category.id === "amcache")!;
+    const masquerading = { ...original, schedulerCategoryId: "eventLogs" };
+    let writes = 0;
+    const summary = await ensureForensicTraceSchedules(async () => {
+      writes++;
+      return { success: true, data: { status: "created" } };
+    }, async () => ({ success: true, data: { schedules: [] } }), [masquerading]);
+    expect(writes).toBe(0);
+    expect(summary.skipped).toBe(1);
   });
 
   test("retains failures so Dashboard Fix All can report an unsuccessful schedule", async () => {
     const [category] = getForensicTraceScheduleCategories();
     expect(category !== undefined).toBe(true);
-    const summary = await ensureForensicTraceSchedules(async () => ({ success: false, error: "Task Scheduler is unavailable." }), [category!]);
+    const summary = await ensureForensicTraceSchedules(async () => ({ success: false, error: "Task Scheduler is unavailable." }), async () => ({ success: true, data: { schedules: [] } }), [category!]);
 
     expect(summary.failed).toBe(1);
     expect(summary.firstFailure).toBe("Task Scheduler is unavailable.");
+  });
+
+  test("does not report an unverified or disabled schedule as newly active", async () => {
+    const [category] = getForensicTraceScheduleCategories();
+    const row = { categoryId: category.schedulerCategoryId ?? category.id, enabled: false, state: "Disabled", targetUser: null,
+      scope: category.schedulerRunAsSystem ? "system" as const : "current-user" as const,
+      intervalMinutes: 60, managedByAutoSet: false };
+    const disabled = await ensureForensicTraceSchedules(async () => ({ success: true, data: { status: "alreadyConfigured", taskState: "Disabled" } }),
+      async () => ({ success: true, data: { schedules: [row] } }), [category]);
+    expect(disabled.disabledExisting).toBe(1);
+    expect(disabled.created).toBe(0);
+    const unverified = await ensureForensicTraceSchedules(async () => ({ success: true, data: { status: "enabled" } }),
+      async () => ({ success: true, data: { schedules: [row] } }), [category]);
+    expect(unverified.created).toBe(0);
+    expect(unverified.failed).toBe(1);
   });
 });

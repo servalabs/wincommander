@@ -1,0 +1,43 @@
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'auto-erase.ps1')
+
+# Synthetic scheduler boundary: these functions never access Windows tasks.
+$env:USERNAME = 'SyntheticUser'
+function Assert-AutoEraseAdmin {}
+function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
+function Resolve-AutoEraseSid { param($Account) 'S-1-5-21-1' }
+$script:tasks = @()
+$script:writes = 0
+function Get-ScheduledTask { [CmdletBinding()] param() $script:tasks }
+function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId=$Task.Category; ownerSid=$Task.Owner } }
+function Set-AutoEraseScheduleCore {
+    [CmdletBinding()] param($CategoryId,$IntervalMinutes,$RunAsSystem,$TargetUser,[switch]$PreserveExisting,[switch]$ManagedByAutoSet,[switch]$AllowDefaultExcluded)
+    if ($script:expectManaged -and (-not $PreserveExisting -or -not $ManagedByAutoSet)) { throw 'Managed creation did not force safety flags.' }
+    $script:writes++
+    if ($TargetUser -eq 'OtherUser') { return @{ error=$true; message='Synthetic failure' } }
+    @{ status='enabled'; categoryId=$CategoryId }
+}
+$script:expectManaged = $true
+
+$manualUser = [pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-21-1'; State='Disabled'; TaskName='manual-user' }
+$managedSystem = [pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-18'; State='Ready'; TaskName='system' }
+$script:tasks = @($manualUser)
+$result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -RunAsSystem $true
+if ($result.status -ne 'alreadyConfigured' -or $result.taskState -ne 'Disabled' -or $script:writes -ne 0) { throw 'An existing disabled individual task was not preserved.' }
+foreach ($order in @(0, 1)) {
+    $script:tasks = if ($order -eq 0) { @($manualUser, $managedSystem) } else { @($managedSystem, $manualUser) }
+    $result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+    if (-not $result.error -or $script:writes -ne 0) { throw 'Duplicate local owners were not rejected.' }
+}
+$script:tasks = @([pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-21-1'; State='Unknown'; TaskName='unknown' })
+if (-not (Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60).error) { throw 'Unknown task state was accepted.' }
+$script:tasks = @()
+$result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if ($result.status -ne 'enabled' -or $script:writes -ne 1) { throw 'New managed setup did not use the protected child operation.' }
+$before = $script:writes
+$bulkMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,OtherUser' -ManagedByAutoSet
+if (-not $bulkMulti.error -or $script:writes -ne $before) { throw 'Managed multi-user setup was not rejected before mutation.' }
+$script:expectManaged = $false
+$manualMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,OtherUser'
+if (-not $manualMulti.error -or $manualMulti.status -ne 'failed' -or $manualMulti.total -ne 2) { throw 'A partial multi-user failure was reported as success.' }
+Write-Output 'Passed: managed setup preserves both owner scopes, disabled tasks, and rejects ambiguous or unknown state.'

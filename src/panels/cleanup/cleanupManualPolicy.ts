@@ -6,13 +6,32 @@ export const DEFAULT_BULK_CLEAR_EXCLUDES = [
   'credentialManager', 'sshState', 'passwordManagerCaches',
 ];
 
+// These cards did not expose a scheduler in the original Cleanup UI. Their
+// newly supported schedules require an individual choice and must never be
+// included in the bulk Auto-set shortcut. Keep the matching PowerShell list
+// in auto-erase.ps1 in sync.
+export const MANUAL_ONLY_SCHEDULE_IDS = [
+  'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'recallDb',
+  'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
+  'spotlightCache', 'fontCache', 'legacyIconCache', 'gameCaptures', 'photosCache', 'xboxCache',
+  'communicationCaches', 'editorHistory', 'sshState', 'remoteAccessLogs', 'passwordManagerCaches',
+  'gameLauncherLogs', 'adobeRecent', 'officeTempFiles', 'neighborCache', 'netbiosCache',
+  'geolocationCache', 'vpnPhonebooks', 'proxyCache', 'bitsQueue',
+] as const;
+
+export const isManualOnlyCleanupSchedule = (id: string): boolean =>
+  MANUAL_ONLY_SCHEDULE_IDS.some(manual => manual.toLowerCase() === id.toLowerCase());
+
 export const isDefaultExcludedCleanup = (id: string): boolean =>
   DEFAULT_BULK_CLEAR_EXCLUDES.some(excluded => excluded.toLowerCase() === id.toLowerCase());
 
 export const isAutomaticCleanupExcluded = (id: string, exclusions: ReadonlySet<string>): boolean =>
-  isDefaultExcludedCleanup(id) || Array.from(exclusions).some(excluded => excluded.toLowerCase() === id.toLowerCase());
+  isDefaultExcludedCleanup(id) || isManualOnlyCleanupSchedule(id) || Array.from(exclusions).some(excluded => excluded.toLowerCase() === id.toLowerCase());
 
 const DEFAULT_WARNINGS: Record<string, string> = {
+  connectivityHistory: 'This removes Windows network connection history and signatures.',
+  srumData: 'This removes Windows resource-usage history; Windows may rebuild the database.',
+  recallDb: 'This removes Windows activity timeline databases and their stored history.',
   wlanProfiles: 'This removes saved Wi-Fi networks and passwords. The current wireless connection may be lost.',
   browserFootprints: 'This removes browser history, cookies and saved browser state. You may be signed out of websites.',
   notepadState: 'This can permanently delete unsaved Notepad tabs and drafts.',
@@ -54,7 +73,7 @@ export function getCleanupAutoScheduleConfirmation(categories: readonly CleanupC
   const affected = savedData.length ? ` Cards that can remove saved data or recovery material: ${savedData.map(category => category.label).join(', ')}.` : '';
   return {
     title: 'Enable recurring cleanup?',
-    description: `Create recurring wipes for ${categories.length} cards, plus daily SSD maintenance? These wipes can repeatedly and permanently delete saved files, app data and recovery material, including overdue work after the computer comes back online. They continue after WinCommander closes until turned off.${affected} Default exclusions and your additional exclusions will be skipped. Existing individual settings will be preserved.`,
+    description: `Create recurring wipes for ${categories.length} cards, plus daily SSD maintenance? These wipes can repeatedly and permanently delete saved files, app data and recovery material, including overdue work after the computer comes back online. They continue after WinCommander closes until turned off.${affected} Cards reserved for individual scheduling, default exclusions and your additional exclusions will be skipped. Existing individual settings will be preserved.`,
     confirmLabel: 'Enable recurring wipes',
   };
 }
@@ -65,5 +84,7 @@ export async function requestCleanupManualAuthorization(
   confirm: (options: ReturnType<typeof getCleanupManualConfirmation>) => Promise<boolean>,
   minutes?: number,
 ): Promise<boolean> {
-  return !isDefaultExcludedCleanup(category.id) || await confirm(getCleanupManualConfirmation(category, action, minutes));
+  const requiresConfirmation = isDefaultExcludedCleanup(category.id) ||
+    (action === 'schedule' && isManualOnlyCleanupSchedule(category.id));
+  return !requiresConfirmation || await confirm(getCleanupManualConfirmation(category, action, minutes));
 }
