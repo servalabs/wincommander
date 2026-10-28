@@ -18,7 +18,7 @@ import { useCleanupLegacyDialogs } from "./useCleanupLegacyDialogs";
 import { useCleanupSessionState } from "./cleanupSessionState";
 import { VIEW_ONLY_CATEGORIES, type CleanupUsabilityTier } from "./cleanupCategories";
 import useVisibility from "../../hooks/useVisibility";
-import { CleanupDisplayPicker, CleanupDisplayProvider } from "./cleanupDisplay";
+import { CleanupDisplayProvider } from "./cleanupDisplay";
 import { summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "./cleanupDisplayModel";
 import "./cleanupDisplay.css";
 
@@ -168,7 +168,6 @@ export default function SystemCleanupPanel() {
                 title="System Cleanup"
                 description="Find and clear the traces Windows keeps about you — then schedule recurring cleanups."
             />
-            <CleanupDisplayPicker />
             {isInvestigator && (
                 <div
                     style={{
@@ -308,6 +307,7 @@ export default function SystemCleanupPanel() {
                     verification={(traceDetailData as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
                     scheduleState={scheduleState}
                     scheduleMinutes={scan.schedulesById[traceDetailCategory.id] ?? null}
+                    excludedFromBulk={scan.clearAllExcludes.has(traceDetailCategory.id)}
                     scopeLabel={traceDetailCategory.systemWide ? "This device" : selectedDisplay || "Current Windows user"}
                     clearing={traceDetailData?.clearing ?? false}
                     onClose={() => setTraceDetailCatId(null)}
@@ -334,6 +334,9 @@ export default function SystemCleanupPanel() {
                     rawData={otherUserDataMap[otherDetail.catId]?.raw}
                     error={otherUserDataMap[otherDetail.catId]?.error}
                     verification={(otherUserDataMap[otherDetail.catId] as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
+                    scheduleState={scheduleState}
+                    scheduleMinutes={scan.schedulesById[otherDetail.catId] ?? null}
+                    excludedFromBulk={scan.clearAllExcludes.has(otherDetail.catId)}
                     scopeLabel={selectedDisplay || "Selected Windows user"}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
@@ -371,6 +374,9 @@ export default function SystemCleanupPanel() {
                         count={d?.count ?? -1}
                         items={[]}
                         groupedItems={groupedItems}
+                        scheduleState={scheduleState}
+                        scheduleMinutes={scan.schedulesById[combinedDetail.catId] ?? null}
+                        excludedFromBulk={scan.clearAllExcludes.has(combinedDetail.catId)}
                         scopeLabel="All Windows users"
                         clearing={false}
                         onClose={() => setCombinedDetail(null)}

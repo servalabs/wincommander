@@ -3,20 +3,20 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin: 0 0 16px;
-  padding: 12px 14px;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 10px);
   background: var(--color-bg-secondary);
 }
 .cleanup-display-choice > div:first-child { display: grid; gap: 3px; }
-.cleanup-display-choice strong { color: var(--color-text-primary); font-size: 13px; }
-.cleanup-display-choice span { color: var(--color-text-muted); font-size: 12px; }
-.cleanup-display-choice__buttons { display: flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--color-bg-tertiary); }
-.cleanup-display-choice__buttons button, .cleanup-readable-card__actions > button {
+.cleanup-display-choice strong { color: var(--color-text-primary); font-size: 12px; }
+.cleanup-display-choice span { color: var(--color-text-muted); font-size: 11px; }
+.cleanup-display-choice__buttons { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 8px; background: var(--color-bg-tertiary); }
+.cleanup-display-choice__buttons button {
   min-height: 34px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: transparent;
@@ -26,41 +26,15 @@
   cursor: pointer;
 }
 .cleanup-display-choice__buttons button[aria-pressed="true"] { background: var(--color-bg-elevated); border-color: var(--color-accent); color: var(--color-accent); }
-.cleanup-display-choice button:focus-visible, .cleanup-readable-card button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-.cleanup-readable-card {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg, 10px);
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  overflow-anchor: none;
-}
-.cleanup-readable-card__heading { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
-.cleanup-readable-card__heading > div { flex: 1; min-width: 0; }
-.cleanup-readable-card__heading h3 { margin: 0; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
-.cleanup-readable-card__heading small { color: var(--color-text-muted); }
-.cleanup-readable-card__icon { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--color-bg-tertiary); }
-.cleanup-readable-card__status { flex: none; max-width: 52%; padding: 4px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; line-height: 1.25; text-align: right; }
-.cleanup-readable-card__status--found { color: var(--color-warning); background: var(--color-warning-dim); }
-.cleanup-readable-card__status--empty { color: var(--color-success); background: var(--color-success-dim); }
-.cleanup-readable-card__status--error, .cleanup-readable-card__status--inconsistent { color: var(--color-danger); background: var(--color-danger-dim); }
-.cleanup-readable-card__status--partial, .cleanup-readable-card__status--unavailable { color: var(--color-warning); background: var(--color-warning-dim); }
-.cleanup-readable-card__description, .cleanup-readable-card__next, .cleanup-readable-card__warning, .cleanup-readable-card__technical { margin: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.cleanup-readable-card__description, .cleanup-readable-card__technical { color: var(--color-text-muted); }
-.cleanup-readable-card__next { color: var(--color-text-secondary); }
-.cleanup-readable-card__warning { padding: 8px; border-left: 2px solid var(--color-warning); background: var(--color-warning-dim); color: var(--color-text-primary); }
-.cleanup-readable-card__facts { display: grid; gap: 4px; color: var(--color-text-secondary); font-size: 11px; line-height: 1.35; }
-.cleanup-readable-card__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 6px; }
-.cleanup-readable-card__actions > button:disabled { cursor: not-allowed; opacity: .45; }
-.cleanup-readable-card__clear { color: var(--color-danger) !important; }
-.cleanup-readable-card__schedule { display: inline-flex; align-items: center; gap: 3px; min-height: 34px; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 6px; font-size: 11px; }
+.cleanup-display-choice button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .cleanup-readable-detail__body { display: grid; gap: 10px; padding: 14px 18px; overflow-y: auto; color: var(--color-text-secondary); font-size: 13px; line-height: 1.45; }
 .cleanup-readable-detail__body p { margin: 0; }
 .cleanup-readable-detail__result { display: grid; gap: 3px; padding: 12px; border-radius: 8px; background: var(--color-bg-tertiary); }
+.cleanup-readable-detail__result--found { color: var(--color-warning); }
+.cleanup-readable-detail__result--empty { color: var(--color-success); }
+.cleanup-readable-detail__result--error, .cleanup-readable-detail__result--inconsistent { color: var(--color-danger); }
+.cleanup-readable-detail__result--partial, .cleanup-readable-detail__result--unavailable, .cleanup-readable-detail__result--not-scanned { color: var(--color-warning); }
+.cleanup-readable-detail__warning { margin: 0; padding: 9px; border-left: 2px solid var(--color-warning); background: var(--color-warning-dim); color: var(--color-text-primary); }
 .cleanup-readable-detail__facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px; margin: 0; }
 .cleanup-readable-detail__facts div { padding: 8px; border: 1px solid var(--color-border); border-radius: 8px; }
 .cleanup-readable-detail__facts dt { color: var(--color-text-muted); font-size: 11px; }
@@ -84,6 +58,4 @@
   .cleanup-display-choice { align-items: stretch; }
   .cleanup-display-choice__buttons { width: 100%; }
   .cleanup-display-choice__buttons button { flex: 1; }
-  .cleanup-readable-card__heading { flex-wrap: wrap; }
-  .cleanup-readable-card__status { max-width: 100%; text-align: left; }
 }

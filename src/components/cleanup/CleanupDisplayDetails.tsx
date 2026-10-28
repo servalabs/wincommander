@@ -2,14 +2,16 @@ import { Button, Icon } from "@/components/ui/bp";
 import { useEffect, useRef } from "react";
 import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
+import { CleanupDisplayPicker } from "../../panels/cleanup/cleanupDisplay";
 import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, isCleanupScheduleUnavailable, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 
 type DetailCategory = Pick<CleanupCategory, "id" | "label" | "description" | "icon" | "severity" | "systemWide" | "scopeAware" | "clearDataKey" | "confirmMessage" | "regeneratesNote" | "schedulable">;
 
-export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, verification, scopeLabel }: {
+export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, verification, scopeLabel, excludedFromBulk = false }: {
   category: DetailCategory; mode: CleanupDisplayMode; count: number; items: string[]; rawData?: unknown; error?: string;
   clearing: boolean; clearDisabled?: boolean; clearLabel: string; onClose: () => void; onClear?: () => void;
   scheduleState?: "checking" | "verified" | "unavailable"; scheduleMinutes?: number | null;
+  excludedFromBulk?: boolean;
   verification?: CleanupVerification;
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   scopeLabel?: string;
@@ -45,6 +47,11 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const taskStatus = scheduleState === "verified" && scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable || isCleanupScheduleUnavailable(category.id) ? "; new schedules unavailable" : ""}` :
     !category.schedulable || isCleanupScheduleUnavailable(category.id) ? "Not available for this card" : scheduleState === "checking" ? "Checking" :
       scheduleState === "verified" ? "Off" : "Not verified";
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleMinutes
+    ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable || isCleanupScheduleUnavailable(category.id) ? ". New schedules are unavailable for this cleanup." : "."}`
+    : scheduleState === "verified" ? "No automatic cleanup is scheduled."
+      : scheduleState === "checking" ? "Checking whether automatic cleanup is scheduled."
+        : "Schedule status could not be verified.";
   return (
     <div ref={dialogRef} tabIndex={-1} className="trace-dialog" role="dialog" aria-modal="true" aria-label={`${name} details`}>
       <div className="trace-dialog__panel cleanup-readable-detail">
@@ -54,14 +61,19 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           <div className="trace-dialog__actions"><Button icon="cross" minimal aria-label={`Dismiss ${name} details`} onClick={onClose} /></div>
         </header>
         <div className="cleanup-readable-detail__body">
-          <div className={`cleanup-readable-detail__result cleanup-readable-card__status--${summary.state}`} role="status">
+          <CleanupDisplayPicker />
+          <div className={`cleanup-readable-detail__result cleanup-readable-detail__result--${summary.state}`} role="status">
             <strong>{summary.message}</strong><span>{summary.nextStep}</span>
           </div>
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
           {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
           {summary.count !== null && summary.state !== "inconsistent" ? <p><strong>{summary.count} {cleanupCountUnit(category.id, summary.count)}</strong> reported by this scan.</p> : null}
-          {category.clearDataKey ? <p className="cleanup-readable-card__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
-          {mode === "simple" ? <p><strong>Last verification:</strong> {receipt}</p> : null}
+          {category.clearDataKey ? <p className="cleanup-readable-detail__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
+          {excludedFromBulk ? <p><strong>Bulk cleanup:</strong> This card is currently skipped by Clear all.</p> : null}
+          {mode === "simple" ? <>
+            <p><strong>Schedule:</strong> {simpleScheduleStatus}</p>
+            <p><strong>Last check:</strong> {receipt}</p>
+          </> : null}
           {category.regeneratesNote ? <p>{category.regeneratesNote}</p> : null}
           {mode === "advanced" ? <>
             <dl className="cleanup-readable-detail__facts">
@@ -80,7 +92,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
             {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
             <p className="cleanup-readable-detail__privacy">Private record contents and credentials are not shown in this summary.</p>
           </> : null}
-          {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p></section> : null}
+          {mode === "advanced" && groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><ul>{groupedItems.map((group, index) => <li key={`${group.title}-${index}`}>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</li>)}</ul><p>Account coverage was not reported with this result.</p></section> : null}
         </div>
         <footer className="trace-dialog__footer"><Button text="Close" minimal onClick={onClose} />
           {onClear ? <Button text={clearLabel} intent="danger" loading={clearing} disabled={clearDisabled || clearing || summary.state !== "found"} onClick={onClear} /> : null}

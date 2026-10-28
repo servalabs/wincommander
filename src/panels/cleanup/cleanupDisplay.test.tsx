@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "./cleanupCategories";
-import { parseCleanupDisplayPreference } from "./cleanupDisplay";
+import { CleanupDisplayProvider, parseCleanupDisplayPreference } from "./cleanupDisplay";
 import { cleanupDisplayName, deriveCleanupVerification, summarizeCleanupGroups, summarizeCleanupResult } from "./cleanupDisplayModel";
-import CleanupReadableCard from "../../components/cleanup/CleanupReadableCard";
 import CleanupDisplayDetails from "../../components/cleanup/CleanupDisplayDetails";
 
 const category = ALL_CATEGORIES.find(item => item.id === "amcache")!;
@@ -86,54 +85,53 @@ describe("System Cleanup display projection", () => {
     expect(html).toContain("Account A");
     expect(html).toContain("2 reported");
     expect(html).not.toContain("private trace");
-    const card = renderToStaticMarkup(<CleanupReadableCard mode="simple" category={category} count={3} preview={[]} groupedItems={groups} loading={false} clearing={false} onClear={() => {}} />);
-    expect(card).toContain("3 items reported");
-    expect(card).not.toContain("private trace");
-    const missing = renderToStaticMarkup(<CleanupReadableCard mode="simple" category={category} count={2} preview={[]} groupedItems={[groups[0], { title: "Account B", count: -1, items: [] }]} loading={false} clearing={false} onClear={() => {}} />);
-    expect(missing).toContain("Account scan incomplete");
-    expect(missing).toContain("disabled");
+    const casual = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="simple" count={3} items={[]} groupedItems={groups} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(casual).toContain("3 records");
+    expect(casual).not.toContain("Account A");
+    expect(casual).not.toContain("private trace");
   });
 
-  test("incomplete and failed cards never render a clean result in either view", () => {
+  test("incomplete and failed details never render a clean result in either view", () => {
     for (const mode of ["simple", "advanced"] as const) {
       for (const state of [{ error: "denied", rawData: undefined }, { error: undefined, rawData: { status: "partial" } }]) {
-        const html = renderToStaticMarkup(<CleanupReadableCard mode={mode} category={category} count={0} preview={[]} loading={false} clearing={false} onClear={() => {}} {...state} />);
+        const html = renderToStaticMarkup(<CleanupDisplayDetails mode={mode} category={category} count={0} items={[]} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} {...state} />);
         expect(html).not.toContain("No items found");
         expect(html).toContain("disabled");
       }
     }
   });
 
-  test("shows exclusions, schedule state and safe post-clear result on a card", () => {
+  test("shows bulk exclusion and schedule state in the casual details", () => {
     const excluded = ALL_CATEGORIES.find(item => item.id === "notepadState")!;
-    const html = renderToStaticMarkup(<CleanupReadableCard mode="simple" category={excluded} count={0} preview={[]} rawData={{ total: 0, files: [] }} loading={false} clearing={false} excludedFromBulk scheduleState="verified" scheduleMinutes={60} onClear={() => {}} onLoad={() => {}} onSetSchedule={() => true} />);
-    expect(html).toContain("Default exclusion");
+    const html = renderToStaticMarkup(<CleanupDisplayDetails mode="simple" category={excluded} count={0} items={[]} rawData={{ total: 0, files: [] }} excludedFromBulk scheduleState="verified" scheduleMinutes={60} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(html).toContain("skipped by Clear all");
-    expect(html).toContain("Scheduled every 60 min");
+    expect(html).toContain("Scheduled every 60 minutes");
     expect(html).toContain("No items found");
-    expect(html).toContain("disabled");
-    const unknown = renderToStaticMarkup(<CleanupReadableCard mode="simple" category={excluded} count={0} preview={[]} rawData={{ total: 0, files: [] }} loading={false} clearing={false} onClear={() => {}} onSetSchedule={() => true} />);
-    expect(unknown).toContain("Schedule status not verified");
-    expect(unknown).not.toContain("Schedule a wipe for");
     const blocked = ALL_CATEGORIES.find(item => item.id === "wlanProfiles")!;
-    const existing = renderToStaticMarkup(<CleanupReadableCard mode="simple" category={blocked} count={-1} preview={[]} loading={false} clearing={false} scheduleState="verified" scheduleMinutes={60} onClear={() => {}} onClearSchedule={() => true} />);
-    expect(existing).toContain("Scheduled every 60 min; new schedules unavailable");
-    expect(existing).toContain("Turn off schedule");
+    const existing = renderToStaticMarkup(<CleanupDisplayDetails mode="advanced" category={blocked} count={-1} items={[]} scheduleState="verified" scheduleMinutes={60} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(existing).toContain("Enabled every 60 min; new schedules unavailable");
   });
 
-  test("every catalog entry has a display name in both views", () => {
+  test("every catalog entry has safe casual and security detail views", () => {
     expect(ALL_CATEGORIES.length).toBe(84);
     for (const item of ALL_CATEGORIES) {
       expect(cleanupDisplayName(item, "simple").trim()).not.toBe("");
       expect(cleanupDisplayName(item, "advanced").trim()).not.toBe("");
-      if (item.actionOnly) continue;
       for (const mode of ["simple", "advanced"] as const) {
         const raw = item.id === "amcache" ? { total: 1, entries: [{ category: "InventoryApplication", count: 1, sample: [] }] } : { total: 1, entries: [{ privateValue: "fixture-secret" }] };
-        const html = renderToStaticMarkup(<CleanupReadableCard mode={mode} category={item} count={1} preview={["fixture-secret"]} rawData={raw} loading={false} clearing={false} onClear={() => {}} onLoad={() => {}} />);
-        expect(html).toContain(`data-cleanup-category="${item.id}"`);
+        const html = renderToStaticMarkup(<CleanupDisplayDetails mode={mode} category={item} count={1} items={["fixture-secret"]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+        const escapedName = cleanupDisplayName(item, mode).replaceAll("&", "&amp;").replaceAll("'", "&#x27;");
+        expect(html).toContain(escapedName);
         expect(html).not.toContain("fixture-secret");
       }
     }
+  });
+
+  test("the audience selector lives in the detail view and keeps the standard card screen clear", () => {
+    const html = renderToStaticMarkup(<CleanupDisplayProvider defaultMode="simple"><CleanupDisplayDetails category={category} mode="simple" count={15} items={[]} rawData={base.raw} clearing={false} clearLabel="Clear" onClose={() => {}} /></CleanupDisplayProvider>);
+    expect(html).toContain("Casual");
+    expect(html).toContain("Security profile");
+    expect(html).toContain("Cleanup detail level");
   });
 
   test("reports supplied post-clear receipts without exposing their contents", () => {

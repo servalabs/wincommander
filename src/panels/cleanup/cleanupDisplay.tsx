@@ -33,11 +33,11 @@ export function useCleanupDisplay(): CleanupDisplayMode | undefined {
 export function CleanupDisplayPicker() {
   const value = useContext(CleanupDisplayContext);
   if (!value) return null;
-  return <div className="cleanup-display-choice" role="group" aria-label="System Cleanup display">
-    <div><strong>Choose your view</strong><span>Both views use the same scan and cleanup settings. A schedule repeats a clear only after you choose an interval.</span></div>
+  return <div className="cleanup-display-choice" role="group" aria-label="Cleanup detail level">
+    <div><strong>Detail level</strong><span>Choose a simpler summary or security details. This only changes what is shown.</span></div>
     <div className="cleanup-display-choice__buttons">
-      <button type="button" aria-pressed={value.mode === "simple"} onClick={() => value.select("simple")}>Simple</button>
-      <button type="button" aria-pressed={value.mode === "advanced"} onClick={() => value.select("advanced")}>Advanced</button>
+      <button type="button" aria-pressed={value.mode === "simple"} onClick={() => value.select("simple")}>Casual</button>
+      <button type="button" aria-pressed={value.mode === "advanced"} onClick={() => value.select("advanced")}>Security profile</button>
     </div>
   </div>;
 }

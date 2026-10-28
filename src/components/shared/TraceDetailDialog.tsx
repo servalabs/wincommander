@@ -31,6 +31,7 @@ interface TraceDetailDialogProps {
   verification?: CleanupVerification;
   scheduleState?: "checking" | "verified" | "unavailable";
   scheduleMinutes?: number | null;
+  excludedFromBulk?: boolean;
   scopeLabel?: string;
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   clearing: boolean;
@@ -50,6 +51,7 @@ export default function TraceDetailDialog({
   verification,
   scheduleState,
   scheduleMinutes,
+  excludedFromBulk = false,
   scopeLabel,
   groupedItems,
   clearing,
@@ -83,7 +85,7 @@ export default function TraceDetailDialog({
   }
 
   if (displayMode) {
-    return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems}
+    return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems} excludedFromBulk={excludedFromBulk}
       error={error} clearing={clearing} clearDisabled={clearDisabled} clearLabel={clearLabel} onClose={onClose} onClear={onClear}
       scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} verification={verification} scopeLabel={scopeLabel} />;
   }
