@@ -738,6 +738,11 @@ pub struct FleetSettings {
     /// different device command. Absent legacy data safely causes one read-back.
     #[serde(default)]
     pub privacy_shield_applied_command_id: Option<String>,
+    /// Hash of detector tuning used by the running Fleet session. A policy
+    /// epoch can change without a Shield command, so revision alone is not
+    /// enough to know whether the detector uses the new blur settings.
+    #[serde(default)]
+    pub privacy_shield_applied_tuning_hash: Option<String>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
@@ -1584,6 +1589,12 @@ pub struct PrivacyShieldSettings {
     pub gaze_detection_enabled: Option<bool>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,
+    #[serde(default)]
+    pub look_away_notifications_enabled: Option<bool>,
+    #[serde(default)]
+    pub multiple_faces_notifications_enabled: Option<bool>,
+    #[serde(default)]
+    pub phone_notifications_enabled: Option<bool>,
     pub confidence_threshold: Option<f32>,
     pub wake_delay_seconds: Option<u32>,
     pub blur_opacity: Option<f32>,

@@ -6692,6 +6692,9 @@ fn privacy_shield_event_classes_from_reason(reason: &str) -> Vec<&'static str> {
     if upper.contains("PHONE DETECTED") {
         classes.push("phone_detected");
     }
+    if upper.contains("MULTIPLE FACES") {
+        classes.push("multiple_faces");
+    }
     if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
         classes.push("presence_lost");
     }
@@ -6757,6 +6760,7 @@ enum FleetPrivacyAlertGate {
     FleetDisconnected,
     NoFleetManagedSession,
     UnknownEventClass,
+    NotificationsDisabled,
     UnknownMode,
     RateLimited,
 }
@@ -6770,6 +6774,7 @@ impl FleetPrivacyAlertGate {
                 "the current Privacy Shield session was started locally, not by Fleet"
             }
             Self::UnknownEventClass => "the detector emitted an unsupported aggregate class",
+            Self::NotificationsDisabled => "this detector alert is disabled by policy",
             Self::UnknownMode => "Fleet has not confirmed a valid Privacy Shield mode",
             Self::RateLimited => "the signed Fleet notification limit is reached",
         }
@@ -6801,17 +6806,46 @@ fn fleet_privacy_event_gate(
     if !fleet_session_owned && !fleet_monitoring_selected {
         return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
-    // Blur switches are local enforcement preferences, not alert opt-outs.
-    // Fleet policy explicitly keeps monitoring and Fleet alerts active when a
-    // blur switch is off; only its global monitoring switch and alert rate
-    // limit govern the aggregate notification channel.
-    if matches!(
-        event_class,
-        "look_away" | "presence_lost" | "phone_detected"
-    ) {
-        FleetPrivacyAlertGate::Allowed
+    if !matches!(event_class, "look_away" | "presence_lost" | "multiple_faces" | "phone_detected") {
+        return FleetPrivacyAlertGate::UnknownEventClass;
+    }
+    if !privacy_shield_notification_enabled(shield, event_class) {
+        return FleetPrivacyAlertGate::NotificationsDisabled;
+    }
+    FleetPrivacyAlertGate::Allowed
+}
+
+fn privacy_shield_notification_enabled(shield: &crate::settings::PrivacyShieldSettings, class: &str) -> bool {
+    match class {
+        "look_away" | "presence_lost" => shield.look_away_notifications_enabled.unwrap_or(true),
+        "multiple_faces" => shield.multiple_faces_notifications_enabled.unwrap_or(true),
+        "phone_detected" => shield.phone_notifications_enabled.unwrap_or(true),
+        _ => false,
+    }
+}
+
+fn privacy_shield_local_notification_body(
+    shield: &crate::settings::PrivacyShieldSettings,
+    classes: &[&str],
+) -> Option<String> {
+    let labels: Vec<_> = classes
+        .iter()
+        .filter(|class| privacy_shield_notification_enabled(shield, class))
+        .filter_map(|class| match *class {
+            "look_away" => Some("Look-away"),
+            "presence_lost" => Some("No face"),
+            "multiple_faces" => Some("Multiple faces"),
+            "phone_detected" => Some("Phone detected"),
+            _ => None,
+        })
+        .collect();
+    if labels.is_empty() {
+        None
     } else {
-        FleetPrivacyAlertGate::UnknownEventClass
+        Some(format!(
+            "{} — Privacy Shield detected this immediately.",
+            labels.join(" and ")
+        ))
     }
 }
 
@@ -6908,6 +6942,7 @@ mod fleet_privacy_alert_tests {
     use super::{
         fleet_privacy_alert_mode_from_state, fleet_privacy_event_gate,
         privacy_shield_event_classes_from_reason, privacy_shield_flow_kinds_from_reason,
+        privacy_shield_local_notification_body, privacy_shield_notification_enabled,
         FleetPrivacyAlertGate,
     };
     use crate::settings::{FleetShieldDesiredState, PrivacyShieldSettings};
@@ -6963,8 +6998,37 @@ mod fleet_privacy_alert_tests {
         );
         assert_eq!(
             fleet_privacy_event_gate(true, true, &policy, "multiple_faces"),
-            FleetPrivacyAlertGate::UnknownEventClass
+            FleetPrivacyAlertGate::Allowed
         );
+    }
+
+    #[test]
+    fn look_away_and_no_face_alerts_can_be_silenced_without_silencing_other_detectors() {
+        let mut policy = enabled_policy();
+        policy.look_away_notifications_enabled = Some(false);
+        for class in ["look_away", "presence_lost"] {
+            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::NotificationsDisabled);
+            assert!(!privacy_shield_notification_enabled(&policy, class));
+        }
+        for class in ["multiple_faces", "phone_detected"] {
+            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::Allowed);
+            assert!(privacy_shield_notification_enabled(&policy, class));
+        }
+    }
+
+    #[test]
+    fn combined_local_alert_mentions_only_enabled_detector_classes() {
+        let mut policy = enabled_policy();
+        policy.look_away_notifications_enabled = Some(false);
+        let classes = privacy_shield_event_classes_from_reason("LOOK AWAY & PHONE DETECTED & MULTIPLE FACES");
+        let body = privacy_shield_local_notification_body(&policy, &classes).unwrap();
+        assert!(body.contains("Phone detected"));
+        assert!(body.contains("Multiple faces"));
+        assert!(!body.contains("Look-away"));
+
+        policy.phone_notifications_enabled = Some(false);
+        policy.multiple_faces_notifications_enabled = Some(false);
+        assert!(privacy_shield_local_notification_body(&policy, &classes).is_none());
     }
 
     #[test]
@@ -6998,6 +7062,10 @@ mod fleet_privacy_alert_tests {
         assert_eq!(
             privacy_shield_event_classes_from_reason("PRESENCE LOST"),
             vec!["presence_lost"]
+        );
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("MULTIPLE FACES & PHONE DETECTED"),
+            vec!["phone_detected", "multiple_faces"]
         );
         assert!(privacy_shield_event_classes_from_reason("camera warmup").is_empty());
         assert_eq!(
@@ -7060,8 +7128,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .map(|meta| meta.len())
                 .unwrap_or(0);
         }
-        let mut locally_looking_away = false;
         let mut active_fleet_event_classes = std::collections::BTreeSet::new();
+        let mut active_local_notification_classes = std::collections::BTreeSet::new();
         let mut fleet_episode_id: Option<String> = None;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
@@ -7127,8 +7195,6 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     );
                                     continue;
                                 }
-                                let first_look_away_in_episode = !locally_looking_away;
-                                locally_looking_away = true;
                                 let episode_id = fleet_episode_id
                                     .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
                                     .clone();
@@ -7147,47 +7213,26 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     serde_json::json!({ "lookingAway": true }),
                                 );
 
-                                // Local alerting is independent of Fleet. Do it before
-                                // any policy/readiness check so an attention event is
-                                // visible immediately even when Fleet is offline or slow.
-                                if first_look_away_in_episode {
-                                    let detail = if reason.is_empty() {
-                                        "Presence check failed".to_string()
-                                    } else {
-                                        reason.to_string()
-                                    };
-                                    // Do not read settings here: another
-                                    // settings writer can hold its lock for
-                                    // seconds, delaying a safety alert. The
-                                    // detector itself has already enforced
-                                    // the selected mode by this point.
-                                    let notification_body = format!(
-                                        "{} — Privacy Shield detected this immediately.",
-                                        detail
-                                    );
-                                    if let Err(error) =
-                                        crate::native_notify::show_security_notification(
-                                            &app,
-                                            "Privacy Shield — look-away",
-                                            &notification_body,
-                                        )
-                                    {
-                                        crate::flow_bridge::flow_trace(format!(
-                                            "shield-reader: local security alert not displayed: {}",
-                                            error
-                                        ));
-                                        crate::log_message(
-                                            "warn",
-                                            &format!(
-                                                "[PrivacyShield] local detection alert could not be displayed: {}",
-                                                error
-                                            ),
-                                        );
-                                    } else {
-                                        crate::flow_bridge::flow_trace(
-                                            "shield-reader: local security alert delivered immediately",
-                                        );
-                                    }
+                                // Keep local alerting off the detector reader: policy
+                                // settings may briefly be locked by another writer.
+                                let new_local_classes: Vec<_> = event_classes.iter().copied()
+                                    .filter(|class| active_local_notification_classes.insert(*class))
+                                    .collect();
+                                if !new_local_classes.is_empty() {
+                                    let notification_classes = new_local_classes;
+                                    let notification_app = app.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let Ok(settings) = crate::settings::read_settings() else { return; };
+                                        let Some(body) = privacy_shield_local_notification_body(
+                                            &settings.ideal.privacy.privacy_shield,
+                                            &notification_classes,
+                                        ) else { return; };
+                                        if let Err(error) = crate::native_notify::show_security_notification(
+                                            &notification_app, "Privacy Shield — detection", &body,
+                                        ) {
+                                            crate::log_message("warn", &format!("[PrivacyShield] local detection alert could not be displayed: {}", error));
+                                        }
+                                    });
                                 }
 
                                 // Fleet receives only the detected class. Keep this
@@ -7229,8 +7274,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 }
                             }
                             Some("look_back") => {
-                                locally_looking_away = false;
                                 active_fleet_event_classes.clear();
+                                active_local_notification_classes.clear();
                                 fleet_episode_id = None;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(

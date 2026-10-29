@@ -162,12 +162,62 @@ function Clear-PrivacyShieldPidMarker {
     Remove-Item -LiteralPath (Get-PrivacyShieldPidMarkerPath) -Force -ErrorAction SilentlyContinue
 }
 
+function Get-PrivacyShieldNativeOptions {
+    param([string]$CommandLine)
+
+    # Parse only the fixed flags emitted by Start-PrivacyShield. A missing,
+    # duplicate, or malformed value means the native tuning is unknown.
+    if (-not $CommandLine -or $CommandLine.Length -gt 8192) { return $null }
+    $options = @{}
+    $flags = @{
+        'check-gaze' = 'checkGaze'; 'check-faces' = 'checkFaces'; 'check-phone' = 'checkPhone'
+        'blur-gaze' = 'blurGaze'; 'blur-faces' = 'blurFaces'; 'blur-phone' = 'blurPhone'
+        'capture-on-device' = 'captureOnDevice'; 'capture-on-multi-face' = 'captureOnMultiFace'
+    }
+    foreach ($name in $flags.Keys) {
+        $matches = [regex]::Matches($CommandLine, "(?:^|\s)--$name(?=\s|$)")
+        if ($matches.Count -gt 1) { return $null }
+        $options[$flags[$name]] = ($matches.Count -eq 1)
+    }
+    $names = @{
+        'model-level' = 'modelLevel'; 'confidence' = 'confidence'
+        'overlay-opacity' = 'overlayOpacity'; 'wake-delay-ms' = 'wakeDelayMs'
+        'device-wake-multiplier' = 'deviceWakeMultiplier'
+        'multi-face-wake-multiplier' = 'multiFaceWakeMultiplier'
+        'buffer-frames' = 'bufferFrames'; 'capture-speed' = 'captureSpeed'
+    }
+    foreach ($name in $names.Keys) {
+        if ([regex]::Matches($CommandLine, "(?:^|\s)--$name(?=\s|$)").Count -ne 1) { return $null }
+        $matches = [regex]::Matches($CommandLine, "(?:^|\s)--$name\s+([^\s`"']+)(?=\s|$)")
+        if ($matches.Count -ne 1) { return $null }
+        $raw = $matches[0].Groups[1].Value
+        if ($name -eq 'model-level') {
+            if ($raw -cnotmatch '^(nano|small|medium|large)$') { return $null }
+            $options[$names[$name]] = $raw
+        } else {
+            if ($raw -cnotmatch '^(0|[1-9][0-9]{0,5})(\.[0-9]{1,4})?$') { return $null }
+            $number = 0.0
+            if (-not [double]::TryParse($raw, [System.Globalization.NumberStyles]::AllowDecimalPoint,
+                [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $null }
+            $options[$names[$name]] = if ($name -in @('confidence', 'device-wake-multiplier', 'multi-face-wake-multiplier')) {
+                $number
+            } elseif ($number -eq [math]::Truncate($number)) {
+                [int]$number
+            } else {
+                return $null
+            }
+        }
+    }
+    return $options
+}
+
 function Get-PrivacyShieldStatus {
     try {
         $shieldProcessMarker = "--wc-privacy-shield"
         $running = $false
         $processId = $null
         $activeMode = $null
+        $nativeOptions = $null
         $camera = Get-PrivacyShieldCameraAvailability
 
         # Get-CimInstance works reliably on both PowerShell 5.1 (Windows
@@ -178,9 +228,15 @@ function Get-PrivacyShieldStatus {
         # Filter at the CIM level (-Filter) instead of pipe-Where so we
         # don't materialise the whole process list just to drop most of
         # it.
-        $procs = Get-CimInstance -ClassName Win32_Process `
-            -Filter "Name='python.exe' OR Name='pythonw.exe'" `
-            -ErrorAction SilentlyContinue
+        $cimUnavailable = $false
+        try {
+            $procs = Get-CimInstance -ClassName Win32_Process `
+                -Filter "Name='python.exe' OR Name='pythonw.exe'" `
+                -ErrorAction Stop
+        } catch {
+            $cimUnavailable = $true
+            $procs = @()
+        }
         foreach ($proc in $procs) {
             if ($proc.CommandLine -like "*$shieldProcessMarker*") {
                 $running = $true
@@ -188,11 +244,22 @@ function Get-PrivacyShieldStatus {
                 # The process arguments are the detector's applied state.
                 # Do not infer mode from a delayed settings sync: that made a
                 # no-blur Notify only process appear as Blur + Notify locally.
-                $activeMode = if ($proc.CommandLine -match '(?:^|\s)--blur-(?:gaze|faces|phone)(?:\s|$)') {
+                $explicitModes = [regex]::Matches($proc.CommandLine, '(?:^|\s)--mode\s+(\S+)(?=\s|$)')
+                $modeSwitchCount = [regex]::Matches($proc.CommandLine, '(?:^|\s)--mode(?=\s|$)').Count
+                $activeMode = if ($modeSwitchCount -ne $explicitModes.Count) {
+                    $null
+                } elseif ($explicitModes.Count -eq 1) {
+                    if ($explicitModes[0].Groups[1].Value -cin @('blur_notify', 'notify_only')) {
+                        $explicitModes[0].Groups[1].Value
+                    } else { $null }
+                } elseif ($explicitModes.Count -gt 1) {
+                    $null
+                } elseif ($proc.CommandLine -match '(?:^|\s)--blur-(?:gaze|faces|phone)(?:\s|$)') {
                     'blur_notify'
                 } else {
                     'notify_only'
                 }
+                $nativeOptions = Get-PrivacyShieldNativeOptions -CommandLine $proc.CommandLine
                 break
             }
         }
@@ -209,6 +276,9 @@ function Get-PrivacyShieldStatus {
                 # is intentionally unknown rather than guessed from cache.
             }
         }
+        if ($cimUnavailable -and -not $running) {
+            return @{ error = $true; message = 'Privacy Shield status could not be read.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
+        }
 
         # NOTE: the old "last-ditch fallback" that grabbed the first
         # python.exe via Get-Process was removed. It didn't check the
@@ -221,6 +291,7 @@ function Get-PrivacyShieldStatus {
             running         = $running
             processId       = $processId
             activeMode      = $activeMode
+            nativeOptions   = $nativeOptions
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
@@ -279,6 +350,7 @@ function Start-PrivacyShield {
         [switch]$BlurPhone,
         [switch]$CaptureOnDevice,
         [switch]$CaptureOnMultiFace,
+        [ValidateSet('blur_notify', 'notify_only')][string]$Mode = '',
         [string]$ModelLevel = "nano",
         [float]$Confidence = 0.5,
         [int]$OverlayOpacity = 200,
@@ -1157,6 +1229,7 @@ if __name__ == "__main__":
         if ($BlurPhone) { $pythonArgs += "--blur-phone" }
         if ($CaptureOnDevice) { $pythonArgs += "--capture-on-device" }
         if ($CaptureOnMultiFace) { $pythonArgs += "--capture-on-multi-face" }
+        if ($Mode) { $pythonArgs += "--mode"; $pythonArgs += $Mode }
         if ($ownerPid -gt 0) { $pythonArgs += "--owner-pid"; $pythonArgs += "$ownerPid" }
 
         # Use resolved python executable (must be python.exe, NOT pythonw.exe)

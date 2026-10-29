@@ -932,9 +932,8 @@ modified_at: string, };
 export type RecentDownloadsResult = { entries: Array<RecentDownloadEntry>, };
 
 /**
- * Reserved seam for future remote file-search; carried in a command payload +
- * returned via the command result endpoint. Not yet wired to any catalog entry
- * or handler.
+ * Per-device signed `files.search` command payload. The server derives the
+ * result limit and any continuation cursor; the console chooses query/scope.
  */
 export type RemoteSearchRequest = { terms: string,
 /**
@@ -954,7 +953,17 @@ predicates: SearchPredicates, rank: SearchRank,
  * organization setting before signing the command; callers cannot select
  * a larger limit through the search request itself.
  */
-result_limit: number, };
+result_limit: number,
+/**
+ * Opaque device snapshot from a prior page. Only Fleet may put this in a
+ * signed continuation command; an initial search must leave it absent.
+ */
+snapshot_id: string | null,
+/**
+ * Zero for the initial page. Continuations must be a page boundary from
+ * the same signed query and snapshot.
+ */
+page_offset: number, };
 
 /**
  * Cross-device file search result, returned via the command result endpoint
@@ -971,6 +980,15 @@ accepted_result_limit: number | null,
  * This must not be inferred from `rows.len()`.
  */
 cap_reached: boolean | null,
+/**
+ * A bounded, short-lived device snapshot makes later signed pages stable
+ * even if the filesystem or index changes between check-ins.
+ */
+snapshot_id: string | null, page_offset: number, snapshot_rows: number | null,
+/**
+ * True when the snapshot itself stopped before every eligible result.
+ */
+snapshot_truncated: boolean | null,
 /**
  * Whether this device actually evaluated `RemoteSearchRequest::predicates`.
  *
@@ -996,7 +1014,11 @@ predicates_applied: boolean, };
  * audited, admin-triggered pull, the same distinction `files.recent_downloads`
  * below draws).
  */
-export type RemoteSearchResultRow = { doc_id: string, path: string, name: string, ext: string, mtime: bigint, size: bigint, score: number, match_kind: string, snippet: string, };
+export type RemoteSearchResultRow = { doc_id: string, path: string, name: string, ext: string, mtime: bigint, size: bigint, score: number, match_kind: string,
+/**
+ * Compatibility field. Files search leaves this empty; Content search has a separate response.
+ */
+snippet: string, };
 
 /**
  * The signed, per-device policy projection delivered to the agent.  Produced

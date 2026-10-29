@@ -1071,9 +1071,8 @@ pub enum SearchRank {
     TraversalOrder,
 }
 
-/// Reserved seam for future remote file-search; carried in a command payload +
-/// returned via the command result endpoint. Not yet wired to any catalog entry
-/// or handler.
+/// Per-device signed `files.search` command payload. The server derives the
+/// result limit and any continuation cursor; the console chooses query/scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
@@ -1097,6 +1096,14 @@ pub struct RemoteSearchRequest {
     /// a larger limit through the search request itself.
     #[serde(default = "default_remote_search_result_limit")]
     pub result_limit: usize,
+    /// Opaque device snapshot from a prior page. Only Fleet may put this in a
+    /// signed continuation command; an initial search must leave it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    /// Zero for the initial page. Continuations must be a page boundary from
+    /// the same signed query and snapshot.
+    #[serde(default)]
+    pub page_offset: usize,
 }
 
 fn default_remote_search_result_limit() -> usize {
@@ -1122,6 +1129,7 @@ pub struct RemoteSearchResultRow {
     pub size: u64,
     pub score: f32,
     pub match_kind: String,
+    /// Compatibility field. Files search leaves this empty; Content search has a separate response.
     pub snippet: String,
 }
 
@@ -1142,6 +1150,17 @@ pub struct RemoteSearchResult {
     /// This must not be inferred from `rows.len()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap_reached: Option<bool>,
+    /// A bounded, short-lived device snapshot makes later signed pages stable
+    /// even if the filesystem or index changes between check-ins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(default)]
+    pub page_offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_rows: Option<usize>,
+    /// True when the snapshot itself stopped before every eligible result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_truncated: Option<bool>,
     /// Whether this device actually evaluated `RemoteSearchRequest::predicates`.
     ///
     /// Serde ignores unknown fields, so an agent older than the predicate
@@ -1750,6 +1769,45 @@ pub struct PostureReport {
     pub shield_running: Option<bool>,
 }
 
+/// Closed, media-free detector launch options observed from the running
+/// process. Notification preferences are local policy, not native detector
+/// options, and are intentionally absent from this evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShieldNativeOptions {
+    pub check_gaze: bool,
+    pub check_faces: bool,
+    pub check_phone: bool,
+    pub blur_gaze: bool,
+    pub blur_faces: bool,
+    pub blur_phone: bool,
+    pub capture_on_device: bool,
+    pub capture_on_multi_face: bool,
+    pub model_level: String,
+    pub confidence: f64,
+    pub overlay_opacity: u32,
+    pub wake_delay_ms: u32,
+    pub device_wake_multiplier: f64,
+    pub multi_face_wake_multiplier: f64,
+    pub buffer_frames: u32,
+    pub capture_speed: u32,
+}
+
+impl ShieldNativeOptions {
+    pub fn is_bounded(&self) -> bool {
+        matches!(self.model_level.as_str(), "nano" | "small" | "medium" | "large")
+            && self.confidence.is_finite() && (0.0..=1.0).contains(&self.confidence)
+            && self.overlay_opacity <= 255
+            && (1..=10_000).contains(&self.wake_delay_ms)
+            && self.device_wake_multiplier.is_finite()
+            && (1.0..=100.0).contains(&self.device_wake_multiplier)
+            && self.multi_face_wake_multiplier.is_finite()
+            && (1.0..=100.0).contains(&self.multi_face_wake_multiplier)
+            && (1..=100).contains(&self.buffer_frames)
+            && (1..=4).contains(&self.capture_speed)
+    }
+}
+
 // ── Clipboard Guard + Ink Receipt device reports (plan §4.4, §5.6) ───────
 // Both types below ride `CheckinRequest` as a new batched `Vec<_>` field —
 // `local_alerts: Vec<LocalAlertReport>` above is the batching precedent
@@ -2218,6 +2276,30 @@ pub fn canonical_json_bytes(value: &Value) -> Vec<u8> {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    #[test]
+    fn shield_native_options_are_closed_and_bounded() {
+        let options = serde_json::json!({
+            "checkGaze": true, "checkFaces": true, "checkPhone": true,
+            "blurGaze": true, "blurFaces": false, "blurPhone": false,
+            "captureOnDevice": false, "captureOnMultiFace": false,
+            "modelLevel": "medium", "confidence": 0.5, "overlayOpacity": 200,
+            "wakeDelayMs": 150, "deviceWakeMultiplier": 5.0,
+            "multiFaceWakeMultiplier": 5.0, "bufferFrames": 2,
+            "captureSpeed": 1,
+        });
+        let parsed: ShieldNativeOptions = serde_json::from_value(options.clone()).unwrap();
+        assert!(parsed.is_bounded());
+        let mut with_extra = options.clone();
+        with_extra["commandLine"] = Value::String("private path".into());
+        assert!(serde_json::from_value::<ShieldNativeOptions>(with_extra).is_err());
+        let mut with_missing = options.clone();
+        with_missing.as_object_mut().unwrap().remove("blurGaze");
+        assert!(serde_json::from_value::<ShieldNativeOptions>(with_missing).is_err());
+        let mut with_invalid = options;
+        with_invalid["confidence"] = serde_json::json!(9.0);
+        assert!(!serde_json::from_value::<ShieldNativeOptions>(with_invalid).unwrap().is_bounded());
+    }
 
     fn security_snapshot() -> SecuritySnapshotResult {
         SecuritySnapshotResult {
