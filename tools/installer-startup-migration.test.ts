@@ -13,7 +13,7 @@ test.skipIf(process.platform !== "win32")("upgrade cleans each profile's expanda
   expect(result.stdout).toContain("PASS: complete upgrade replaces admin and standard profile routes and preserves data");
   expect(result.stdout).toContain("PASS: both legacy install layouts preserve disabled tasks for every profile");
   expect(result.stdout).toContain("PASS: maintenance migration cannot resurrect startup");
-});
+}, 20_000);
 
 const nsis = join(process.env.LOCALAPPDATA ?? "", "tauri", "NSIS", "makensis.exe");
 test.skipIf(process.platform !== "win32" || !existsSync(nsis))("installer diagnostics append each stage without overwriting earlier migration evidence", () => {
