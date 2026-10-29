@@ -1,7 +1,7 @@
 import { Button, FormGroup, InputGroup, Tag } from "@/components/ui/bp";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../../../hooks/useBackend";
+import useProcessElevation from "../../../hooks/useProcessElevation";
 import UniversalCallout from "../../../components/shared/UniversalCallout";
 import { fireLicenseCelebration } from "../../../components/shared/LicenseCelebrationListener";
 import {
@@ -35,7 +35,8 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [feedback, setFeedback] = useState<{ intent: "success" | "danger" | "warning"; text: string } | null>(null);
-  const [canRemoveDeviceLicense, setCanRemoveDeviceLicense] = useState(false);
+  const { state: processElevation } = useProcessElevation();
+  const canRemoveDeviceLicense = processElevation === "administrator";
   // Two-step confirm: null = idle, 'deactivate' = awaiting 2nd click
   const [confirmPending, setConfirmPending] = useState<'deactivate' | null>(null);
 
@@ -56,20 +57,6 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   }, [getLicenseStatus, onStatusLoaded]);
 
   useEffect(() => { refreshStatus(); }, [refreshStatus]);
-
-  useEffect(() => {
-    let active = true;
-    void invoke<boolean>("is_current_process_elevated")
-      .then((elevated) => {
-        if (active) setCanRemoveDeviceLicense(elevated);
-      })
-      // Treat a failed probe as not approved. Native removal applies the
-      // exact same check, so this only improves the explanation in the UI.
-      .catch(() => {
-        if (active) setCanRemoveDeviceLicense(false);
-      });
-    return () => { active = false; };
-  }, []);
 
   const runWithLoading = async (key: string, action: () => Promise<void>) => {
     setLoading((prev) => ({ ...prev, [key]: true }));
