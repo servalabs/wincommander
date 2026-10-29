@@ -26,7 +26,7 @@ const MANAGER_LABELS: Record<string, string> = { winget: "Winget", chocolatey: "
  */
 export function PackageUpdateTools() {
   const backend = useBackend();
-  const { appInventory, runAppInventoryScan, waitForAppInventoryScan } = useAppState();
+  const { appInventory, runAppInventoryScan } = useAppState();
   const backendRef = useRef(backend);
   backendRef.current = backend;
   const packageSnapshot = useSyncExternalStore(
@@ -61,8 +61,7 @@ export function PackageUpdateTools() {
     .map((manager) => `${MANAGER_LABELS[manager.manager] ?? manager.manager}: ${manager.error}`) ?? [];
 
   const refreshAppInventoryFully = async () => {
-    await runAppInventoryScan(true);
-    await waitForAppInventoryScan();
+    await runAppInventoryScan(true, true);
   };
 
   const runPackageAction = async (label: string, action: (wasQueued: boolean) => Promise<void>) => {

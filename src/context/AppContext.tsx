@@ -26,6 +26,7 @@ import { _getOperationHandlers } from './TaskStatusContext';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
 import { isAppInventoryRefreshDue } from '../lib/appInventoryStartup';
 import { waitForSoftTimeout } from '../lib/softTimeout';
+import { joinInventoryScan, verifySavedInventory } from '../lib/appInventoryScanResult';
 import { continueStartupSettingsHydration, getStartupSettingsRecoveryMessage, normalizeModulesConfig, normalizeStartupSettings, readPersonalSettingsStatus, type PersonalSettingsStatus } from '../lib/startupHydration';
 import { canRunStartupJob, type StartupEligibility } from '../lib/startupJobPolicy';
 import { createStartupCoordinator, type StartupCoordinator, type StartupJob, type StartupJobResult } from '../services/startupCoordinator';
@@ -120,7 +121,7 @@ interface AppState {
     /** Run the unified app inventory scan (Get-AppInventory).
      * Auto-persists to settings.json → current.apps.inventory.
      * Called when the startup cache is stale and after install/upgrade/uninstall. */
-    runAppInventoryScan: (silent?: boolean) => Promise<void>;
+    runAppInventoryScan: (silent?: boolean, requireVerified?: boolean) => Promise<void>;
     /** Wait until the underlying native Get-AppInventory call actually drains. */
     waitForAppInventoryScan: () => Promise<void>;
     /** Refresh dependency status (Get-DependencyStatus). Called on startup. */
@@ -249,7 +250,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // KT: This tracks the real backend Get-AppInventory completion, not just
     // the caller's UI wait. A soft timeout can return while winget is still
     // running; clearing the guard there lets duplicate scans stack up.
-    const appInventoryBackendInFlightRef = useRef<Promise<void> | null>(null);
+    const appInventoryBackendInFlightRef = useRef<Promise<boolean> | null>(null);
 
     // Loading State
     const [loading, setLoading] = useState({
@@ -873,44 +874,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     //   3. After install/upgrade/uninstall actions (caller invokes this)
     //   4. Manual refresh button in Apps panel
     // ────────────────────────────────────────────────────────────────────
-    const runAppInventoryScan = useCallback(async (silent: boolean = false) => {
+    const runAppInventoryScan = useCallback(async (silent: boolean = false, requireVerified: boolean = false) => {
         const startBackendScan = () => {
+            setPackageUpdateCatalogInventoryFresh(false);
             const task = Promise.resolve()
                 .then(() => getAppInventory())
                 .then(async (res) => {
-                    if (res.success && res.data) {
-                        // Re-read settings to get the updated inventory that backend auto-persisted
-                        try {
-                            const updatedSettings = await settingsWriterRef.current!.read();
-                            if (isDecoyMode()) return;
-                            setAppSettings(updatedSettings);
-                            appSettingsRef.current = updatedSettings;
-                            seedFromCachedSettings(updatedSettings);
-                            setPackageUpdateCatalogInventoryFresh(true);
-                        } catch { /* best-effort */ }
-                    } else if (!res.success) {
-                        console.warn('App inventory scan did not return data:', res.error ?? res);
-                    }
+                    if (!res.success || !res.data) return false;
+                    const updatedSettings = await settingsWriterRef.current!.read();
+                    if (isDecoyMode()) return false;
+                    setAppSettings(updatedSettings);
+                    appSettingsRef.current = updatedSettings;
+                    seedFromCachedSettings(updatedSettings);
+                    const verified = await verifySavedInventory(res.data, updatedSettings.current?.apps?.inventory);
+                    const stillCurrent = verified && !isDecoyMode() && appSettingsRef.current === updatedSettings;
+                    if (stillCurrent) setPackageUpdateCatalogInventoryFresh(true);
+                    return stillCurrent;
                 })
-                .catch((err) => {
-                    console.error('App inventory scan failed:', err);
-                })
-                .finally(() => {
-                    if (appInventoryBackendInFlightRef.current === task) {
-                        appInventoryBackendInFlightRef.current = null;
-                    }
-                });
-
-            appInventoryBackendInFlightRef.current = task;
+                .catch(() => false);
             return task;
         };
 
-        const scanTask = appInventoryBackendInFlightRef.current ?? startBackendScan();
+        const scanTask = joinInventoryScan(appInventoryBackendInFlightRef, startBackendScan);
         if (!silent) setLoading(prev => ({ ...prev, apps: true }));
         try {
             const result = await waitForSoftTimeout(scanTask, APP_INVENTORY_SOFT_TIMEOUT_MS);
             if (result.status === "timed-out") {
                 console.warn('App inventory scan is still running after 45 seconds; keeping cached inventory and applying results when it finishes.');
+            }
+            if (requireVerified && !await scanTask) {
+                throw new Error('The app inventory refresh could not be verified. Refresh again before relying on its results.');
             }
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, apps: false }));

@@ -101,6 +101,15 @@ describe("package update display", () => {
     expect(refreshed).toBe(result);
   });
 
+  test("does not claim a package refresh after the app inventory refresh fails", async () => {
+    const calls: string[] = [];
+    expect(await refreshPackageAndAppInventories(
+      async () => { calls.push("apps"); throw new Error("inventory unavailable"); },
+      async () => { calls.push("package managers"); return { managers: [], cancelled: false }; },
+    ).then(() => "resolved", error => error.message)).toBe("inventory unavailable");
+    expect(calls).toEqual(["apps"]);
+  });
+
   test("gives a clear status for each package manager", () => {
     expect(managerUpdateStatus(manager("winget", ["Git.Git"]))).toEqual({
       label: "1 update available",

@@ -14,6 +14,19 @@ mod backend_paid_args;
 #[path = "backend_receipt.rs"]
 mod receipt;
 
+fn inventory_persistence_receipt(submitted: &serde_json::Value, saved: Result<serde_json::Value, String>) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+    let expected = serde_json::from_value::<settings::AppInventorySnapshot>(submitted.clone())
+        .ok().and_then(|value| serde_json::to_value(value).ok());
+    match (expected, saved) {
+        (Some(expected), Ok(actual)) if expected.is_object() && expected == actual => {
+            let digest = hex::encode(Sha256::digest(actual.to_string().as_bytes()));
+            serde_json::json!({"state": "confirmed", "sha256": digest})
+        }
+        _ => serde_json::json!({"state": "unconfirmed"}),
+    }
+}
+
 #[path = "backend_process.rs"]
 mod process;
 
@@ -3883,6 +3896,29 @@ mod settings_sync_patch_tests {
     use super::*;
 
     #[test]
+    fn inventory_receipt_matches_cross_language_canonical_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/appInventoryHashFixture.json")).unwrap();
+        let normalized = serde_json::to_value(serde_json::from_value::<crate::settings::AppInventorySnapshot>(fixture.clone()).unwrap()).unwrap();
+        assert_eq!(normalized, fixture);
+        let receipt = super::inventory_persistence_receipt(&fixture, Ok(normalized));
+        assert_eq!(receipt["sha256"], "8517e4f77bd97442192d51b2f335a538fcc4f45419671963ce418c299902ce05");
+    }
+
+    #[test]
+    fn inventory_receipt_binds_scan_to_canonical_saved_value() {
+        let submitted = serde_json::json!({"lastScanAt":"2026-10-28T12:00:00Z"});
+        let normalized = serde_json::to_value(serde_json::from_value::<crate::settings::AppInventorySnapshot>(submitted.clone()).unwrap()).unwrap();
+        let receipt = super::inventory_persistence_receipt(&submitted, Ok(normalized.clone()));
+        assert_eq!(receipt["state"], "confirmed");
+        assert_eq!(receipt["sha256"].as_str().unwrap().len(), 64);
+        for failure in [Err("sensitive error".to_string()), Ok(serde_json::Value::Null), Ok(serde_json::json!({"lastScanAt":"old"}))] {
+            let receipt = super::inventory_persistence_receipt(&submitted, failure);
+            assert_eq!(receipt, serde_json::json!({"state":"unconfirmed"}));
+            assert!(!receipt.to_string().contains("sensitive"));
+        }
+    }
+
+    #[test]
     fn explicit_failure_never_becomes_saved_telemetry_state() {
         for command in ["Disable-Telemetry", "Enable-Telemetry"] {
             for result in [
@@ -5760,7 +5796,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         }
     };
 
-    let result = if let Some(scope) = effective_scope {
+    let mut result = if let Some(scope) = effective_scope {
         result.map(|value| fix_scope::annotate(&command, scope, value))
     } else {
         result
@@ -5821,16 +5857,12 @@ pub(crate) async fn run_backend_script_with_timeout(
         // to current.apps.inventory so heartbeat sends cached data, not a live scan.
         // Also auto-persist after install/upgrade/uninstall actions so snapshot stays fresh.
         if command == "Get-AppInventory" {
-            if let Ok(ref res) = result {
-                // The result is the inventory snapshot JSON — persist to settings
-                let inventory_patch = serde_json::json!({
-                    "current": {
-                        "apps": {
-                            "inventory": res
-                        }
-                    }
-                });
-                let _ = settings::patch_settings(inventory_patch);
+            let inventory_patch = serde_json::json!({"current": {"apps": {"inventory": res}}});
+            let saved = settings::patch_settings(inventory_patch)
+                .and_then(|settings| serde_json::to_value(settings.current.apps.inventory).map_err(|_| "inventory serialization failed".to_string()));
+            let receipt = inventory_persistence_receipt(res, saved);
+            if let Ok(serde_json::Value::Object(ref mut value)) = result {
+                value.insert("__wcInventoryReceipt".to_string(), receipt);
             }
         }
     }
