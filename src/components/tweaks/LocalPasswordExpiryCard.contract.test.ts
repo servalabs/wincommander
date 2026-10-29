@@ -26,7 +26,8 @@ describe("local account password expiry", () => {
     for (const field of ["builtIn", "disabled", "service", "externalIdentity"]) {
       expect(backend).toContain(`${field} = 0`);
     }
-    expect(card).toContain("window.confirm(message)");
+    expect(card).toContain("await confirm({ title:");
+    expect(card).toContain("description: message");
     expect(card).toContain("This does not restore each account's previous setting.");
     expect(card).toContain("Windows was rechecked.");
   });
