@@ -132,7 +132,7 @@ function parseSensitiveCommands(rawSrc: string): Map<string, Tier> {
 // literals (command: "Name", ..., tier: CommandTier::X). These are
 // registered into the runtime registry, which get_command_tier() consults
 // BEFORE the SENSITIVE_COMMANDS/fallback paths, so they take precedence. ──
-function parseRegisteredCommandEntries(rawSrc: string): Map<string, Tier> {
+export function parseRegisteredCommandEntries(rawSrc: string): Map<string, Tier> {
   const src = stripLineComments(rawSrc);
   const map = new Map<string, Tier>();
   for (const fnName of ["register_p2_commands", "register_p3_commands"]) {
@@ -144,7 +144,13 @@ function parseRegisteredCommandEntries(rawSrc: string): Map<string, Tier> {
       /command:\s*"([^"]+)"[\s\S]*?tier:\s*CommandTier::(Free|Paid)/g;
     let m: RegExpExecArray | null;
     while ((m = entryRe.exec(body)) !== null) {
-      map.set(m[1], m[2] === "Paid" ? "paid" : "free");
+      const tier: Tier = m[2] === "Paid" ? "paid" : "free";
+      const existing = map.get(m[1]);
+      if (existing !== undefined && existing !== tier) {
+        throw new Error(`conflicting registered tiers for ${m[1]}: first ${existing}, later ${tier}`);
+      }
+      // Runtime registry_lookup uses the first registered entry.
+      if (existing === undefined) map.set(m[1], tier);
     }
   }
   return map;
@@ -319,4 +325,4 @@ function main(): void {
   process.exit(1);
 }
 
-main();
+if (import.meta.main) main();
