@@ -17,7 +17,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, type Event } from '@tauri-apps/api/event';
+import { createAsyncListenerScope } from '../../lib/asyncListeners';
 import { save } from '@tauri-apps/plugin-dialog';
 import { Button, HTMLSelect, InputGroup, Spinner, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
@@ -145,16 +146,12 @@ export default function CanaryTokensSection() {
     void refreshRecent();
 
     // Live hit updates from the Pro sidecar.
-    let unlisten: UnlistenFn | null = null;
-    (async () => {
-      unlisten = await listen<CanaryHit>('canary-token-fired', (e) => {
-        setRecent((prev) => [e.payload, ...prev].slice(0, RECENT_CAP));
-        void showSuccess(`Canary fired: ${e.payload.label || e.payload.tokenId}`);
-      });
-    })();
-    return () => {
-      if (unlisten) unlisten();
-    };
+    const listeners = createAsyncListenerScope(() => console.warn('Unable to manage Canary listener'));
+    void listeners.listen<Event<CanaryHit>>((handler) => listen('canary-token-fired', handler), (e) => {
+      setRecent((prev) => [e.payload, ...prev].slice(0, RECENT_CAP));
+      void showSuccess(`Canary fired: ${e.payload.label || e.payload.tokenId}`);
+    });
+    return () => listeners.dispose();
   }, [hasPaid, refreshStatus, refreshTokens, refreshRecent]);
 
   // ── Listener controls ──────────────────────────────────────────────────────

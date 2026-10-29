@@ -19,7 +19,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type Event } from "@tauri-apps/api/event";
+import { createAsyncListenerScope } from "../../lib/asyncListeners";
 
 export interface ScreenCaptureHit {
   tool: string;
@@ -91,16 +92,12 @@ export default function useScreenCapture(
   // on screen — the toast in BackgroundPollers is the always-on surface.
   useEffect(() => {
     void refresh();
-    let unlisten: UnlistenFn | null = null;
-    (async () => {
-      unlisten = await listen<ScreenCaptureHit>("screen-capture-detected", (e) => {
-        setRecent((prev) => [e.payload, ...prev].slice(0, RECENT_CAP));
-        void refresh();
-      });
-    })();
-    return () => {
-      if (unlisten) unlisten();
-    };
+    const listeners = createAsyncListenerScope(() => console.warn("Unable to manage screen capture listener"));
+    void listeners.listen<Event<ScreenCaptureHit>>((handler) => listen("screen-capture-detected", handler), (e) => {
+      setRecent((prev) => [e.payload, ...prev].slice(0, RECENT_CAP));
+      void refresh();
+    });
+    return () => listeners.dispose();
   }, [refresh]);
 
   const toggleDetection = useCallback(
