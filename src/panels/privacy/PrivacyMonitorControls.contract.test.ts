@@ -134,7 +134,7 @@ describe("Privacy Monitor control accessibility", () => {
     expect(rightSidebar).toContain('ariaLabel="Open instant file search"');
     expect(rightSidebar).toContain('ariaLabel="Open secure file and folder deletion"');
     expect(rightSidebar).toContain('ariaLabel="Open metadata scrubber"');
-    expect(rightSidebar).toContain('ariaLabel={sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}');
+    expect(rightSidebar).toContain('ariaLabel={pendingLockdownEnabled !== null ? "Lockdown setting is being saved" : sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}');
   });
 
   test("keeps every Fleet-selected local reporting control visibly locked", async () => {

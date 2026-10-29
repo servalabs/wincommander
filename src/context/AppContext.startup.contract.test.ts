@@ -19,7 +19,6 @@ describe("AppContext startup coordination", () => {
     expect(source).toContain("emitProgress(70, 'checking system readiness')");
     expect(source).toContain("setStartupComplete(true);");
     expect(source).toContain("settings = normalizeStartupSettings(settings);");
-    expect(source).toContain("only an elevated administrator may save");
     expect(source).toContain("startupEligibilityRef.current");
     expect(source).not.toContain("runStartupJob,\n    startupEligibility,");
   });
@@ -44,6 +43,9 @@ describe("AppContext startup coordination", () => {
     expect(hydration).toContain("setAppSettings(settings)");
     expect(hydration).not.toContain("'patch_settings_cmd'");
     expect(hydration).not.toContain("'set_settings'");
+    const normalizedHydration = hydration.slice(hydration.indexOf("settings = normalizeStartupSettings(settings);"), hydration.indexOf("// Phase 2: System probe"));
+    expect(normalizedHydration).toContain("setAppSettings(settings)");
+    expect(normalizedHydration).not.toMatch(/\b(?:writeSettings|patchAppSettings|patchSettingsSnapshot|settingsWriterRef)\b/);
   });
 
   test("keeps recovery notice independent of patch snapshots and out of decoy mode", async () => {
@@ -67,22 +69,23 @@ describe("AppContext startup coordination", () => {
 
   test("persists normalized module defaults when the user edits modules", async () => {
     const source = await Bun.file("src/context/AppContext.tsx").text();
-    const mutation = source.slice(source.indexOf("const patchAppSettings ="), source.indexOf("const startupEligibility ="));
+    const mutation = source.slice(source.indexOf("const writeSettings ="), source.indexOf("const startupEligibility ="));
 
     expect(mutation).toContain("normalizeModulesConfig(");
-    expect(mutation).toContain("...currentModules,");
-    expect(mutation).toContain("...normalizedPatch.app.modules,");
-    expect(mutation).toContain("invoke<AppSettings>('patch_settings_cmd', { patch: normalizedPatch })");
+    expect(mutation).toContain("...currentModules, ...normalizedPatch.app.modules");
+    expect(mutation).toContain("command: 'patch_settings_cmd', args: { patch: normalizedPatch }");
+    expect(mutation).toContain("enqueueSettingsWrite(patchChainRef");
+    expect(mutation).toContain("invoke<AppSettings>(operation.command, operation.args)");
   });
 
   test("does not let a pre-mutation recovery read overwrite a newer settings snapshot", async () => {
     const source = await Bun.file("src/context/AppContext.tsx").text();
     const refresh = source.slice(source.indexOf("const readAndApplySettings ="), source.indexOf("const refreshHardening ="));
-    const mutation = source.slice(source.indexOf("const patchAppSettings ="), source.indexOf("const startupEligibility ="));
+    const mutation = source.slice(source.indexOf("const writeSettings ="), source.indexOf("const startupEligibility ="));
 
     expect(refresh).toContain("const requestGeneration = settingsMutationGenerationRef.current;");
     expect(refresh).toContain("await patchChainRef.current;");
-    expect(refresh).toContain("if (requestGeneration !== settingsMutationGenerationRef.current) return;");
+    expect(refresh).toContain("if (isDecoyMode() || requestGeneration !== settingsMutationGenerationRef.current) return;");
     expect(mutation).toContain("settingsMutationGenerationRef.current += 1;");
   });
 

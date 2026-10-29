@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const layout = readFileSync("src/panels/vault/VaultVolumeLayout.css", "utf8");
+const layout = readFileSync("src/panels/vault/VaultVolumeLayout.css", "utf8").replace(/\r\n/g, "\n");
 
 describe("encrypted-volume table layout", () => {
   test("keeps headers and rows as a table when the Secure Storage card is narrow", () => {

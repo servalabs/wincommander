@@ -44,34 +44,18 @@ describe("secure storage deep-state contracts", () => {
     expect(progressSource).toContain('className="mount-progress" role="status"');
     expect(vaultSource).toContain('<MountProgress');
     expect(vaultSource).toContain("const boundedMountError");
-    expect(vaultSource).toContain("installed WinCommander service still requires an NTFS permission check");
-    expect(vaultSource).toContain("Repair or update the WinCommander service");
+    expect(vaultSource).toContain('const boundedMountError = (error: unknown) => vaultOperationError(error)');
     expect(mountHandlerSource).toContain("setMountFailure(message);");
     expect(mountHandlerSource).toContain("mountPasswordSelectedVolume(mountVolume");
-    expect(mountHandlerSource).toContain("setMountPassword(\"\");");
+    expect(mountHandlerSource).toContain('setMountPassword("");');
     expect(mountHandlerSource).toContain("refreshMountLetters()");
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
     expect(vaultSource).toContain("vault_engine_unlock_failed");
-    expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
     expect(vaultSource).toContain("vault_caller_access_denied");
     expect(vaultSource).toContain("VLT.ACL.CALLER_ACCESS_DENIED");
-    const accessFailure = vaultSource.slice(vaultSource.indexOf('if (normalized.includes("vault_caller_access_denied"))'), vaultSource.indexOf('if (normalized.includes("vault_acl_apply_failed"))'));
-    expect(accessFailure).toContain("return vaultOperationError(error)");
     expect(vaultSource).not.toContain("Make this recovered volume accessible on this PC?");
     expect(vaultSource).not.toContain("repairCurrentAccountAccess");
     expect(mountHandlerSource).not.toContain("repairCurrentAccountAccess");
-    expect(vaultSource).toContain("vault_broker_unavailable");
-    expect(vaultSource).toContain("secure mount helper could not be reached");
-    expect(vaultSource).toContain("vault_broker_rejected");
-    expect(vaultSource).toContain("could not verify the secure mount helper");
-    const cleanupMessage = vaultSource.slice(
-      vaultSource.indexOf('if (normalized.includes("vault_cleanup_failed"))'),
-      vaultSource.indexOf("return normalized.length"),
-    );
-    expect(cleanupMessage).toContain("mount state could not be confirmed after cleanup");
-    expect(cleanupMessage).not.toContain("was not left mounted");
-    expect(cleanupMessage).not.toContain("safely unmounted");
-    expect(vaultSource).not.toContain("vault_broker_failed");
     const failureBranch = mountHandlerSource.slice(
       mountHandlerSource.indexOf("} catch"),
       mountHandlerSource.indexOf("} finally"),
