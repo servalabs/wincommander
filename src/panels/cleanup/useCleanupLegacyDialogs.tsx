@@ -1,8 +1,8 @@
 // Only the two bespoke viewers still used by SystemCleanupPanel.
-// Active handlers and dialog JSX are retained unchanged from the legacy hook.
+// Dedicated viewers for Wi-Fi profiles and browser footprints.
 import { Dialog, Button, Icon } from "@/components/ui/bp";
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import { DURATION_S } from "../../components/shared/motion";
 import useBackend, { type WlanProfile, type BrowserFootprintBrowser } from "../../hooks/useBackend";
@@ -19,6 +19,8 @@ const formatSizeKB = (sizeKB: number) => {
 export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     const { getWlanProfiles, removeWlanProfile, getBrowserFootprints, clearBrowserFootprints } = useBackend();
     const requestConfirm = useAppConfirm();
+    const cleanupActionInFlight = useRef(false);
+    const browserAuditStale = useRef(false);
 
     const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
 
@@ -42,6 +44,9 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     };
 
     const handleWlanProfiles = async () => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
         const cached = cardDataMap['wlanProfiles']?.raw;
         if (cached?.profiles) { setWlanProfiles(cached.profiles); setWlanDialogOpen(true); return; }
         await runLocalOnly('wlanProfiles', async () => {
@@ -53,20 +58,43 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 showError(res.error || "Failed to load WLAN profiles.");
             }
         });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
     };
 
     const handleRemoveWlanProfile = async (name: string) => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
+        const accepted = await requestConfirm({
+            title: `Forget Wi-Fi network ${name}?`,
+            description: 'This removes the saved Wi-Fi profile and may disconnect the current connection.',
+            confirmLabel: 'Forget network',
+        });
+        if (!accepted) return;
         await runLocalOnly('wlanRemove', async () => {
             const res = await removeWlanProfile(name);
             if (res.success) {
-                setWlanProfiles(prev => prev.filter(p => p.name !== name));
+                const next = wlanProfiles.filter(p => p.name !== name);
+                setWlanProfiles(next);
+                updateCacheEntry('wlanProfiles', {
+                    count: next.length, items: next.map(p => p.name), loading: false, clearing: false,
+                    raw: { profiles: next, totalProfiles: next.length },
+                });
             } else {
                 showError(res.error || "Failed to remove WLAN profile.");
             }
         });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
     };
 
     const handleEraseAllWlan = async () => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
         const accepted = await requestConfirm({
             title: "Forget all Wi-Fi networks?",
             description: "Every saved Wi-Fi profile will be removed and the current wireless connection may be lost.",
@@ -83,11 +111,17 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 showError(res.error || "Failed to clear Wi-Fi profiles.");
             }
         });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
     };
 
-    const handleBrowserFootprints = async () => {
+    const handleBrowserFootprints = async (forceRefresh = false) => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
         const cached = cardDataMap['browserFootprints']?.raw;
-        if (cached?.browsers) {
+        if (!forceRefresh && !browserAuditStale.current && cached?.browsers) {
             setBrowserFootprints(Array.isArray(cached.browsers) ? cached.browsers : []);
             setBrowserFootprintsError(null);
             setBrowserFootprintsDialogOpen(true);
@@ -98,14 +132,22 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         setBrowserFootprintsError(null);
         await runLocalOnly('browserFootprints', async () => {
             const res = await getBrowserFootprints();
-            if (res.success && res.data?.browsers) {
-                setBrowserFootprints(Array.isArray(res.data.browsers) ? res.data.browsers : []);
+            if (res.success && Array.isArray(res.data?.browsers)) {
+                const next = res.data.browsers;
+                setBrowserFootprints(next);
+                syncBrowserFootprintsCache(next);
+                browserAuditStale.current = false;
             } else {
+                browserAuditStale.current = true;
+                invalidateBrowserFootprintsCache();
                 const message = res.error || "Failed to audit browser footprints.";
                 setBrowserFootprintsError(message);
                 showError(message);
             }
         });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
     };
 
     const browserFootprintCacheKey = (b: BrowserFootprintBrowser) =>
@@ -121,33 +163,90 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         });
     };
 
-    const handleClearBrowserFootprints = async () => {
-        await runLocalOnly('browserFootprintsClear', async () => {
-            const res = await clearBrowserFootprints();
-            if (res.success) {
-                setBrowserFootprints([]);
-                syncBrowserFootprintsCache([]);
-                showSuccess("Browser footprints cleared.");
-            } else {
-                showError(res.error || "Failed to clear browser footprints.");
-            }
+    const invalidateBrowserFootprintsCache = () => {
+        const prior = cardDataMap['browserFootprints'];
+        updateCacheEntry('browserFootprints', {
+            count: prior?.count ?? 0, items: prior?.items ?? [], loading: false, clearing: false,
+            error: "Browser audit needs to be refreshed.",
         });
     };
 
-    const handleClearBrowserFootprint = async (target: BrowserFootprintBrowser) => {
-        await runLocalOnly(browserFootprintCacheKey(target), async () => {
-            const res = await clearBrowserFootprints(target.browser, target.profilePath);
-            if (res.success) {
-                const next = browserFootprints.filter(
-                    (b) => b.browser !== target.browser || b.profilePath !== target.profilePath
-                );
-                setBrowserFootprints(next);
-                syncBrowserFootprintsCache(next);
-                showSuccess(`Browser cleared: ${target.browser}`);
-            } else {
-                showError(res.error || `Failed to clear browser ${target.browser}.`);
+    // The cleanup operation may leave locked files behind. Only a fresh audit
+    // can update the list; a successful command is not proof of a complete wipe.
+    const refreshAfterBrowserCleanup = async () => {
+        const audit = await getBrowserFootprints();
+        if (audit.success && Array.isArray(audit.data?.browsers)) {
+            const next = audit.data.browsers;
+            setBrowserFootprints(next);
+            syncBrowserFootprintsCache(next);
+            setBrowserFootprintsError(null);
+            browserAuditStale.current = false;
+            return true;
+        }
+        browserAuditStale.current = true;
+        invalidateBrowserFootprintsCache();
+        const message = audit.error || "Failed to refresh browser audit.";
+        setBrowserFootprintsError(message);
+        showError(`Cleanup finished, but the browser audit could not be refreshed: ${message}`);
+        return false;
+    };
+
+    const handleClearBrowserFootprints = async () => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
+        const accepted = await requestConfirm({
+            title: "Clear all browser footprints?",
+            description: "This removes browser history, cookies, sessions, caches and saved login data where accessible.",
+            confirmLabel: "Clear all browsers",
+        });
+        if (!accepted) return;
+        await runLocalOnly('browserFootprintsClear', async () => {
+            const res = await clearBrowserFootprints();
+            const refreshed = await refreshAfterBrowserCleanup();
+            if (!res.success) {
+                showError(res.error || "Failed to clear browser footprints.");
+            } else if (typeof (res.data as { stdout?: unknown } | undefined)?.stdout === "string" &&
+                /\b\d+ locked\b/i.test((res.data as { stdout: string }).stdout)) {
+                showError("Some browser data could not be cleared because files are locked. Close the browser and review the audit before retrying.");
+            } else if (refreshed) {
+                showSuccess("Browser cleanup finished. Review the refreshed audit for remaining data.");
             }
         });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
+    };
+
+    const handleClearBrowserFootprint = async (target: BrowserFootprintBrowser) => {
+        if (cleanupActionInFlight.current) return;
+        cleanupActionInFlight.current = true;
+        try {
+        if (!target.browser?.trim() || !target.profilePath?.trim()) {
+            showError("Cannot clear this browser because its identity is incomplete. Refresh the audit and try again.");
+            return;
+        }
+        const accepted = await requestConfirm({
+            title: `Clear ${target.browser} footprints?`,
+            description: "This removes this browser's history, cookies, sessions, caches and saved login data where accessible.",
+            confirmLabel: "Clear browser",
+        });
+        if (!accepted) return;
+        await runLocalOnly(browserFootprintCacheKey(target), async () => {
+            const res = await clearBrowserFootprints(target.browser, target.profilePath);
+            const refreshed = await refreshAfterBrowserCleanup();
+            if (!res.success) {
+                showError(res.error || `Failed to clear browser ${target.browser}.`);
+            } else if (typeof (res.data as { stdout?: unknown } | undefined)?.stdout === "string" &&
+                /\b\d+ locked\b/i.test((res.data as { stdout: string }).stdout)) {
+                showError("Some browser data could not be cleared because files are locked. Close the browser and review the audit before retrying.");
+            } else if (refreshed) {
+                showSuccess("Browser cleanup finished. Review the refreshed audit for remaining data.");
+            }
+        });
+        } finally {
+            cleanupActionInFlight.current = false;
+        }
     };
 
     useEffect(() => {
@@ -259,7 +358,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                                 Browser artifact inventory
                             </div>
                             <div className="text-[11px] mt-1" style={{ color: "var(--color-text-muted)", lineHeight: 1.45 }}>
-                                History, cookies, caches, sessions, local storage, and login databases by detected browser profile.
+                                History, cookies, caches, sessions, local storage, and login databases in detected browser locations. This audit may omit additional profiles or locations.
                             </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
@@ -281,11 +380,11 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                         {browserFootprintsError && !localLoadingMap['browserFootprints'] && (
                             <div className="mx-1 mb-3 flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-xs" role="alert" style={{ borderColor: "var(--color-danger)", color: "var(--color-danger)", background: "var(--color-danger-dim)" }}>
                                 <span>Browser audit failed: {browserFootprintsError}</span>
-                                <Button small minimal icon="refresh" text="RETRY AUDIT" onClick={() => void handleBrowserFootprints()} />
+                                <Button small minimal icon="refresh" text="RETRY AUDIT" onClick={() => void handleBrowserFootprints(true)} />
                             </div>
                         )}
                         {browserFootprints.length === 0 && !localLoadingMap['browserFootprints'] && !browserFootprintsError && (
-                            <p className="text-xs text-center py-4" style={{ color: "var(--color-text-muted)" }}>No browser profiles detected</p>
+                            <p className="text-xs text-center py-4" style={{ color: "var(--color-text-muted)" }}>No browser artifacts detected in this audit. Additional profiles or locations may not be included.</p>
                         )}
                         <div className="grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2">
                             {[...browserFootprints].sort((a, b) => b.totalSizeKB - a.totalSizeKB).map((b) => (
