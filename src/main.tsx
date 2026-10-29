@@ -23,6 +23,8 @@ const windowLabel = (() => {
 })();
 const isNotificationWindow = windowLabel === "notification-alerts"
   || new URLSearchParams(window.location.search).get("wc-window") === "notification-alerts";
+const isSearchOverlayWindow = windowLabel === "search-overlay"
+  || new URLSearchParams(window.location.search).get("wc-window") === "search-overlay";
 
 // The alert window is created by the Rust backend. In dev mode Tauri can
 // legitimately use its postMessage IPC fallback before it exposes the legacy
@@ -31,10 +33,12 @@ const isNotificationWindow = windowLabel === "notification-alerts"
 // security alerts.
 if (isNotificationWindow) {
   void import("./entries/notificationAlerts").then(({ mountNotificationAlerts }) => mountNotificationAlerts());
+} else if (isSearchOverlayWindow) {
+  // Route this trusted native window before the dev IPC marker check. WebView2
+  // can publish that marker after the window label on a cold first launch.
+  void import("./entries/searchOverlay").then(({ mountSearchOverlay }) => mountSearchOverlay());
 } else if (!hasNativeBackend) {
   void import("./entries/backendRequired").then(({ mountBackendRequired }) => mountBackendRequired());
-} else if (windowLabel === "search-overlay") {
-  void import("./entries/searchOverlay").then(({ mountSearchOverlay }) => mountSearchOverlay());
 } else {
   void import("./entries/mainWindow")
     .then(({ mountMainWindow }) => mountMainWindow())

@@ -48,7 +48,6 @@ import "./EverythingSearchBar.css";
 
 const esbIconCache = new Map<string, string | null>();
 import { rememberSearchHandoff } from "@/lib/searchPrivacy";
-const QUICK_RESULT_LIMIT = 300;
 
 const TYPE_FILTER_META: Record<string, { label: string; icon: string }> = {
   videos: { label: "Video", icon: "video" },
@@ -690,12 +689,11 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     if (activeRow && activeRow.docId !== previewRow?.docId) selectPreview(activeRow);
   }, [activeIndex, dedupedContentRows, previewRow?.docId, resultTab, selectPreview]);
 
-  // The count request is intentionally best-effort. A full quick-search page
-  // still means there may be more results even when that slower request timed
-  // out, so never hide the complete-results escape hatch in that case.
-  const hasMoreResults = search.totalCount !== null
-    ? search.totalCount > primary.length
-    : primary.length >= QUICK_RESULT_LIMIT;
+  // The shortcut is a short ranked preview. `hasMore` comes from the verified
+  // provider page, so ordinary searches with 99 matches always get a route to
+  // the complete Search Files panel even though privacy-safe total counts are
+  // unavailable.
+  const hasMoreResults = search.hasMore || (search.totalCount !== null && search.totalCount > primary.length);
 
   // The ghost is the ONE thing Tab acts on: a trailing-word chip candidate.
   // The shortcut launcher must not silently inherit Explorer's active folder:
@@ -1222,7 +1220,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       )}
 
       {!privacy.status && (
-        <div className="esb-error" role="status">Checking volume privacy. Search results are hidden until this check completes.</div>
+        <div className="esb-status" role="status">Preparing search…</div>
       )}
 
       {sectionLabel && primary.length > 0 && (
@@ -1292,16 +1290,14 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             type="button"
             className="esb-open-full-search"
             onClick={() => {
-              // The panel mounts after navigation, so retain the handoff until
-              // its first effect can consume it instead of racing an event. A
-              // DOM event alone stays inside the dedicated shortcut WebView;
-              // the Tauri event reaches the main window that owns the panel.
+              // This must cross the native boundary: a frontend broadcast can
+              // route the hidden main WebView without restoring its window.
               const handoff = query.text.trim();
-              if (handoff) rememberSearchHandoff(handoff);
-              void emit("open-search-files-panel", handoff)
+              void invoke("open_search_files_from_shortcut", { query: handoff })
                 .catch(() => {
-                  // The normal in-window bar has no separate main WebView, so
-                  // preserve its direct route as a resilient fallback.
+                  // The ordinary in-window bar can still navigate locally if
+                  // a development/native command is unavailable.
+                  if (handoff) rememberSearchHandoff(handoff);
                   window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }));
                 })
                 .finally(close);

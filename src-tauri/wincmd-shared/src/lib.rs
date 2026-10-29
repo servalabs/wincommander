@@ -22,6 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 pub mod vault_sync;
+pub mod managed_deployment;
 
 /// Magic string in the Hello frame so a connecting peer can spot a
 /// protocol-mismatch immediately. Bumped on incompatible wire-format

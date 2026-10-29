@@ -9,7 +9,7 @@
 // always emit every active filter token AND the text together.
 
 import { describe, expect, it, test } from "bun:test";
-import { buildSearchQuery, isSearchTimeoutError } from "./fileNameSearch";
+import { buildSearchQuery, fileSearchPageStatus, formatFileSearchError } from "./fileNameSearch";
 import { FILE_TYPE_EXTENSIONS } from "./fileNameSearch";
 import type { SearchType } from "./fileNameSearch";
 
@@ -20,11 +20,12 @@ describe("buildSearchQuery — text + filters combine (the core fix)", () => {
     // sent the backend only "assets*" and filtered the raw hits client-side —
     // silently dropping matching folders whenever the first page of raw
     // Everything results happened to be all files.
-    expect(q).toBe("folder: size:>100mb dm:thisweek assets*");
+    expect(q).toBe("folder: size:>100mb dm:thisweek *assets*");
   });
 
-  it("text alone (no filters) still normalizes to a trailing-wildcard token", () => {
-    expect(buildSearchQuery("report 2024", new Set(), "any", "any")).toBe("report*2024*");
+  it("matches a name containing the text, including text after a prefix", () => {
+    expect(buildSearchQuery("parth", new Set(), "any", "any")).toBe("*parth*");
+    expect(buildSearchQuery("report 2024", new Set(), "any", "any")).toBe("*report*2024*");
   });
 
   it("filters alone (no text) still produce their tokens with no dangling text token", () => {
@@ -170,9 +171,45 @@ describe("buildSearchQuery — date modified, verified against es.exe (ES_FACTS)
   });
 });
 
-describe("isSearchTimeoutError", () => {
-  it("classifies the backend's transient autocomplete timeout without hiding other errors", () => {
-    expect(isSearchTimeoutError("Search took too long — that filter isn't indexed.")).toBe(true);
-    expect(isSearchTimeoutError("Search engine not installed")).toBe(false);
+describe("formatFileSearchError", () => {
+  it("turns legacy timeout errors into an actionable failure instead of no matches", () => {
+    expect(formatFileSearchError("Search took too long — that filter isn't indexed."))
+      .toBe("Filename search did not respond in time. Try searching again.");
+  });
+
+  it("preserves detailed engine recovery instructions", () => {
+    const message = "Filename search engine is still loading or not responding. Please retry.";
+    expect(formatFileSearchError(message)).toBe(message);
+    expect(formatFileSearchError(new Error("Search engine not installed"))).toBe("Search engine not installed");
+  });
+});
+
+describe("filename result page status", () => {
+  const empty = { results: [], total: 0, query: "budget" };
+
+  it("keeps Show more available when verified page total does not include later matches", () => {
+    expect(fileSearchPageStatus({ ...empty, has_more: true, incomplete: false }, 200))
+      .toEqual({ resultsIncomplete: false, hasMore: true });
+  });
+
+  it("keeps an incomplete empty scan distinct from an exhausted empty search", () => {
+    expect(fileSearchPageStatus({ ...empty, has_more: false, incomplete: true }, 200))
+      .toEqual({ resultsIncomplete: true, hasMore: true });
+    expect(fileSearchPageStatus({ ...empty, has_more: false, incomplete: false }, 200))
+      .toEqual({ resultsIncomplete: false, hasMore: false });
+  });
+
+  it("uses the old total only when provider pagination metadata is absent", () => {
+    expect(fileSearchPageStatus({ ...empty, total: 400 }, 200).hasMore).toBe(true);
+    expect(fileSearchPageStatus({ ...empty, total: 400, has_more: false }, 200).hasMore).toBe(false);
+  });
+
+  it("clears incomplete and pagination state after a reset or failed request", () => {
+    let status = fileSearchPageStatus({ ...empty, incomplete: true, has_more: true }, 200);
+    expect(status.resultsIncomplete).toBe(true);
+    status = fileSearchPageStatus(null, 200);
+    expect(status).toEqual({ resultsIncomplete: false, hasMore: false });
+    status = fileSearchPageStatus(empty, 200);
+    expect(status).toEqual({ resultsIncomplete: false, hasMore: false });
   });
 });

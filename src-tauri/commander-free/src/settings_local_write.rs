@@ -45,23 +45,28 @@ fn apply_with(
 
 fn prepare(current: &AppSettings, mutation: Mutation) -> Result<AppSettings, String> {
     let candidate = match mutation {
-        Mutation::Patch(patch) => {
+        Mutation::Patch(mut patch) => {
             if !patch.is_object() {
                 return Err("Settings patch must be an object".into());
             }
+            super::normalize_file_search_result_limit(&mut patch);
             let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
             merge_json(&mut value, &patch);
             serde_json::from_value(value).map_err(|e| format!("Invalid settings format: {e}"))?
         }
-        Mutation::Replace(value) => {
+        Mutation::Replace(mut value) => {
+            super::normalize_file_search_result_limit(&mut value);
             serde_json::from_value(value).map_err(|e| format!("Invalid settings format: {e}"))?
         }
         Mutation::Import(json) => {
             if json.len() > MAX_IMPORT_BYTES {
                 return Err("Settings file exceeds the 4 MiB limit".into());
             }
-            let mut imported: AppSettings =
+            let mut value: Value =
                 serde_json::from_str(&json).map_err(|e| format!("Import failed: {e}"))?;
+            super::normalize_file_search_result_limit(&mut value);
+            let mut imported: AppSettings =
+                serde_json::from_value(value).map_err(|e| format!("Import failed: {e}"))?;
             imported.device_id = current.device_id.clone();
             imported.created_at = current.created_at.clone();
             imported.app_version = super::get_app_version();
@@ -140,7 +145,8 @@ fn validate(current: &AppSettings, candidate: &AppSettings) -> Result<(), String
         if path.split('.').any(str::is_empty) {
             return Err("Managed policy contains an invalid locked path".into());
         }
-        if at_path(&before, &path) != at_path(&after, &path) {
+        let path = super::canonical_file_search_result_limit_path(&path);
+        if at_path(&before, path) != at_path(&after, path) {
             return Err(format!("Setting '{lock}' is locked by admin policy"));
         }
     }

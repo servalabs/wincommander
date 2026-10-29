@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -670,15 +670,7 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
                     .ok()
                     .and_then(|payload| payload.get("query")?.as_str().map(str::to_owned))
                     .unwrap_or_default();
-                // A second Ctrl+Space is an explicit request to leave the
-                // compact overlay and use full Search Files. The event alone
-                // changes React state in the hidden main WebView; it does not
-                // restore/maximize the native window. Reveal first so dev and
-                // release builds both make the full search actually visible.
-                reveal_main_window(&app_for_handoff);
-                if let Some(main) = app_for_handoff.get_webview_window("main") {
-                    let _ = main.emit("open-search-files-panel", query);
-                }
+                open_search_files_panel(&app_for_handoff, &query);
             });
 
             let overlay_clone = overlay.clone();
@@ -692,30 +684,36 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
                 let _ = overlay_clone.hide();
                 if !handoff_received.load(Ordering::Acquire) {
                     app_clone.unlisten(handoff_listener);
-                    open_search_files_panel(&app_clone);
+                    open_search_files_panel(&app_clone, "");
                 }
             });
             return;
         }
-        let _ = overlay.show();
-        force_window_foreground(&overlay);
-
-        let overlay_clone = overlay.clone();
-        tauri::async_runtime::spawn(async move {
-            // 200 ms gives Windows enough time to fully promote the window
-            // to foreground before we re-assert focus and fire the frontend
-            // focus event. 100 ms was occasionally too short on busy systems.
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let _ = overlay_clone.set_focus();
-            let _ = overlay_clone.emit("focus-search-input", ());
-        });
+        // The first instance is built hidden. A second hotkey while its
+        // renderer is loading must not reveal WebView2's unpainted surface.
+        if search_overlay_renderer_ready().load(Ordering::Acquire) {
+            show_search_overlay(&overlay);
+        }
         return;
     }
 
-    if let Ok(overlay) = tauri::WebviewWindowBuilder::new(
+    search_overlay_renderer_ready().store(false, Ordering::Release);
+    let ready = search_overlay_renderer_ready();
+    let ready_for_listener = ready;
+    let app_for_ready = app.clone();
+    let ready_listener = app.once("search-overlay-ready", move |_| {
+        ready_for_listener.store(true, Ordering::Release);
+        if let Some(overlay) = app_for_ready.get_webview_window("search-overlay") {
+            show_search_overlay(&overlay);
+        }
+    });
+
+    if tauri::WebviewWindowBuilder::new(
         app,
         "search-overlay",
-        tauri::WebviewUrl::App("index.html".into()),
+        // The marker routes this window correctly even if WebView2 has not
+        // published its label to JavaScript during a cold dev launch.
+        tauri::WebviewUrl::App("index.html?wc-window=search-overlay".into()),
     )
     .title("Quick Search")
     .decorations(false)
@@ -724,30 +722,64 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
     .always_on_top(true)
     .skip_taskbar(true)
     .resizable(false)
+    .focused(false)
+    .visible(false)
     .inner_size(760.0, 520.0)
     .center()
     .build()
-    {
-        let _ = overlay.show();
-        force_window_foreground(&overlay);
-
-        let overlay_clone = overlay.clone();
+    .is_ok() {
+        let app_for_timeout = app.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let _ = overlay_clone.set_focus();
-            let _ = overlay_clone.emit("focus-search-input", ());
+            // Never expose a blank or black emergency fallback. If a broken
+            // renderer cannot acknowledge in time, remove the hidden window
+            // so the next Ctrl+Space can make a clean attempt.
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            if !search_overlay_renderer_ready().load(Ordering::Acquire) {
+                app_for_timeout.unlisten(ready_listener);
+                if let Some(overlay) = app_for_timeout.get_webview_window("search-overlay") {
+                    let _ = overlay.close();
+                }
+            }
         });
+    } else {
+        app.unlisten(ready_listener);
     }
 }
 
-fn open_search_files_panel(app: &tauri::AppHandle) {
-    // Match the acknowledged query handoff above. This fallback is also
-    // reached if the overlay renderer failed to answer, so it must reveal the
-    // main native window instead of merely changing a hidden React panel.
+fn search_overlay_renderer_ready() -> &'static AtomicBool {
+    static READY: OnceLock<AtomicBool> = OnceLock::new();
+    READY.get_or_init(|| AtomicBool::new(false))
+}
+
+fn show_search_overlay(overlay: &tauri::WebviewWindow) {
+    let _ = overlay.show();
+    force_window_foreground(overlay);
+
+    let overlay_clone = overlay.clone();
+    tauri::async_runtime::spawn(async move {
+        // 200 ms gives Windows enough time to fully promote the window before
+        // focus is re-asserted and the renderer receives its focus cue.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let _ = overlay_clone.set_focus();
+        let _ = overlay_clone.emit("focus-search-input", ());
+    });
+}
+
+fn open_search_files_panel(app: &tauri::AppHandle, query: &str) {
+    // A panel event by itself only changes the hidden main WebView's route.
+    // Restore the native window first so every shortcut route is visible.
     reveal_main_window(app);
     if let Some(main) = app.get_webview_window("main") {
-        let _ = main.emit("open-search-files-panel", ());
+        let _ = main.emit("open-search-files-panel", query);
     }
+}
+
+/// Promote a compact-search query into the complete Search Files page.
+/// Unlike a frontend broadcast this reaches the main window after it has been
+/// revealed, so closing the overlay cannot leave the full page hidden.
+#[tauri::command]
+fn open_search_files_from_shortcut(app: tauri::AppHandle, query: String) {
+    open_search_files_panel(&app, query.trim());
 }
 
 #[tauri::command]
@@ -2341,6 +2373,11 @@ pub fn run() {
             // dashboard-mounted JS interval guaranteed.
             updater::init(app.handle());
 
+            // Start the local content-index crawl and file watchers now, not
+            // when the user first opens Search Files. The indexer owns its own
+            // background worker, so this does not delay window startup.
+            file_search::start_background_indexing();
+
             #[cfg(windows)]
             session_instance::set_app_ready(&app.handle().clone());
 
@@ -2359,6 +2396,7 @@ pub fn run() {
             startup_trace::report_startup_phase,
             startup_window::startup_window_ready,
             exit_app,
+            open_search_files_from_shortcut,
             reveal_main_window_for_security_alert,
             open_log_file,
             // ── Destructive-action capability (mints a token for catastrophic ops) ──

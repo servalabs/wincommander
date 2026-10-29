@@ -101,6 +101,45 @@ fn unchanged(generation: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Start the ordinary index and private-volume refresh jobs without making a
+/// search request. This is shared by startup and the status command so the
+/// first crawl and filesystem watchers are ready before either search surface
+/// is opened.
+fn ensure_indexing_started() -> Result<(AppSettings, privacy::SearchPlan), String> {
+    let _replacement_lock = IndexReplacementLock::acquire()?;
+    let (settings, plan) = prepare(true)?;
+    let fs = &settings.app.file_search;
+    global::with_engine(
+        build_index_config(fs, plan.ordinary.clone())?,
+        &plan.protected,
+        |_| Ok(()),
+    )?;
+    private_jobs::refresh(&plan, &settings.device_id, &fs.exclusions, false);
+    Ok((settings, plan))
+}
+
+/// Queue indexing after the native application has opened. The worker only
+/// starts the existing background crawl/watchers; it never delays setup or the
+/// first window paint.
+pub(crate) fn start_background_indexing() {
+    if let Err(error) = std::thread::Builder::new()
+        .name("wc-content-index-start".into())
+        .spawn(|| {
+            if let Err(error) = ensure_indexing_started() {
+                crate::log_message(
+                    "warn",
+                    &format!("[FileSearch] background index start failed: {error}"),
+                );
+            }
+        })
+    {
+        crate::log_message(
+            "warn",
+            &format!("[FileSearch] could not start background index: {error}"),
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn search_content(
     terms: String,
@@ -163,14 +202,13 @@ pub async fn search_content(
 #[tauri::command]
 pub async fn content_index_status() -> Result<IndexStatus, String> {
     tokio::task::spawn_blocking(move || {
-        let (settings, plan) = prepare(true)?;
+        let (settings, plan) = ensure_indexing_started()?;
         let fs = &settings.app.file_search;
         let mut status = global::with_engine(
             build_index_config(fs, plan.ordinary.clone())?,
             &plan.protected,
             |engine| Ok(engine.status()),
         )?;
-        private_jobs::refresh(&plan, &settings.device_id, &fs.exclusions, false);
         for shard in &plan.private {
             let (state, message, count) = private_jobs::state(shard);
             status.indexed_docs += count;

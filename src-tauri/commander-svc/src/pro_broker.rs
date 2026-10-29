@@ -125,7 +125,9 @@ fn require_vault_runtime_version(
 const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 #[cfg(windows)]
 fn broker_timeout_for(feature_id: &str) -> std::time::Duration {
-    if feature_id == "vault.syncthing.prepare" {
+    if feature_id == "managed.deployment.apply" {
+        std::time::Duration::from_secs(300)
+    } else if feature_id == "vault.syncthing.prepare" {
         // First use can download the verified prerequisite before starting its profile.
         std::time::Duration::from_secs(180)
     } else {
@@ -386,7 +388,9 @@ async fn vault_call_until(
             eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash.eq_ignore_ascii_case(&connected_hash));
             return Err(VaultMountReason::BrokerHandshakeRejected);
         }
-        require_vault_runtime_version(vault_runtime_version)?;
+        if feature_id != "managed.deployment.apply" {
+            require_vault_runtime_version(vault_runtime_version)?;
+        }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
             request_id,
@@ -717,7 +721,7 @@ fn is_syncthing_profile_failure(message: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn fixed_pro_path() -> std::path::PathBuf {
+pub(crate) fn fixed_pro_path() -> std::path::PathBuf {
     let bin = std::env::var_os("ProgramData")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| r"C:\ProgramData".into())

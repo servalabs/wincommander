@@ -648,7 +648,11 @@ pub struct FileSearchSettings {
     /// Maximum filename rows returned to the Search Files panel. The command
     /// clamps this again so a malformed settings file cannot create an
     /// unbounded Everything request.
-    #[serde(default = "default_file_search_result_limit")]
+    #[serde(
+        default = "default_file_search_result_limit",
+        rename = "resultLimit",
+        alias = "result_limit"
+    )]
     pub result_limit: u32,
 }
 
@@ -734,6 +738,11 @@ pub struct FleetSettings {
     /// different device command. Absent legacy data safely causes one read-back.
     #[serde(default)]
     pub privacy_shield_applied_command_id: Option<String>,
+    /// Hash of detector tuning used by the running Fleet session. A policy
+    /// epoch can change without a Shield command, so revision alone is not
+    /// enough to know whether the detector uses the new blur settings.
+    #[serde(default)]
+    pub privacy_shield_applied_tuning_hash: Option<String>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
@@ -1580,6 +1589,12 @@ pub struct PrivacyShieldSettings {
     pub gaze_detection_enabled: Option<bool>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,
+    #[serde(default)]
+    pub look_away_notifications_enabled: Option<bool>,
+    #[serde(default)]
+    pub multiple_faces_notifications_enabled: Option<bool>,
+    #[serde(default)]
+    pub phone_notifications_enabled: Option<bool>,
     pub confidence_threshold: Option<f32>,
     pub wake_delay_seconds: Option<u32>,
     pub blur_opacity: Option<f32>,
@@ -2519,6 +2534,7 @@ fn parse_and_migrate_json_val(json: serde_json::Value) -> Result<AppSettings, St
         json
     };
     migrate_legacy_monitor_names(&mut final_json);
+    normalize_file_search_result_limit(&mut final_json);
     let mut settings: AppSettings = serde_json::from_value(final_json)
         .map_err(|e| format!("Failed to deserialize settings: {e}"))?;
     ensure_valid_device_id(&mut settings);
@@ -2635,10 +2651,24 @@ fn merge_user_overlay(
     mut overlay: serde_json::Value,
 ) -> Result<AppSettings, String> {
     startup_scope::remove_personal_choice(&mut overlay);
+    normalize_file_search_result_limit(&mut overlay);
     let mut merged = serde_json::to_value(machine)
         .map_err(|error| format!("Failed to serialize machine settings: {error}"))?;
     merge_json(&mut merged, &overlay);
     parse_and_migrate_json_val(merged)
+}
+
+/// Normalize this legacy spelling before merging with canonical defaults or
+/// snapshots, so the two serde aliases cannot become duplicate fields.
+fn normalize_file_search_result_limit(value: &mut serde_json::Value) {
+    if let Some(search) = value
+        .pointer_mut("/app/fileSearch")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if let Some(legacy) = search.remove("result_limit") {
+            search.entry("resultLimit".to_string()).or_insert(legacy);
+        }
+    }
 }
 
 fn load_legacy_user_settings_overlay() -> Result<Option<serde_json::Value>, String> {
@@ -3010,11 +3040,12 @@ pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
 }
 
 fn patch_settings_with(
-    patch: serde_json::Value,
+    mut patch: serde_json::Value,
     paid: bool,
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,
     notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
 ) -> Result<AppSettings, String> {
+    normalize_file_search_result_limit(&mut patch);
     mutate_settings_with(
         |settings| {
             let mut current =
@@ -3116,11 +3147,21 @@ pub fn get_settings_hash() -> Result<String, String> {
 /// Check if a setting path is locked by admin policy.
 pub fn is_path_locked(path: &str) -> Result<bool, String> {
     let settings = read_settings()?;
+    let path = canonical_file_search_result_limit_path(path);
     Ok(settings
         .policy
         .locked_paths
         .iter()
-        .any(|p| path.starts_with(p.as_str())))
+        .any(|p| path.starts_with(canonical_file_search_result_limit_path(p))))
+}
+
+/// Resolve the historical spelling only for comparisons. Signed policy paths
+/// remain byte-for-byte unchanged in the settings snapshot.
+fn canonical_file_search_result_limit_path(path: &str) -> &str {
+    match path {
+        "app.fileSearch.result_limit" => "app.fileSearch.resultLimit",
+        _ => path,
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -4294,6 +4335,85 @@ pub async fn update_current_state(probe: serde_json::Value) -> Result<serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_search_result_limit_reads_legacy_snake_case_without_resetting_saved_choice() {
+        let settings: FileSearchSettings = serde_json::from_value(serde_json::json!({
+            "roots": [], "exclusions": [], "result_limit": 500
+        }))
+        .unwrap();
+        assert_eq!(settings.result_limit, 500);
+        let saved = serde_json::to_value(settings).unwrap();
+        let restarted: FileSearchSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(restarted.result_limit, 500);
+    }
+
+    #[test]
+    fn file_search_result_limit_accepts_frontend_camel_case_choice() {
+        let settings: FileSearchSettings = serde_json::from_value(serde_json::json!({
+            "roots": [], "exclusions": [], "resultLimit": 50
+        }))
+        .unwrap();
+        assert_eq!(settings.result_limit, 50);
+    }
+
+    #[test]
+    fn file_search_result_limit_serializes_only_canonical_camel_case() {
+        let settings = FileSearchSettings {
+            result_limit: 1_000,
+            ..FileSearchSettings::default()
+        };
+        let saved = serde_json::to_value(settings).unwrap();
+        assert_eq!(saved["resultLimit"], 1_000);
+        assert!(saved.get("result_limit").is_none());
+    }
+
+    #[test]
+    fn file_search_result_limit_defaults_to_200_when_legacy_settings_omit_it() {
+        let settings: FileSearchSettings = serde_json::from_value(serde_json::json!({
+            "roots": [], "exclusions": []
+        }))
+        .unwrap();
+        assert_eq!(settings.result_limit, 200);
+        assert_eq!(FileSearchSettings::default().result_limit, 200);
+    }
+
+    #[test]
+    fn file_search_result_limit_legacy_overlay_overrides_canonical_machine_defaults() {
+        let settings = merge_user_overlay(
+            create_default_settings(),
+            serde_json::json!({"app": {"fileSearch": {"result_limit": 500}}}),
+        )
+        .unwrap();
+        assert_eq!(settings.app.file_search.result_limit, 500);
+    }
+
+    #[test]
+    fn file_search_result_limit_canonical_overlay_wins_when_both_spellings_exist() {
+        let settings = merge_user_overlay(
+            create_default_settings(),
+            serde_json::json!({"app": {"fileSearch": {"result_limit": 500, "resultLimit": 50}}}),
+        )
+        .unwrap();
+        assert_eq!(settings.app.file_search.result_limit, 50);
+    }
+
+    #[test]
+    fn file_search_result_limit_machine_load_and_legacy_patch_keep_the_selected_value() {
+        let mut persisted = serde_json::to_value(create_default_settings()).unwrap();
+        let search = persisted["app"]["fileSearch"].as_object_mut().unwrap();
+        search.remove("resultLimit");
+        search.insert("result_limit".into(), serde_json::json!(1_000));
+        let settings = parse_and_migrate_json_val(persisted).unwrap();
+        assert_eq!(settings.app.file_search.result_limit, 1_000);
+
+        let mut snapshot = serde_json::to_value(settings).unwrap();
+        let mut patch = serde_json::json!({"app": {"fileSearch": {"result_limit": 500, "resultLimit": 50}}});
+        normalize_file_search_result_limit(&mut patch);
+        merge_json(&mut snapshot, &patch);
+        let settings = parse_and_migrate_json_val(snapshot).unwrap();
+        assert_eq!(settings.app.file_search.result_limit, 50);
+    }
 
     #[test]
     fn only_first_run_or_legacy_migration_requires_a_cold_read_commit() {

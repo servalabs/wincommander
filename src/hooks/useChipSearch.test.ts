@@ -17,8 +17,9 @@
 // comment on appSortScore in useChipSearch.ts for the reasoning.
 
 import { describe, expect, it } from "bun:test";
-import { appSortScore, isMatchTermTooShort, MIN_MATCH_TERM_LENGTH } from "./useChipSearch";
+import { appSortScore, fetchBrowse, fetchMatchPage, fetchMatches, isMatchTermTooShort, MIN_MATCH_TERM_LENGTH } from "./useChipSearch";
 import type { SearchResult } from "../lib/fileNameSearch";
+import type { EverythingPlan } from "../lib/searchQueryPlan";
 
 function file(name: string, dir = "C:\\Users\\Admin\\Documents"): SearchResult {
   return { name, directory: dir, full_path: `${dir}\\${name}`, size: "1024", modified: "" };
@@ -26,6 +27,99 @@ function file(name: string, dir = "C:\\Users\\Admin\\Documents"): SearchResult {
 function folder(name: string, dir = "C:\\Users\\Admin\\Documents"): SearchResult {
   return { name, directory: dir, full_path: `${dir}\\${name}`, size: "", modified: "" };
 }
+
+describe("filename engine failures", () => {
+  const plan: EverythingPlan = { tokens: ["budget*"], isBrowse: false, scopePath: "D:\\Documents" };
+
+  it("rejects a timed-out primary request instead of presenting an empty match list", async () => {
+    let requests = 0;
+    const failure = await fetchMatches(plan, "budget", async () => {
+      requests += 1;
+      throw new Error("Search took too long — that filter isn't indexed.");
+    }).then(() => null, (error: unknown) => error);
+    expect(failure instanceof Error).toBe(true);
+    expect(String(failure)).toContain("Search took too long");
+    expect(requests).toBe(1);
+  });
+
+  it("returns an empty list when the engine successfully confirms there are no matches", async () => {
+    const rows = await fetchMatches(plan, "budget", async () => ({ results: [], total: 0, query: "budget*" }));
+    expect(rows).toEqual([]);
+  });
+
+  it("keeps confirmed matches when an optional ranking request fails", async () => {
+    const match = file("budget.txt", "D:\\Documents");
+    let requests = 0;
+    const rows = await fetchMatches(plan, "budget", async () => {
+      requests += 1;
+      if (requests > 1) throw new Error("Filename search timed out");
+      return { results: [match], total: 1, query: "budget*" };
+    });
+    expect(rows).toEqual([match]);
+    expect(requests).toBe(3);
+  });
+
+  it("rejects an incomplete empty match page before it can become no matches", async () => {
+    let requests = 0;
+    const failure = await fetchMatches(plan, "budget", async () => {
+      requests += 1;
+      return { results: [], total: 0, query: "budget*", has_more: false, incomplete: true };
+    }).then(() => null, (error: unknown) => error);
+    expect(String(failure)).toContain("Filename search is incomplete");
+    expect(String(failure)).toContain("narrow your search");
+    expect(requests).toBe(1);
+  });
+
+  it("retains confirmed matches from an incomplete provider page", async () => {
+    const match = file("budget.txt", "D:\\Documents");
+    const rows = await fetchMatches(plan, "budget", async () => ({
+      results: [match], total: 1, query: "budget*", has_more: true, incomplete: true,
+    }));
+    expect(rows).toEqual([match]);
+  });
+
+  it("rejects an incomplete empty browse instead of silently showing no recent files", async () => {
+    const failure = await fetchBrowse({ ...plan, isBrowse: true }, true, async () => ({
+      results: [], total: 0, query: "", incomplete: true,
+    })).then(() => null, (error: unknown) => error);
+    expect(String(failure)).toContain("Filename search is incomplete");
+  });
+
+  it("keeps a healthy zero-result browse empty", async () => {
+    const rows = await fetchBrowse({ ...plan, isBrowse: true }, true, async () => ({
+      results: [], total: 0, query: "", has_more: false, incomplete: false,
+    }));
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("shortcut match continuation", () => {
+  const plan: EverythingPlan = { tokens: ["parth*"], isBrowse: false };
+
+  it("keeps the compact preview but reports that the full Search Files panel has more matches", async () => {
+    const rows = Array.from({ length: 99 }, (_, index) => file(`parth-${index}.txt`));
+    const page = await fetchMatchPage(plan, "parth", async () => ({
+      results: rows,
+      total: rows.length,
+      query: "parth*",
+      has_more: false,
+    }));
+    expect(page.rows).toHaveLength(10);
+    expect(page.hasMore).toBe(true);
+  });
+
+  it("preserves the provider continuation signal even when the first page has only preview-sized rows", async () => {
+    const rows = Array.from({ length: 10 }, (_, index) => file(`parth-${index}.txt`));
+    const page = await fetchMatchPage(plan, "parth", async () => ({
+      results: rows,
+      total: rows.length,
+      query: "parth*",
+      has_more: true,
+    }));
+    expect(page.rows).toHaveLength(10);
+    expect(page.hasMore).toBe(true);
+  });
+});
 
 /** Sorts a mixed bag the same way fetchMatches's byScore does for the tier
  *  term — frecency/pathPreference tie-breaks are exercised separately from

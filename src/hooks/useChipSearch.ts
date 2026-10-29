@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildContentQueryArgs, contentHitToDisplayRow } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { ContentHit } from "@/types/wincmd-search";
-import { isDirectoryResult, isSearchTimeoutError, sfExtOf } from "@/lib/fileNameSearch";
+import { formatFileSearchError, isDirectoryResult, requireCompleteEmptySearch, sfExtOf } from "@/lib/fileNameSearch";
 import type { SearchResponse, SearchResult } from "@/lib/fileNameSearch";
 import { resolveMotionDisabled } from "@/lib/motionPolicy";
 import { normalizeKey, topPaths } from "@/lib/frecency";
@@ -301,9 +301,10 @@ function synthesizeRow(path: string): BrowseResult {
 }
 
 /** The empty-box list: recency from the index, led by what the user opens. */
-async function fetchBrowse(plan: EverythingPlan, filtered: boolean): Promise<BrowseResult[]> {
-  const resp = await fetchNames(plan, BROWSE_FETCH);
+export async function fetchBrowse(plan: EverythingPlan, filtered: boolean, fetch = fetchNames): Promise<BrowseResult[]> {
+  const resp = await fetch(plan, BROWSE_FETCH);
   const rows: BrowseResult[] = resp.results.filter((r) => !isNoisePath(r.full_path));
+  requireCompleteEmptySearch(resp, rows.length);
   // With chips active the list is a filtered search, not a history — injecting
   // remembered paths there would show rows that contradict the visible filters.
   if (filtered) return rows.slice(0, BROWSE_SHOW);
@@ -326,7 +327,18 @@ const EMPTY_SEARCH_RESPONSE: SearchResponse = { results: [], total: 0, query: ""
 
 /** The typed-query list: exact/prefix name matches first (apps ahead of ties),
  *  then frecency, then shortest name. */
-async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseResult[]> {
+export interface MatchPage {
+  rows: BrowseResult[];
+  /** True when the compact shortcut intentionally hides confirmed matches. */
+  hasMore: boolean;
+}
+
+/**
+ * Fetch a ranked preview for the shortcut. The shortcut remains deliberately
+ * compact, but it must retain the provider's continuation signal so a search
+ * with more matches can always open the complete Search Files panel.
+ */
+export async function fetchMatchPage(plan: EverythingPlan, term: string, fetch = fetchNames): Promise<MatchPage> {
   const termLower = term.toLowerCase();
   const boost = appsBoostApplies(plan);
   // The overlay previously launched three es.exe requests on every settled
@@ -334,17 +346,16 @@ async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseR
   // queued behind each other and the 6 s safety timeout surfaced as a bogus
   // "filter isn't indexed" error. The recency page is the useful answer in
   // almost every case; only ask for the expensive recovery pages when it is
-  // genuinely sparse. A timeout is then a silent partial result, never an
-  // alarming user-facing error for a query that remains valid.
-  const sorted = await fetchNames(plan, MATCH_FETCH).catch((error) => {
-    if (isSearchTimeoutError(error)) return EMPTY_SEARCH_RESPONSE;
-    throw error;
-  });
+  // genuinely sparse. The primary request must succeed: its failure is an
+  // unavailable search, not evidence that no files match. Supplemental ranking
+  // requests remain best-effort after a successful primary search.
+  const sorted = await fetch(plan, MATCH_FETCH);
+  requireCompleteEmptySearch(sorted);
   const needsRecovery = sorted.results.length < MATCH_SHOW;
   const [apps, unsorted] = needsRecovery
     ? await Promise.all([
-      boost ? fetchNames(plan, 30, APP_EXT_TOKEN).catch(() => EMPTY_SEARCH_RESPONSE) : Promise.resolve<SearchResponse>(EMPTY_SEARCH_RESPONSE),
-      fetchNames({ ...plan, sort: undefined }, MATCH_FETCH).catch(() => EMPTY_SEARCH_RESPONSE),
+      boost ? fetch(plan, 30, APP_EXT_TOKEN).catch(() => EMPTY_SEARCH_RESPONSE) : Promise.resolve<SearchResponse>(EMPTY_SEARCH_RESPONSE),
+      fetch({ ...plan, sort: undefined }, MATCH_FETCH).catch(() => EMPTY_SEARCH_RESPONSE),
     ])
     : [EMPTY_SEARCH_RESPONSE, EMPTY_SEARCH_RESPONSE];
   // ONE pool, sorted ONCE below — not two independently-sorted arrays
@@ -384,7 +395,22 @@ async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseR
     seen.add(row.full_path);
     merged.push(row);
   }
-  return merged.slice(0, MATCH_SHOW);
+  return {
+    rows: merged.slice(0, MATCH_SHOW),
+    // `total` is deliberately not trusted: it cannot account for rows hidden
+    // by the per-result privacy check. The verified page signal and the
+    // local ranked overflow both prove that the shortcut has more to offer.
+    hasMore: merged.length > MATCH_SHOW
+      || sorted.has_more === true
+      || sorted.incomplete === true
+      || unsorted.has_more === true
+      || unsorted.incomplete === true,
+  };
+}
+
+/** Existing pure-test seam for callers that only need the visible preview. */
+export async function fetchMatches(plan: EverythingPlan, term: string, fetch = fetchNames): Promise<BrowseResult[]> {
+  return (await fetchMatchPage(plan, term, fetch)).rows;
 }
 
 export interface ChipSearchApi {
@@ -402,6 +428,8 @@ export interface ChipSearchApi {
   contentRows: ContentDisplayRow[];
   /** True total from the engine, or null when unknown / not worth showing. */
   totalCount: number | null;
+  /** The shortcut preview hid additional verified filename results. */
+  hasMore: boolean;
   isSearching: boolean;
   error: string | null;
   setError: (message: string | null) => void;
@@ -426,6 +454,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
   const [showingBrowse, setShowingBrowse] = useState(true);
   const [contentRows, setContentRows] = useState<ContentDisplayRow[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -458,6 +487,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     setShowingBrowse(true);
     setContentRows([]);
     setTotalCount(null);
+    setHasMore(false);
     setError(null);
     setIsSearching(false);
   }, []);
@@ -467,6 +497,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     setPrimary([]);
     setContentRows([]);
     setTotalCount(null);
+    setHasMore(false);
     if (previousPrivateRoots.current) setQuery(EMPTY_QUERY);
     previousPrivateRoots.current = (privacy.status?.privateRoots.length ?? 0) > 0;
   }, [privacy.revision, privacy.status?.privateRoots.length]);
@@ -513,20 +544,25 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
       setIsSearching(true);
       void (async () => {
         try {
-          const rows = plan.isBrowse
-            ? await fetchBrowse(plan, searchState.chips.length > 0)
-            : await fetchMatches(plan, jump.term);
+          const page = plan.isBrowse
+            ? { rows: await fetchBrowse(plan, searchState.chips.length > 0), hasMore: false }
+            : await fetchMatchPage(plan, jump.term);
           await refreshSearchPrivacy(true);
           if (!live()) return;
-          setPrimary(rows.filter((row) => mayShowSearchPath(row.full_path)));
+          const visible = page.rows.filter((row) => mayShowSearchPath(row.full_path));
+          setPrimary(visible);
+          setHasMore(page.hasMore);
           setRowsRevision(privacy.revision);
           setShowingBrowse(plan.isBrowse);
           setError(null);
         } catch (err) {
           if (!live()) return;
           setPrimary([]);
+          setHasMore(false);
           setShowingBrowse(plan.isBrowse);
-          setError(String(err));
+          setError(formatFileSearchError(err));
+          setTotalCount(null);
+          return;
         } finally {
           if (live()) setIsSearching(false);
         }
@@ -603,7 +639,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     isBrowse: showingBrowse, isJump: jump.isJump, term: jump.term,
     primary: rowsRevision === privacy.revision ? primary.filter((row) => mayShowSearchPath(row.full_path)) : [],
     contentRows: contentRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
-    totalCount, isSearching, error, setError, reset,
+    totalCount, hasMore, isSearching, error, setError, reset,
   };
 }
 

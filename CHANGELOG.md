@@ -12,18 +12,22 @@ Public release notes are published with each versioned
 - Add disk-analysis sunburst and treemap depth controls, navigation history,
   large-file filtering, scan progress/cancellation, and partial-result notices.
   Label logical sizes explicitly and require a fresh analysis after deletion.
+- Privacy Shield now honors separate notification choices for look-away/no-face,
+  multiple faces and phone detection. Changing blur or detector timing while a
+  Fleet-managed session runs reapplies the local detector settings; device
+  status still requires a current native observation to confirm the result.
 
 - Hidden backend commands now rebuild Windows PowerShell's module search path,
   preventing inherited PowerShell 7 modules from breaking permission checks.
 
-- Add administrator-confirmed Bluetooth machine policy control with protected
-  ownership records, configured/effective Windows policy checks and in-app
-  notifications. Server 2025 and later check the installed provider. Organisation
-  policies and uncertain state remain protected; no adapter is disabled. The
-  compact control reports unsupported or managed systems and preserves device-
-  change records for manual administrator review. Service changes preview affected
-  dependencies and save settings before applying; a collapsed view compares
-  snapshots, excluding driver settings from the service profile.
+- Bluetooth now uses Windows policy only. Adapter disabling and its background
+  worker are removed. The compact control verifies policy results, reports
+  unsupported or managed systems explicitly and uses in-app notifications.
+  Existing device-change records are preserved for manual administrator review.
+  Server 2025 and later now check the installed policy provider instead of
+  being rejected solely because they are Windows Server. Service changes
+  preview affected dependencies and save settings before applying; a collapsed
+  view compares snapshots, excluding driver settings from the service profile.
 
 - Setup refreshes recognized Scrub metadata menus for signed-in Windows users,
   so a previous installation path does not keep launching an older scrubber.

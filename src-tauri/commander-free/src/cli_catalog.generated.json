@@ -8242,6 +8242,16 @@
       ]
     },
     {
+      "id": "tauri:duplicate_finder_open",
+      "name": "duplicate_finder_open",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:duplicate_finder_page",
       "name": "duplicate_finder_page",
       "transport": "tauri",
@@ -9808,9 +9818,8 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/App.tsx",
-        "src/components/LicenseQuickPanel.tsx",
-        "src/hooks/useProcessElevation.ts",
-        "src/panels/identity/components/AppLicensePanel.tsx"
+        "src/hooks/useBackend.ts",
+        "src/hooks/useProcessElevation.ts"
       ]
     },
     {
@@ -10179,6 +10188,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:open_search_files_from_shortcut",
+      "name": "open_search_files_from_shortcut",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx"
       ]
     },
     {

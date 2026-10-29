@@ -73,7 +73,7 @@ export function useFileHygiene() {
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, roots, scopeMode, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
+  }, [backend, busy, minimumSizeBytes, roots, scopeMode, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
 
   useEffect(() => {
     if (enteredTool.current === tool) return;

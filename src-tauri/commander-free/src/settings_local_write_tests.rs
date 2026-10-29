@@ -52,7 +52,7 @@ impl Fixture {
     fn current(&self) -> Value {
         serde_json::to_value(SETTINGS_CACHE.lock().unwrap().as_ref().unwrap()).unwrap()
     }
-    fn deny(&self, mutation: Mutation) {
+    fn deny(&self, mutation: Mutation) -> String {
         let before = self.current();
         let attempts = Cell::new(0);
         let result = apply_with(
@@ -64,13 +64,80 @@ impl Fixture {
             },
             |_, _| panic!("denied mutation notified observers"),
         );
-        assert!(result.is_err(), "unauthorized mutation reached persistence");
+        let error = result.expect_err("unauthorized mutation reached persistence");
         assert_eq!(attempts.get(), 0, "authorization must precede every write");
         assert_eq!(
             self.current(),
             before,
             "denial must not replace cached state"
         );
+        error
+    }
+}
+
+#[test]
+fn file_search_result_limit_renderer_patch_replace_and_import_accept_legacy_and_mixed_keys() {
+    let current = create_default_settings();
+    for search in [
+        json!({"result_limit": 50}),
+        json!({"result_limit": 500, "resultLimit": 50}),
+    ] {
+        let patch = json!({"app": {"fileSearch": search}});
+        let mut replacement = serde_json::to_value(&current).unwrap();
+        let file_search = replacement["app"]["fileSearch"].as_object_mut().unwrap();
+        file_search.remove("resultLimit");
+        for (key, value) in patch["app"]["fileSearch"].as_object().unwrap() {
+            file_search.insert(key.clone(), value.clone());
+        }
+        for mutation in [
+            Mutation::Patch(patch),
+            Mutation::Replace(replacement.clone()),
+            Mutation::Import(replacement.to_string()),
+        ] {
+            let proposed = prepare(&current, mutation).unwrap();
+            assert_eq!(proposed.app.file_search.result_limit, 50);
+            let saved = serde_json::to_value(proposed).unwrap();
+            assert_eq!(saved["app"]["fileSearch"]["resultLimit"], 50);
+            assert!(saved["app"]["fileSearch"].get("result_limit").is_none());
+        }
+    }
+}
+
+#[test]
+fn file_search_result_limit_legacy_and_canonical_locks_deny_all_renderer_mutations() {
+    let fixture = Fixture::managed();
+    for lock in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
+        SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().policy.locked_paths = vec![lock.into()];
+        let before = fixture.current();
+        for spelling in ["result_limit", "resultLimit"] {
+            let patch = json!({"app": {"fileSearch": {(spelling): 50}}});
+            let mut replacement = before.clone();
+            let search = replacement["app"]["fileSearch"].as_object_mut().unwrap();
+            search.remove("resultLimit");
+            search.insert(spelling.into(), json!(50));
+            for mutation in [
+                Mutation::Patch(patch),
+                Mutation::Replace(replacement.clone()),
+                Mutation::Import(replacement.to_string()),
+            ] {
+                let error = fixture.deny(mutation);
+                assert!(error.contains("locked by admin policy"), "{error}");
+                assert_eq!(fixture.current()["policy"], before["policy"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn file_search_result_limit_lock_queries_resolve_both_spellings_without_rewriting_policy() {
+    let fixture = Fixture::managed();
+    for lock in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
+        SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().policy.locked_paths = vec![lock.into()];
+        for query in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
+            assert!(super::super::is_path_locked(query).unwrap());
+        }
+        assert!(!super::super::is_path_locked("app.fileSearch.result_limit_extra").unwrap());
+        assert_eq!(fixture.current()["policy"]["lockedPaths"], json!([lock]));
     }
 }
 impl Drop for Fixture {

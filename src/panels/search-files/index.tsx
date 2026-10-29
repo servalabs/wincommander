@@ -25,7 +25,7 @@ import { showIndexedSearchRow } from "@/lib/contentSearch";
 import { getIndexDisplayError, getTabFilterSuggestion } from "@/lib/searchFilesPanel";
 import { isEngineMissingError } from "@/lib/fileNameSearch";
 import { buildContentFilterTokens } from "@/lib/contentQueryFilters";
-import { areResultsFresh, buildSelectionEntries, normalizeResultLimit, stepSelection } from "@/lib/searchSelection";
+import { areResultsFresh, buildSelectionEntries, currentQueryRows, normalizeResultLimit, stepSelection } from "@/lib/searchSelection";
 import SearchHeader from "./SearchHeader";
 import SearchEmptyState from "./SearchEmptyState";
 import FilterBar from "./FilterBar";
@@ -105,20 +105,36 @@ export default function SearchFilesPanel() {
     () => content.contentRows.filter((row) => showIndexedSearchRow(row, content.privacyStatus?.privateRoots ?? [])),
     [content.contentRows, content.privacyStatus?.privateRoots],
   );
+  // Results arrive asynchronously. Never leave the previous query's files on
+  // screen under newly handed-off text: that makes an old search look current
+  // and can let a click open the wrong file.
+  const nameRowsCurrent = search.resultsQuery === search.query;
+  const contentRowsCurrent = content.contentQuery === search.query;
+  const nameRows = currentQueryRows(search.query, search.resultsQuery, search.results);
+  const visibleContentRows = currentQueryRows(search.query, content.contentQuery, textContentRows);
+  const trimmed = search.query.trim();
+  const showContentSection = trimmed.length >= 2;
+  const filenameSearchRequested = trimmed.length > 0
+    || search.searchTypes.size > 0
+    || search.sizeFilter !== "any"
+    || search.dateFilter !== "any";
+  const nameLoading = search.isSearching || (filenameSearchRequested && !nameRowsCurrent);
+  const contentLoading = content.contentLoading || (showContentSection && !contentRowsCurrent);
 
   // Only the visible tab participates in arrow-key navigation. This keeps the
   // input's active descendant on a row the user can actually see.
   const entries = useMemo(
     () => activeResultTab === "names"
-      ? buildSelectionEntries(search.results.length, 0)
-      : buildSelectionEntries(0, textContentRows.length),
-    [activeResultTab, search.results.length, textContentRows.length],
+      ? buildSelectionEntries(nameRows.length, 0)
+      : buildSelectionEntries(0, visibleContentRows.length),
+    [activeResultTab, nameRows.length, visibleContentRows.length],
   );
 
   const savedResultLimit = appSettings?.app?.fileSearch?.resultLimit;
   const effectiveSavedResultLimit = normalizeResultLimit(savedResultLimit);
+  const appliedSavedResultLimit = useRef<number | null>(null);
   const resultLimitLocked = (appSettings?.policy?.lockedPaths ?? []).some((path) => {
-    const normalized = path.trim();
+    const normalized = path.trim().replace(/(^|\.)result_limit$/, "$1resultLimit");
     return normalized.length > 0 && (
       "app.fileSearch.resultLimit".startsWith(normalized)
       || "fileSearch.resultLimit".startsWith(normalized)
@@ -128,10 +144,11 @@ export default function SearchFilesPanel() {
   // Settings arrive after the panel mounts. Apply the saved/admin-provided
   // value then, rather than leaving this session on the old 200-row default.
   useEffect(() => {
-    if (typeof savedResultLimit === "number" && effectiveSavedResultLimit !== resultLimit) {
-      setResultLimit(effectiveSavedResultLimit);
+    if (typeof savedResultLimit === "number" && (resultLimitLocked || appliedSavedResultLimit.current !== effectiveSavedResultLimit)) {
+      appliedSavedResultLimit.current = effectiveSavedResultLimit;
+      if (effectiveSavedResultLimit !== resultLimit) setResultLimit(effectiveSavedResultLimit);
     }
-  }, [effectiveSavedResultLimit, resultLimit, savedResultLimit, setResultLimit]);
+  }, [effectiveSavedResultLimit, resultLimit, resultLimitLocked, savedResultLimit, setResultLimit]);
 
   const changeResultLimit = useCallback((value: number) => {
     const next = normalizeResultLimit(value);
@@ -185,17 +202,17 @@ export default function SearchFilesPanel() {
     const entry = entries[flatIndex];
     if (!entry) return;
     if (entry.kind === "name") {
-      const r = search.results[entry.index];
+      const r = nameRows[entry.index];
       if (!r) return;
       if (folder) openFolder(r.directory);
       else openFile(r.full_path);
     } else {
-      const row = textContentRows[entry.index];
+      const row = visibleContentRows[entry.index];
       if (!row) return;
       if (folder) openFolder(contentRowDir(row.path));
       else openFile(row.path);
     }
-  }, [entries, search.results, textContentRows, openFile, openFolder]);
+  }, [entries, nameRows, visibleContentRows, openFile, openFolder]);
 
   const clearAll = useCallback(() => {
     search.clear();
@@ -250,16 +267,16 @@ export default function SearchFilesPanel() {
 
   // A missing/stopped filename indexer must not scream over healthy content
   // results — it degrades to an inline notice under the File-names group.
-  const engineMissing = isEngineMissingError(search.error);
-  const activeError = (engineMissing ? null : search.error) ?? content.contentError;
+  const currentFileError = nameRowsCurrent ? search.error : null;
+  const currentContentError = contentRowsCurrent ? content.contentError : null;
+  const engineMissing = isEngineMissingError(currentFileError);
+  const activeError = (engineMissing ? null : currentFileError) ?? currentContentError;
   const indexDisplayError = content.indexStatusError ?? getIndexDisplayError(content.indexStatus?.last_error);
 
-  const trimmed = search.query.trim();
-  const showContentSection = trimmed.length >= 2;
-  const showNameSection = search.hasSearched || search.isSearching;
+  const showNameSection = search.hasSearched || nameLoading;
   const showEmptyState = !showNameSection && !trimmed && content.currentRoots.length > 0 && !showIndexSettings;
-  const anySearching = search.isSearching || content.contentLoading;
-  const showFooter = (showNameSection || textContentRows.length > 0) && !activeError;
+  const anySearching = nameLoading || contentLoading;
+  const showFooter = ((search.hasSearched && nameRowsCurrent) || visibleContentRows.length > 0) && !activeError;
   const canShowNameTab = showNameSection;
   const canShowContentTab = showContentSection;
 
@@ -351,7 +368,7 @@ export default function SearchFilesPanel() {
             </TooltipContent>
           </Tooltip>
         </div>
-        {search.error && <p className="sfp-indexing-note" aria-live="polite">{fileSearchDiagnostic("service_unavailable").message}</p>}
+        {currentFileError && <p className="sfp-indexing-note" aria-live="polite">{fileSearchDiagnostic("service_unavailable").message}</p>}
         {tabFilter && (
           <button type="button" className="sfp-tab-filter" onClick={acceptTabFilter}>
             <Icon icon="filter" size={13} />
@@ -431,7 +448,7 @@ export default function SearchFilesPanel() {
               }}
             >
               File names
-              {!search.isSearching && search.results.length > 0 && <span>{search.results.length.toLocaleString()}</span>}
+              {!nameLoading && nameRows.length > 0 && <span>{nameRows.length.toLocaleString()}</span>}
             </button>
             <button
               type="button"
@@ -452,7 +469,7 @@ export default function SearchFilesPanel() {
               }}
             >
               Indexed files
-              {!content.contentLoading && textContentRows.length > 0 && <span>{textContentRows.length.toLocaleString()}</span>}
+              {!contentLoading && visibleContentRows.length > 0 && <span>{visibleContentRows.length.toLocaleString()}</span>}
             </button>
           </div>
           <div
@@ -465,11 +482,16 @@ export default function SearchFilesPanel() {
             <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Indexed files"} search results`}>
               {activeResultTab === "names" && showNameSection && (
                 <div>
+                {nameRowsCurrent && search.resultsIncomplete && !nameLoading && !currentFileError && (
+                  <p className="sfp-indexing-note" role="status">
+                    Filename search is incomplete. Choose a specific folder or narrow your search, then try again.
+                  </p>
+                )}
                 <NameResultsSection
-                results={search.results}
+                results={nameRows}
                 query={search.query}
-                isSearching={search.isSearching}
-                showNoMatches={search.hasSearched && !search.error && !search.isSearching && search.results.length === 0}
+                isSearching={nameLoading}
+                showNoMatches={search.hasSearched && nameRowsCurrent && !currentFileError && !search.resultsIncomplete && !nameLoading && nameRows.length === 0}
                 engineMissing={engineMissing}
                 selectedIndex={selected}
                 onSelect={setSelected}
@@ -478,7 +500,7 @@ export default function SearchFilesPanel() {
                 onCopyPath={copyPath}
                 copiedPath={copiedPath}
                 scrollContainer={scrollContainer}
-                loadNativeIcons={!search.isSearching && search.resultsQuery === search.query}
+                loadNativeIcons={!nameLoading && nameRowsCurrent}
                 headerless
                 />
                 </div>
@@ -486,10 +508,10 @@ export default function SearchFilesPanel() {
               {activeResultTab === "content" && showContentSection && (
                 <div>
                 <ContentResultsSection
-                rows={textContentRows}
+                rows={visibleContentRows}
                 query={search.query}
-                contentLoading={content.contentLoading}
-                showNoMatches={!content.contentLoading && textContentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
+                contentLoading={contentLoading}
+                showNoMatches={contentRowsCurrent && !contentLoading && visibleContentRows.length === 0 && trimmed.length >= 2 && !currentContentError && content.currentRoots.length > 0}
                 expandedDocId={content.expandedDocId}
                 expandedText={content.expandedText}
                 expandedLoading={content.expandedLoading}
@@ -502,7 +524,7 @@ export default function SearchFilesPanel() {
                 onOpenFolder={openFolder}
                 onCopyPath={copyPath}
                 copiedPath={copiedPath}
-                loadNativeIcons={!content.contentLoading && content.contentQuery === search.query}
+                loadNativeIcons={!contentLoading && contentRowsCurrent}
                 headerless
                 />
                 </div>
@@ -516,17 +538,15 @@ export default function SearchFilesPanel() {
       {showFooter && (
         <div className="sfp-footer">
           <div className="sfp-footer-counts">
-            {search.hasSearched && !search.error && (
+            {search.hasSearched && nameRowsCurrent && !currentFileError && (
               <span className="result-count">
-                {search.totalCount > search.resultLimit
-                  ? `Showing ${search.results.length.toLocaleString()} of ${search.totalCount.toLocaleString()} name matches`
-                  : `${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}`}
-                {!content.contentLoading && textContentRows.length > 0 &&
-                  ` · ${textContentRows.length.toLocaleString()} indexed matches`}
+                {`Showing ${nameRows.length.toLocaleString()} name match${nameRows.length !== 1 ? "es" : ""}${search.resultsIncomplete ? " · search incomplete" : ""}`}
+                {!contentLoading && visibleContentRows.length > 0 &&
+                  ` · ${visibleContentRows.length.toLocaleString()} indexed matches`}
               </span>
             )}
-            {search.canShowMore && (
-              <Button size="sm" variant="ghost" onClick={search.showMore} disabled={search.isSearching}>
+            {nameRowsCurrent && search.canShowMore && (
+              <Button size="sm" variant="ghost" onClick={search.showMore} disabled={nameLoading || resultLimitLocked}>
                 Show more
               </Button>
             )}

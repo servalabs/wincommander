@@ -27,8 +27,10 @@ describe("native and UI-audit entrypoints", () => {
     const config = JSON.parse(tauriConfig) as { build: { devUrl: string } };
     expect(config.build.devUrl).toBe("http://127.0.0.1:1420");
     expect(nativeSource).toMatch(
-      /"search-overlay",\s*tauri::WebviewUrl::App\("index\.html"\.into\(\)\)/s,
+      /"search-overlay",[\s\S]*?tauri::WebviewUrl::App\("index\.html\?wc-window=search-overlay"\.into\(\)\)/,
     );
+    expect(nativeSource).toContain("search-overlay-ready");
+    expect(nativeSource).toContain(".visible(false)");
     expect(nativeSource).toMatch(
       /"main",\s*tauri::WebviewUrl::App\("cli-runtime\.html"\.into\(\)\)/s,
     );
@@ -46,6 +48,7 @@ describe("native and UI-audit entrypoints", () => {
     expect(await read("src/entries/backendRequired.tsx")).toContain("bun run dev:tauri:free");
     expect(source).toContain("if (!hasNativeBackend)");
     expect(source).toContain('import("./entries/searchOverlay")');
+    expect(source.indexOf("isSearchOverlayWindow")).toBeLessThan(source.indexOf("if (!hasNativeBackend)"));
     expect(source).toContain('import("./entries/notificationAlerts")');
     expect(source).toContain('import("./entries/mainWindow")');
   });

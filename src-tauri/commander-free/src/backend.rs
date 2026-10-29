@@ -6692,6 +6692,9 @@ fn privacy_shield_event_classes_from_reason(reason: &str) -> Vec<&'static str> {
     if upper.contains("PHONE DETECTED") {
         classes.push("phone_detected");
     }
+    if upper.contains("MULTIPLE FACES") {
+        classes.push("multiple_faces");
+    }
     if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
         classes.push("presence_lost");
     }
@@ -6757,6 +6760,7 @@ enum FleetPrivacyAlertGate {
     FleetDisconnected,
     NoFleetManagedSession,
     UnknownEventClass,
+    NotificationsDisabled,
     UnknownMode,
     RateLimited,
 }
@@ -6770,6 +6774,7 @@ impl FleetPrivacyAlertGate {
                 "the current Privacy Shield session was started locally, not by Fleet"
             }
             Self::UnknownEventClass => "the detector emitted an unsupported aggregate class",
+            Self::NotificationsDisabled => "this detector alert is disabled by policy",
             Self::UnknownMode => "Fleet has not confirmed a valid Privacy Shield mode",
             Self::RateLimited => "the signed Fleet notification limit is reached",
         }
@@ -6801,17 +6806,46 @@ fn fleet_privacy_event_gate(
     if !fleet_session_owned && !fleet_monitoring_selected {
         return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
-    // Blur switches are local enforcement preferences, not alert opt-outs.
-    // Fleet policy explicitly keeps monitoring and Fleet alerts active when a
-    // blur switch is off; only its global monitoring switch and alert rate
-    // limit govern the aggregate notification channel.
-    if matches!(
-        event_class,
-        "look_away" | "presence_lost" | "phone_detected"
-    ) {
-        FleetPrivacyAlertGate::Allowed
+    if !matches!(event_class, "look_away" | "presence_lost" | "multiple_faces" | "phone_detected") {
+        return FleetPrivacyAlertGate::UnknownEventClass;
+    }
+    if !privacy_shield_notification_enabled(shield, event_class) {
+        return FleetPrivacyAlertGate::NotificationsDisabled;
+    }
+    FleetPrivacyAlertGate::Allowed
+}
+
+fn privacy_shield_notification_enabled(shield: &crate::settings::PrivacyShieldSettings, class: &str) -> bool {
+    match class {
+        "look_away" | "presence_lost" => shield.look_away_notifications_enabled.unwrap_or(true),
+        "multiple_faces" => shield.multiple_faces_notifications_enabled.unwrap_or(true),
+        "phone_detected" => shield.phone_notifications_enabled.unwrap_or(true),
+        _ => false,
+    }
+}
+
+fn privacy_shield_local_notification_body(
+    shield: &crate::settings::PrivacyShieldSettings,
+    classes: &[&str],
+) -> Option<String> {
+    let labels: Vec<_> = classes
+        .iter()
+        .filter(|class| privacy_shield_notification_enabled(shield, class))
+        .filter_map(|class| match *class {
+            "look_away" => Some("Look-away"),
+            "presence_lost" => Some("No face"),
+            "multiple_faces" => Some("Multiple faces"),
+            "phone_detected" => Some("Phone detected"),
+            _ => None,
+        })
+        .collect();
+    if labels.is_empty() {
+        None
     } else {
-        FleetPrivacyAlertGate::UnknownEventClass
+        Some(format!(
+            "{} — Privacy Shield detected this immediately.",
+            labels.join(" and ")
+        ))
     }
 }
 
@@ -6908,6 +6942,7 @@ mod fleet_privacy_alert_tests {
     use super::{
         fleet_privacy_alert_mode_from_state, fleet_privacy_event_gate,
         privacy_shield_event_classes_from_reason, privacy_shield_flow_kinds_from_reason,
+        privacy_shield_local_notification_body, privacy_shield_notification_enabled,
         FleetPrivacyAlertGate,
     };
     use crate::settings::{FleetShieldDesiredState, PrivacyShieldSettings};
@@ -6963,8 +6998,37 @@ mod fleet_privacy_alert_tests {
         );
         assert_eq!(
             fleet_privacy_event_gate(true, true, &policy, "multiple_faces"),
-            FleetPrivacyAlertGate::UnknownEventClass
+            FleetPrivacyAlertGate::Allowed
         );
+    }
+
+    #[test]
+    fn look_away_and_no_face_alerts_can_be_silenced_without_silencing_other_detectors() {
+        let mut policy = enabled_policy();
+        policy.look_away_notifications_enabled = Some(false);
+        for class in ["look_away", "presence_lost"] {
+            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::NotificationsDisabled);
+            assert!(!privacy_shield_notification_enabled(&policy, class));
+        }
+        for class in ["multiple_faces", "phone_detected"] {
+            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::Allowed);
+            assert!(privacy_shield_notification_enabled(&policy, class));
+        }
+    }
+
+    #[test]
+    fn combined_local_alert_mentions_only_enabled_detector_classes() {
+        let mut policy = enabled_policy();
+        policy.look_away_notifications_enabled = Some(false);
+        let classes = privacy_shield_event_classes_from_reason("LOOK AWAY & PHONE DETECTED & MULTIPLE FACES");
+        let body = privacy_shield_local_notification_body(&policy, &classes).unwrap();
+        assert!(body.contains("Phone detected"));
+        assert!(body.contains("Multiple faces"));
+        assert!(!body.contains("Look-away"));
+
+        policy.phone_notifications_enabled = Some(false);
+        policy.multiple_faces_notifications_enabled = Some(false);
+        assert!(privacy_shield_local_notification_body(&policy, &classes).is_none());
     }
 
     #[test]
@@ -6998,6 +7062,10 @@ mod fleet_privacy_alert_tests {
         assert_eq!(
             privacy_shield_event_classes_from_reason("PRESENCE LOST"),
             vec!["presence_lost"]
+        );
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("MULTIPLE FACES & PHONE DETECTED"),
+            vec!["phone_detected", "multiple_faces"]
         );
         assert!(privacy_shield_event_classes_from_reason("camera warmup").is_empty());
         assert_eq!(
@@ -7060,8 +7128,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .map(|meta| meta.len())
                 .unwrap_or(0);
         }
-        let mut locally_looking_away = false;
         let mut active_fleet_event_classes = std::collections::BTreeSet::new();
+        let mut active_local_notification_classes = std::collections::BTreeSet::new();
         let mut fleet_episode_id: Option<String> = None;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
@@ -7127,8 +7195,6 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     );
                                     continue;
                                 }
-                                let first_look_away_in_episode = !locally_looking_away;
-                                locally_looking_away = true;
                                 let episode_id = fleet_episode_id
                                     .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
                                     .clone();
@@ -7147,47 +7213,26 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     serde_json::json!({ "lookingAway": true }),
                                 );
 
-                                // Local alerting is independent of Fleet. Do it before
-                                // any policy/readiness check so an attention event is
-                                // visible immediately even when Fleet is offline or slow.
-                                if first_look_away_in_episode {
-                                    let detail = if reason.is_empty() {
-                                        "Presence check failed".to_string()
-                                    } else {
-                                        reason.to_string()
-                                    };
-                                    // Do not read settings here: another
-                                    // settings writer can hold its lock for
-                                    // seconds, delaying a safety alert. The
-                                    // detector itself has already enforced
-                                    // the selected mode by this point.
-                                    let notification_body = format!(
-                                        "{} — Privacy Shield detected this immediately.",
-                                        detail
-                                    );
-                                    if let Err(error) =
-                                        crate::native_notify::show_security_notification(
-                                            &app,
-                                            "Privacy Shield — look-away",
-                                            &notification_body,
-                                        )
-                                    {
-                                        crate::flow_bridge::flow_trace(format!(
-                                            "shield-reader: local security alert not displayed: {}",
-                                            error
-                                        ));
-                                        crate::log_message(
-                                            "warn",
-                                            &format!(
-                                                "[PrivacyShield] local detection alert could not be displayed: {}",
-                                                error
-                                            ),
-                                        );
-                                    } else {
-                                        crate::flow_bridge::flow_trace(
-                                            "shield-reader: local security alert delivered immediately",
-                                        );
-                                    }
+                                // Keep local alerting off the detector reader: policy
+                                // settings may briefly be locked by another writer.
+                                let new_local_classes: Vec<_> = event_classes.iter().copied()
+                                    .filter(|class| active_local_notification_classes.insert(*class))
+                                    .collect();
+                                if !new_local_classes.is_empty() {
+                                    let notification_classes = new_local_classes;
+                                    let notification_app = app.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let Ok(settings) = crate::settings::read_settings() else { return; };
+                                        let Some(body) = privacy_shield_local_notification_body(
+                                            &settings.ideal.privacy.privacy_shield,
+                                            &notification_classes,
+                                        ) else { return; };
+                                        if let Err(error) = crate::native_notify::show_security_notification(
+                                            &notification_app, "Privacy Shield — detection", &body,
+                                        ) {
+                                            crate::log_message("warn", &format!("[PrivacyShield] local detection alert could not be displayed: {}", error));
+                                        }
+                                    });
                                 }
 
                                 // Fleet receives only the detected class. Keep this
@@ -7229,8 +7274,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 }
                             }
                             Some("look_back") => {
-                                locally_looking_away = false;
                                 active_fleet_event_classes.clear();
+                                active_local_notification_classes.clear();
                                 fleet_episode_id = None;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(
@@ -8841,7 +8886,11 @@ Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$batchPath`"" -WindowStyle
 
 // ── Everything Search ────────────────────────────────────────────────────────
 
+#[path = "backend/everything_engine.rs"]
+mod everything_engine;
 mod everything_privacy;
+#[path = "backend/everything_results.rs"]
+mod everything_results;
 use everything_privacy::{ObservedVolume, PublicSearchPolicy};
 
 fn observe_search_volume(path: &std::path::Path) -> Option<ObservedVolume> {
@@ -8880,6 +8929,8 @@ pub struct EsResponse {
     pub results: Vec<EsResult>,
     pub total: usize,
     pub query: String,
+    pub has_more: bool,
+    pub incomplete: bool,
 }
 
 #[tauri::command]
@@ -9139,6 +9190,13 @@ fn build_es_search_args(
         "1".to_string(),
         "-no-header".to_string(),
         "-csv".to_string(),
+        // Hidden ES clients have no console code page; its fallback replaces
+        // non-ASCII names with '?', which then fail native path validation.
+        "-code-page".to_string(),
+        "65001".to_string(),
+        // ES otherwise reports a successful empty search while its index loads.
+        "-timeout".to_string(),
+        "4000".to_string(),
     ];
     if let Some(sort) = sort {
         args.push("-sort".to_string());
@@ -9176,86 +9234,15 @@ fn parse_es_count(stdout: &[u8]) -> Result<u64, String> {
         .ok_or_else(|| format!("Search returned an unreadable count: {}", raw.trim()))
 }
 
-// KT: hard timeouts, because an un-indexed operator makes es.exe abandon the
-// index and walk the disk live — `attrib:h` measured over 100 SECONDS on this
-// machine. std::process::Command::output() waits for all of it with no way out,
-// which froze the search overlay. Bounded here so a bad filter degrades into an
-// error message instead of a hang.
 const ES_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
-const ES_TIMEOUT_MSG: &str =
-    "Search took too long — that filter isn't indexed. Try a narrower query.";
 
-/// Run es.exe once with a hard timeout, capturing stdout/stderr.
-async fn run_es_once(
-    es_exe: &str,
-    args: &[String],
-    timeout: std::time::Duration,
-) -> Result<std::process::Output, String> {
-    let mut cmd = tokio::process::Command::new(es_exe);
-    cmd.args(args);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    // KT: kill_on_drop is what gives the timeout teeth. wait_with_output()
-    // consumes the Child, so once the future is in flight the only handle we
-    // have on the process is dropping that future — which then kills es.exe
-    // instead of leaving a disk-scanning orphan behind.
-    cmd.kill_on_drop(true);
-    #[cfg(target_os = "windows")]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to run search: {e}"))?;
-    // Draining both pipes via wait_with_output matters: a large result set can
-    // fill the stdout pipe and wedge es.exe if we only waited on exit.
-    let finished = tokio::time::timeout(timeout, child.wait_with_output()).await;
-    match finished {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(format!("Failed to run search: {e}")),
-        Err(_) => Err(ES_TIMEOUT_MSG.to_string()),
-    }
-}
-
-/// Run es.exe, auto-starting the Everything daemon and retrying once if the IPC
-/// endpoint isn't there yet. Returns raw stdout bytes on success.
 async fn run_es_with_daemon_retry(
     es_exe: &str,
     args: &[String],
     timeout: std::time::Duration,
 ) -> Result<Vec<u8>, String> {
-    let output = run_es_once(es_exe, args, timeout).await?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    // Non-zero exit usually means "IPC not found" (daemon not running).
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let msg = if !stderr.is_empty() { stderr } else { stdout };
-    let lowered = msg.to_lowercase();
-    if lowered.contains("ipc not found") || lowered.contains("error 8") {
-        // Daemon not running — try to auto-start Everything.exe silently, then retry.
-        if try_start_everything_daemon() {
-            // Async sleep: this runs on a Tauri command task, so parking the
-            // runtime worker for 2s with thread::sleep stalled other commands.
-            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-            let retry = run_es_once(es_exe, args, timeout).await.ok();
-            if let Some(retry_out) = retry.filter(|out| out.status.success()) {
-                return Ok(retry_out.stdout);
-            }
-        }
-        return Err("Search engine service is not running. Launch it (or reinstall from Packages) and try again.".to_string());
-    }
-    Err(format!(
-        "Search failed (exit {}): {}",
-        output.status,
-        msg.trim()
-    ))
+    everything_engine::search(es_exe, args, timeout).await
 }
-
 /// Search files using Everything's CLI tool (es.exe).
 /// Everything must be installed; es.exe is looked up in common paths and %PATH%.
 ///
@@ -9371,7 +9358,7 @@ pub async fn search_everything(
     };
 
     let policy_scope = scope.clone();
-    let mut policy = tokio::task::spawn_blocking(move || {
+    let policy = tokio::task::spawn_blocking(move || {
         let mut policy = public_search_policy()?;
         if policy_scope.as_deref().is_some_and(|path| {
             !policy.allows(std::path::Path::new(path), observe_search_volume)
@@ -9392,23 +9379,7 @@ pub async fn search_everything(
     let es_exe = es_exe_path.to_str().unwrap_or("es.exe").to_string();
 
     let args = build_es_search_args(limit, sort.as_deref(), scope.as_deref(), &query_tokens);
-    let stdout = run_es_with_daemon_retry(&es_exe, &args, ES_SEARCH_TIMEOUT).await?;
-    // ES may retain records from unmounted drives or indexed aliases. Validate
-    // each returned path against native state before it reaches any renderer.
-    // Filtering can shorten a limited page; never report its unfiltered total.
-    tokio::task::spawn_blocking(move || {
-        let mut response = parse_es_output(stdout, query)?;
-        response.results.retain(|row| {
-            policy.allows(std::path::Path::new(&row.full_path), observe_search_volume)
-        });
-        if !search_policy_unchanged(&policy) {
-            return Err("Search volume state changed. Run the search again.".to_string());
-        }
-        response.total = response.results.len();
-        Ok(response)
-    })
-    .await
-    .map_err(|_| "Search result privacy check failed.".to_string())?
+    everything_results::search(es_exe, args, query, limit as usize, policy).await
 }
 
 /// Aggregate provider counts cannot verify each hit's existence, reparse
@@ -9597,8 +9568,8 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 mod es_query_tests {
     use super::{
         build_es_count_args, build_es_search_args, locate_es_exe_cached, parse_es_count,
-        search_scope_drive_root, tokenize_es_query, validate_es_scope_path, validate_es_sort,
-        validate_es_tokens,
+        parse_es_output, search_scope_drive_root, tokenize_es_query, validate_es_scope_path,
+        validate_es_sort, validate_es_tokens,
     };
 
     #[test]
@@ -9774,6 +9745,10 @@ mod es_query_tests {
         let args = build_es_search_args(50, Some("dm-descending"), Some(r"D:\My Files"), &tokens);
         assert_eq!(args[0], "-n");
         assert_eq!(args[1], "50");
+        let wait_at = args.iter().position(|a| a == "-timeout").unwrap();
+        assert_eq!(args[wait_at + 1], "4000");
+        let code_page_at = args.iter().position(|a| a == "-code-page").unwrap();
+        assert_eq!(args[code_page_at + 1], "65001");
         // -path takes the folder verbatim as its own entry, spaces and all.
         let path_at = args.iter().position(|a| a == "-path").unwrap();
         assert_eq!(args[path_at + 1], r"D:\My Files");
@@ -9786,6 +9761,34 @@ mod es_query_tests {
     fn count_args_are_minimal() {
         let args = build_es_count_args(None, &tokenize_es_query("ext:md dm:today"));
         assert_eq!(args, vec!["-get-result-count", "ext:md", "dm:today"]);
+    }
+
+    #[test]
+    fn utf8_csv_preserves_unicode_file_names_and_directories() {
+        let csv = "\"हिन्दी, 世界 😀.txt\",\"D:\\दस्तावेज़\",42,2026-10-21T07:46:31\r\n";
+        let response = parse_es_output(csv.as_bytes().to_vec(), "हिन्दी".into()).unwrap();
+        assert_eq!(response.total, 1);
+        assert_eq!(response.results[0].name, "हिन्दी, 世界 😀.txt");
+        assert_eq!(response.results[0].directory, r"D:\दस्तावेज़");
+        assert_eq!(
+            response.results[0].full_path,
+            r"D:\दस्तावेज़\हिन्दी, 世界 😀.txt"
+        );
+    }
+
+    #[test]
+    fn utf8_csv_accepts_a_bom_without_changing_the_first_file_name() {
+        let csv = "\u{feff}\"हिन्दी.txt\",\"D:\\public\",32,2026-10-21T07:46:31\r\n";
+        let response = parse_es_output(csv.as_bytes().to_vec(), String::new()).unwrap();
+        assert_eq!(response.results[0].full_path, r"D:\public\हिन्दी.txt");
+    }
+
+    #[test]
+    fn invalid_utf8_is_an_explicit_error_instead_of_damaged_paths_or_empty_matches() {
+        let error = parse_es_output(vec![0xff, 0xfe, b','], String::new())
+            .err()
+            .unwrap();
+        assert!(error.contains("unreadable file names"));
     }
 
     // ── Count parsing ──
@@ -10050,7 +10053,11 @@ fn try_start_everything_daemon() -> bool {
 
 /// Parse raw es.exe stdout bytes into an EsResponse.
 fn parse_es_output(stdout: Vec<u8>, query: String) -> Result<EsResponse, String> {
-    let raw = String::from_utf8_lossy(&stdout).to_string();
+    let raw = String::from_utf8(stdout).map_err(|_| {
+        "Filename search returned unreadable file names. Restart Everything and try again."
+            .to_string()
+    })?;
+    let raw = raw.trim_start_matches('\u{feff}');
 
     let mut results: Vec<EsResult> = Vec::new();
 
@@ -10113,6 +10120,8 @@ fn parse_es_output(stdout: Vec<u8>, query: String) -> Result<EsResponse, String>
         results,
         total,
         query,
+        has_more: false,
+        incomplete: false,
     })
 }
 

@@ -2423,6 +2423,7 @@ export function useBackend() {
     },
 
     // App Licensing
+    isCurrentProcessElevated: () => invoke<boolean>("is_current_process_elevated"),
     getLicenseStatus: () => invoke<AppLicenseStatus>("get_license_status"),
     activateAppLicense: (licenseKey: string) =>
       invoke<AppLicenseStatus>("activate_license", { licenseKey }),
