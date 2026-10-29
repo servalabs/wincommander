@@ -19,3 +19,10 @@ test("a probe which did not request a policy does not erase its cached observati
   expect(preserveDashboardPolicyUnknowns({}, { officeLoggingDisabled: false })).toEqual({});
   expect(preserveDashboardPolicyUnknowns({}, {})).toEqual({});
 });
+
+
+test("unknown location clears the cached current observation without changing intent", () => {
+  const patch = preserveDashboardPolicyUnknowns({ current: { privacy: { telemetry: { locationTrackingDisabled: true } } } }, { locationTrackingDisabled: null });
+  expect(patch).toEqual({ current: { privacy: { telemetry: { locationTrackingDisabled: null } } } });
+  expect(preserveDashboardPolicyUnknowns({}, { locationTrackingDisabled: false })).toEqual({});
+});

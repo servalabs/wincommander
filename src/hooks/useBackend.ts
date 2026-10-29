@@ -449,7 +449,7 @@ export interface HardeningStatus {
   classicContextMenu: boolean;
   ntfsOptimizations: boolean;
   activityHistoryDisabled?: boolean;
-  locationTrackingDisabled?: boolean;
+  locationTrackingDisabled?: boolean | null;
   poshTelemetryDisabled?: boolean;
   telemetryDisabled?: boolean;
   endTaskOnTaskbar?: boolean;

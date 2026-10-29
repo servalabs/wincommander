@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createAutoHealer, HEAL_COOLDOWN_MS } from "./autoHeal";
 import { getToggleDrift } from "./toggleDrift";
+import { getToggleById } from "../registry";
 import type { AppSettings } from "../types/settings";
 import type { ToggleDef } from "../types/toggles";
 
@@ -60,6 +61,18 @@ test("unknown and absent observations never become OFF or cause a repair", async
     f.setCurrent(value); await f.run();
   }
   expect(f.calls).toEqual([]);
+});
+
+test("unknown location readback does not trigger an automatic repair", async () => {
+  const location = getToggleById("location")!;
+  const cached = { app: { firstRunComplete: true, autoHeal: true }, ideal: { privacy: { telemetry: { locationTrackingDisabled: true } } }, current: { privacy: { telemetry: { locationTrackingDisabled: true } } } } as unknown as AppSettings;
+  const unknown = { ...cached, current: { privacy: { telemetry: { locationTrackingDisabled: null } } } } as unknown as AppSettings;
+  let repairs = 0;
+  const run = createAutoHealer({ getSettings: () => cached, toggles: [location], canUse: () => true, probe: async () => unknown,
+    repair: async () => { repairs++; }, failureMessage: String, notify: () => {}, verified: () => {} });
+  await run();
+  expect(getToggleDrift(unknown, location)).toBeNull();
+  expect(repairs).toBe(0);
 });
 
 test("automatic repairs honor current desired OFF and stop when disabled or in decoy", async () => {

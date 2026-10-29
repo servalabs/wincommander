@@ -3121,10 +3121,12 @@ fn get_settings_sync_patch(
             // back the PS function's own post-apply verification (`disabled`
             // in its result) instead, so the toggle reflects what the system
             // actually did, not what we asked it to do.
-            let disabled = result
-                .and_then(|r| r.get("disabled"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(command == "Disable-LocationTracking");
+            let disabled = result?.get("disabled")?.as_bool()?;
+            // This patch is written to both ideal and current. Do not overwrite
+            // intent with an observation that disagrees with the requested action.
+            if disabled != (command == "Disable-LocationTracking") {
+                return None;
+            }
             Some(json!({"privacy":{"telemetry":{"locationTrackingDisabled": disabled}}}))
         }
 
@@ -3971,6 +3973,32 @@ mod settings_sync_patch_tests {
                     Some(&serde_json::json!(expected))
                 );
             }
+        }
+    }
+
+    #[test]
+    fn location_sync_requires_matching_boolean_observation() {
+        let params = HashMap::new();
+        for (command, expected) in [
+            ("Disable-LocationTracking", true),
+            ("Enable-LocationTracking", false),
+        ] {
+            for result in [
+                serde_json::json!({}),
+                serde_json::json!({"disabled":null}),
+                serde_json::json!({"disabled":"false"}),
+                serde_json::json!({"disabled":!expected}),
+                serde_json::json!({"error":true,"disabled":expected}),
+            ] {
+                assert!(get_settings_sync_patch(command, &params, Some(&result)).is_none());
+            }
+            assert!(get_settings_sync_patch(command, &params, None).is_none());
+            let result = serde_json::json!({"disabled":expected});
+            let patch = get_settings_sync_patch(command, &params, Some(&result)).unwrap();
+            assert_eq!(
+                patch.pointer("/privacy/telemetry/locationTrackingDisabled"),
+                Some(&serde_json::json!(expected))
+            );
         }
     }
 
@@ -5556,6 +5584,9 @@ pub(crate) async fn run_backend_script_with_timeout(
         additional_modules.push_str(&load_module("productivity")?);
         additional_modules.push_str("\n\n");
         additional_modules.push_str(&load_module("apps/winget")?);
+        additional_modules.push_str("\n\n");
+    } else if command == "Get-WCSystemProbe" {
+        additional_modules.push_str(&load_module("privacy/telemetry")?);
         additional_modules.push_str("\n\n");
     } else if command == "Get-DashboardPrivacyPolicyStatus" {
         additional_modules.push_str(&load_module("privacy/telemetry")?);

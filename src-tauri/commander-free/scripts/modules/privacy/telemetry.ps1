@@ -889,7 +889,14 @@ function Disable-LocationTracking {
 
     # The load-bearing step for location specifically: flip + restart lfsvc.
     Set-LocationServiceMaster -Access 'Deny'
-    return @{ status = 'disabled'; disabled = (Get-LocationTrackingStatus).disabled }
+    $observation = Get-LocationTrackingStatus
+    if ($observation.error -eq $true -or $observation.disabled -isnot [bool]) {
+        return @{ error = $true; message = 'Location change was requested, but Windows state could not be checked.' }
+    }
+    if (-not $observation.disabled) {
+        return @{ error = $true; message = 'Location was requested to be disabled, but the observed state did not match.' }
+    }
+    return @{ status = 'disabled'; disabled = $observation.disabled }
 }
 
 # Comprehensive location-access check across every layer Windows (and this
@@ -899,28 +906,55 @@ function Disable-LocationTracking {
 # master switch, LocationAndSensors GP, or a disabled lfsvc startup type —
 # is still blocking access; this is the one place both the toggle's status
 # probe and its post-apply verification read from, so they can't disagree.
+function Read-LocationRegistryValue {
+    param([string]$Hive, [string]$Path, [string]$Name)
+    $root = if ($Hive -eq 'HKLM') { [Microsoft.Win32.Registry]::LocalMachine } elseif ($Hive -eq 'HKCU') { [Microsoft.Win32.Registry]::CurrentUser } else { throw 'Invalid location registry hive' }
+    $key = $root.OpenSubKey($Path, $false)
+    if ($null -eq $key) { return @{ present = $false; value = $null } }
+    try {
+        $names = @($key.GetValueNames())
+        if ($Name -notin $names) { return @{ present = $false; value = $null } }
+        return @{ present = $true; value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+    } finally { $key.Dispose() }
+}
+
 function Get-LocationTrackingStatus {
     try {
-        $appPrivacyHKLM = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name "LetAppsAccessLocation" -ErrorAction SilentlyContinue).LetAppsAccessLocation
-        $appPrivacyHKCU = (Get-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name "LetAppsAccessLocation" -ErrorAction SilentlyContinue).LetAppsAccessLocation
-        $deviceAccess = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}" -Name "Value" -ErrorAction SilentlyContinue).Value
-        $gpHKLM = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors" -Name "DisableLocation" -ErrorAction SilentlyContinue).DisableLocation
-        $gpHKCU = (Get-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors" -Name "DisableLocation" -ErrorAction SilentlyContinue).DisableLocation
-        $consentHKLM = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" -Name "Value" -ErrorAction SilentlyContinue).Value
-        $consentHKCU = (Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" -Name "Value" -ErrorAction SilentlyContinue).Value
-        $svc = Get-Service -Name lfsvc -ErrorAction SilentlyContinue
-
-        $blocked = (
-            $appPrivacyHKLM -eq 2 -or $appPrivacyHKCU -eq 2 -or
-            $deviceAccess -eq 'Deny' -or
-            $gpHKLM -eq 1 -or $gpHKCU -eq 1 -or
-            $consentHKLM -eq 'Deny' -or $consentHKCU -eq 'Deny' -or
-            ($svc -and $svc.StartType -eq 'Disabled')
+        $checks = @(
+            @{ hive='HKLM'; path='SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'; name='LetAppsAccessLocation'; kind='policy' },
+            @{ hive='HKCU'; path='SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'; name='LetAppsAccessLocation'; kind='policy' },
+            @{ hive='HKLM'; path='SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}'; name='Value'; kind='consent' },
+            @{ hive='HKLM'; path='SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; name='DisableLocation'; kind='switch' },
+            @{ hive='HKCU'; path='SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; name='DisableLocation'; kind='switch' },
+            @{ hive='HKLM'; path='SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'; name='Value'; kind='consent' },
+            @{ hive='HKCU'; path='SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'; name='Value'; kind='consent' },
+            @{ hive='HKLM'; path='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}'; name='SensorPermissionState'; kind='sensor' },
+            @{ hive='HKLM'; path='SYSTEM\CurrentControlSet\Services\lfsvc\Service\Configuration\Status'; name='Value'; kind='master' }
         )
-        @{ disabled = [bool]$blocked }
-    }
-    catch {
-        @{ error = $true; message = $_.Exception.Message; disabled = $false }
+        $blocked = $false
+        foreach ($check in $checks) {
+            $reading = Read-LocationRegistryValue -Hive $check.hive -Path $check.path -Name $check.name
+            if (-not $reading.present) {
+                if ($check.kind -eq 'master') { throw 'Location master state is absent' }
+                continue
+            }
+            $value = $reading.value
+            if ($check.kind -eq 'consent') {
+                if ($value -isnot [string] -or $value -notin @('Allow', 'Deny', 'Prompt')) { throw 'Invalid location consent' }
+                if ($value -eq 'Deny') { $blocked = $true }
+            } else {
+                if ($value -isnot [int] -and $value -isnot [long]) { throw 'Invalid location policy' }
+                $valid = if ($check.kind -eq 'policy') { @(0,1,2) } else { @(0,1) }
+                if ($value -notin $valid) { throw 'Invalid location policy' }
+                if (($check.kind -eq 'policy' -and $value -eq 2) -or ($check.kind -eq 'switch' -and $value -eq 1) -or (($check.kind -eq 'master' -or $check.kind -eq 'sensor') -and $value -eq 0)) { $blocked = $true }
+            }
+        }
+        $svc = Get-Service -Name lfsvc -ErrorAction Stop
+        if ($null -eq $svc -or [string]$svc.StartType -notin @('Automatic', 'Manual', 'Disabled')) { throw 'Location service state unavailable' }
+        if ([string]$svc.StartType -eq 'Disabled') { $blocked = $true }
+        return @{ disabled = $blocked }
+    } catch {
+        return @{ error = $true; message = 'Location state could not be verified.'; disabled = $null }
     }
 }
 
@@ -947,7 +981,14 @@ function Enable-LocationTracking {
     Set-AppCapabilityAccess -Capability 'location' -Access 'Allow' | Out-Null
 
     Set-LocationServiceMaster -Access 'Allow'
-    return @{ status = 'enabled'; disabled = (Get-LocationTrackingStatus).disabled }
+    $observation = Get-LocationTrackingStatus
+    if ($observation.error -eq $true -or $observation.disabled -isnot [bool]) {
+        return @{ error = $true; message = 'Location change was requested, but Windows state could not be checked.' }
+    }
+    if ($observation.disabled) {
+        return @{ error = $true; message = 'Location was requested to be enabled, but the observed state did not match.' }
+    }
+    return @{ status = 'enabled'; disabled = $observation.disabled }
 }
 
 function Get-TelemetryStatus {

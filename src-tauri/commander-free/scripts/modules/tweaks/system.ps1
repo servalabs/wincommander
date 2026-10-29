@@ -533,7 +533,7 @@ function Get-HardeningStatus {
         classicContextMenu       = $classicContextMenu
         ntfsOptimizations        = $ntfsOptimizations
         activityHistoryDisabled  = ($activity.PublishUserActivities -eq 0)
-        locationTrackingDisabled = [bool]$locationStatus.disabled
+        locationTrackingDisabled = if ($locationStatus.error -eq $true -or $locationStatus.disabled -isnot [bool]) { $null } else { $locationStatus.disabled }
         poshTelemetryDisabled    = ($posh -eq '1')
         telemetryDisabled        = ($telemetry.AllowTelemetry -eq 0)
         endTaskOnTaskbar         = ($endTask.TaskbarEndTask -eq 1)
