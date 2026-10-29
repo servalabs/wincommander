@@ -1121,6 +1121,11 @@ function Remove-AutoEraseSchedule {
     }
 }
 
+function Test-AutoEraseManagedDescription {
+    param([string]$Description)
+    return ($Description -like 'WinCommander Auto-set scheduled wipe*' -or $Description -eq 'System Maintenance scheduled cleanup v4 (managed)')
+}
+
 function Get-AutoEraseSchedules {
     try {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1138,7 +1143,7 @@ function Get-AutoEraseSchedules {
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
                 ownerAccount     = $t.Principal.UserId
-                managedByAutoSet = ($t.Description -like 'WinCommander Auto-set scheduled wipe*')
+                managedByAutoSet = (Test-AutoEraseManagedDescription $t.Description)
                 lastRun          = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun          = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
@@ -1217,7 +1222,7 @@ function Invoke-AutoEraseMigration {
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
                 $revision = if ($isUsbHistoryTask) { 3 } else { 2 }
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision
-                $xml.Task.RegistrationInfo.Description = if ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v4 (managed)' } else { 'System Maintenance scheduled cleanup v4' }
+                $xml.Task.RegistrationInfo.Description = if (Test-AutoEraseManagedDescription $task.Description) { 'System Maintenance scheduled cleanup v4 (managed)' } else { 'System Maintenance scheduled cleanup v4' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

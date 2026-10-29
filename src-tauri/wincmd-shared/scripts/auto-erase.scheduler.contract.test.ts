@@ -14,7 +14,8 @@ test("the scheduler exposes only a real, SYSTEM-scoped firewall-log clearer", ()
 
 test("bulk scheduling can preserve a manually configured scheduled task", () => {
   expect(scheduler).toContain("[switch]$PreserveExisting");
-  expect(scheduler).toContain("Get-ScheduledTask -TaskPath '\\' -TaskName $taskName");
+  expect(scheduler).toContain("Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName");
+  expect(scheduler).toContain("if ($PreserveExisting -and $existing)");
   expect(scheduler).toContain("status          = 'alreadyConfigured'");
   expect(scheduler).toContain("per-card editor intentionally leaves it off");
 });
@@ -27,7 +28,7 @@ test("missed intervals catch up once at sign-in or startup and only success adva
   expect(scheduler).toContain("New-ScheduledTaskTrigger -AtStartup");
   expect(scheduler).toContain("New-ScheduledTaskTrigger -AtLogOn -User $TargetUser");
   expect(scheduler).toContain("-At (Get-Date).AddMinutes($IntervalMinutes)");
-  expect(scheduler).toContain("scheduled wipe v2");
+  expect(scheduler).toContain("if (`$success) { `$lastSuccess = `$completedUtc }");
   expect(scheduler).toContain("catch-up marker behind");
 });
 
