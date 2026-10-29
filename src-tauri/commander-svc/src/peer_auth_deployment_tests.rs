@@ -30,6 +30,140 @@ fn identity(session_id: u32) -> PeerIdentitySnapshot {
 }
 
 #[test]
+fn fleet_policy_relay_requires_matching_active_session_and_protected_helper() {
+    let gate = SessionHelperGate::with_allowed_root(
+        Arc::new(Probe),
+        Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")),
+    );
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.get_policy",
+            2,
+            true,
+            || Ok(())
+        ),
+        Ok(TrustOrigin::SessionHelperPinned)
+    );
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.get_policy",
+            3,
+            true,
+            || Ok(())
+        ),
+        Err(PeerAuthError::WrongSession)
+    );
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.get_policy",
+            2,
+            false,
+            || Ok(())
+        ),
+        Err(PeerAuthError::WrongSession)
+    );
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.replace_trust",
+            2,
+            true,
+            || Ok(())
+        ),
+        Err(PeerAuthError::PathNotAllowed)
+    );
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.get_policy",
+            2,
+            true,
+            || Err(PeerAuthError::PathNotAllowed)
+        ),
+        Err(PeerAuthError::PathNotAllowed)
+    );
+    let mut foreign = identity(2);
+    foreign.canonical_image_path = r"C:\Users\other\wincommander-pro.exe".into();
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &foreign,
+            "svc.fleet.get_policy",
+            2,
+            true,
+            || panic!("foreign binary must be denied")
+        ),
+        Err(PeerAuthError::PathNotAllowed)
+    );
+    let mut other_helper = identity(2);
+    other_helper.canonical_image_path =
+        r"C:\ProgramData\WinCommander\bin\wincommander-clipboard-guard.exe".into();
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &other_helper,
+            "svc.fleet.get_policy",
+            2,
+            true,
+            || panic!("wrong helper must be denied")
+        ),
+        Err(PeerAuthError::PathNotAllowed)
+    );
+}
+
+#[test]
+fn fleet_policy_relay_retains_per_session_rate_limit() {
+    let gate = SessionHelperGate::with_allowed_root(
+        Arc::new(Probe),
+        Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")),
+    );
+    for _ in 0..RATE_LIMIT_MAX_CALLS {
+        assert!(gate
+            .authorize_fleet_policy_observation(
+                &identity(2),
+                "svc.fleet.get_policy",
+                2,
+                true,
+                || Ok(())
+            )
+            .is_ok());
+    }
+    assert_eq!(
+        gate.authorize_fleet_policy_observation(
+            &identity(2),
+            "svc.fleet.get_policy",
+            2,
+            true,
+            || Ok(())
+        ),
+        Err(PeerAuthError::RateLimited)
+    );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn debug_helper_pin_requires_exact_path_and_digest() {
+    let path = Path::new(r"C:\ProgramData\WinCommander\dev-fleet\wincommander-free.exe");
+    let digest = [0xabu8; 32];
+    let pin = "ab".repeat(32);
+    assert!(dev_pin_digest_matches(path, path, &digest, &pin));
+    assert!(!dev_pin_digest_matches(
+        Path::new(IMAGE),
+        path,
+        &digest,
+        &pin
+    ));
+    assert!(!dev_pin_digest_matches(
+        path,
+        path,
+        &digest,
+        &"cd".repeat(32)
+    ));
+    assert!(!dev_pin_digest_matches(path, path, &digest, "bad"));
+}
+
+#[test]
 fn signed_machine_relay_survives_rdp_disconnect_but_rejects_logged_off_or_unknown_sessions() {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTSActive, WTSConnected, WTSDisconnected, WTSDown, WTSIdle, WTSListen, WTSReset,

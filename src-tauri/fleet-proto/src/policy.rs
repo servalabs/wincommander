@@ -166,6 +166,12 @@ pub struct ShieldDesiredState {
 pub struct PolicyEnvelope {
     pub org_id: OrgId,
     pub device_id: DeviceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_revision: Option<i64>,
     pub config: Option<ConfigEpoch>,
     pub shield: Option<ShieldDesiredState>,
     /// Latest independent Shield revision for the organisation, including a
@@ -183,6 +189,9 @@ pub struct PolicyEnvelope {
 pub struct PolicyEnvelopeSigningInput<'a> {
     pub org_id: &'a OrgId,
     pub device_id: &'a DeviceId,
+    pub enrollment_generation: Option<&'a str>,
+    pub config_revision: Option<i64>,
+    pub resolution_revision: Option<i64>,
     pub config: Option<&'a ConfigEpoch>,
     pub shield: Option<&'a ShieldDesiredState>,
     pub shield_revision: i64,
@@ -262,13 +271,22 @@ pub fn policy_preimage(
 /// section retains its own signature, while this outer signature binds the
 /// resolved config and shield sections to the intended org and device.
 pub fn policy_envelope_preimage(input: &PolicyEnvelopeSigningInput<'_>) -> Vec<u8> {
-    let envelope = serde_json::json!({
+    let mut envelope = serde_json::json!({
         "config": input.config,
         "device_id": input.device_id,
         "org_id": input.org_id,
         "shield": input.shield,
         "shield_revision": input.shield_revision,
     });
+    if let Some(generation) = input.enrollment_generation {
+        envelope["enrollment_generation"] = serde_json::json!(generation);
+    }
+    if let Some(revision) = input.config_revision {
+        envelope["config_revision"] = serde_json::json!(revision);
+    }
+    if let Some(revision) = input.resolution_revision {
+        envelope["resolution_revision"] = serde_json::json!(revision);
+    }
     let mut canonical = String::new();
     write_canonical(&envelope, &mut canonical);
     canonical.into_bytes()
@@ -279,6 +297,9 @@ impl PolicyEnvelope {
         PolicyEnvelopeSigningInput {
             org_id: &self.org_id,
             device_id: &self.device_id,
+            enrollment_generation: self.enrollment_generation.as_deref(),
+            config_revision: self.config_revision,
+            resolution_revision: self.resolution_revision,
             config: self.config.as_ref(),
             shield: self.shield.as_ref(),
             shield_revision: self.shield_revision,
@@ -300,6 +321,9 @@ mod tests {
         PolicyEnvelope {
             org_id: OrgId("local".into()),
             device_id: DeviceId("device-a".into()),
+            enrollment_generation: None,
+            config_revision: None,
+            resolution_revision: None,
             config: None,
             shield: Some(ShieldDesiredState {
                 enabled: true,
@@ -338,5 +362,24 @@ mod tests {
             &tampered.preimage(),
             &signature
         ));
+    }
+
+    #[test]
+    fn generation_and_null_config_revision_are_signed_without_changing_legacy_bytes() {
+        let mut policy = envelope();
+        let legacy = policy.preimage();
+        policy.enrollment_generation = Some("00000000-0000-0000-0000-000000000000".into());
+        policy.config_revision = Some(4);
+        policy.resolution_revision = Some(9);
+        let bytes = policy.preimage();
+        assert_ne!(bytes, legacy);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\"enrollment_generation\":\"00000000-0000-0000-0000-000000000000\""));
+        assert!(text.contains("\"config_revision\":4"));
+        assert!(text.contains("\"resolution_revision\":9"));
+        policy.enrollment_generation = None;
+        policy.config_revision = None;
+        policy.resolution_revision = None;
+        assert_eq!(policy.preimage(), legacy);
     }
 }

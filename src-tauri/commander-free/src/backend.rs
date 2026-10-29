@@ -4638,18 +4638,106 @@ pub async fn run_backend_script(
     command: String,
     mut params: HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
+    authorize_backend_script(&app, &command, &mut params).await?;
+    if matches!(
+        command.as_str(),
+        "Start-PrivacyShield" | "Stop-PrivacyShield"
+    ) {
+        let runtime = tokio::runtime::Handle::current();
+        return tokio::task::spawn_blocking(move || {
+            let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+            if command == "Start-PrivacyShield" {
+                crate::fleet_agent::require_single_interactive_shield_session()?;
+                runtime.block_on(crate::fleet_agent::verify_service_shield_profile())?;
+            }
+            let settings = crate::settings::read_settings()?;
+            if settings.app.fleet.privacy_shield_policy_transaction.is_some() {
+                if command == "Start-PrivacyShield" {
+                    return Err("Shield policy is transitioning; Start will be available after verification".into());
+                }
+                record_local_shield_stop_intent()?;
+            }
+            runtime.block_on(run_backend_script_with_timeout(app, command, params, None))
+        })
+        .await
+        .map_err(|error| format!("Shield action worker failed: {error}"))?;
+    }
+    run_backend_script_with_timeout(app, command, params, None).await
+}
+
+fn local_stop_owns_pending_restart(
+    owner_session_id: Option<u32>,
+    current_session_id: u32,
+    was_running: bool,
+) -> bool {
+    was_running && owner_session_id == Some(current_session_id)
+}
+
+#[cfg(test)]
+mod shield_session_stop_tests {
+    #[test]
+    fn stop_while_detector_is_paused_cancels_only_own_pending_restart() {
+        // The decision uses the durable pre-pause owner, not a detector
+        // process that is deliberately absent during the pause window.
+        assert!(super::local_stop_owns_pending_restart(Some(7), 7, true));
+        assert!(!super::local_stop_owns_pending_restart(Some(7), 8, true));
+        assert!(!super::local_stop_owns_pending_restart(None, 7, true));
+        assert!(!super::local_stop_owns_pending_restart(Some(7), 7, false));
+    }
+}
+
+fn record_local_shield_stop_intent() -> Result<(), String> {
+    let settings = crate::settings::read_settings()?;
+    if let Some(mut transaction) = settings.app.fleet.privacy_shield_policy_transaction {
+        // The native detector may be intentionally paused. Its absence is
+        // never proof the owner did not press Stop. The durable pre-pause
+        // Windows session ID binds this intent to the original session.
+        if !local_stop_owns_pending_restart(
+            transaction.owner_session_id,
+            crate::fleet_agent::current_shield_session_id()?,
+            transaction.was_running,
+        ) {
+            return Ok(());
+        }
+        // Persist the user's Stop intent before touching the detector. A
+        // crash in the commit/supervisor gap cannot turn it into a Start.
+        transaction.local_stop_requested = true;
+        crate::settings::patch_settings(serde_json::json!({"app":{"fleet":{
+            "privacyShieldPolicyTransaction": transaction
+        }}}))?;
+    }
+    Ok(())
+}
+
+/// Fleet's policy worker already holds the machine lock across its whole
+/// pause/commit/restart transaction. Calling the public command there would
+/// acquire the same Windows mutex recursively on another thread.
+pub(crate) async fn run_backend_script_unlocked(
+    app: AppHandle,
+    command: String,
+    mut params: HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    authorize_backend_script(&app, &command, &mut params).await?;
+    run_backend_script_with_timeout(app, command, params, None).await
+}
+
+async fn authorize_backend_script(
+    app: &AppHandle,
+    command: &str,
+    params: &mut HashMap<String, String>,
+) -> Result<(), String> {
     if !crate::cli::tauri_runtime_active() {
-        if crate::authz::backend_dispatch_policy(&command)
+        if crate::authz::backend_dispatch_policy(command)
             == crate::authz::BackendDispatchPolicy::NativeConfirmation
         {
-            if !crate::authz::confirm_backend_dispatch(&app, &command, &params).await {
+            if !crate::authz::confirm_backend_dispatch(app, command, params).await {
                 return Err("native confirmation was refused".to_string());
             }
         } else {
-            crate::authz::authorize_backend_dispatch(&command, &mut params)?;
+            crate::authz::authorize_backend_dispatch(command, params)?;
         }
     }
-    run_backend_script_with_timeout(app, command, params, None).await
+    Ok(())
 }
 
 /// The sole set of Cleanup views that Fleet may request from the local Free
@@ -6597,11 +6685,27 @@ pub fn start_privacy_shield_if_enabled_on_launch(app: AppHandle) {
             return;
         };
         let shield = &settings.ideal.privacy.privacy_shield;
-        if !shield.autostart || shield.fleet_managed == Some(true) {
+        if !shield.autostart
+            || shield.fleet_managed == Some(true)
+            || settings
+                .app
+                .fleet
+                .privacy_shield_policy_transaction
+                .is_some()
+        {
             return;
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let Ok(latest) = crate::settings::read_settings() else {
+            return;
+        };
+        if !latest.ideal.privacy.privacy_shield.autostart
+            || latest.ideal.privacy.privacy_shield.fleet_managed == Some(true)
+            || latest.app.fleet.privacy_shield_policy_transaction.is_some()
+        {
+            return;
+        }
         if let Err(error) =
             run_backend_script(app, "Start-PrivacyShield".to_string(), HashMap::new()).await
         {
@@ -6806,7 +6910,10 @@ fn fleet_privacy_event_gate(
     if !fleet_session_owned && !fleet_monitoring_selected {
         return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
-    if !matches!(event_class, "look_away" | "presence_lost" | "multiple_faces" | "phone_detected") {
+    if !matches!(
+        event_class,
+        "look_away" | "presence_lost" | "multiple_faces" | "phone_detected"
+    ) {
         return FleetPrivacyAlertGate::UnknownEventClass;
     }
     if !privacy_shield_notification_enabled(shield, event_class) {
@@ -6815,7 +6922,10 @@ fn fleet_privacy_event_gate(
     FleetPrivacyAlertGate::Allowed
 }
 
-fn privacy_shield_notification_enabled(shield: &crate::settings::PrivacyShieldSettings, class: &str) -> bool {
+fn privacy_shield_notification_enabled(
+    shield: &crate::settings::PrivacyShieldSettings,
+    class: &str,
+) -> bool {
     match class {
         "look_away" | "presence_lost" => shield.look_away_notifications_enabled.unwrap_or(true),
         "multiple_faces" => shield.multiple_faces_notifications_enabled.unwrap_or(true),
@@ -7007,11 +7117,17 @@ mod fleet_privacy_alert_tests {
         let mut policy = enabled_policy();
         policy.look_away_notifications_enabled = Some(false);
         for class in ["look_away", "presence_lost"] {
-            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::NotificationsDisabled);
+            assert_eq!(
+                fleet_privacy_event_gate(true, false, &policy, class),
+                FleetPrivacyAlertGate::NotificationsDisabled
+            );
             assert!(!privacy_shield_notification_enabled(&policy, class));
         }
         for class in ["multiple_faces", "phone_detected"] {
-            assert_eq!(fleet_privacy_event_gate(true, false, &policy, class), FleetPrivacyAlertGate::Allowed);
+            assert_eq!(
+                fleet_privacy_event_gate(true, false, &policy, class),
+                FleetPrivacyAlertGate::Allowed
+            );
             assert!(privacy_shield_notification_enabled(&policy, class));
         }
     }
@@ -7020,7 +7136,8 @@ mod fleet_privacy_alert_tests {
     fn combined_local_alert_mentions_only_enabled_detector_classes() {
         let mut policy = enabled_policy();
         policy.look_away_notifications_enabled = Some(false);
-        let classes = privacy_shield_event_classes_from_reason("LOOK AWAY & PHONE DETECTED & MULTIPLE FACES");
+        let classes =
+            privacy_shield_event_classes_from_reason("LOOK AWAY & PHONE DETECTED & MULTIPLE FACES");
         let body = privacy_shield_local_notification_body(&policy, &classes).unwrap();
         assert!(body.contains("Phone detected"));
         assert!(body.contains("Multiple faces"));
@@ -7215,21 +7332,33 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
 
                                 // Keep local alerting off the detector reader: policy
                                 // settings may briefly be locked by another writer.
-                                let new_local_classes: Vec<_> = event_classes.iter().copied()
-                                    .filter(|class| active_local_notification_classes.insert(*class))
+                                let new_local_classes: Vec<_> = event_classes
+                                    .iter()
+                                    .copied()
+                                    .filter(|class| {
+                                        active_local_notification_classes.insert(*class)
+                                    })
                                     .collect();
                                 if !new_local_classes.is_empty() {
                                     let notification_classes = new_local_classes;
                                     let notification_app = app.clone();
                                     tauri::async_runtime::spawn(async move {
-                                        let Ok(settings) = crate::settings::read_settings() else { return; };
+                                        let Ok(settings) = crate::settings::read_settings() else {
+                                            return;
+                                        };
                                         let Some(body) = privacy_shield_local_notification_body(
                                             &settings.ideal.privacy.privacy_shield,
                                             &notification_classes,
-                                        ) else { return; };
-                                        if let Err(error) = crate::native_notify::show_security_notification(
-                                            &notification_app, "Privacy Shield — detection", &body,
-                                        ) {
+                                        ) else {
+                                            return;
+                                        };
+                                        if let Err(error) =
+                                            crate::native_notify::show_security_notification(
+                                                &notification_app,
+                                                "Privacy Shield — detection",
+                                                &body,
+                                            )
+                                        {
                                             crate::log_message("warn", &format!("[PrivacyShield] local detection alert could not be displayed: {}", error));
                                         }
                                     });
@@ -7346,6 +7475,17 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
 
 #[tauri::command]
 pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        record_local_shield_stop_intent()?;
+        runtime.block_on(kill_privacy_shield_process_unlocked(app))
+    })
+    .await
+    .map_err(|error| format!("Shield stop worker failed: {error}"))?
+}
+
+async fn kill_privacy_shield_process_unlocked(app: AppHandle) -> Result<(), String> {
     // Clear the reader run-flag so the look-state reader exits with the shield.
     SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     // The UI uses this direct path when the normal Stop command reports an
@@ -7359,18 +7499,20 @@ pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
     let script = r#"
         $markerRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
         $markerPath = Join-Path $markerRoot "WinCommander\logs\privacy_shield.pid"
+        $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
         $target = $null
         if (Test-Path -LiteralPath $markerPath) {
             try {
                 $candidatePid = [int](Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim()
-                $target = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+                $candidate = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+                if ($candidate -and $candidate.SessionId -eq $currentSessionId) { $target = $candidate }
             } catch {}
         }
         if (-not $target) {
             $target = Get-CimInstance -ClassName Win32_Process `
                 -Filter "Name='python.exe' OR Name='pythonw.exe'" `
                 -ErrorAction SilentlyContinue |
-                Where-Object { $_.CommandLine -like "*--wc-privacy-shield*" } |
+                Where-Object { $_.SessionId -eq $currentSessionId -and $_.CommandLine -like "*--wc-privacy-shield*" } |
                 Select-Object -First 1
         }
         if ($target) {

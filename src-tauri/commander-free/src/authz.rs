@@ -19,7 +19,7 @@ pub use dispatch::{
     action_for, authorize_backend_dispatch, backend_dispatch_policy, BackendDispatchPolicy,
 };
 pub use request::DestructiveRequest;
-pub use trusted::native_confirm_action;
+pub use trusted::{native_confirm_action, native_confirm_fleet_trust_repair};
 pub(crate) use trusted::{
     confirm_backend_dispatch, execute_trusted_lockdown, schedule_trusted_lockdown,
     toggle_trusted_lockdown,

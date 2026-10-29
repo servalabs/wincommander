@@ -8,10 +8,14 @@ param(
     # differences could otherwise stop the old service and strand it.
     [switch]$UseExistingBuild,
     [switch]$SyncPro,
+    [switch]$StageFleetDebug,
     # Replacing the SYSTEM service cleanly dismounts every Vault it owns. An
     # explicit opt-in keeps an ordinary frontend restart from unexpectedly
     # closing a mounted Vault during development.
     [switch]$AllowVaultDismount,
+    [string]$ExpectedServiceSha256,
+    [string]$ExpectedFreeSha256,
+    [string]$ExpectedProSha256,
     [string]$DiagnosticPath
 )
 
@@ -21,8 +25,10 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $tauriRoot = Join-Path $repoRoot 'src-tauri'
 $builtService = Join-Path $tauriRoot 'target\debug\wincommander-svc.exe'
-$stagingDirectory = Join-Path $repoRoot '.dev\wincommander-service'
+$stagingDirectory = Join-Path $env:ProgramData 'WinCommander\dev-service'
 $stagedService = Join-Path $stagingDirectory 'wincommander-svc.exe'
+$fleetStaging = Join-Path $env:ProgramData 'WinCommander\dev-fleet'
+$builtFree = Join-Path $tauriRoot 'target\debug\wincommander-free.exe'
 $serviceName = 'WinCommanderSvc'
 $builtPro = Join-Path $tauriRoot 'target\debug\wincommander-pro.exe'
 $managedPro = 'C:\ProgramData\WinCommander\bin\wincommander-pro.dev.exe'
@@ -90,6 +96,70 @@ function Get-Sha256([string]$Path) {
     }
 }
 
+function Assert-NoReparsePoint([string]$Path) {
+    if (Test-Path -LiteralPath $Path) {
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "A protected development path is a reparse point: $Path"
+        }
+    }
+}
+
+function Assert-ProtectedPath([string]$Path) {
+    Assert-NoReparsePoint $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = ([Security.Principal.NTAccount]::new($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -notin @('S-1-5-18', 'S-1-5-32-544')) { throw "Development path has an untrusted owner: $Path" }
+    $writeMask = [int64]([Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership) -bor 0x50000000
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($sid -notin @('S-1-5-18', 'S-1-5-32-544') -and (([int64]$rule.FileSystemRights -band $writeMask) -ne 0)) {
+            throw "Development path allows an untrusted writer: $Path"
+        }
+    }
+}
+
+function Ensure-ProtectedDevelopmentDirectory([string]$Path) {
+    $parent = Split-Path -Parent $Path
+    Assert-ProtectedPath $parent
+    if (Test-Path -LiteralPath $Path) {
+        Assert-ProtectedPath $Path
+        return
+    }
+    New-Item -ItemType Directory -Path $Path | Out-Null
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid), 'FullControl', $inherit, 'None', 'Allow'))
+    }
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'), 'ReadAndExecute', $inherit, 'None', 'Allow'))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    Assert-ProtectedPath $Path
+}
+
+function Invoke-SafeServiceRecovery([bool]$HadPriorService, [bool]$WasRunning, [string]$VerifiedBackupHash, [string]$CurrentStatus, [scriptblock]$Restore) {
+    if (-not $HadPriorService -or -not $VerifiedBackupHash -or $CurrentStatus -ne 'Stopped') { return $false }
+    & $Restore $WasRunning
+    return $true
+}
+
+function Get-PriorRecoveryPlan([bool]$HadService, [string]$PriorStatus, [bool]$HasBackup, [bool]$SameTarget, [bool]$ConfigRecoverable) {
+    if (-not $HadService) { return 'none' }
+    if (-not $ConfigRecoverable -or $PriorStatus -notin @('Running', 'Stopped')) { return 'abort' }
+    if ($HasBackup) { return 'full' }
+    if ($PriorStatus -eq 'Stopped' -and -not $SameTarget) { return 'config-only' }
+    return 'abort'
+}
+
+function Test-SimpleServiceImagePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.IndexOfAny([char[]]@('"', '%', "`r", "`n")) -ge 0) { return $false }
+    if (-not [IO.Path]::IsPathRooted($Path) -or -not $Path.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    try { return [IO.File]::Exists($Path) -and [IO.Path]::GetFullPath($Path).Equals($Path, [StringComparison]::OrdinalIgnoreCase) } catch { return $false }
+}
+
 function Get-VerifiedDriverHash {
     try {
         return Get-Sha256 $driverPath
@@ -109,9 +179,12 @@ function Get-VerifiedDriverHash {
 }
 
 function Test-DevelopmentProCurrent {
-    return (Test-Path -LiteralPath $builtPro -PathType Leaf) -and
-        (Test-Path -LiteralPath $managedPro -PathType Leaf) -and
-        ((Get-Sha256 $builtPro) -eq (Get-Sha256 $managedPro))
+    if (-not (Test-Path -LiteralPath $builtPro -PathType Leaf) -or -not (Test-Path -LiteralPath $managedPro -PathType Leaf)) { return $false }
+    try {
+        Assert-ProtectedPath (Split-Path -Parent $managedPro)
+        Assert-ProtectedPath $managedPro
+        return (Get-Sha256 $builtPro) -eq (Get-Sha256 $managedPro)
+    } catch { return $false }
 }
 
 function Test-ServiceProcessCurrent([switch]$AllowUnverifiable) {
@@ -171,6 +244,9 @@ function Test-CompatibleVeraCryptDriverReady {
 }
 
 function Assert-StagedDevelopmentService {
+    Assert-ProtectedPath (Split-Path -Parent $stagingDirectory)
+    Assert-ProtectedPath $stagingDirectory
+    Assert-ProtectedPath $stagedService
     $configuredPath = Get-ServiceImagePath
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     $serviceState = if ($service) { $service.Status } else { 'Missing' }
@@ -309,8 +385,13 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
     # the elevated child stopped the service but failed before restarting it.
     $existingBuildArgument = if ($UseExistingBuild) { ' -UseExistingBuild' } else { '' }
     $proArgument = if ($SyncPro) { ' -SyncPro' } else { '' }
+    $fleetArgument = if ($StageFleetDebug) { ' -StageFleetDebug' } else { '' }
+    if (-not $UseExistingBuild) { throw 'Build the development service without elevation before synchronizing it.' }
+    $serviceHashArgument = " -ExpectedServiceSha256 '$(Get-Sha256 $builtService)'"
+    $freeHashArgument = if ($StageFleetDebug) { " -ExpectedFreeSha256 '$(Get-Sha256 $builtFree)'" } else { '' }
+    $proHashArgument = if ($SyncPro -or $StageFleetDebug) { " -ExpectedProSha256 '$(Get-Sha256 $builtPro)'" } else { '' }
     $vaultArgument = if ($AllowVaultDismount) { ' -AllowVaultDismount' } else { '' }
-    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument$proArgument$vaultArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
+    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument$proArgument$fleetArgument$vaultArgument$serviceHashArgument$freeHashArgument$proHashArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     # Pass one argument string to the Windows process launcher.  The encoded
     # payload contains no spaces, avoiding another quoting boundary on paths
@@ -344,13 +425,7 @@ if (-not $Elevated) {
         Build-Service
     }
     catch {
-        # First migration from an older target\debug service can hold the build
-        # output open. The elevated child stops it, rebuilds, and completes the
-        # one-time move to the staging directory.
-        Assert-NoActiveVaultsUnlessAllowed
-        Start-ElevatedSync
-        Write-Host 'WinCommander development service synchronized and running.'
-        return
+        throw 'The development service could not be built without elevation. Resolve the build or locked executable before synchronization.'
     }
 
     $expectedHash = Get-Sha256 $builtService
@@ -359,12 +434,13 @@ if (-not $Elevated) {
     $configuredPath = Get-ServiceImagePath
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     $serviceRunning = $null -ne $service -and $service.Status -eq 'Running'
-    if ($stagedMatches -and $configuredPath -and
+    if (-not $StageFleetDebug -and $stagedMatches -and $configuredPath -and
         $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -and
         $serviceRunning -and (Test-ServiceProcessCurrent) -and
         (-not $SyncPro -or (Test-EncryptedVolumeDriverReady)) -and
         (-not $SyncPro -or (Test-DevelopmentProCurrent)) -and
         (Test-ServiceAcceptingConnections)) {
+        Assert-StagedDevelopmentService
         Write-Host 'WinCommander development service is current.'
         return
     }
@@ -381,7 +457,43 @@ if (-not $Elevated) {
 if ($SyncPro -and -not (Test-Path -LiteralPath $builtPro -PathType Leaf)) {
     throw 'Build the development Pro helper before synchronizing the service.'
 }
+if ($StageFleetDebug -and ((-not (Test-Path -LiteralPath $builtFree -PathType Leaf)) -or (-not (Test-Path -LiteralPath $builtPro -PathType Leaf)))) {
+    throw 'Build both Free and Pro debug helpers before protected Fleet staging.'
+}
+if (-not $UseExistingBuild -or $ExpectedServiceSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtService) -ne $ExpectedServiceSha256) { throw 'A hash-bound non-elevated service build is required before stopping the service.' }
+if ($StageFleetDebug -and ($ExpectedFreeSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtFree) -ne $ExpectedFreeSha256)) { throw 'The Free debug helper changed before staging.' }
+if (($SyncPro -or $StageFleetDebug) -and ($ExpectedProSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtPro) -ne $ExpectedProSha256)) { throw 'The Pro debug helper changed before staging.' }
+Ensure-ProtectedDevelopmentDirectory $stagingDirectory
+if ($StageFleetDebug) { Ensure-ProtectedDevelopmentDirectory $fleetStaging }
 Assert-NoActiveVaultsUnlessAllowed
+$priorService = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
+$priorPath = Get-ServiceImagePath
+$rollbackPath = Join-Path $stagingDirectory 'wincommander-svc.rollback.exe'
+$rollbackHash = $null
+$rollbackStart = if ($priorService) { switch ($priorService.StartMode) { 'Auto' { 'auto' } 'Manual' { 'demand' } 'Disabled' { 'disabled' } default { $null } } } else { $null }
+$priorWasRunning = $null -ne $priorService -and $priorService.State -eq 'Running'
+if ($priorService -and $priorPath -and $priorService.StartName -in @('LocalSystem', 'NT AUTHORITY\SYSTEM')) {
+    try {
+        Assert-ProtectedPath (Split-Path -Parent $priorPath)
+        Assert-ProtectedPath $priorPath
+        if (Test-Path -LiteralPath $rollbackPath) { Assert-ProtectedPath $rollbackPath }
+        Copy-Item -LiteralPath $priorPath -Destination $rollbackPath -Force
+        Assert-ProtectedPath $rollbackPath
+        $rollbackHash = Get-Sha256 $priorPath
+        if ((Get-Sha256 $rollbackPath) -ne $rollbackHash) { throw 'The previous service backup differs from its source.' }
+        if (-not $rollbackStart) { $rollbackHash = $null }
+    } catch {
+        $rollbackHash = $null
+        Write-Diagnostic 'The previous service cannot be safely backed up; automatic restart will not be attempted on failure.'
+    }
+}
+$priorStatus = if ($priorService) { $priorService.State } else { 'Missing' }
+$recoverableConfig = $null -ne $priorService -and (Test-SimpleServiceImagePath $priorPath) -and [bool]$rollbackStart -and $priorService.StartName -in @('LocalSystem', 'NT AUTHORITY\SYSTEM')
+$sameTarget = $priorPath -and $priorPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase)
+$recoveryPlan = Get-PriorRecoveryPlan ($null -ne $priorService) $priorStatus ([bool]$rollbackHash) ([bool]$sameTarget) $recoverableConfig
+if ($recoveryPlan -eq 'abort') { throw 'The prior service cannot be safely restored after a failed synchronization; it was not stopped or changed.' }
+if ($recoveryPlan -eq 'config-only') { $rollbackHash = 'config-only' }
+try {
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Diagnostic 'Stopping the existing WinCommander service.'
     Stop-Service -Name $serviceName -Force -NoWait -ErrorAction Stop
@@ -393,24 +505,47 @@ if ($UseExistingBuild) {
     if (-not (Test-Path -LiteralPath $builtService -PathType Leaf)) {
         throw "The verified development service build is missing: $builtService."
     }
+    if ($ExpectedServiceSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtService) -ne $ExpectedServiceSha256) { throw 'The development service changed after the non-elevated build.' }
+    if ($StageFleetDebug -and ($ExpectedFreeSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtFree) -ne $ExpectedFreeSha256)) { throw 'The Free debug helper changed before staging.' }
+    if (($SyncPro -or $StageFleetDebug) -and ($ExpectedProSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or (Get-Sha256 $builtPro) -ne $ExpectedProSha256)) { throw 'The Pro debug helper changed before staging.' }
     Write-Diagnostic 'Using the development service built by the non-elevated parent.'
 } else {
-    Write-Diagnostic 'Building the development service.'
-    Build-Service
+    throw 'An elevated synchronization must use a previously built, hash-bound service.'
 }
-New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+if (Test-Path -LiteralPath $stagedService) { Assert-ProtectedPath $stagedService }
 Copy-Item -LiteralPath $builtService -Destination $stagedService -Force
-if ((Get-Sha256 $builtService) -ne (Get-Sha256 $stagedService)) {
+Assert-ProtectedPath $stagedService
+if ((Get-Sha256 $stagedService) -ne $ExpectedServiceSha256) {
     throw 'The staged development service does not match the build output.'
 }
+if ($StageFleetDebug) {
+    foreach ($entry in @(@($builtFree, 'wincommander-free.exe'), @($builtPro, 'wincommander-pro.exe'))) {
+        $destination = Join-Path $fleetStaging $entry[1]
+        if (Test-Path -LiteralPath $destination) { Assert-ProtectedPath $destination }
+        Copy-Item -LiteralPath $entry[0] -Destination $destination -Force
+        Assert-ProtectedPath $destination
+        $expected = if ($entry[1] -eq 'wincommander-free.exe') { $ExpectedFreeSha256 } else { $ExpectedProSha256 }
+        if ((Get-Sha256 $destination) -ne $expected) { throw 'A staged Fleet helper differs from its approved build.' }
+    }
+    # Debug Free embeds its backend scripts at build time. Avoid
+    # copying a separate mutable resource tree across the elevation boundary.
+    $pin = Join-Path $fleetStaging 'wincommander-free.sha256'
+    if (Test-Path -LiteralPath $pin) { Assert-ProtectedPath $pin }
+    [IO.File]::WriteAllText($pin, (Get-Sha256 (Join-Path $fleetStaging 'wincommander-free.exe')))
+    Assert-ProtectedPath $pin
+}
 if ($SyncPro -and -not (Test-DevelopmentProCurrent)) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $managedPro) -Force | Out-Null
+    Ensure-ProtectedDevelopmentDirectory (Split-Path -Parent $managedPro)
     $temporaryPro = "$managedPro.dev-sync"
+    if (Test-Path -LiteralPath $temporaryPro) { Assert-ProtectedPath $temporaryPro }
+    if (Test-Path -LiteralPath $managedPro) { Assert-ProtectedPath $managedPro }
     Copy-Item -LiteralPath $builtPro -Destination $temporaryPro -Force
-    if ((Get-Sha256 $builtPro) -ne (Get-Sha256 $temporaryPro)) {
+    Assert-ProtectedPath $temporaryPro
+    if ((Get-Sha256 $temporaryPro) -ne $ExpectedProSha256) {
         throw 'The temporary development Pro helper does not match the build.'
     }
     Move-Item -LiteralPath $temporaryPro -Destination $managedPro -Force
+    Assert-ProtectedPath $managedPro
 }
 
 # sc.exe receives an already-parsed argument list from PowerShell. Preserve
@@ -441,3 +576,40 @@ Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 Assert-StagedDevelopmentService
 Write-Host 'WinCommander development service synchronized and running.'
+} catch {
+    $failure = $_
+    $current = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    $currentStatus = if ($current) { $current.Status.ToString() } else { 'Missing' }
+    if ($priorService -and $rollbackHash -and $currentStatus -eq 'Stopped') {
+        try {
+            [void](Invoke-SafeServiceRecovery $true $priorWasRunning $rollbackHash $currentStatus {
+            param([bool]$RestartPrior)
+            if ($rollbackHash -ne 'config-only') {
+                Assert-ProtectedPath $stagingDirectory
+                Assert-ProtectedPath $rollbackPath
+                if ((Get-Sha256 $rollbackPath) -ne $rollbackHash) { throw 'The previous service backup no longer matches.' }
+                Assert-ProtectedPath (Split-Path -Parent $priorPath)
+                if (Test-Path -LiteralPath $priorPath) { Assert-ProtectedPath $priorPath }
+                Copy-Item -LiteralPath $rollbackPath -Destination $priorPath -Force
+                Assert-ProtectedPath $priorPath
+                if ((Get-Sha256 $priorPath) -ne $rollbackHash) { throw 'The restored service image does not match its backup.' }
+            }
+            $rollbackArgument = '"' + $priorPath + '"'
+            & sc.exe config $serviceName 'binPath=' $rollbackArgument 'start=' $rollbackStart 'obj=' 'LocalSystem'
+            if ($LASTEXITCODE -ne 0 -or (Get-ServiceImagePath) -ne $priorPath) { throw 'Windows did not restore the previous service configuration.' }
+            if ($RestartPrior) {
+                Start-Service -Name $serviceName
+                (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+            }
+            })
+            Write-Diagnostic 'The protected previous service image, startup mode, and prior stopped/running state were restored.'
+        } catch {
+            Write-Diagnostic ("Automatic service recovery failed: {0}" -f $_)
+            throw "Development service synchronization failed and automatic recovery also failed. Original failure: $failure; recovery: $_"
+        }
+    } elseif ($priorService) {
+        Write-Diagnostic 'Automatic recovery skipped: no verified previous image, or service is not stopped. No additional stop was attempted.'
+        throw "Development service synchronization failed. Automatic recovery was unsafe or unavailable; no additional service stop was attempted. Original failure: $failure"
+    }
+    throw $failure
+}

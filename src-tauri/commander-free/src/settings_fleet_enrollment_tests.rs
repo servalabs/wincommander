@@ -36,6 +36,8 @@ fn reconnect_keeps_committed_policy_and_personal_session_state() {
     let current = managed();
     let p = plan(&current);
     assert!(!p.needs_confirmation());
+    assert!(!p.needs_service_challenge());
+    assert!(!p.allows_trust_replacement());
     let updated = p.prepare(&current, false).unwrap();
     let before = serde_json::to_value(current).unwrap();
     let after = serde_json::to_value(updated).unwrap();
@@ -51,6 +53,8 @@ fn native_policy_pin_requires_confirmation_when_the_ui_pin_is_missing() {
     let p =
         ConnectionPlan::new(&current, current.app.fleet.server_url.clone(), true, key(8)).unwrap();
     assert!(p.needs_confirmation());
+    assert!(p.needs_service_challenge());
+    assert!(p.allows_trust_replacement());
     assert!(p.prepare(&current, false).is_err());
 }
 
@@ -77,6 +81,8 @@ fn reducing_managed_dispatch_requires_native_confirmation() {
     )
     .unwrap();
     assert!(p.needs_confirmation());
+    assert!(!p.needs_service_challenge());
+    assert!(!p.allows_trust_replacement());
     assert!(p.prepare(&current, false).is_err());
 }
 
@@ -140,6 +146,8 @@ fn first_enrollment_remains_available_without_starting_privacy_shield() {
     )
     .unwrap();
     assert!(!p.needs_confirmation());
+    assert!(p.needs_service_challenge());
+    assert!(!p.allows_trust_replacement());
     let updated = p.prepare(&current, false).unwrap();
     assert!(updated.app.fleet.enabled);
     assert_eq!(updated.policy.fleet_signing_key, Some(key(7)));
@@ -155,6 +163,8 @@ fn rekeying_is_still_available_after_native_approval() {
     let current = managed();
     let p =
         ConnectionPlan::new(&current, current.app.fleet.server_url.clone(), true, key(8)).unwrap();
+    assert!(p.needs_service_challenge());
+    assert!(p.allows_trust_replacement());
     assert!(p.prepare(&current, false).is_err());
     let updated = p.prepare(&current, true).unwrap();
     assert_eq!(updated.policy.fleet_signing_key, Some(key(8)));

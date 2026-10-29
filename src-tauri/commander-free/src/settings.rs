@@ -703,6 +703,46 @@ pub struct FleetShieldDesiredState {
     pub command_id: Option<String>,
 }
 
+/// Durable device-side checkpoint between a verified policy preflight and
+/// the matching signed epoch commit. The Shield supervisor must not start an
+/// older configuration while this record is present.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShieldPolicyTransaction {
+    pub epoch_version: u32,
+    pub epoch_signature_hash: String,
+    pub resolution_revision: i64,
+    pub shield_revision: i64,
+    pub attempt_id: String,
+    pub was_running: bool,
+    pub was_fleet_owned: bool,
+    #[serde(default)]
+    pub owner_session_id: Option<u32>,
+    #[serde(default)]
+    pub pre_pause_mode: Option<String>,
+    #[serde(default)]
+    pub pre_pause_camera_index: Option<u32>,
+    #[serde(default)]
+    pub pre_pause_native_options: Option<wincmd_shared::fleet::ShieldNativeOptions>,
+    #[serde(default)]
+    pub local_stop_requested: bool,
+    #[serde(default)]
+    pub attempt_count: u8,
+    #[serde(default)]
+    pub retry_not_before_ms: i64,
+    pub expected_hash: String,
+    #[serde(default)]
+    pub last_stage: Option<wincmd_shared::fleet::ShieldPolicyProgressStage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShieldStoppedPolicyHold {
+    pub epoch_version: u32,
+    pub shield_revision: i64,
+    pub command_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -743,6 +783,12 @@ pub struct FleetSettings {
     /// enough to know whether the detector uses the new blur settings.
     #[serde(default)]
     pub privacy_shield_applied_tuning_hash: Option<String>,
+    #[serde(default)]
+    pub privacy_shield_policy_transaction: Option<ShieldPolicyTransaction>,
+    /// A policy-only update observed the detector stopped. Do not turn that
+    /// update into an implicit Start; only a newer desired-state request may.
+    #[serde(default)]
+    pub privacy_shield_stopped_policy_hold: Option<ShieldStoppedPolicyHold>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
@@ -2415,11 +2461,22 @@ pub(crate) fn context_notification_preferences() -> Result<(bool, bool, String),
         .map_err(|_| "notification_preferences_schema_invalid".to_string())
 }
 
-fn context_notification_preferences_from_value(value: &serde_json::Value) -> Result<(bool, bool, String), ()> {
-    let app = value.get("app").and_then(serde_json::Value::as_object).ok_or(())?;
-    let disabled = app.get("disableNativeNotifications").and_then(serde_json::Value::as_bool).ok_or(())?;
-    let theme = app.get("theme").and_then(serde_json::Value::as_str)
-        .filter(|theme| matches!(*theme, "light" | "dark" | "system")).ok_or(())?;
+fn context_notification_preferences_from_value(
+    value: &serde_json::Value,
+) -> Result<(bool, bool, String), ()> {
+    let app = value
+        .get("app")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(())?;
+    let disabled = app
+        .get("disableNativeNotifications")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or(())?;
+    let theme = app
+        .get("theme")
+        .and_then(serde_json::Value::as_str)
+        .filter(|theme| matches!(*theme, "light" | "dark" | "system"))
+        .ok_or(())?;
     let decoy = match app.get("decoyMode") {
         None | Some(serde_json::Value::Null) => false,
         Some(value) => {
@@ -3370,6 +3427,57 @@ fn get_device_identity_sync() -> Result<serde_json::Value, String> {
 /// Native-only policy ingestion. Renderer callers may request a native Fleet
 /// refresh, but cannot select or replay an arbitrary policy envelope.
 #[allow(clippy::too_many_arguments)]
+fn verified_admin_epoch(
+    config: serde_json::Value,
+    locked_paths: Vec<String>,
+    strategy: String,
+    config_version: u32,
+    signature: Option<String>,
+    signer_key: Option<String>,
+    target_kind: Option<String>,
+    target_id: Option<String>,
+    managed: Option<bool>,
+) -> epoch_write::Epoch {
+    epoch_write::Epoch {
+        config,
+        locked_paths,
+        strategy,
+        version: config_version,
+        signature,
+        signer_key,
+        target_kind,
+        target_id,
+        managed: managed.unwrap_or(false),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preview_verified_admin_config(
+    config: serde_json::Value,
+    locked_paths: Vec<String>,
+    strategy: String,
+    config_version: u32,
+    signature: Option<String>,
+    signer_key: Option<String>,
+    target_kind: Option<String>,
+    target_id: Option<String>,
+    managed: Option<bool>,
+) -> Result<AppSettings, String> {
+    let epoch = verified_admin_epoch(
+        config,
+        locked_paths,
+        strategy,
+        config_version,
+        signature,
+        signer_key,
+        target_kind,
+        target_id,
+        managed,
+    );
+    epoch_write::preflight(&epoch)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_verified_admin_config(
     config: serde_json::Value,
     locked_paths: Vec<String>,
@@ -3381,17 +3489,17 @@ pub(crate) fn apply_verified_admin_config(
     target_id: Option<String>,
     managed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let epoch = epoch_write::Epoch {
+    let epoch = verified_admin_epoch(
         config,
         locked_paths,
         strategy,
-        version: config_version,
+        config_version,
         signature,
         signer_key,
         target_kind,
         target_id,
-        managed: managed.unwrap_or(false),
-    };
+        managed,
+    );
     let updated = epoch_write::apply(&epoch)?;
     crate::net_traffic_alert::reload_from_settings(&updated);
     // Never announce/relay an epoch that failed its local authority transaction.
@@ -4408,7 +4516,8 @@ mod tests {
         assert_eq!(settings.app.file_search.result_limit, 1_000);
 
         let mut snapshot = serde_json::to_value(settings).unwrap();
-        let mut patch = serde_json::json!({"app": {"fileSearch": {"result_limit": 500, "resultLimit": 50}}});
+        let mut patch =
+            serde_json::json!({"app": {"fileSearch": {"result_limit": 500, "resultLimit": 50}}});
         normalize_file_search_result_limit(&mut patch);
         merge_json(&mut snapshot, &patch);
         let settings = parse_and_migrate_json_val(snapshot).unwrap();
@@ -5607,7 +5716,9 @@ mod tests {
     }
     #[test]
     fn explicit_settings_read_ignores_a_warm_cache_and_holds_the_writer_gate() {
-        let _global = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _global = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         warm_cache_with_defaults();
         let old_revision = cached_settings().unwrap().snapshot_revision;
         let observed = reload_verified_settings_with(|| {
@@ -5615,7 +5726,8 @@ mod tests {
             let mut latest = create_default_settings();
             latest.app.theme = "light".to_string();
             Ok(latest)
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(observed.app.theme, "light");
         assert_eq!(cached_settings().unwrap().app.theme, "light");
         assert_ne!(observed.snapshot_revision, old_revision);
@@ -5629,28 +5741,46 @@ mod tests {
         let legacy: VaultSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!legacy.quick_mount_open_explorer_after_mount);
         for enabled in [true, false] {
-            let value = serde_json::json!({"app":{"vault":{"quickMountOpenExplorerAfterMount":enabled}}});
+            let value =
+                serde_json::json!({"app":{"vault":{"quickMountOpenExplorerAfterMount":enabled}}});
             let (machine, personal) = split_settings_value(value).unwrap();
-            assert!(machine.pointer("/app/vault/quickMountOpenExplorerAfterMount").is_none());
-            assert_eq!(personal["app"]["vault"]["quickMountOpenExplorerAfterMount"], enabled);
-            let settings: VaultSettings = serde_json::from_value(personal["app"]["vault"].clone()).unwrap();
-            let restarted: VaultSettings = serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+            assert!(machine
+                .pointer("/app/vault/quickMountOpenExplorerAfterMount")
+                .is_none());
+            assert_eq!(
+                personal["app"]["vault"]["quickMountOpenExplorerAfterMount"],
+                enabled
+            );
+            let settings: VaultSettings =
+                serde_json::from_value(personal["app"]["vault"].clone()).unwrap();
+            let restarted: VaultSettings =
+                serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
             assert_eq!(restarted.quick_mount_open_explorer_after_mount, enabled);
         }
     }
 
     #[test]
     fn context_notification_preferences_require_verified_user_flags_without_warming_settings() {
-        let _global = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _global = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let before = cached_settings().and_then(|settings| settings.snapshot_revision);
         let value = serde_json::json!({"app":{"disableNativeNotifications":true,"theme":"dark","decoyMode":{"enabled":true}}});
-        assert_eq!(context_notification_preferences_from_value(&value), Ok((true, true, "dark".into())));
-        for invalid in [serde_json::json!({}), serde_json::json!({"app":{"theme":"dark"}}),
+        assert_eq!(
+            context_notification_preferences_from_value(&value),
+            Ok((true, true, "dark".into()))
+        );
+        for invalid in [
+            serde_json::json!({}),
+            serde_json::json!({"app":{"theme":"dark"}}),
             serde_json::json!({"app":{"disableNativeNotifications":false,"theme":"unknown"}}),
-            serde_json::json!({"app":{"disableNativeNotifications":false,"theme":"dark","decoyMode":{"enabled":"yes"}}})] {
+            serde_json::json!({"app":{"disableNativeNotifications":false,"theme":"dark","decoyMode":{"enabled":"yes"}}}),
+        ] {
             assert!(context_notification_preferences_from_value(&invalid).is_err());
         }
-        assert_eq!(cached_settings().and_then(|settings| settings.snapshot_revision), before);
+        assert_eq!(
+            cached_settings().and_then(|settings| settings.snapshot_revision),
+            before
+        );
     }
-
 }

@@ -150,8 +150,11 @@ function Get-PrivacyShieldPidFromMarker {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     try {
         $candidatePid = [int](Get-Content -LiteralPath $path -Raw -ErrorAction Stop).Trim()
-        if ($candidatePid -gt 0 -and (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue)) {
-            return $candidatePid
+        if ($candidatePid -gt 0) {
+            $candidate = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+            if ($candidate -and $candidate.SessionId -eq [System.Diagnostics.Process]::GetCurrentProcess().SessionId) {
+                return $candidatePid
+            }
         }
     } catch {}
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -218,7 +221,9 @@ function Get-PrivacyShieldStatus {
         $processId = $null
         $activeMode = $null
         $nativeOptions = $null
+        $cameraIndex = $null
         $camera = Get-PrivacyShieldCameraAvailability
+        $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
 
         # Get-CimInstance works reliably on both PowerShell 5.1 (Windows
         # default) AND PowerShell 7+. The previous Get-WmiObject path
@@ -238,7 +243,7 @@ function Get-PrivacyShieldStatus {
             $procs = @()
         }
         foreach ($proc in $procs) {
-            if ($proc.CommandLine -like "*$shieldProcessMarker*") {
+            if ($proc.SessionId -eq $currentSessionId -and $proc.CommandLine -like "*$shieldProcessMarker*") {
                 $running = $true
                 $processId = $proc.ProcessId
                 # The process arguments are the detector's applied state.
@@ -260,6 +265,17 @@ function Get-PrivacyShieldStatus {
                     'notify_only'
                 }
                 $nativeOptions = Get-PrivacyShieldNativeOptions -CommandLine $proc.CommandLine
+                # Local recovery needs the exact camera index. Keep this out
+                # of Fleet observations and fail closed on missing/duplicate
+                # switches rather than guessing the default camera.
+                $cameraSwitches = [regex]::Matches($proc.CommandLine, '(?:^|\s)--camera(?=\s|$)').Count
+                $cameraValues = [regex]::Matches($proc.CommandLine, '(?:^|\s)--camera\s+([0-9]+)(?=\s|$)')
+                if ($cameraSwitches -eq 1 -and $cameraValues.Count -eq 1) {
+                    $parsedCamera = 0
+                    if ([int]::TryParse($cameraValues[0].Groups[1].Value, [ref]$parsedCamera) -and $parsedCamera -ge 0 -and $parsedCamera -le 32) {
+                        $cameraIndex = $parsedCamera
+                    }
+                }
                 break
             }
         }
@@ -292,6 +308,7 @@ function Get-PrivacyShieldStatus {
             processId       = $processId
             activeMode      = $activeMode
             nativeOptions   = $nativeOptions
+            cameraIndex     = $cameraIndex
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message

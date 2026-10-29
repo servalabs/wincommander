@@ -11,6 +11,51 @@ use windows_sys::Win32::System::RemoteDesktop::{
 #[path = "peer_auth_deployment_acl.rs"]
 mod acl;
 
+#[cfg(debug_assertions)]
+fn dev_helper_path() -> Result<std::path::PathBuf, PeerAuthError> {
+    let root = std::env::var_os("ProgramData").ok_or(PeerAuthError::IdentityUnavailable)?;
+    Ok(std::path::PathBuf::from(root)
+        .join("WinCommander")
+        .join("dev-fleet")
+        .join("wincommander-free.exe"))
+}
+
+#[cfg(debug_assertions)]
+fn dev_pin_digest_matches(candidate: &Path, expected: &Path, actual: &[u8], pin: &str) -> bool {
+    paths_equal(candidate, expected)
+        && pin.len() == 64
+        && pin.bytes().all(|c| c.is_ascii_hexdigit())
+        && actual
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            .eq_ignore_ascii_case(pin)
+}
+
+#[cfg(debug_assertions)]
+fn dev_helper_matches(path: &Path) -> bool {
+    let Ok(expected) = dev_helper_path()
+        .and_then(|p| std::fs::canonicalize(p).map_err(|_| PeerAuthError::IdentityUnavailable))
+    else {
+        return false;
+    };
+    if !paths_equal(path, &expected) || acl::verify_path(&expected).is_err() {
+        return false;
+    }
+    let pin_path = expected.with_file_name("wincommander-free.sha256");
+    if acl::verify_component(&pin_path).is_err() {
+        return false;
+    }
+    let Ok(pin) = std::fs::read_to_string(&pin_path) else {
+        return false;
+    };
+    let pin = pin.trim();
+    let Ok(mut file) = File::open(&expected) else {
+        return false;
+    };
+    hash(&mut file).is_ok_and(|current| dev_pin_digest_matches(path, &expected, &current, pin))
+}
+
 pub(crate) fn deployment_session_is_permitted(
     session_id: u32,
     state: Option<WTS_CONNECTSTATE_CLASS>,
@@ -25,6 +70,71 @@ pub(crate) fn deployment_session_is_permitted(
 }
 
 impl SessionHelperGate {
+    /// Fleet policy only: admit a protected Free/Pro helper from its actual
+    /// active Windows session, including RDP, while retaining path and ACL
+    /// checks. The session comes from the captured pipe token, never the UI.
+    pub(crate) fn authorize_fleet_policy_relay(
+        &self,
+        pid: u32,
+        verb: &str,
+        captured_session: u32,
+        active: bool,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        let identity = self.probe.identity(pid)?;
+        self.authorize_fleet_policy_observation(&identity, verb, captured_session, active, || {
+            verify_image(
+                &identity.canonical_image_path,
+                &identity.canonical_image_path,
+            )
+        })
+    }
+
+    fn authorize_fleet_policy_observation(
+        &self,
+        identity: &PeerIdentitySnapshot,
+        verb: &str,
+        captured_session: u32,
+        active: bool,
+        verify: impl FnOnce() -> Result<(), PeerAuthError>,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        if !matches!(verb, "svc.fleet.install_policy" | "svc.fleet.get_policy") {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        if !active || captured_session == 0 || identity.session_id != captured_session {
+            return Err(PeerAuthError::WrongSession);
+        }
+        let allowed_name = identity
+            .canonical_image_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| {
+                n.eq_ignore_ascii_case("wincommander-free.exe")
+                    || n.eq_ignore_ascii_case("wincommander-pro.exe")
+            });
+        let installed_pro = identity
+            .canonical_image_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("wincommander-pro.exe"))
+            && std::fs::canonicalize(crate::pro_broker::fixed_pro_path())
+                .ok()
+                .is_some_and(|expected| paths_equal(&identity.canonical_image_path, &expected));
+        #[cfg(debug_assertions)]
+        let staged_dev = dev_helper_matches(&identity.canonical_image_path);
+        #[cfg(not(debug_assertions))]
+        let staged_dev = false;
+        if !allowed_name
+            || (!self.is_allowed_helper_path(&identity.canonical_image_path)
+                && !installed_pro
+                && !staged_dev)
+        {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        verify()?;
+        self.check_rate_limit(identity, verb, Instant::now())?;
+        Ok(TrustOrigin::SessionHelperPinned)
+    }
+
     pub(crate) fn authorize_deployment_relay(
         &self,
         pid: u32,
