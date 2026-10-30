@@ -29,7 +29,7 @@ try {
         $script:scanCalls = @{}; $script:retained = $false; $script:AutoEraseCoverageIncomplete = $false
         Invoke-Expression $script:AutoEraseScripts[$category]
         if (@($script:scanCalls.Values | Where-Object { $_ -ne 2 }).Count) { throw "$category did not recheck every cache root." }
-        if ($script:AutoEraseCoverageIncomplete -ne ($category -eq 'passwordManagerCaches')) { throw "$category coverage was not reported accurately." }
+        if (-not $script:AutoEraseCoverageIncomplete) { throw "$category coverage was not reported accurately." }
         $script:scanCalls = @{}; $script:retained = $true; $script:AutoEraseFailed = 0
         Invoke-Expression $script:AutoEraseScripts[$category]
         if ($script:AutoEraseFailed -eq 0) { throw "$category reported success despite remaining files." }

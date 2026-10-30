@@ -1093,7 +1093,7 @@ function Get-WCDockerBuildCacheCount {
 }
 
 function Invoke-WCDockerDesktopCleanup {
-    $result = @{ removed = 0; failed = 0 }
+    $result = @{ removed = 0; failed = 0; coverageIncomplete = $true }
     $script:WCDockerMutationTimedOut = $false
     # This local log is also in the manual cleanup target. It does not depend
     # on the Docker daemon being available, so attempt it independently before
@@ -1124,7 +1124,6 @@ function Invoke-WCDockerDesktopCleanup {
         $result.removed = [Math]::Max(0, $before.containers.Count - $after.containers.Count) + [Math]::Max(0, $before.images.Count - $after.images.Count) + [Math]::Max(0, $before.volumes.Count - $after.volumes.Count)
         if ($after.containers.Count -or $after.images.Count -or $after.volumes.Count -or (Get-WCDockerBuildCacheCount $config $identity) -gt 0 -or (Get-WCDockerArtifactRemainders) -gt 0) { $result.failed++ }
         # The supported CLI cannot verify whether a custom disk image remains.
-        $result.failed++
     } catch { $result.failed++ }
     finally {
         if (-not $script:WCDockerMutationTimedOut) {
@@ -1142,6 +1141,7 @@ function Invoke-WCDockerDesktopCleanup {
 
 $script:AutoEraseScripts = @{
     'dockerDesktopData' = @'
+$script:AutoEraseCoverageIncomplete = $true
 try {
     $result = Invoke-WCDockerDesktopCleanup
     $script:AutoEraseRemoved += [int]$result.removed
@@ -1149,6 +1149,8 @@ try {
 } catch { $script:AutoEraseFailed++ }
 '@
     'virtualMachineArtifacts' = @'
+# Provider-managed and relocated artifacts are outside the verified scope.
+$script:AutoEraseCoverageIncomplete = $true
 try {
     $result = Invoke-WCVirtualMachineArtifactCleanup
     $script:AutoEraseRemoved += [int]$result.removed
@@ -1161,7 +1163,9 @@ try {
     Assert-WCScheduledWslProviderInventory $before
     $dockerDistros = @($before | Where-Object { $_.Name -in @('docker-desktop', 'docker-desktop-data') })
     $eligible = @($before | Where-Object { $_.Name -notin @('docker-desktop', 'docker-desktop-data') })
-    if ($dockerDistros.Count -gt 0) { $script:AutoEraseFailed++ }
+    # Docker-managed distributions are intentionally out of scope, rather
+    # than failed attempts to delete them.
+    if ($dockerDistros.Count -gt 0) { $script:AutoEraseCoverageIncomplete = $true }
     foreach ($distro in $eligible) {
         try { Remove-WCScheduledWslDistro $distro.Name }
         catch { $script:AutoEraseFailed++ }
@@ -1174,10 +1178,13 @@ try {
         if (-not $registered -and -not $diskPresent) { $script:AutoEraseRemoved++ }
         else { $script:AutoEraseFailed++ }
     }
-    if ($after.Count -gt 0 -or (Test-WCScheduledWslOrphans)) { $script:AutoEraseFailed++ }
+    if (@($after | Where-Object { $_.Name -in @('docker-desktop', 'docker-desktop-data') }).Count -gt 0) { $script:AutoEraseCoverageIncomplete = $true }
+    if (@($after | Where-Object { $_.Name -notin @('docker-desktop', 'docker-desktop-data') }).Count -gt 0 -or (Test-WCScheduledWslOrphans)) { $script:AutoEraseFailed++ }
 } catch { $script:AutoEraseFailed++ }
 '@
     'credentialManager' = @'
+# CredEnumerate cannot verify other applications' Windows Vault entries.
+$script:AutoEraseCoverageIncomplete = $true
 try {
     $before = @(Get-WCScheduledCredentials)
     foreach ($credential in $before) {
@@ -1190,8 +1197,6 @@ try {
         if (-not $stillPresent) { $script:AutoEraseRemoved++ }
     }
     if ($after.Count -gt 0) { $script:AutoEraseFailed++ }
-    # CredEnumerate cannot verify other applications' Windows Vault entries.
-    $script:AutoEraseFailed++
 } catch { $script:AutoEraseFailed++ }
 '@
     # Machine maintenance -------------------------------------------------
@@ -1270,6 +1275,8 @@ if (Test-Path `$fallback) { Erase-OneFile `$fallback }
 "@
     'dnsCache'          = "ipconfig /flushdns | Out-Null; if (`$LASTEXITCODE -ne 0) { `$script:AutoEraseFailed++ }"
     'browserFootprints' = @'
+# The fixed browser/profile inventory cannot cover every browser or custom path.
+$script:AutoEraseCoverageIncomplete = $true
 function Assert-BrowserProfilePath {
     param([string]$Path)
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -1844,6 +1851,8 @@ foreach ($relative in @('CoreAIPlatform.00','ConnectedDevicesPlatform')) {
 }
 '@
     'developerCaches' = @'
+# Other developer tools and custom cache locations are outside these roots.
+$script:AutoEraseCoverageIncomplete = $true
 foreach ($root in @(
     (Join-Path $env:APPDATA 'npm-cache'), (Join-Path $env:LOCALAPPDATA 'npm-cache'),
     (Join-Path $env:LOCALAPPDATA 'pip\Cache'), (Join-Path $env:USERPROFILE '.cargo\registry\cache'),

@@ -19,7 +19,7 @@ try {
         $script:AutoEraseFailed = 0; $script:AutoEraseRemoved = 0; $script:AutoEraseDeferred = 0; $script:AutoEraseCoverageIncomplete = $false
         & ([scriptblock]::Create($script:AutoEraseScripts[$case.id]))
         if ($script:AutoEraseFailed -ne 0 -or (Test-Path -LiteralPath $case.root)) { throw "$($case.id) failed=$script:AutoEraseFailed exists=$(Test-Path -LiteralPath $case.root) removed=$script:AutoEraseRemoved" }
-        if ($script:AutoEraseCoverageIncomplete -ne ($case.id -eq 'passwordManagerCaches')) { throw "$($case.id) coverage was not reported accurately." }
+        if (-not $script:AutoEraseCoverageIncomplete) { throw "$($case.id) coverage was not reported accurately." }
     }
 
     # An enumeration failure must be recorded; nothing may fall back to a recursive delete.

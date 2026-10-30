@@ -35,7 +35,7 @@ function Remove-WCScheduledCredential($Name, $Type, $UserName) {
 }
 Invoke-Expression $script:AutoEraseScripts['credentialManager']
 Assert-True ($script:AutoEraseRemoved -eq 3) 'Readback must distinguish users sharing an extended credential target.'
-Assert-True ($script:AutoEraseFailed -gt 0) 'Unverified Windows Vault coverage must be reported as incomplete.'
+Assert-True ($script:AutoEraseFailed -gt 0 -and $script:AutoEraseCoverageIncomplete) 'A retained identity and unverified Windows Vault coverage must be reported independently.'
 Assert-True ($script:deleted.Contains('example/1') -and $script:deleted.Contains('example/2')) 'Typed identities must be preserved.'
 Assert-True ($script:deleted.Contains('example|alice/6') -and $script:deleted.Contains('example|bob/6')) 'Extended credentials must be targeted by user.'
 
@@ -59,5 +59,10 @@ $script:AutoEraseFailed = 0
 function Get-WCScheduledCredentials { throw 'enumeration denied' }
 Invoke-Expression $script:AutoEraseScripts['credentialManager']
 Assert-True ($script:AutoEraseFailed -gt 0) 'An unavailable credential store must not report success.'
+
+$script:AutoEraseRemoved = 0; $script:AutoEraseFailed = 0; $script:AutoEraseCoverageIncomplete = $false
+function Get-WCScheduledCredentials { return @() }
+Invoke-Expression $script:AutoEraseScripts['credentialManager']
+Assert-True ($script:AutoEraseFailed -eq 0 -and $script:AutoEraseCoverageIncomplete) 'Unverified Vault coverage must not be counted as a deletion failure.'
 
 Write-Output 'Credential scheduled cleanup fixtures passed.'

@@ -36,13 +36,14 @@ Assert-True (-not (Test-WCScheduledWslDisk -Path 'C:\synthetic\ext4.vhdx')) 'A m
 # The task payload is exercised with a disposable in-memory inventory only.
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
+$script:AutoEraseCoverageIncomplete = $false
 $script:inventory = @([pscustomobject]@{ Name='ExampleLinux'; Disk='' }, [pscustomobject]@{ Name='ExampleImport'; Disk='' })
 function Get-WCScheduledWslInventory { return @($script:inventory) }
 function Get-WCScheduledWslProviderNames { return @($script:inventory | ForEach-Object { $_.Name }) }
 function Test-WCScheduledWslOrphans { return $false }
 function Remove-WCScheduledWslDistro($Name) { $script:inventory = @($script:inventory | Where-Object { $_.Name -ne $Name }) }
 Invoke-Expression $script:AutoEraseScripts['wslData']
-Assert-True ($script:AutoEraseRemoved -eq 2 -and $script:AutoEraseFailed -eq 0) 'Registered distributions must be unregistered and verified.'
+Assert-True ($script:AutoEraseRemoved -eq 2 -and $script:AutoEraseFailed -eq 0 -and -not $script:AutoEraseCoverageIncomplete) 'Registered distributions must be unregistered and verified.'
 
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
@@ -60,14 +61,16 @@ Assert-True ($script:AutoEraseRemoved -eq 0 -and $script:AutoEraseFailed -gt 0) 
 
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
+$script:AutoEraseCoverageIncomplete = $false
 $script:inventory = @([pscustomobject]@{ Name='docker-desktop'; Disk='' })
 $script:attempted = $false
 function Remove-WCScheduledWslDistro($Name) { $script:attempted = $true }
 Invoke-Expression $script:AutoEraseScripts['wslData']
-Assert-True (-not $script:attempted -and $script:AutoEraseFailed -gt 0) 'Docker-owned distributions must not be unregistered by WSL cleanup.'
+Assert-True (-not $script:attempted -and $script:AutoEraseFailed -eq 0 -and $script:AutoEraseCoverageIncomplete) 'Docker-owned distributions must remain outside coverage without a deletion failure.'
 
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
+$script:AutoEraseCoverageIncomplete = $false
 $script:inventory = @([pscustomobject]@{ Name='docker-desktop'; Disk='' }, [pscustomobject]@{ Name='ExampleLinux'; Disk='' })
 $script:deleted = @()
 function Remove-WCScheduledWslDistro($Name) {
@@ -76,7 +79,7 @@ function Remove-WCScheduledWslDistro($Name) {
 }
 Invoke-Expression $script:AutoEraseScripts['wslData']
 Assert-True ($script:deleted.Count -eq 1 -and $script:deleted[0] -eq 'ExampleLinux') 'Mixed inventories should process only non-Docker distributions.'
-Assert-True ($script:AutoEraseRemoved -eq 1 -and $script:AutoEraseFailed -gt 0) 'Docker-owned distributions make a mixed result incomplete.'
+Assert-True ($script:AutoEraseRemoved -eq 1 -and $script:AutoEraseFailed -eq 0 -and $script:AutoEraseCoverageIncomplete) 'Docker-owned distributions make coverage incomplete without a deletion failure.'
 
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0

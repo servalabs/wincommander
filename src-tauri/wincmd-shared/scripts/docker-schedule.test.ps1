@@ -87,7 +87,7 @@ Assert-WCDockerTest ($result.failed -gt 0) 'Remaining Docker volumes must make t
 
 $script:scenario = 'valid'; $script:identityReads = 0; $script:mutations.Clear(); $script:volumes = @()
 $result = Invoke-WCDockerDesktopCleanup
-Assert-WCDockerTest ($result.failed -gt 0) 'Even an empty default inventory must remain incomplete when a custom disk image cannot be ruled out.'
+Assert-WCDockerTest ($result.failed -eq 0 -and $result.coverageIncomplete) 'An empty default inventory must report custom disk uncertainty without a deletion failure.'
 
 $script:scenario = 'denied'; $script:identityReads = 0; $script:mutations.Clear(); $script:containers = @('a' * 64)
 $result = Invoke-WCDockerDesktopCleanup

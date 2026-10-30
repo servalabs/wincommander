@@ -37,8 +37,9 @@ try {
     $script:erased = [Collections.Generic.List[string]]::new()
     function Erase-OneFile($Path) { $script:erased.Add($Path); [void]$script:files.Remove($Path); $script:AutoEraseRemoved++ }
     function Erase-Dir($Path) { $script:erased.Add($Path); [void]$script:dirs.Remove($Path); $script:AutoEraseRemoved++ }
-    $script:AutoEraseRemoved = 0; $script:AutoEraseFailed = 0
+    $script:AutoEraseRemoved = 0; $script:AutoEraseFailed = 0; $script:AutoEraseCoverageIncomplete = $false
     Invoke-Expression $script:AutoEraseScripts['browserFootprints']
+    if (-not $script:AutoEraseCoverageIncomplete) { throw 'Uninspected browsers and custom paths must be reported as incomplete coverage.' }
     if ($script:AutoEraseFailed -or $script:erased.Count -ne 4 -or -not $script:erased.Contains("$chrome\History") -or -not $script:erased.Contains("$chrome\Network") -or -not $script:erased.Contains("$chromeProfile\Cookies") -or -not $script:erased.Contains("$firefox\Profiles\test\places.sqlite")) { throw 'Installed browser profile data was not correctly scoped and removed.' }
     if ($script:erased | Where-Object { $_ -like '*Brave*' }) { throw 'Uninstalled browser data was unexpectedly targeted.' }
 
