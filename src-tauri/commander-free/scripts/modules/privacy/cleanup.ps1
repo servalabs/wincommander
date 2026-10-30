@@ -3793,7 +3793,7 @@ function Get-CleanupArtifactFiles {
         foreach ($pattern in $source.patterns) {
             Get-ChildItem -LiteralPath $sourcePath -Recurse:($source.recurse -ne $false) -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
                 $relative = $_.FullName.Substring($sourcePath.Length).TrimStart('\\')
-                $files += @{ name = "$($source.label): $relative"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files += @{ name = "$($source.label): $relative"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
             }
         }
     }

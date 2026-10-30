@@ -39,7 +39,7 @@ $script:deny = $true
 if (-not (Get-PCAInfo).error -or -not (Get-PrintSpoolerInfo).error) { throw 'A denied target was reported as a successful empty scan.' }
 $script:deny = $false
 $artifacts = @(Get-CleanupArtifactFiles -Sources @(@{ path='C:\Mock'; label='Mock'; patterns=@('*.dat') }))
-if ($artifacts.Count -ne 1 -or $artifacts[0].name -ne 'Mock: mock.dat') { throw 'Artifact reader lost the record metadata.' }
+if ($artifacts.Count -ne 1 -or $artifacts[0].name -ne 'Mock: mock.dat' -or $artifacts[0].path -ne 'C:\Mock\mock.dat') { throw 'Artifact reader lost the record metadata.' }
 $missing = @(Get-CleanupArtifactFiles -Sources @(@{ path='C:\Absent'; label='Mock'; patterns=@('*') }))
 if ($missing.Count -ne 0) { throw 'Missing artifact folder was not empty.' }
 $script:deny = $true
