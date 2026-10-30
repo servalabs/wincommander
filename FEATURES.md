@@ -87,6 +87,51 @@ the backend and private component before execution.
   Dashboard action failures appear in Notifications, with unresolved findings
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
+- Maintenance workspaces for Deep Cleanup, Windows Storage, duplicates, disk
+  analysis, startup, registry hygiene, and local operation history. Large Files
+  and File Types are tabs within Disk Space Analysis. The compact tab row stays
+  visible while its content scrolls. System Cleanup retains Browser Audit,
+  Editor History, Office Document History, Adobe Recent Files, Windows activity,
+  clipboard, network and credential tools.
+- Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
+  user-managed models, datasets, credentials, and resumable upload staging.
+- Deep Cleanup scans supported application cache locations automatically and
+  shows only categories with discovered targets; selection totals and review
+  actions sit beside the scan control. Windows
+  Storage focuses on Windows-managed storage cleanup. Windows Spotlight,
+  Legacy Icon Cache and BranchCache remain in System Cleanup alongside browser
+  history, location traces, DNS and app activity.
+- Disk analysis with synchronized folder results, treemap/sunburst charts,
+  chart depth, navigation history, progress, and cancellation. Partial scans
+  identify skipped entries and scan limits; charts show logical file sizes,
+  not measured physical allocation or guaranteed reclaimable space.
+- Space, Large Files and File Types share one Disk Space Analysis workspace.
+  The selected-folder inspector has reserved space beside the chart; small
+  or display-limited areas are represented by an explicit Other tile.
+  File Types reports counts and logical sizes in the current cached scope.
+  Partial scans offer a fresh scan of a browsed subfolder for more detail.
+- Large Files uses a selected minimum file size, type filters, search, and
+  sorting. Results disclose the backend display limit and incomplete scans.
+  Folder exploration and Open in Explorer are separate from confirmed file
+  deletion; recursive folder deletion is unavailable in the analyzer.
+- Duplicate Smart Select and an explicit copy-to-keep preference, with
+  backend content and identity rechecks, retention checks, and a refreshed
+  scan after removal. Repeated paths and hard links are not counted as extras.
+  Entering Duplicate Cleanup scans local fixed drives automatically; chosen
+  folder scans remain available. A disk-backed inventory bounds memory use;
+  paged groups disclose their result limits and partial-scan status.
+- Deep Cleanup expands application/category rows into backend-discovered
+  folders and a bounded preview of exact files, with logical sizes and counts.
+  Database-vacuum estimates are distinguished from measured file sizes.
+- Startup review includes enabled/disabled filters, available publisher and
+  launcher details, and exact-entry enable/disable controls. Startup delay
+  and memory savings are not inferred from a running process's memory use.
+- Application selection reveals available publisher, version, installed size
+  and location beside the scrollable results. Unavailable metadata is labeled;
+  protected or ambiguous program targets cannot be selected for removal.
+- Local display history retains up to 100 supported maintenance results in
+  the current application profile. It is clearable and is not an evidence
+  receipt or a measurement of physical space recovered.
 - Service Profile recommendations use current Windows service settings, not an
   expiring run timestamp. Already-applied settings stay resolved across restarts;
   changes and per-service failures remain actionable.

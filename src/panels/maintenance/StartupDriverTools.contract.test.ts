@@ -33,6 +33,18 @@ describe("System Managers compact detail views", () => {
     expect(css).toContain('overflow-y: auto');
   });
 
+  test("centers empty and loading startup reviews instead of pinning them to the corner", async () => {
+    const [source, css] = await Promise.all([
+      Bun.file("src/components/tweaks/managers/StartupManager.tsx").text(),
+      Bun.file("src/components/tweaks/managers/StartupReview.css").text(),
+    ]);
+
+    expect(source).toContain('const isResultsLoading = loading && !items.length');
+    expect(source).toContain('startup-review-results${isResultsLoading');
+    expect(css).toContain('.startup-review-results.is-loading');
+    expect(css).toContain('place-items: center');
+  });
+
   test("folds long concealment signals into compact, titled tags", async () => {
     const [source, css] = await Promise.all([
       Bun.file("src/panels/runtime-visibility/index.tsx").text(),

@@ -28,6 +28,7 @@ pub(super) fn add_targets(
         targets.push(ScanTarget {
             category: "gaming".into(),
             label: "Steam shader cache".into(),
+            description: None,
             path: library.join("steamapps").join("shadercache"),
             operation: TargetOperation::Delete,
             recommended: true,
@@ -51,6 +52,7 @@ pub(super) fn add_targets(
                     targets.push(ScanTarget {
                         category: "gaming".into(),
                         label: "Steam redistributable cache".into(),
+                        description: None,
                         path,
                         operation: TargetOperation::Delete,
                         // Keep large redistributable removals opt-in even though

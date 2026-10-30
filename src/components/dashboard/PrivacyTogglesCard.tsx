@@ -70,6 +70,7 @@ export default function PrivacyTogglesCard({
             MIC {microphoneBlocked ? "OFF" : "ON"}
           </button>
         </div>
+        <div className="privacy-connectivity-toggles">
         {onToggleInternet && (
           <button
             type="button"
@@ -85,6 +86,7 @@ export default function PrivacyTogglesCard({
           </button>
         )}
         <BluetoothControl />
+        </div>
       </div>
       <RadarControlStrip />
     </div>

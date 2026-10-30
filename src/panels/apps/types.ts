@@ -6,6 +6,13 @@ export interface DebloatItem {
   source: DebloatSource;
   category: string;
   sizeKB?: number;
+  publisher?: string;
+  version?: string;
+  installDate?: string;
+  installLocation?: string;
+  packageFullName?: string;
+  isProvisioned?: boolean;
+  removalUnavailable?: string;
   /** Original local package/program icon, resolved by the backend. */
   iconData?: string | null;
   recommended: boolean;

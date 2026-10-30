@@ -2,9 +2,12 @@
 // Native preview-first cache cleaner. The webview receives opaque IDs only;
 // filesystem paths used for mutation always come from this process-local cache.
 
+mod app_categories;
 mod browser_rules;
 mod database_rules;
 mod mutations;
+mod operation;
+mod projects;
 mod rules;
 mod scanner;
 mod steam_rules;
@@ -20,11 +23,21 @@ use std::time::{Duration, Instant};
 use rules::TargetOperation;
 
 const CACHE_TTL: Duration = Duration::from_secs(20 * 60);
-const ALLOWED_CATEGORIES: &[&str] = &["system", "browsers", "applications", "gaming", "databases"];
+pub(super) const MAX_PREVIEW_ENTRIES_PER_TARGET: usize = 100;
+const ALLOWED_CATEGORIES: &[&str] = &[
+    "system",
+    "browsers",
+    "applications",
+    "gaming",
+    "databases",
+    "developers",
+    "ai",
+];
 
 #[derive(Clone, Debug)]
 struct CachedFile {
     path: std::path::PathBuf,
+    actual_bytes: u64,
     bytes: u64,
     minimum_age: Duration,
     file_identity: Option<(u32, u64)>,
@@ -36,6 +49,7 @@ struct CachedCleanerItem {
     label: String,
     root: std::path::PathBuf,
     canonical_root: std::path::PathBuf,
+    requires_plain_path: bool,
     files: Vec<CachedFile>,
     operation: TargetOperation,
 }
@@ -63,13 +77,28 @@ fn cache() -> &'static Mutex<CleanerCache> {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RoutineCleanerEntryPreview {
+    pub id: String,
+    pub path: Option<String>,
+    pub actual_size_bytes: u64,
+    pub estimated_reclaim_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoutineCleanerItem {
     pub id: String,
     pub category: String,
     pub label: String,
+    pub description: Option<String>,
     pub path: String,
+    pub path_display: Option<String>,
     pub bytes: u64,
     pub file_count: usize,
+    pub entries: Vec<RoutineCleanerEntryPreview>,
+    pub entry_count: usize,
+    pub entries_limit: usize,
+    pub entries_truncated: bool,
     pub recommended: bool,
     pub operation: String,
     pub truncated: bool,
@@ -78,6 +107,7 @@ pub struct RoutineCleanerItem {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineCleanerScan {
+    pub scan_root: Option<String>,
     pub items: Vec<RoutineCleanerItem>,
     pub total_bytes: u64,
     pub total_files: usize,
@@ -109,6 +139,7 @@ pub async fn routine_cleaner_scan(
 ) -> Result<RoutineCleanerScan, String> {
     if crate::settings::is_decoy_mode() {
         return Ok(RoutineCleanerScan {
+            scan_root: None,
             items: Vec::new(),
             total_bytes: 0,
             total_files: 0,
@@ -117,7 +148,7 @@ pub async fn routine_cleaner_scan(
         });
     }
     let categories = validate_categories(categories)?;
-    CANCELLED.store(false, Ordering::Release);
+    let _operation = operation::begin()?;
     let (scan, cached) = tokio::task::spawn_blocking(move || {
         let targets = rules::build_targets(&categories)?;
         scanner::scan_targets(targets, &CANCELLED)
@@ -137,10 +168,51 @@ pub async fn routine_cleaner_scan(
 }
 
 #[tauri::command]
+pub async fn routine_cleaner_scan_projects(
+    app: tauri::AppHandle,
+) -> Result<Option<RoutineCleanerScan>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if crate::settings::is_decoy_mode() {
+        return Err("Project scanning is unavailable in Decoy mode.".into());
+    }
+    let _operation = operation::begin()?;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Choose a project folder to review rebuildable caches")
+        .blocking_pick_folder();
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let root = picked.into_path().map_err(|error| error.to_string())?;
+    let scan_root = root.to_string_lossy().into_owned();
+    let (mut scan, cached) = tokio::task::spawn_blocking(move || {
+        let (targets, skipped) = projects::discover(&root, &CANCELLED)?;
+        let (mut scan, cached) = scanner::scan_targets(targets, &CANCELLED)?;
+        scan.skipped_targets += skipped;
+        Ok::<_, String>((scan, cached))
+    })
+    .await
+    .map_err(|error| format!("project scan task failed: {error}"))??;
+    scan.scan_root = Some(scan_root);
+    scan.cancelled = CANCELLED.load(Ordering::Acquire);
+    let mut guard = cache()
+        .lock()
+        .map_err(|_| "routine cleaner cache lock poisoned".to_string())?;
+    guard.created_at = Instant::now();
+    guard.items = cached
+        .into_iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    Ok(Some(scan))
+}
+
+#[tauri::command]
 pub async fn routine_cleaner_clean(
     item_ids: Vec<String>,
 ) -> Result<RoutineCleanerCleanResult, String> {
     ensure_mutation_allowed()?;
+    let _operation = operation::begin()?;
     if item_ids.is_empty() {
         return Err("select at least one scanned cleaner item".into());
     }
@@ -165,7 +237,6 @@ pub async fn routine_cleaner_clean(
         selected
     };
 
-    CANCELLED.store(false, Ordering::Release);
     let (result, cleaned_ids) =
         tokio::task::spawn_blocking(move || mutations::clean_items(selected, &CANCELLED))
             .await

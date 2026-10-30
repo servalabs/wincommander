@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,13 +12,15 @@ import {
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
-import { Chip } from "../../components/ui/chip";
 import { Icon } from "../../components/ui/icon";
 import type { RoutineCleanerCategory, RoutineCleanerCleanResult } from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
 import { formatBytes, getRoutineCleanerCategories } from "./routineCleanerHelpers";
 import { RoutineCleanerPreview } from "./RoutineCleanerPreview";
+import { CleanupReviewItems } from "./CleanupReviewItems";
+import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { type useRoutineCleaner } from "./useRoutineCleaner";
+import "./RoutineCleanerPanel.css";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
 
@@ -27,12 +29,38 @@ type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
  * because it is one scope inside the "Reclaim disk space" card — the caller
  * owns the heading and the categories.
  */
-export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[] }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
+export function RoutineCleanerPanel({ cleaner, categories: allowedCategories, confirmOpen, onConfirmOpenChange }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[]; confirmOpen: boolean; onConfirmOpenChange: (open: boolean) => void }) {
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
   const isRunning = operation !== "idle";
-  const categoryOptions = getRoutineCleanerCategories(allowedCategories);
+  // Categories choose the scope before scanning. Once results are available,
+  // the preview exposes only categories that actually produced a target.
+  const categoryOptions = scan ? [] : getRoutineCleanerCategories(allowedCategories);
   const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+  const selectedLogicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
+  const selectedVacuumEstimate = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
+  const reviewEntries = selectedItems.flatMap((item) => {
+    const entries = item.entries ?? [];
+    const entryCount = item.entryCount ?? item.fileCount;
+    const amount = item.operation === "vacuum"
+      ? `${formatBytes(item.bytes)} estimated reclaim`
+      : `${formatBytes(item.bytes)} logical file size`;
+    const limitNotice = item.entriesTruncated
+      ? ` · showing ${entries.length} of ${entryCount} file paths`
+      : "";
+    const partialNotice = item.truncated ? " · scan was partial" : "";
+    return [
+      {
+        id: `target:${item.id}`,
+        path: toExplorerDisplayPath(item.pathDisplay) ?? "Path unavailable",
+        detail: `${item.label} · ${entryCount.toLocaleString()} files counted · ${amount}${limitNotice}${partialNotice}`,
+      },
+      ...entries.map((entry) => ({
+        id: `entry:${item.id}:${entry.id}`,
+        path: toExplorerDisplayPath(entry.path) ?? "Path unavailable",
+        detail: `${item.label} · ${formatBytes(entry.actualSizeBytes)} file size${entry.estimatedReclaimBytes === null ? "" : ` · ${formatBytes(entry.estimatedReclaimBytes)} estimated reclaim`}`,
+      })),
+    ];
+  });
 
   useEffect(() => {
     if (error) void showError(error);
@@ -40,28 +68,22 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
 
   useEffect(() => {
     if (result && !result.cancelled && !result.errors.length) {
-      void showSuccess(`Recovered ${formatBytes(result.bytesRecovered)} from ${result.filesCleaned.toLocaleString()} files.`);
+      void showSuccess(`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`);
     }
   }, [result]);
 
   const runClean = async () => {
-    setConfirmOpen(false);
+    onConfirmOpenChange(false);
     await cleaner.cleanSelected();
   };
 
   return <div className="maintenance-routine-cleaner flex min-h-0 flex-1 flex-col gap-4">
-    <div className="flex flex-wrap items-start gap-2">
-      {/* Chips share the surface-2 bar background with their inactive state,
-          so the row reads as one tab bar with a single accent-soft "active"
-          pill — the same visual language as TabsList/TabsTrigger (see
-          src/components/ui/tabs.tsx) — even though selection here stays
-          multi-select (cleaner.setCategory toggles membership, unlike a
-          true single-value Tabs root). */}
+    {categoryOptions.length > 0 && <div className="flex flex-wrap items-start gap-2">
       <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--r)] bg-[var(--surface-2)] p-1">
-        {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Chip>)}
+        {categoryOptions.map((category) => <Button size="sm" variant={categories.includes(category.id) ? "outline" : "ghost"} key={category.id} aria-pressed={categories.includes(category.id)} disabled={isRunning} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Button>)}
       </div>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
-    </div>
+    </div>}
     {!scan && (
       <CacheScanIdleState
         isScanning={operation === "scanning"}
@@ -73,29 +95,49 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: 
     {operation === "cleaning" && <Card><CardContent className="flex items-center gap-3 py-4 text-sm text-[var(--text-dim)]"><Icon icon="clean" className="animate-spin text-[var(--accent)]" /> Cleaning selected items. You can cancel while the current target completes.</CardContent></Card>}
     {error && <ResultNotice tone="danger" title="Operation failed" message={error} />}
     {result && <CleanResult result={result} />}
-    <RoutineCleanerPreview cleaner={cleaner} onRequestClean={() => setConfirmOpen(true)} />
-    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and attempt to recover {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))}. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+    <RoutineCleanerPreview cleaner={cleaner} />
+    <AlertDialog open={confirmOpen} onOpenChange={onConfirmOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Clean selected cache data?</AlertDialogTitle>
+          <AlertDialogDescription>
+            WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"}. The scan lists {formatBytes(selectedLogicalBytes)} of logical file data{selectedVacuumEstimate ? ` and ${formatBytes(selectedVacuumEstimate)} estimated reclaim from database optimization` : ""}. The database amount is an estimate, not recovered space; actual free-space change can differ. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <CleanupReviewItems items={reviewEntries} />
+        <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
     </AlertDialog>
   </div>;
 }
 
 /** The owning card renders this in its header so refresh remains fixed to the card edge. */
-export function RoutineCleanerHeaderActions({ cleaner }: { cleaner: RoutineCleaner }) {
-  const { categories, operation, scan } = cleaner;
+export function RoutineCleanerHeaderActions({ cleaner, onRequestClean }: { cleaner: RoutineCleaner; onRequestClean: () => void }) {
+  const { categories, operation, scan, selectedItems } = cleaner;
   const isRunning = operation !== "idle";
   const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+  const logicalBytes = selectedItems.reduce((total, item) => total + (item.operation === "delete" ? item.bytes : 0), 0);
+  const vacuumEstimateBytes = selectedItems.reduce((total, item) => total + (item.operation === "vacuum" ? item.bytes : 0), 0);
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-2">
-      {isRunning && (
-        <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation">
-          <Icon icon="stop" />
+    <div className="maintenance-cache-header-actions">
+      <div className="maintenance-cache-header-selection" role="status" aria-live="polite">
+        <strong>{selectedItems.length} targets selected</strong>
+        <span>{formatBytes(logicalBytes)} logical file size{vacuumEstimateBytes ? ` · ${formatBytes(vacuumEstimateBytes)} estimated database reclaim` : ""}</span>
+      </div>
+      <div className="maintenance-cache-header-buttons">
+        <Button size="sm" variant="ghost" onClick={cleaner.clearSelection} disabled={isRunning || !selectedItems.length}>Clear</Button>
+        <Button size="sm" variant="outline" onClick={cleaner.selectRecommended} disabled={isRunning || !scan?.items.length}>Select recommended</Button>
+        <Button size="sm" variant="primary" onClick={onRequestClean} disabled={isRunning || !selectedItems.length}><Icon icon="clean" /> Clean selected</Button>
+        {isRunning && (
+          <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation">
+            <Icon icon="stop" />
+          </Button>
+        )}
+        <Button size="icon" variant="outline" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={operation === "scanning" ? "Scanning application caches" : scanLabel} aria-label={operation === "scanning" ? "Scanning application caches" : scanLabel}>
+          <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
         </Button>
-      )}
-      <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
-      </Button>
+      </div>
     </div>
   );
 }
@@ -123,9 +165,9 @@ function CacheScanIdleState({ isScanning, onScan, disabled, label }: { isScannin
 }
 
 function CleanResult({ result }: { result: RoutineCleanerCleanResult }) {
-  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`Recovered ${formatBytes(result.bytesRecovered)} before cancellation.`} />;
+  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data before cancellation.`} />;
   if (result.errors.length) return <ResultNotice tone="warning" title="Cleaning completed with issues" message={`${result.itemsCleaned} targets cleaned; ${result.errors.length} target${result.errors.length === 1 ? "" : "s"} could not be completed.`} />;
-  return <ResultNotice tone="success" title="Cleaning complete" message={`Recovered ${formatBytes(result.bytesRecovered)} from ${result.filesCleaned.toLocaleString()} files.`} />;
+  return <ResultNotice tone="success" title="Cleaning complete" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`} />;
 }
 
 function ResultNotice({ tone, title, message }: { tone: "success" | "warning" | "danger"; title: string; message: string }) {

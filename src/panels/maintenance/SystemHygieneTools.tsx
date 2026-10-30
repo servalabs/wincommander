@@ -24,12 +24,13 @@ import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { BrokenShortcut } from "../../hooks/useBackend";
 import { useBackend } from "../../hooks/useBackend";
 import { formatBytes } from "./routineCleanerHelpers";
+import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { useSystemHygiene, type SystemHygieneTool } from "./useSystemHygiene";
 import { showSuccess } from "../../utils/toast";
 
 export function SystemHygieneTools() {
   const tools = useSystemHygiene();
-  const { openPath } = useBackend();
+  const { openPath, uninstallLeftoversReveal } = useBackend();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const items =
     tools.tool === "shortcuts"
@@ -150,7 +151,7 @@ export function SystemHygieneTools() {
                 checked={tools.selected.has(item.id)}
                 onClick={() => tools.select(item.id)}
                 title={`${item.scope} · ${item.variable}`}
-                detail={`${item.kind} · ${item.value}`}
+                detail={item.kind}
                 path={item.value}
                 onReveal={(path) => void openParentFolder(openPath, path)}
               />
@@ -178,9 +179,10 @@ export function SystemHygieneTools() {
                 checked={tools.selected.has(item.id)}
                 onClick={() => tools.select(item.id)}
                 title={`${item.name} · ${formatBytes(item.bytes)} · possible remnant`}
-                detail={`${item.scope} · ${item.path}`}
+                detail={item.scope}
                 path={item.path}
-                onReveal={(path) => void openParentFolder(openPath, path)}
+                revealLabel="Open candidate folder in Explorer"
+                onReveal={() => void uninstallLeftoversReveal(item.id)}
               />
             ))}
             {!tools.leftovers.entries.length && <Empty />}
@@ -264,22 +266,25 @@ function ShortcutPath({
   path: string;
   onReveal: (path: string) => void;
 }) {
+  const displayPath = toExplorerDisplayPath(path);
   const copyPath = async () => {
-    const copied = await navigator.clipboard.writeText(path).then(() => true).catch(() => false);
+    if (!displayPath) return;
+    const copied = await navigator.clipboard.writeText(displayPath).then(() => true).catch(() => false);
     if (copied) showSuccess("Full location copied.");
   };
+  const unavailable = !displayPath;
   return (
     <span className="mt-1 grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-1.5">
       <Icon icon={icon} size={12} className="mt-0.5 text-[var(--text-mute)]" />
       <span className="min-w-0">
         <span className="block text-[10px] uppercase tracking-wide text-[var(--text-mute)]">{label}</span>
-        <button type="button" onClick={() => onReveal(path)} className="block w-full min-w-0 text-left font-mono text-[11px] text-[var(--text-dim)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}>
-          <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{path}</span>
+        <button type="button" disabled={unavailable} onClick={() => onReveal(path)} className="block w-full min-w-0 text-left font-mono text-[11px] text-[var(--text-dim)] hover:text-[var(--accent)] disabled:cursor-not-allowed" title={displayPath ? `Open containing folder in Explorer: ${displayPath}` : "Path unavailable: it could not be decoded safely."}>
+          <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{displayPath ?? "Path unavailable"}</span>
         </button>
       </span>
       <span className="mt-3 flex items-center gap-0.5">
-        <Button size="icon" variant="ghost" className="size-6" title="Copy full location" aria-label={`Copy ${label}`} onClick={() => void copyPath()}><Icon icon="clipboard" size={13} /></Button>
-        <Button size="icon" variant="ghost" className="size-6" title="Open containing folder" aria-label={`Open ${label} in Explorer`} onClick={() => onReveal(path)}><Icon icon="folder-open" size={13} /></Button>
+        <Button size="icon" variant="ghost" className="size-6" title={unavailable ? "Path unavailable" : "Copy full location"} aria-label={`Copy ${label}`} disabled={unavailable} onClick={() => void copyPath()}><Icon icon="clipboard" size={13} /></Button>
+        <Button size="icon" variant="ghost" className="size-6" title={unavailable ? "Path unavailable" : "Open containing folder"} aria-label={`Open ${label} in Explorer`} disabled={unavailable} onClick={() => onReveal(path)}><Icon icon="folder-open" size={13} /></Button>
       </span>
     </span>
   );
@@ -291,6 +296,7 @@ function Row({
   title,
   detail,
   path,
+  revealLabel = "Open containing folder in Explorer",
   onReveal,
 }: {
   checked: boolean;
@@ -298,10 +304,13 @@ function Row({
   title: string;
   detail: string;
   path: string;
+  revealLabel?: string;
   onReveal: (path: string) => void;
 }) {
+  const displayPath = toExplorerDisplayPath(path);
   const copyPath = async () => {
-    const copied = await navigator.clipboard.writeText(path).then(() => true).catch(() => false);
+    if (!displayPath) return;
+    const copied = await navigator.clipboard.writeText(displayPath).then(() => true).catch(() => false);
     if (copied) showSuccess("Full location copied.");
   };
   return (
@@ -309,11 +318,18 @@ function Row({
       <CheckboxControl checked={checked} onChange={onClick} ariaLabel={`${checked ? "Deselect" : "Select"} ${title}`} className="mt-0.5" />
       <span className="min-w-0 flex-1">
         <span className="block text-sm text-[var(--text)]">{title}</span>
-        <button type="button" onClick={() => onReveal(path)} className="block min-w-0 max-w-full text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`Open containing folder in Explorer: ${path}`}><CompactPath path={detail} /></button>
+        <span className="mt-0.5 block text-[10px] text-[var(--text-mute)]">{detail}</span>
+        {displayPath ? (
+          <button type="button" onClick={() => onReveal(path)} className="block min-w-0 max-w-full text-left font-mono text-[11px] text-[var(--text-mute)] hover:text-[var(--accent)]" title={`${revealLabel}: ${displayPath}`}>
+            <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{displayPath}</span>
+          </button>
+        ) : (
+          <span className="block text-[11px] text-[var(--text-mute)]">Path unavailable: it could not be decoded safely.</span>
+        )}
       </span>
       <span className="flex shrink-0 items-center gap-0.5">
-        <Button size="icon" variant="ghost" className="size-7" title="Copy full location" aria-label={`Copy ${title} location`} onClick={() => void copyPath()}><Icon icon="clipboard" size={14} /></Button>
-        <Button size="icon" variant="ghost" className="size-7" title="Open containing folder" aria-label={`Open ${title} in Explorer`} onClick={() => onReveal(path)}><Icon icon="folder-open" size={14} /></Button>
+        <Button size="icon" variant="ghost" className="size-7" title={displayPath ? "Copy full location" : "Path unavailable"} aria-label={`Copy ${title} location`} disabled={!displayPath} onClick={() => void copyPath()}><Icon icon="clipboard" size={14} /></Button>
+        <Button size="icon" variant="ghost" className="size-7" title={displayPath ? revealLabel : "Path unavailable"} aria-label={`Open ${title} in Explorer`} disabled={!displayPath} onClick={() => onReveal(path)}><Icon icon="folder-open" size={14} /></Button>
       </span>
     </div>
   );
@@ -326,18 +342,6 @@ function openParentFolder(openPath: (path: string) => Promise<unknown>, path: st
   return openPath(folder).catch(() => {});
 }
 
-function CompactPath({ path }: { path: string }) {
-  const normalized = path.replace(/^[A-Za-z]:\\/, (root) => `${root.slice(0, 2)} › `).replace(/\\/g, " › ");
-  const isWindows = /^[A-Za-z]:\\Windows(?:\\|$)/i.test(path);
-  const isProgramFiles = /^[A-Za-z]:\\Program Files(?: \(x86\))?(?:\\|$)/i.test(path);
-  return (
-    <span className="flex min-w-0 items-start gap-1">
-      <Icon icon="drive-time" size={11} className="mt-0.5 shrink-0 text-[var(--text-mute)]" />
-      {isWindows || isProgramFiles ? <Icon icon={isWindows ? "desktop" : "folder-shared"} size={11} className="mt-0.5 shrink-0 text-[var(--text-mute)]" /> : null}
-      <span className="line-clamp-2 min-w-0 whitespace-normal [overflow-wrap:anywhere]">{normalized}</span>
-    </span>
-  );
-}
 function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) {
   return (
     <Card role={tone === "danger" ? "alert" : "status"}>

@@ -58,6 +58,7 @@ serde_json = "1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 aes-gcm = "0.11"
 sha2 = "0.11"
+blake3 = "1.8"
 # F-1 paste monitor dependencies — clipboard polling + regex patterns
 # for credential detection (AWS keys, JWT, BIP-39, etc).
 clipboard-win = "5"

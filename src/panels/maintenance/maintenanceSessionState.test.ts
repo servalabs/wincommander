@@ -24,7 +24,10 @@ test("maintenance scan hooks retain their results in the session store", async (
   }
 
   const panel = await read("index.tsx");
-  expect(panel).toContain('useMaintenanceSessionState("maintenance.active-tab"');
+  expect(panel).toContain('useMaintenanceSessionState("maintenance.active-workspace"');
+  expect(panel).toContain('<PanelHeader');
+  expect(panel).toContain('title="System Maintenance"');
+  expect(panel).toContain("Understand your storage, review cleanable data, and keep your system in order.");
 });
 
 test("system hygiene tab changes do not launch a scan", async () => {
@@ -75,34 +78,36 @@ test("storage dashboards do not auto-scan the manual analysis tools", async () =
   expect(fileStats).not.toContain("if (!fileStatsSession) void runScan()");
 });
 
-test("storage matches the cache card to File Hygiene while retaining the established analyser presentation", async () => {
-  const [panel, analyzer, css, cleaner, preview] = await Promise.all([
-    read("index.tsx"),
-    read("DiskSpaceAnalyzerDialog.tsx"),
-    read("MaintenanceStorage.css"),
-    read("RoutineCleanerPanel.tsx"),
-    read("RoutineCleanerPreview.tsx"),
-  ]);
+test("duplicate discovery starts once per app session and keeps a completed report on return", async () => {
+  const source = await read("useFileHygiene.ts");
 
-  expect(css).toContain("--maintenance-file-hygiene-height");
-  expect(css).toContain("align-items: stretch;");
-  expect(css).toContain(".maintenance-app-cache-card");
-  expect(css).toContain("overflow: hidden;");
-  expect(css).toContain(".maintenance-app-cache-content {");
-  expect(css).toContain("overflow: auto;");
-  expect(cleaner).toContain("maintenance-routine-cleaner flex min-h-0 flex-1");
-  expect(panel).toContain("Disk space analyser");
-  expect(analyzer).toContain('flex: 1, overflow: "hidden", minHeight: 0');
-  expect(analyzer).not.toContain("const hasResults =");
-  expect(css).toContain("height: min(42rem, 68vh);");
-  expect(preview).toContain('onClick={selectRecommended}');
-  expect(preview).not.toContain('className="maintenance-cache-category-actions"');
-  expect(preview.match(/Select recommended/g)).toHaveLength(1);
-  expect(preview).toContain('className="maintenance-cache-item-list flex flex-col gap-2"');
-  expect(css).toContain("max-height: calc(6 * 5.75rem + 5 * 0.5rem);");
+  expect(source).toContain('if (tool === "duplicates" && !busy && !duplicateScan) void scan("local")');
+  expect(source).toContain("keep the completed report in");
 });
 
-test("visible maintenance scan controls use icon-only accessible actions", async () => {
+test("maintenance exposes distinct workspaces with review and selection controls", async () => {
+  const [panel, navigation, css, cleaner, preview] = await Promise.all([
+    read("index.tsx"), read("workspace/MaintenanceWorkspaceNav.tsx"),
+    read("MaintenanceStorage.css"), read("RoutineCleanerPanel.tsx"), read("RoutineCleanerPreview.tsx"),
+  ]);
+  expect(panel).toContain("<MaintenanceWorkspaceNav");
+  for (const id of ["cleanup", "windows-storage", "duplicates", "analysis", "startup", "registry", "history"]) expect(navigation).toContain(`id: "${id}"`);
+  expect(navigation).not.toContain("Windows-managed storage cleanup is available in its own section.");
+  expect(panel).toContain('active.id === "windows-storage" && <WindowsStorageCard />');
+  expect(navigation).not.toContain('id: "activity"');
+  expect(navigation).not.toContain('id: "large"');
+  expect(await read("disk-analyzer/DiskAnalyzerTabs.tsx")).toContain("Large Files");
+  expect(css).toContain(".maintenance-cache-master-detail");
+  expect(css).toContain(".maintenance-selection-bar");
+  expect(css).toContain("position: sticky");
+  expect(cleaner).toContain("<AlertDialog");
+  expect(preview).toContain('aria-label="Filter cache targets"');
+  expect(cleaner).toContain('onClick={cleaner.clearSelection}');
+  expect(cleaner).toContain('onClick={cleaner.selectRecommended}');
+  expect(cleaner).toContain('disabled={isRunning || !selectedItems.length}');
+});
+
+test("visible maintenance scan controls retain accessible action labels", async () => {
   const sources = await Promise.all([
     "FileHygieneTools.tsx",
     "MalwareCenter.tsx",

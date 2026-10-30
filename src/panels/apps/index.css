@@ -115,16 +115,100 @@
   width: fit-content;
 }
 .eng-installed-toggle:hover { color: var(--color-text-secondary); }
-.apps-panel {
+.panel-container.apps-panel {
   width: 100%;
   min-width: 0;
-  padding: 0;
+  padding: 0 !important;
+}
+
+/* Debloat owns its scroll panes; the shell's catalog footer space stays with Install Software. */
+.app-content:has(.apps-panel--debloat) .app-panel-stage {
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.app-panel-frame:has(> .apps-panel--debloat),
+.apps-panel.apps-panel--debloat,
+.apps-panel--debloat .apps-panel-layout,
+.apps-panel--debloat [data-slot="tabs"],
+.apps-panel--debloat [data-slot="tabs-content"][data-state="active"],
+.apps-panel--debloat .debloat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+}
+
+.apps-panel.apps-panel--debloat {
+  height: 100%;
+  overflow: hidden;
+}
+
+.apps-panel--debloat [data-slot="tabs-content"][data-state="active"] {
+  overflow: hidden;
+}
+
+.apps-panel--debloat .panel-header,
+.apps-panel--debloat .apps-panel-tabs,
+.debloat-hero,
+.debloat-toolbar,
+.debloat-selbar {
+  flex-shrink: 0;
+}
+
+.apps-panel--debloat .application-review-workspace {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.apps-panel--debloat .application-review-results {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.apps-panel--debloat .application-review-main {
+  display: flex;
+  flex-direction: column;
+  max-height: none;
+  overflow: hidden;
+}
+
+.apps-panel--debloat .application-review-categories { overflow: auto; }
+.apps-panel--debloat .application-review-detail {
+  flex: 0 1 auto;
+  max-height: 65%;
+  overflow-y: auto;
+}
+
+/* At the minimum window height, preserve reachable controls instead of clipping them. */
+@media (max-height: 560px) {
+  .app-content:has(.apps-panel--debloat) .app-panel-stage { overflow-y: auto; }
+  .app-panel-frame:has(> .apps-panel--debloat),
+  .apps-panel.apps-panel--debloat,
+  .apps-panel--debloat .apps-panel-layout,
+  .apps-panel--debloat [data-slot="tabs"],
+  .apps-panel--debloat [data-slot="tabs-content"][data-state="active"],
+  .apps-panel--debloat .debloat-panel {
+    flex: none;
+    height: auto;
+    overflow: visible;
+  }
+  .apps-panel--debloat .application-review-workspace {
+    flex: none;
+    height: 280px;
+    min-height: 280px;
+  }
 }
 
 .debloat-panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+  container: debloat / inline-size;
 }
 
 .debloat-hero {

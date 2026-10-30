@@ -40,7 +40,14 @@ export interface AIControlOperationResult {
   requiresReboot?: boolean;
 }
 
-export type RoutineCleanerCategory = "system" | "browsers" | "applications" | "gaming" | "databases";
+export type RoutineCleanerCategory = "system" | "browsers" | "applications" | "gaming" | "databases" | "developers" | "ai" | "projects";
+
+export interface RoutineCleanerEntryPreview {
+  id: string;
+  path: string | null;
+  actualSizeBytes: number;
+  estimatedReclaimBytes: number | null;
+}
 
 export interface RoutineCleanerItem {
   id: string;
@@ -52,9 +59,16 @@ export interface RoutineCleanerItem {
   recommended: boolean;
   operation: "delete" | "vacuum";
   truncated: boolean;
+  pathDisplay: string | null;
+  entries: RoutineCleanerEntryPreview[];
+  entryCount: number;
+  entriesLimit: number;
+  entriesTruncated: boolean;
+  description: string | null;
 }
 
 export interface RoutineCleanerScan {
+  scanRoot?: string | null;
   items: RoutineCleanerItem[];
   totalBytes: number;
   totalFiles: number;
@@ -81,6 +95,10 @@ export interface DuplicateFile {
   name: string;
   path: string;
   size: number;
+  /** Nanoseconds since the Unix epoch, captured while the content was verified. */
+  modified: string | null;
+  /** Missing only while an already-running older backend is being replaced. */
+  removable?: boolean;
 }
 
 export interface DuplicateGroup {
@@ -88,13 +106,48 @@ export interface DuplicateGroup {
   size: number;
   reclaimableBytes: number;
   files: DuplicateFile[];
+  fileCount: number;
+  memberOffset: number;
+  hasMoreFiles: boolean;
 }
 
 export interface DuplicateScan {
+  scanId: string;
+  scopeRoots: string[];
+  excludedVolumes: string[];
   groups: DuplicateGroup[];
+  skippedEntries: number;
   scannedFiles: number;
   cancelled: boolean;
   truncated: boolean;
+  hashedFiles: number;
+  skippedLinks: number;
+  errors: string[];
+  complete: boolean;
+  totalGroups: number;
+  totalDuplicateBytes: number;
+  groupOffset: number;
+  hasMoreGroups: boolean;
+  minimumSizeBytes: number;
+  skippedSmallFiles: number;
+}
+
+export interface DuplicateProgress {
+  scanId: string;
+  running: boolean;
+  phase: string;
+  scopeRoots: string[];
+  excludedVolumes: string[];
+  currentPath: string;
+  scannedFiles: number;
+  hashedFiles: number;
+  candidateFiles: number;
+  bytesHashed: number;
+  skippedEntries: number;
+  skippedLinks: number;
+  errors: string[];
+  minimumSizeBytes: number;
+  skippedSmallFiles: number;
 }
 
 export interface DuplicateRemoveResult {
@@ -2338,8 +2391,8 @@ export function useBackend() {
     getStartupItems: () => execute<{ items: StartupItem[] }>("Get-StartupItems"),
     disableStartupItem: (name: string, location: string) =>
       execute("Disable-StartupItem", { Name: name, Location: location }),
-    enableStartupItem: (name: string) =>
-      execute("Enable-StartupItem", { Name: name }),
+    enableStartupItem: (name: string, location?: string) =>
+      execute("Enable-StartupItem", { Name: name, ...(location ? { Location: location } : {}) }),
     optimizeStartup: (aggressive: boolean) =>
       execute<{ DisabledCount: number; RamSavedMB: number }>("Invoke-OptimizeStartup", { Aggressive: aggressive }),
 
@@ -2371,6 +2424,7 @@ export function useBackend() {
     },
 
     // App Licensing
+    isCurrentProcessElevated: () => invoke<boolean>("is_current_process_elevated"),
     getLicenseStatus: () => invoke<AppLicenseStatus>("get_license_status"),
     activateAppLicense: (licenseKey: string) =>
       invoke<AppLicenseStatus>("activate_license", { licenseKey }),
@@ -2389,6 +2443,7 @@ export function useBackend() {
       invoke<RoutineCleanerScan>("routine_cleaner_scan", { categories }),
     routineCleanerClean: (itemIds: string[]) =>
       invoke<RoutineCleanerCleanResult>("routine_cleaner_clean", { itemIds }),
+    routineCleanerScanProjects: () => invoke<RoutineCleanerScan | null>("routine_cleaner_scan_projects"),
     routineCleanerCancel: () => invoke<void>("routine_cleaner_cancel"),
     packageUpdatesInventory: () => invoke<PackageUpdateInventory>("package_updates_inventory"),
     packageUpdatesApply: (updateIds: string[]) => invoke<PackageUpdateResult>("package_updates_apply", { updateIds }),
@@ -2398,8 +2453,16 @@ export function useBackend() {
     firewallAuditRemediate: (ruleIds: string[], action: "enable" | "disable" | "remove") =>
       invoke<FirewallRemediation>("firewall_audit_remediate", { ruleIds, action }),
     firewallAuditCancel: () => invoke<void>("firewall_audit_cancel"),
-    duplicateFinderScan: (roots: string[]) =>
-      invoke<DuplicateScan>("duplicate_finder_scan", { roots }),
+    duplicateFinderScan: (roots: string[], minimumSizeBytes?: number) =>
+      invoke<DuplicateScan>("duplicate_finder_scan", { roots, minimumSizeBytes }),
+    duplicateFinderScanLocal: (minimumSizeBytes?: number) => invoke<DuplicateScan>("duplicate_finder_scan_local", { minimumSizeBytes }),
+    duplicateFinderProgress: () => invoke<DuplicateProgress>("duplicate_finder_progress"),
+    duplicateFinderPage: (scanId: string, offset: number) =>
+      invoke<DuplicateScan>("duplicate_finder_page", { scanId, offset }),
+    duplicateFinderGroupPage: (scanId: string, groupId: string, offset: number) =>
+      invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
+    duplicateFinderOpen: (scanId: string, fileId: string) =>
+      invoke<void>("duplicate_finder_open", { scanId, fileId }),
     duplicateFinderRemove: (fileIds: string[]) =>
       invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),
@@ -2444,6 +2507,7 @@ export function useBackend() {
     environmentCleanerRepair: (ids: string[]) => invoke<EnvironmentRepairResult>("environment_cleaner_repair", { ids }),
     uninstallLeftoversScan: () => invoke<UninstallLeftoverScan>("uninstall_leftovers_scan"),
     uninstallLeftoversRemove: (ids: string[]) => invoke<UninstallLeftoverRemoveResult>("uninstall_leftovers_remove", { ids }),
+    uninstallLeftoversReveal: (id: string) => invoke<void>("uninstall_leftovers_reveal", { id }),
     uninstallLeftoversCancel: () => invoke<void>("uninstall_leftovers_cancel"),
     arpCacheScan: () => invoke<ArpScan>("arp_cache_scan"),
     arpCacheClear: (scanId: string) => invoke<ArpClearResult>("arp_cache_clear", { scanId }),
@@ -2455,16 +2519,21 @@ export function useBackend() {
       invoke<{ summary: string; filesCount: number; spaceRecovered: string; specialOps: number; errors: number; preview: boolean; samplePaths: string[] }>("run_bleachbit_clean", { excludeBrowsers, preview }),
 
     // ── Disk Space Analyzer ────────────────────────────────────────────
-    /** Run WizTree scan for a path. Returns metadata; children fetched via getDiskChildren. */
+    /** Scan a folder natively. Byte totals describe logical file lengths, not physical allocation. */
     runDiskScan: (path: string) =>
-      invoke<{ scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean }>("run_disk_scan", { path }),
+      invoke<{ scanId: string; scanRoot: string; totalSize: number; freeSpace: number; driveCapacity: number; fileCount: number; folderCount: number; wiztreeFound: boolean; complete: boolean; skippedEntries: number; skippedLinks: number; truncated: boolean; cancelled: boolean; sizeBasis: "logical"; allocatedSizeAvailable: boolean }>("run_disk_scan", { path }),
+    cancelDiskScan: () => invoke<void>("cancel_disk_scan"),
+    getDiskScanProgress: () => invoke<{ running: boolean; filesScanned: number; foldersScanned: number; bytesScanned: number; skippedEntries: number; cancelled: boolean }>("get_disk_scan_progress"),
     /** Fetch sorted children of a folder from the in-memory scan cache. */
     getDiskChildren: (path: string) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
-    /** Fetch a flat list of the largest files/folders from the latest WizTree scan. */
-    getLargeDiskItems: (minSizeBytes: number, limit: number = 200, includeDirs: boolean = true) =>
-      invoke<Array<{ name: string; fullPath: string; size: number; allocated: number; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
-    /** Permanently delete a file or folder and evict it from the scan cache. */
+      invoke<Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number }>>("get_disk_children", { path }),
+    getDiskFileTypes: (scanId: string, path: string) =>
+      invoke<import("../lib/diskAnalyzer").DiskFileTypes>("get_disk_file_types", { scanId, path }),
+    /** Threshold matches from the scanned scope, with an explicit result limit. */
+    getLargeDiskItems: (minSizeBytes: number, limit: number = 5000, includeDirs: boolean = false) =>
+      invoke<{ items: Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>; matchedCount: number; matchedSize: number; resultLimit: number; limited: boolean; minimumSize: number; scanId: string }>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
+    openDiskItem: (scanId: string, itemId: number) => invoke<void>("open_disk_item", { scanId, itemId }),
+    /** Permanently delete a verified file and invalidate the scan cache. Folder deletion is refused. */
     diskDeleteItem: async (path: string) => {
       const capabilityToken = await requestDestructiveCapability(
         { command: "disk_delete_item", path },
@@ -2572,7 +2641,7 @@ export function useBackend() {
     // Apps: Teams & APPX Debloat
     removeTeams: () => execute("Remove-MicrosoftTeams"),
     getTeamsStatus: () => execute<{ installed: boolean }>("Get-TeamsStatus"),
-    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean; iconData?: string | null }[] }>("Get-InstalledAppxInventory"),
+    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean; version?: string; publisher?: string; iconData?: string | null }[] }>("Get-InstalledAppxInventory"),
     getDebloatWindowsIconData: () => execute<{ icons: Record<string, string | null> }>("Get-DebloatWindowsIconData"),
     removeAppxByName: (name: string) => execute("Remove-AppxByName", { Name: name }),
     restoreAppxByName: (name: string) => execute("Restore-AppxByName", { Name: name }),

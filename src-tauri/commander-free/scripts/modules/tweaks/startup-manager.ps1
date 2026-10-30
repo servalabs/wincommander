@@ -162,7 +162,8 @@ function Get-StartupItems {
                 if ($backups -isnot [Array]) { $backups = @($backups) }
                 foreach ($b in $backups) {
                     # Avoid duplicates if they somehow exist in both
-                    if (!($items | Where-Object { $_.Name -eq $b.Name })) {
+                    $originalLocation = if ($b.OriginalKey) { $b.OriginalKey } else { $b.OriginalLocation }
+                    if (!($items | Where-Object { $_.Name -eq $b.Name -and $_.Location -eq $originalLocation })) {
                         $items += [PSCustomObject]@{
                             Name     = $b.Name
                             Command  = if ($b.Command) { $b.Command } else { $b.OriginalLocation }
@@ -236,47 +237,60 @@ function Get-StartupItems {
     return $results
 }
 
+function Resolve-WcStartupTarget {
+    param([string]$Name, [string]$Location)
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Name.IndexOfAny([char[]]'*?[]') -ge 0) { throw 'Select an exact startup entry.' }
+    $matches = @(Get-StartupItems | Where-Object { $_.Name -eq $Name -and (-not $Location -or $_.Location -eq $Location) })
+    if ($matches.Count -ne 1) { throw 'Startup entry changed or is ambiguous. Scan again and select its exact location.' }
+    $item = $matches[0]
+    $approvedMap = @{
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run' = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32'
+    }
+    $approved = $approvedMap[$item.Location]
+    $valueName = $Name
+    if (-not $approved -and $item.Location -notin @('HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce')) {
+        $full = [IO.Path]::GetFullPath($item.Location)
+        $parent = [IO.Path]::GetDirectoryName($full)
+        $userRoot = [IO.Path]::Combine($env:APPDATA, 'Microsoft\Windows\Start Menu\Programs\Startup')
+        $commonRoot = [IO.Path]::Combine($env:ProgramData, 'Microsoft\Windows\Start Menu\Programs\Startup')
+        if ($parent -notin @($userRoot, $commonRoot) -or [IO.Path]::GetExtension($full) -ne '.lnk') { throw 'This startup location is not supported.' }
+        # The shortcut and each existing ancestor must be ordinary local entries.
+        foreach ($candidate in @($full, "$full.disabled", $parent)) {
+            if (Test-Path -LiteralPath $candidate) {
+                $node = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop
+                while ($node) {
+                    if (($node.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Linked startup locations cannot be changed here.' }
+                    $node = if ($node -is [IO.DirectoryInfo] -or $node.PSIsContainer) { $node.Parent } else { $node.Directory }
+                }
+            }
+        }
+        $approved = if ($parent -eq $userRoot) { 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder' } else { 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder' }
+        $valueName = [IO.Path]::GetFileName($full)
+    }
+    return @{ Item = $item; ApprovedPath = $approved; ValueName = $valueName }
+}
+
 function Disable-StartupItem {
     param(
         [string]$Name,
         [string]$Location
     )
     Assert-IsAdmin
+    try { $target = Resolve-WcStartupTarget -Name $Name -Location $Location }
+    catch { return @{ success = $false; message = $_.Exception.Message } }
+    $Location = $target.Item.Location
 
     # 1. Try "Soft Disable" via StartupApproved (Task Manager method) - PREFERRED
     # This keeps the item in the list but stops it from running.
     
-    # Map Locations to Approved Paths
-    $approvedMap = @{
-        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"             = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
-        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"             = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
-        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32"
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"      = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Startup"  = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"
-    }
-
-    $approvedPath = $null
-    foreach ($path in $approvedMap.Keys) {
-        if ($Location -eq $path -or $Location -eq "$path\$Name") { 
-            # Allow for direct key match or folder path match
-            $approvedPath = $approvedMap[$path]
-            break
-        }
-        # Handle file paths (Location might be full path C:\...\file.lnk)
-        if ($Location.StartsWith($path)) {
-            $approvedPath = $approvedMap[$path]
-            break
-        }
-    }
+    $approvedPath = $target.ApprovedPath
 
     if ($approvedPath) {
         # Determine the Registry Value Name
         # For Run keys, it's just $Name. For Folders, it's "filename.lnk".
-        $regName = $Name
-        if ($approvedPath.EndsWith("StartupFolder")) {
-            # If it's a file, ensure we use the filename
-            $regName = Split-Path $Location -Leaf
-        }
+        $regName = $target.ValueName
 
         # Check if Approved Key exists, create if not
         if (!(Test-Path $approvedPath)) {
@@ -308,12 +322,11 @@ function Disable-StartupItem {
         }
 
         try {
-            Set-ItemProperty -Path $approvedPath -Name $regName -Value $bytes -Type Binary -Force
+            Set-ItemProperty -LiteralPath $approvedPath -Name $regName -Value $bytes -Type Binary -Force -ErrorAction Stop
             return @{ success = $true; message = "Disabled via Registry (Soft)" }
         }
         catch {
-            Write-Warning "Failed to set StartupApproved key: $_"
-            # Fall through to hard disable if soft fails
+            return @{ success = $false; message = "Windows could not change this startup entry. No fallback removal was attempted: $($_.Exception.Message)" }
         }
     }
 
@@ -368,75 +381,42 @@ function Disable-StartupItem {
 }
 
 function Enable-StartupItem {
-    param(
-        [string]$Name
-    )
+    param([string]$Name, [string]$Location)
     Assert-IsAdmin
-
-    $settingsDir = "$env:APPDATA\WinCommander\StartupBackups"
-    $backupFile = "$settingsDir\disabled_items.json"
-    
-    # 1. Try to restore from Backup (Custom Disable)
-    if (Test-Path $backupFile) {
-        $backups = Get-Content $backupFile | ConvertFrom-Json
-        if ($backups -isnot [Array]) { $backups = @($backups) }
-        
-        $target = $backups | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-        
-        if ($target) {
-            if ($target.Type -eq "File") {
-                # Restore file
-                $disabledPath = "$($target.OriginalLocation).disabled"
-                if (Test-Path $disabledPath) {
-                    Rename-Item -Path $disabledPath -NewName (Split-Path $target.OriginalLocation -Leaf) -Force
-                }
-            }
-            elseif ($target.Type -eq "Registry") {
-                # Restore Registry
-                New-ItemProperty -Path $target.OriginalKey -Name $target.Name -Value $target.Command -PropertyType String -Force | Out-Null
-            }
-
-            # Remove from backup list
-            $backups = $backups | Where-Object { $_.Name -ne $Name }
-            $backups | ConvertTo-Json -Depth 5 | Set-Content $backupFile
-            
-            return @{ success = $true; message = "Restored from backup" }
-        }
-    }
-
-    # 2. If not in backup, try to enable via StartupApproved (Task Manager Disable)
-    # Define locations to search
-    $regPaths = @(
-        @{ Hive = "HKCU"; Root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"; Approved = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" }
-        @{ Hive = "HKLM"; Root = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"; Approved = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" }
-    )
-    
-    foreach ($loc in $regPaths) {
-        $item = Get-ItemProperty -Path $loc.Root -Name $Name -ErrorAction SilentlyContinue
-        if ($item) {
-            # Item exists in Run key, check/fix Approved key
-            if (Test-Path $loc.Approved) {
-                $approvedVal = Get-ItemProperty -Path $loc.Approved -Name $Name -ErrorAction SilentlyContinue
-                if ($approvedVal) {
-                    $bytes = $approvedVal.$Name
-                    if ($bytes -and $bytes.Length -gt 0) {
-                        # Set first byte to 02 (Enabled) if it's odd (Disabled)
-                        if (($bytes[0] % 2) -ne 0) {
-                            $bytes[0] = 0x02 
-                            Set-ItemProperty -Path $loc.Approved -Name $Name -Value $bytes -Force
-                            return @{ success = $true; message = "Enabled via Registry" }
-                        }
-                    }
-                }
-                else {
-                    # If entry exists in Run but not in StartupApproved, it's enabled by default, 
-                    # but maybe we want to explicitly enable it? Usually unnecessary.
-                }
+    try {
+        $target = Resolve-WcStartupTarget -Name $Name -Location $Location
+        $Location = $target.Item.Location
+        $backupFile = "$env:APPDATA\WinCommander\StartupBackups\disabled_items.json"
+        if (Test-Path -LiteralPath $backupFile) {
+            $backups = Get-Content -LiteralPath $backupFile -Raw | ConvertFrom-Json
+            $backups = @($backups)
+            $matching = @($backups | Where-Object { $_.Name -eq $Name -and ($_.OriginalKey -eq $Location -or $_.OriginalLocation -eq $Location) })
+            if ($matching.Count -gt 1) { throw 'Startup backup is ambiguous; no changes were made.' }
+            if ($matching.Count -eq 1) {
+                $backup = $matching[0]
+                if ($backup.Type -eq 'File') {
+                    $disabledPath = "$($backup.OriginalLocation).disabled"
+                    if (-not (Test-Path -LiteralPath $disabledPath) -or (Test-Path -LiteralPath $backup.OriginalLocation)) { throw 'Startup shortcut changed; backup was kept.' }
+                    Rename-Item -LiteralPath $disabledPath -NewName ([IO.Path]::GetFileName($backup.OriginalLocation)) -ErrorAction Stop
+                } elseif ($backup.Type -eq 'Registry') {
+                    # Never overwrite a newly registered launcher with stale backup content.
+                    $existing = Get-ItemProperty -LiteralPath $Location -Name $Name -ErrorAction SilentlyContinue
+                    if ($existing) { throw 'Startup entry already exists; backup was kept.' }
+                    New-ItemProperty -LiteralPath $Location -Name $Name -Value $backup.Command -PropertyType String -ErrorAction Stop | Out-Null
+                } else { throw 'Unsupported startup backup type.' }
+                $remaining = @($backups | Where-Object { $_ -ne $backup })
+                ConvertTo-Json -InputObject $remaining -Depth 5 | Set-Content -LiteralPath $backupFile
+                return @{ success = $true; message = 'Restored the selected startup entry.' }
             }
         }
-    }
-    
-    return @{ success = $false; message = "Item not found in backups or registry" }
+        if (-not $target.ApprovedPath) { throw 'No disabled backup exists for this entry.' }
+        if (-not (Test-Path -LiteralPath $target.ApprovedPath)) { New-Item -Path $target.ApprovedPath -Force -ErrorAction Stop | Out-Null }
+        $value = Get-ItemProperty -LiteralPath $target.ApprovedPath -Name $target.ValueName -ErrorAction SilentlyContinue
+        $bytes = [byte[]]@(0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        if ($value -and $value.($target.ValueName) -is [byte[]] -and $value.($target.ValueName).Length -ge 12) { $bytes = $value.($target.ValueName); $bytes[0] = 0x02 }
+        Set-ItemProperty -LiteralPath $target.ApprovedPath -Name $target.ValueName -Value $bytes -Type Binary -Force -ErrorAction Stop
+        return @{ success = $true; message = 'Enabled the selected startup entry.' }
+    } catch { return @{ success = $false; message = $_.Exception.Message } }
 }
 
 function Invoke-OptimizeStartup {

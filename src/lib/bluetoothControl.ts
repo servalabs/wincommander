@@ -25,13 +25,13 @@ export function parseBluetoothControlStatus(value: unknown): BluetoothControlSta
 }
 
 export function bluetoothControlLabel(status: BluetoothControlStatus | null): string {
-  if (!status) return "Bluetooth policy unknown";
+  if (!status) return "Bluetooth unavailable";
   switch (status.state) {
-    case "allowed": return "Bluetooth policy allowed";
-    case "blocked": return "Bluetooth policy blocked";
-    case "pending": return "Bluetooth policy pending";
-    case "unsupported": return "Bluetooth policy unsupported";
-    case "externally_managed": return "Bluetooth policy managed";
+    case "allowed": return "Bluetooth ON";
+    case "blocked": return "Bluetooth OFF";
+    case "pending": return "Bluetooth updating…";
+    case "unsupported": return "Bluetooth unavailable";
+    case "externally_managed": return "Bluetooth managed";
     case "legacy_recovery_required": return "Bluetooth needs review";
   }
 }

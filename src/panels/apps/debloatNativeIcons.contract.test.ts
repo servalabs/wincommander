@@ -8,7 +8,7 @@ const read = (path: string) => Bun.file(path).text();
 
 test("Debloat prefers original locally installed icons before bundled fallbacks", async () => {
   const [panel, inventory, icon, utils, uninstaller, bcu] = await Promise.all([
-    read("src/panels/apps/DebloatPanel.tsx"),
+    read("src/panels/apps/components/ApplicationReviewResults.tsx"),
     read("src/panels/apps/useDebloatInventory.ts"),
     read("src/panels/apps/components/AppIcon.tsx"),
     read("src-tauri/commander-free/scripts/core/utils.ps1"),

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import useBackend, { type RoutineCleanerCategory, type RoutineCleanerCleanResult, type RoutineCleanerScan } from "../../hooks/useBackend";
-import { getRecommendedItemIds, getScanAfterClean, getSelectedItems, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
+import { getRecommendedItemIds, getScanAfterClean, getSelectedItems, ROUTINE_CLEANER_CATEGORIES, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
+import { recordMaintenanceOperation } from "../../hooks/useMaintenanceHistory";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
 
 type RoutineCleanerOperation = "idle" | "scanning" | "cleaning";
@@ -30,6 +31,8 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
   const scanSelected = useCallback(async () => {
     if (!categories.length || operation !== "idle") return;
     setOperation("scanning");
+    setSelectedIds(new Set());
+    setScan(null);
     setError(null);
     setResult(null);
     try {
@@ -47,15 +50,20 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
     if (!selectedItems.length || operation !== "idle") return;
     setOperation("cleaning");
     setError(null);
+    setResult(null);
     try {
       const cleanResult = await routineCleanerClean(selectedItems.map((item) => item.id));
       setResult(cleanResult);
-      if (cleanResult.cancelled) return;
+      recordMaintenanceOperation({ tool: "cleanup", title: "Application cache cleanup", outcome: cleanResult.cancelled ? "cancelled" : cleanResult.errors.length ? "partial" : "completed", affectedItems: cleanResult.itemsCleaned, bytesRecovered: cleanResult.bytesRecovered, detail: "Logical data removed; free space not measured." });
+      if (cleanResult.cancelled) { setScan(null); setSelectedIds(new Set()); return; }
       const failedIds = new Set(cleanResult.errors.map((item) => item.id));
       const cleanedIds = selectedItems.map((item) => item.id).filter((id) => !failedIds.has(id));
       setScan((current) => current ? getScanAfterClean(current, cleanedIds) : current);
       setSelectedIds(failedIds);
     } catch (reason) {
+      recordMaintenanceOperation({ tool: "cleanup", title: "Application cache cleanup", outcome: "failed" });
+      setScan(null);
+      setSelectedIds(new Set());
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setOperation("idle");
@@ -71,17 +79,19 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
   }, [routineCleanerCancel, setError]);
 
   const toggleItem = useCallback((id: string) => {
+    if (operation !== "idle" || !scan?.items.some((item) => item.id === id)) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, [setSelectedIds]);
+  }, [operation, scan?.items, setSelectedIds]);
 
   const selectRecommended = useCallback(() => {
+    if (operation !== "idle") return;
     setSelectedIds(new Set(getRecommendedItemIds(scan?.items ?? [])));
-  }, [scan?.items, setSelectedIds]);
+  }, [operation, scan?.items, setSelectedIds]);
 
   return {
     categories,
@@ -96,6 +106,10 @@ export function useRoutineCleaner(initialCategories: RoutineCleanerCategory[] = 
     cleanSelected,
     cancel,
     toggleItem,
+    toggleCategorySelection: (category: RoutineCleanerCategory) => {
+      if (operation === "idle") setSelectedIds((current) => toggleRoutineCategorySelection(scan?.items ?? [], current, category));
+    },
     selectRecommended,
+    clearSelection: () => { if (operation === "idle") setSelectedIds(new Set()); },
   };
 }

@@ -65,12 +65,9 @@ pub(super) fn installed_app_evidence() -> InstalledAppEvidence {
                         add_name(&mut evidence.names, &display_name);
                     }
                     if let Some(location) = read_value(root, &subkey, "InstallLocation", view) {
-                        if let Some(folder) = Path::new(&location).file_name() {
-                            add_name(&mut evidence.names, &folder.to_string_lossy());
-                        }
-                        evidence
-                            .locations
-                            .push(PathBuf::from(expand_known_environment(&location)));
+                        let location = PathBuf::from(expand_known_environment(&location));
+                        add_install_location_names(&mut evidence.names, &location);
+                        evidence.locations.push(location);
                     }
                 }
                 RegCloseKey(key);
@@ -181,6 +178,22 @@ fn add_name(names: &mut HashSet<String>, value: &str) {
     }
 }
 
+/// An installed application's files commonly live under a vendor directory while its
+/// per-user data uses that vendor directory as the AppData root. Preserve those two
+/// ancestor names as installed evidence too. For example, Brave's registered location
+/// ends in `BraveSoftware\\Brave-Browser\\Application`, while its live user data is
+/// `%LOCALAPPDATA%\\BraveSoftware`.
+pub(super) fn add_install_location_names(names: &mut HashSet<String>, location: &Path) {
+    if let Some(folder) = location.file_name() {
+        add_name(names, &folder.to_string_lossy());
+    }
+    for ancestor in location.ancestors().skip(1).take(2) {
+        if let Some(folder) = ancestor.file_name() {
+            add_name(names, &folder.to_string_lossy());
+        }
+    }
+}
+
 pub(super) fn normalize_name(value: &str) -> String {
     value
         .chars()
@@ -210,8 +223,9 @@ fn expand_known_environment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_name, normalize_name};
+    use super::{add_install_location_names, add_name, normalize_name};
     use std::collections::HashSet;
+    use std::path::Path;
 
     #[test]
     fn normalizes_display_names_and_folder_names_without_partial_tokens() {
@@ -225,5 +239,17 @@ mod tests {
     #[test]
     fn normalizes_case_and_punctuation_for_exact_folder_comparisons() {
         assert_eq!(normalize_name("Example-App_2.0"), "exampleapp20");
+    }
+
+    #[test]
+    fn uses_registered_vendor_folder_to_protect_live_app_data() {
+        let mut names = HashSet::new();
+        add_install_location_names(
+            &mut names,
+            Path::new("C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application"),
+        );
+
+        assert!(names.contains(&normalize_name("BraveSoftware")));
+        assert!(names.contains(&normalize_name("Brave-Browser")));
     }
 }

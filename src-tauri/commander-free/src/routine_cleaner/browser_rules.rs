@@ -75,6 +75,7 @@ pub(super) fn add_targets(
                 targets.push(ScanTarget {
                     category: "browsers".into(),
                     label: format!("{}{suffix} {cache_label}", browser_label(&browser.key)),
+                    description: None,
                     path: profile_path.join(normalize_relative(relative)),
                     operation: TargetOperation::Delete,
                     recommended: true,
@@ -134,6 +135,7 @@ fn add_firefox_profiles(targets: &mut Vec<ScanTarget>, label: &str, base: &Path)
         targets.push(ScanTarget {
             category: "browsers".into(),
             label: format!("{label} - {profile} Cache"),
+            description: None,
             path: entry.path().join("cache2"),
             operation: TargetOperation::Delete,
             recommended: true,

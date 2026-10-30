@@ -142,6 +142,32 @@ pub async fn uninstall_leftovers_remove(
         .await
         .map_err(|error| format!("uninstall leftovers removal task failed: {error}"))
 }
+
+/// Opens only a folder from the current, validated leftover scan. The frontend
+/// supplies an opaque scan ID rather than a filesystem path.
+#[tauri::command]
+pub async fn uninstall_leftovers_reveal(id: String) -> Result<(), String> {
+    if id.is_empty() || id.len() > 64 {
+        return Err("invalid uninstall-leftover selection".into());
+    }
+    let entry = {
+        let guard = cache()
+            .lock()
+            .map_err(|_| "uninstall leftovers cache lock poisoned".to_string())?;
+        if guard.created_at.elapsed() > CACHE_TTL {
+            return Err(
+                "uninstall leftovers scan expired; scan again before opening folders".into(),
+            );
+        }
+        guard.entries.get(&id).cloned().ok_or_else(|| {
+            "uninstall-leftover selection is stale or invalid; scan again".to_string()
+        })?
+    };
+    tokio::task::spawn_blocking(move || mutation::reveal_leftover(entry))
+        .await
+        .map_err(|error| format!("uninstall leftovers reveal task failed: {error}"))?
+}
+
 #[tauri::command]
 pub fn uninstall_leftovers_cancel() {
     CANCELLED.store(true, Ordering::Release);
@@ -159,7 +185,7 @@ fn ensure_mutation_allowed() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::installed::{InstalledAppEvidence, RunningAppEvidence};
+    use super::installed::{add_install_location_names, InstalledAppEvidence, RunningAppEvidence};
     use super::scanner::{is_recent, is_safe_name, matches_installed, matches_running};
     use std::collections::HashSet;
     use std::fs;
@@ -201,6 +227,27 @@ mod tests {
             "Vendor",
             Path::new("C:\\Users\\User\\AppData\\Local\\Vendor"),
             &installed
+        ));
+    }
+
+    #[test]
+    fn excludes_live_brave_app_data_from_registered_install_location() {
+        let mut names = HashSet::new();
+        add_install_location_names(
+            &mut names,
+            Path::new("C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application"),
+        );
+        let installed = InstalledAppEvidence {
+            names,
+            locations: vec![PathBuf::from(
+                "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application",
+            )],
+        };
+
+        assert!(matches_installed(
+            "BraveSoftware",
+            Path::new("C:\\Users\\User\\AppData\\Local\\BraveSoftware"),
+            &installed,
         ));
     }
 

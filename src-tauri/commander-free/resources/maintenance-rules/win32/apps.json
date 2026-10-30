@@ -121,7 +121,7 @@
     {
       "id": "bun",
       "name": "Bun Cache",
-      "paths": ["${LOCALAPPDATA}/.bun/install/cache"],
+      "paths": ["${HOME}/.bun/install/cache"],
       "description": "Bun downloaded package cache"
     },
     {
