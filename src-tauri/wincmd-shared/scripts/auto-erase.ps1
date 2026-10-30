@@ -2287,6 +2287,14 @@ function Resolve-AutoEraseSid {
     ([Security.Principal.NTAccount]::new($Account)).Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
+function Get-AutoEraseCurrentIdentity {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not $identity -or -not $identity.User -or [string]::IsNullOrWhiteSpace($identity.Name)) {
+        throw 'The current Windows account could not be verified.'
+    }
+    @{ name = [string]$identity.Name; sid = [string]$identity.User.Value }
+}
+
 # Profile directory names can differ from the sign-in name (renamed accounts,
 # domain suffixes, or pre-existing folders). Resolve the profile's SID instead
 # of guessing an account from its folder name.
@@ -2428,7 +2436,7 @@ function Set-AutoEraseScheduleCore {
         # TargetUser: which account should own this task. Defaults to the
         # currently logged-in user. Pass a different username to create a
         # per-user task for multi-user mode. Ignored when RunAsSystem=$true.
-        [string]$TargetUser = $env:USERNAME,
+        [string]$TargetUser = '',
         # Bulk scheduling uses this switch so a pre-existing task is reported
         # instead of silently replacing a schedule the user set by hand.  The
         # per-card editor intentionally leaves it off after its own confirmation.
@@ -2463,6 +2471,11 @@ function Set-AutoEraseScheduleCore {
     Assert-AutoEraseAdmin
 
     try {
+        if (-not $RunAsSystem -and [string]::IsNullOrWhiteSpace($TargetUser)) {
+            $currentIdentity = Get-AutoEraseCurrentIdentity
+            $TargetUser = $currentIdentity.name
+            if ((Resolve-AutoEraseSid $TargetUser) -ne $currentIdentity.sid) { throw 'The current Windows account could not be verified.' }
+        }
         $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
         # A different account's task must not block a deliberate update for
         # this owner. Global migration still inspects every owned task.
@@ -2606,7 +2619,7 @@ function Set-AutoEraseSchedule {
         [Parameter(Mandatory)] [string]$CategoryId,
         [Parameter(Mandatory)] [int]$IntervalMinutes,
         [bool]$RunAsSystem = $false,
-        [string]$TargetUser = $env:USERNAME,
+        [string]$TargetUser = '',
         [switch]$PreserveExisting,
         [switch]$ManagedByAutoSet,
         [switch]$AllowDefaultExcluded
@@ -2643,7 +2656,7 @@ function Set-ManagedAutoEraseSchedule {
     try {
         # Preserve a current-user OR SYSTEM task for this category, including
         # disabled tasks, before choosing an execution account for the new task.
-        $currentSid = Resolve-AutoEraseSid $env:USERNAME
+        $currentSid = (Get-AutoEraseCurrentIdentity).sid
         $existingTasks = @()
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
             $identity = Get-AutoEraseTaskIdentity $task

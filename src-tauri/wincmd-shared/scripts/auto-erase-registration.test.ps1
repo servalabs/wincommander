@@ -10,6 +10,7 @@ foreach ($revision in @(6,7,8,9,10,11,12,13)) {
 $script:registered = @(); $script:existing = $false
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
+function Get-AutoEraseCurrentIdentity { @{ name='DOMAIN\TestUser'; sid=$(if ($script:identityMismatch) { 'S-1-5-21-1-2-3-9999' } else { 'S-1-5-21-1-2-3-1001' }) } }
 function Resolve-AutoEraseSid { param($Account) if ($Account -eq 'SYSTEM') { 'S-1-5-18' } else { 'S-1-5-21-1-2-3-1001' } }
 function Invoke-AutoEraseMigrationCore { param($CategoryId) @{ status='ok' } }
 function Initialize-SystemMaintenanceTaskFolder {}
@@ -65,9 +66,14 @@ foreach ($id in $eligible) {
     $record = $script:registered[-1]
     $schedulerId = if ($id -eq 'clipboardHistory') { 'clipboard' } else { $id }
     $system = $id -in $script:AutoEraseSystemCategories
-    $expectedUser = if ($system) { 'SYSTEM' } else { 'TestUser' }
+    $expectedUser = if ($system) { 'SYSTEM' } else { 'DOMAIN\TestUser' }
     if ($record.action.argument -ne "mock:$schedulerId`:60" -or $record.triggers.Count -ne 2 -or $record.triggers[0].interval.TotalMinutes -ne 60 -or $record.triggers[1].startup -ne $system -or $record.principal.user -ne $expectedUser -or $record.description -notlike '*(managed)' -or $record.settings.hidden) { throw "Incorrect registration for $id" }
 }
+$registrationsBeforeMismatch = $script:registered.Count
+$script:identityMismatch = $true
+$mismatchedAccount = Set-IndividualAutoEraseSchedule -CategoryId 'notepadState' -IntervalMinutes 60 -AllowDefaultExcluded
+if (-not $mismatchedAccount.error -or $script:registered.Count -ne $registrationsBeforeMismatch) { throw 'Mismatched current account identity was not rejected before registration.' }
+$script:identityMismatch = $false
 foreach ($id in @('notepadState','developerCaches','sshState','passwordManagerCaches')) {
     $result = Set-IndividualAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded
     if ($result.error -or -not $script:approval -or $script:registered[-1].description -ne 'System Maintenance scheduled cleanup v21 (manual opt-in)') { throw "Explicit manual authorization was lost for $id" }

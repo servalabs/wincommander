@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 $env:USERNAME = 'SyntheticUser'
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
+function Get-AutoEraseCurrentIdentity { @{ name='SYNTHETIC\RenamedAccount'; sid='S-1-5-21-1' } }
 function Resolve-AutoEraseSid {
     param($Account)
     if ($Account -eq 'UnresolvedUser') { throw 'Synthetic unresolved account' }

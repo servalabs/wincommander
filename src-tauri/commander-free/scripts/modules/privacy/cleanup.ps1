@@ -1328,7 +1328,7 @@ function Get-FleetForensicProjection {
             'vpn_phonebooks' { $result = Get-VPNPhonebooksInfo; if ($result.error) { return (& $empty 'System Cleanup could not read VPN-phonebook summaries.') }; return (& $metadataProjection 'vpn_phonebooks' 'VPN phonebooks' $result 'VPN metadata') }
             'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
-            'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error) { return (& $empty 'System Cleanup could not read BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
+            'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
             'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
             'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
@@ -4159,23 +4159,27 @@ function Get-CloudPlaceholdersInfo {
 }
 
 function Get-BITSQueueInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
-        $transfers = @(Get-BitsTransfer -AllUsers -ErrorAction Stop)
-        foreach ($transfer in $transfers) {
-            $files += @{ name = "BITS job: $($transfer.DisplayName) ($($transfer.JobState))"; sizeKB = 0; modified = '' }
+        Get-BitsTransfer -AllUsers -ErrorAction Stop | ForEach-Object {
+            $transfer = $_
+            $files.Add(@{ name = "BITS job: $($transfer.DisplayName) ($($transfer.JobState))"; jobId = [string]$transfer.JobId; state = [string]$transfer.JobState; owner = [string]$transfer.OwnerAccount; bytesTransferred = $transfer.BytesTransferred; bytesTotal = $transfer.BytesTotal; sizeKB = 0; modified = '' })
         }
-        $downloader = Join-Path $env:ProgramData 'Microsoft\\Network\\Downloader'
-        try {
-            $null = Get-Item -LiteralPath $downloader -Force -ErrorAction Stop
+    } catch { $partial = $true }
+    $downloader = Join-Path $env:ProgramData 'Microsoft\\Network\\Downloader'
+    try {
+        try { $root = Get-Item -LiteralPath $downloader -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'BITS queue location is not a directory.' }
             Get-ChildItem -LiteralPath $downloader -File -Filter 'qmgr*.dat' -Force -ErrorAction Stop | ForEach-Object {
-                $files += @{ name = "BITS queue database: $($_.Name)"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files.Add(@{ name = "BITS queue database: $($_.Name)"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
-        } catch [System.Management.Automation.ItemNotFoundException] {}
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+        }
+    } catch { $partial = $true }
+    $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some BITS queue sources could not be checked.' } else { $null } }
 }
 
 function Get-CellularHistoryInfo {
