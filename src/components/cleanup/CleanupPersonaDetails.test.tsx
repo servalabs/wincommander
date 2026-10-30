@@ -15,6 +15,12 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("retains the original timestamp when showing local time", () => {
+    const original = "2026-10-20T12:00:00.123+05:30";
+    const [row] = getSafeCleanupPreview("prefetchFiles", { entries: [{ name: "App", lastRun: original }] });
+    expect(row.facts.find(fact => fact.startsWith("Last run:"))).toContain(original);
+  });
+
   test("preserves the size reported by a scan when formatting units", () => {
     const rows = getSafeCleanupPreview("webCache", { files: [
       { name: "A", sizeKB: 100.6 },

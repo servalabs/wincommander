@@ -125,7 +125,10 @@ function metadata(row: RecordObject, categoryId: string): string[] {
   for (const [key, label] of [["lastRun", "Last run"], ["lastModified", "Last modified"], ["deletedTime", "Deleted"], ["modified", "Modified"], ["lastSeen", "Last seen"], ["created", "Created"], ["timestamp", "Date"]] as const) {
     const value = field(key);
     if (typeof value === "string" && value.trim()) {
-      const display = /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : value;
+      const local = /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : value;
+      // Local formatting can omit milliseconds and the original offset. Keep
+      // the source value alongside it so the record retains that information.
+      const display = local === value ? value : `${local} (source: ${value})`;
       facts.push(`${label}: ${display}`); used.add(key.toLowerCase());
     }
   }

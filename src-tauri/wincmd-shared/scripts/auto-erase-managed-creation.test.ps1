@@ -5,7 +5,12 @@ $ErrorActionPreference = 'Stop'
 $env:USERNAME = 'SyntheticUser'
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
-function Resolve-AutoEraseSid { param($Account) 'S-1-5-21-1' }
+function Resolve-AutoEraseSid {
+    param($Account)
+    if ($Account -eq 'UnresolvedUser') { throw 'Synthetic unresolved account' }
+    if ($Account -eq 'OtherUser' -or $Account -eq 'SYNTHETIC\RenamedAccount') { return 'S-1-5-21-2' }
+    'S-1-5-21-1'
+}
 $script:tasks = @()
 $script:writes = 0
 function Get-ScheduledTask { [CmdletBinding()] param() $script:tasks }
@@ -49,6 +54,14 @@ if (-not $bulkMulti.error -or $script:writes -ne $before) { throw 'Managed multi
 $script:expectManaged = $false
 $manualMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,OtherUser'
 if (-not $manualMulti.error -or $manualMulti.status -ne 'failed' -or $manualMulti.total -ne 2) { throw 'A partial multi-user failure was reported as success.' }
+$before = $script:writes
+$sameAccount = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,SYNTHETIC\Alias'
+if ($sameAccount.error -or $sameAccount.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'Two aliases of one SID did not produce exactly one schedule.' }
+$before = $script:writes
+$unresolvedTarget = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,UnresolvedUser'
+if (-not $unresolvedTarget.error -or $unresolvedTarget.total -ne 0 -or $script:writes -ne $before) { throw 'An unresolved explicit account caused a partial write.' }
+$emptyTargetList = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers ',, ,'
+if (-not $emptyTargetList.error -or $emptyTargetList.total -ne 0 -or $script:writes -ne $before) { throw 'An explicit empty account list fell back to all profiles.' }
 $script:profileMode = 'failed'
 function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName)

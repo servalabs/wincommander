@@ -2700,9 +2700,14 @@ function Set-MultiUserAutoEraseSchedule {
     Assert-AutoEraseAdmin
 
     # Split comma-separated string into array; empty = all non-system accounts
-    $targetArr = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
+    $explicitTargets = $TargetUsers -and $TargetUsers.Trim() -ne ''
+    $targetArr = if ($explicitTargets) {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
     } else { @() }
+
+    if (-not $RunAsSystem -and $explicitTargets -and @($targetArr).Count -eq 0) {
+        return @{ error = $true; status = 'failed'; message = 'No valid Windows accounts were specified; no schedules were created.'; results = @(); total = 0 }
+    }
 
     if (-not $RunAsSystem -and $targetArr.Count -eq 0) {
         $sysDrive = $env:SystemDrive
@@ -2715,6 +2720,23 @@ function Set-MultiUserAutoEraseSchedule {
         }
         if ($targetArr.Count -eq 0) {
             return @{ error = $true; status = 'failed'; message = 'No supported Windows user profiles were found; no schedules were created.'; results = @(); total = 0 }
+        }
+    }
+
+    if (-not $RunAsSystem) {
+        # Distinct account spellings can identify the same Windows user. Resolve
+        # all targets before creating any task and count each SID only once.
+        try {
+            $seenOwners = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $uniqueTargets = [Collections.Generic.List[string]]::new()
+            foreach ($target in @($targetArr)) {
+                $sid = Resolve-AutoEraseSid ([string]$target)
+                if ([string]::IsNullOrWhiteSpace($sid)) { throw 'Account SID is unavailable.' }
+                if ($seenOwners.Add($sid)) { $uniqueTargets.Add([string]$target) }
+            }
+            $targetArr = @($uniqueTargets.ToArray())
+        } catch {
+            return @{ error = $true; status = 'failed'; message = 'A selected Windows account could not be verified; no schedules were created.'; results = @(); total = 0 }
         }
     }
 

@@ -1319,7 +1319,7 @@ function Get-FleetForensicProjection {
             'remote_access_logs' { $result = Get-RemoteAccessLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read remote-access summaries.') }; return (& $metadataProjection 'remote_access_logs' 'Remote access logs' $result 'Remote access metadata') }
             'password_manager_caches' { $result = Get-PasswordManagerCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read password-manager summaries.') }; return (& $metadataProjection 'password_manager_caches' 'Password-manager caches' $result 'Password-manager metadata') }
             'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-launcher summaries.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
-            'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
+            'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
             'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
             'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
             'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
@@ -3916,25 +3916,31 @@ function Get-GameLauncherLogsInfo {
 }
 
 function Get-AdobeRecentInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $readerRoot = 'HKCU:\Software\Adobe\Acrobat Reader'
     try {
-        $files = @()
-        $readerRoot = 'HKCU:\Software\Adobe\Acrobat Reader'
-        if (Test-Path $readerRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $readerRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                foreach ($suffix in @('AVGeneral\\cRecentFiles','AVGeneral\\cDigitalSignatures')) {
-                    $path = Join-Path $_.PSPath $suffix
-                    if (Test-Path $path -ErrorAction SilentlyContinue) {
-                        $item = Get-Item -Path $path -ErrorAction SilentlyContinue
+        try { $root = Get-Item -LiteralPath $readerRoot -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            Get-ChildItem -LiteralPath $readerRoot -Force -ErrorAction Stop | ForEach-Object {
+                $version = $_
+                foreach ($suffix in @('AVGeneral\cRecentFiles','AVGeneral\cDigitalSignatures')) {
+                    $path = Join-Path $version.PSPath $suffix
+                    try {
+                        try { $item = Get-Item -LiteralPath $path -ErrorAction Stop }
+                        catch [System.Management.Automation.ItemNotFoundException] { continue }
                         foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                            $files += @{ name = "Adobe $suffix value: $property"; sizeKB = 0; modified = '' }
+                            try {
+                                $files.Add(@{ name = "Adobe $suffix value: $property"; path = $path; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' })
+                            } catch { $partial = $true }
                         }
-                    }
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Adobe recent history could not be checked.' } else { $null } }
 }
 
 function Get-OfficeTempFilesInfo {
