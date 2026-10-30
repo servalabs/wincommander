@@ -32,10 +32,19 @@ try {
     if ($wrong.error -or $wrong.schedules[0].payloadVerified) { throw 'A mismatched payload must not be verified.' }
     $script:fixtureScripts = $scripts
     function Initialize-AutoEraseStorage { @{ scripts = $script:fixtureScripts } }
-    $argument = ConvertTo-AutoEraseTaskArgument -CategoryId 'dnsCache' -IntervalMinutes 60 -Script $script:AutoEraseScripts['dnsCache'] -ExecutionScope 'user-fixture' -FirstDueUtc ([DateTime]::UtcNow.AddHours(1).ToString('o'))
+    $firstDue = [DateTime]::UtcNow.AddHours(1)
+    $argument = ConvertTo-AutoEraseTaskArgument -CategoryId 'dnsCache' -IntervalMinutes 60 -Script $script:AutoEraseScripts['dnsCache'] -ExecutionScope 'user-fixture' -FirstDueUtc ($firstDue.ToString('o'))
     $script:fixtureTask.Actions[0].Arguments = $argument
+    $script:fixtureTask.Triggers[0] | Add-Member -NotePropertyName StartBoundary -NotePropertyValue ($firstDue.ToString('o'))
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.AddMinutes(-120).ToString('o')
+    if (-not (Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A migrated payload aligned with an earlier trigger slot must be verified.' }
+    $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.AddMinutes(15).ToString('o')
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A shifted trigger phase must not be verified.' }
+    $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.AddSeconds(-1).ToString('o')
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'Even a one-second early trigger can skip a cleanup and must not be verified.' }
+    $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.ToString('o')
     foreach ($field in @('DisallowStartIfOnBatteries', 'StopIfGoingOnBatteries', 'RunOnlyIfIdle', 'RunOnlyIfNetworkAvailable')) {
         $script:fixtureTask.Settings.$field = $true
         if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw "A task restricted by $field must not be verified." }

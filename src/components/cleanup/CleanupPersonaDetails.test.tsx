@@ -15,6 +15,17 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("keeps binary array details in one column without dropping any bytes", () => {
+    const proxy = ALL_CATEGORIES.find(category => category.id === "proxyCache")!;
+    const bytes = Array.from({ length: 512 }, (_, index) => index % 256);
+    const data = { total: 1, files: [{ name: "Connection settings", value: bytes, valueType: "Binary" }] };
+    const preview = getSafeCleanupPreview("proxyCache", data);
+    expect(preview[0].facts).toContain(`Value: ${JSON.stringify(bytes)}`);
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={proxy} mode="advanced" count={1} items={[]} rawData={data} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain(JSON.stringify(bytes));
+    expect(html).toContain("<th scope=\"col\">Value</th>");
+    expect(html).not.toContain("Value 512</th>");
+  });
   test("shows observed account details and source facts even when the scan is incomplete", () => {
     const result = readCleanupUserSummary({ count: 3, partial: true, records: [{ name: 'Observed file' }], scanFacts: { path: 'C:\\example' } });
     const category = ALL_CATEGORIES.find(item => item.id === 'crashDumps')!;

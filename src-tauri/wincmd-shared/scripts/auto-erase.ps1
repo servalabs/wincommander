@@ -2883,7 +2883,7 @@ function Get-AutoEraseSchedules {
             $payloadVerified = $false
             try {
                 $exactInterval = $repetition -and [Xml.XmlConvert]::ToTimeSpan($repetition) -eq [TimeSpan]::FromMinutes($minutes)
-                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity) -and (Test-AutoEraseSettingsReadback $t))
+                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity) -and (Test-AutoEraseSchedulePhase -Task $t) -and (Test-AutoEraseSettingsReadback $t))
             } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
@@ -3019,6 +3019,35 @@ function Test-AutoEraseTriggerReadback {
         catch { return $false }
     }
     if (-not $isSystem -and (-not $catchUp[0].UserId -or (Resolve-AutoEraseSid ([string]$catchUp[0].UserId)) -ne $Identity.ownerSid)) { return $false }
+    return $true
+}
+
+function Test-AutoEraseSchedulePhase {
+    param($Task)
+    $timeTriggers = @($Task.Triggers | Where-Object { $_.Repetition.Interval })
+    if ($timeTriggers.Count -ne 1) { return $false }
+    # A user can move the repeating trigger without changing its interval. The
+    # generated payload tracks its own fixed cadence, so the two phases must
+    # still agree or Scheduler can launch it before it considers itself due.
+    $action = @($Task.Actions)[0]
+    if (-not $action -or [string]$action.Arguments -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
+    $body = Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction Stop
+    if ($body -notmatch "(?m)^\`$firstDueUtc = '([^']+)'\r?$") { return $false }
+    $firstDue = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($Matches[1], [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$firstDue)) { return $false }
+    $startText = [string]$timeTriggers[0].StartBoundary
+    $start = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($startText, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$start)) { return $false }
+    # Offset-free Scheduler times use local wall time. During a daylight-saving
+    # overlap or gap Windows may interpret it differently; do not guess.
+    if ($startText -notmatch '(?i)(?:Z|[+-]\d{2}:\d{2})$') {
+        $wall = [DateTime]::SpecifyKind($start.DateTime, [DateTimeKind]::Unspecified)
+        if ([TimeZoneInfo]::Local.IsAmbiguousTime($wall) -or [TimeZoneInfo]::Local.IsInvalidTime($wall)) { return $false }
+    }
+    $interval = [Xml.XmlConvert]::ToTimeSpan([string]$timeTriggers[0].Repetition.Interval)
+    if ($interval.Ticks -le 0) { return $false }
+    $remainder = [Math]::Abs(($firstDue.UtcTicks - $start.UtcTicks) % $interval.Ticks)
+    if ($remainder -ne 0) { return $false }
     return $true
 }
 

@@ -135,7 +135,10 @@ function metadata(row: RecordObject, categoryId: string): string[] {
     if (isObject(value)) {
       for (const [child, childValue] of Object.entries(value)) append(`${label} ${child}`, childValue);
     } else if (Array.isArray(value)) {
-      for (const [index, child] of value.entries()) append(`${label} ${index + 1}`, child);
+      // Registry binary values and other arrays can contain thousands of
+      // elements. Keep the complete value in one cell instead of creating a
+      // table column for every byte; JSON preserves order and nested values.
+      facts.push(`${label}: ${JSON.stringify(value)}`);
     } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       facts.push(`${label}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : value === "" ? "(empty)" : value}`);
     }

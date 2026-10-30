@@ -277,8 +277,9 @@ function Get-SRUMData {
 }
 
 function Get-ConnectivityHistory {
+    $entries = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $entries = @()
         $roots = @(
             @{
                 source = 'Network Profiles'
@@ -298,17 +299,22 @@ function Get-ConnectivityHistory {
         )
 
         foreach ($root in $roots) {
-            if (!(Test-Path $root.path)) { continue }
-
-            Get-ChildItem -Path $root.path -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+            try { $rootItem = Get-Item -LiteralPath $root.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            Get-ChildItem -LiteralPath $root.path -ErrorAction Stop | ForEach-Object {
                 try {
-                    $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                    $props = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction Stop
                     $name = $props.ProfileName
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $props.Description }
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $props.DnsSuffix }
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.PSChildName }
 
-                    $entries += @{
+                    $values = @{}
+                    foreach ($property in $props.PSObject.Properties) {
+                        if ($property.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { $values[$property.Name] = $property.Value }
+                    }
+                    $entries.Add(@{
                         source      = $root.source
                         type        = $root.type
                         name        = $name
@@ -316,14 +322,20 @@ function Get-ConnectivityHistory {
                         description = $props.Description
                         dnsSuffix   = $props.DnsSuffix
                         category    = $props.Category
-                    }
-                } catch {}
+                        registryPath = $_.PSPath
+                        registryValues = $values
+                    })
+                } catch { $partial = $true }
             }
+            } catch { $partial = $true }
         }
 
         @{
-            entries = $entries
+            entries = @($entries.ToArray())
             total   = $entries.Count
+            partial = $partial
+            status = if ($partial) { 'partial' } else { 'complete' }
+            message = if ($partial) { 'Some network history locations could not be checked.' } else { $null }
         }
     }
     catch {
@@ -1019,7 +1031,7 @@ function Get-FleetForensicProjection {
 
             'connectivity_history' {
                 $result = Get-ConnectivityHistory
-                if ($result.error) { return (& $empty 'System Cleanup could not read connectivity-history summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete connectivity-history summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
                     @{ source = (& $sanitizeText $_.source 64); type = (& $sanitizeText $_.type 32); category = (& $sanitizeText $_.category 32); network = (& $sanitizeText $_.name 256); key = (& $sanitizeText $_.key 256); description = (& $sanitizeText $_.description 256); dnsSuffix = (& $sanitizeText $_.dnsSuffix 256) }
