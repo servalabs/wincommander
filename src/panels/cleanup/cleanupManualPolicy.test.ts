@@ -25,8 +25,8 @@ describe("explicit per-card cleanup consent", () => {
     }
     expect(isAutomaticCleanupExcluded("dnsCache", new Set(["DNSCACHE"]))).toBe(true);
     expect(isAutomaticCleanupExcluded("dnsCache", new Set())).toBe(false);
-    expect(MANUAL_ONLY_SCHEDULE_IDS.length).toBe(31);
-    expect(cards.filter(card => card.schedulable && isManualOnlyCleanupSchedule(card.id)).length).toBe(31);
+    expect(MANUAL_ONLY_SCHEDULE_IDS.length).toBe(33);
+    expect(cards.filter(card => card.schedulable && isManualOnlyCleanupSchedule(card.id)).length).toBe(33);
     for (const id of MANUAL_ONLY_SCHEDULE_IDS) {
       expect(isManualOnlyCleanupSchedule(id.toUpperCase())).toBe(true);
       expect(eligible.some(card => card.id === id)).toBe(false);

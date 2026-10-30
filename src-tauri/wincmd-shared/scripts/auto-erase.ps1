@@ -354,7 +354,575 @@ function Invoke-WCWlanClear {
 '@
 . ([scriptblock]::Create($script:WlanProfileFunctions))
 
+$script:ScheduledCredentialFunctions = @'
+function Initialize-WCScheduledCredentials {
+    if (([System.Management.Automation.PSTypeName]'WcCleanup.Credentials').Type) { return }
+    Add-Type -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace WcCleanup {
+    public sealed class CredentialIdentity { public string Name; public uint Type; }
+    public static class Credentials {
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="CredEnumerateW")]
+        private static extern bool Enumerate(string filter, uint flags, out uint count, out IntPtr credentials);
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="CredDeleteW")]
+        private static extern bool Delete(string target, uint type, uint flags);
+        [DllImport("advapi32.dll")] private static extern void CredFree(IntPtr buffer);
+        public static CredentialIdentity[] List() {
+            uint count; IntPtr entries;
+            if (!Enumerate(null, 0, out count, out entries)) {
+                int error = Marshal.GetLastWin32Error();
+                if (error == 1168) return new CredentialIdentity[0];
+                throw new Win32Exception(error);
+            }
+            try {
+                var output = new List<CredentialIdentity>();
+                for (int i = 0; i < count; i++) {
+                    IntPtr entry = Marshal.ReadIntPtr(entries, checked(i * IntPtr.Size));
+                    if (entry == IntPtr.Zero) throw new InvalidOperationException("Invalid credential entry.");
+                    uint type = unchecked((uint)Marshal.ReadInt32(entry, 4));
+                    string name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(entry, 8));
+                    if (String.IsNullOrEmpty(name) || type == 0) throw new InvalidOperationException("Invalid credential identity.");
+                    output.Add(new CredentialIdentity { Name = name, Type = type });
+                }
+                return output.ToArray();
+            } finally { CredFree(entries); }
+        }
+        public static void Remove(string name, uint type) {
+            if (!Delete(name, type, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+}
+"@
+}
+function Get-WCScheduledCredentials {
+    Initialize-WCScheduledCredentials
+    [WcCleanup.Credentials]::List()
+}
+function Remove-WCScheduledCredential($Name, $Type) {
+    Initialize-WCScheduledCredentials
+    [WcCleanup.Credentials]::Remove($Name, [uint32]$Type)
+}
+'@
+
+$script:ScheduledWslFunctions = @'
+function Get-WCScheduledWslInventory {
+    $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @(Get-ChildItem -LiteralPath $root -ErrorAction Stop)) {
+        $data = Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction Stop
+        $name = [string]$data.DistributionName
+        if (-not $name -or $name -ne $name.Trim() -or $name -match '[\x00-\x1f"\\]' -or $name.StartsWith('-') -or -not $seen.Add($name)) {
+            throw 'An unsafe or duplicate WSL distribution identity was detected.'
+        }
+        $base = [string]$data.BasePath
+        if ($base.StartsWith('\\?\')) { $base = $base.Substring(4) }
+        $disk = if ($base) { Join-Path $base 'ext4.vhdx' } else { '' }
+        [pscustomobject]@{ Name=$name; Disk=$disk }
+    }
+}
+function Test-WCScheduledWslOrphans {
+    $root = Join-Path $env:LOCALAPPDATA 'Packages'
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    foreach ($package in @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop)) {
+        if (Test-Path -LiteralPath (Join-Path $package.FullName 'LocalState\ext4.vhdx') -PathType Leaf -ErrorAction Stop) { return $true }
+    }
+    return $false
+}
+function Remove-WCScheduledWslDistro($Name) {
+    $exe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'The WSL provider is unavailable.' }
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $exe
+    $start.Arguments = '--unregister "' + $Name + '"'
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(300000)) {
+            try { $process.Kill() } catch { }
+            throw 'WSL unregister timed out; its final state must be checked.'
+        }
+        $stdout.Wait(); $stderr.Wait()
+        if ($process.ExitCode -ne 0) { throw 'WSL could not unregister the distribution.' }
+    } finally { $process.Dispose() }
+}
+'@
+
+$script:ScheduledVmFunctions = @'
+function Invoke-WCProviderProcess {
+    param([Parameter(Mandatory)][string]$FilePath, [Parameter(Mandatory)][string[]]$Arguments, [bool]$Mutation = $false, [int]$TimeoutSeconds = 120)
+    if ($TimeoutSeconds -lt 1 -or @($Arguments | Where-Object { $_ -match '[\x00-\x1f"]' }).Count) { throw 'Invalid provider invocation.' }
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $FilePath
+    $start.Arguments = (@($Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    # Mutating provider operations may continue merging snapshots after a timeout.
+    # Never interrupt a merge or leave it blocked on a closed redirected pipe.
+    $start.RedirectStandardOutput = -not $Mutation
+    $start.RedirectStandardError = -not $Mutation
+    $process = [Diagnostics.Process]::Start($start)
+    if (-not $process) { throw 'The VM provider could not start.' }
+    try {
+        if (-not $Mutation) {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+        }
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            if (-not $Mutation) { try { $process.Kill() } catch {} }
+            throw 'The VM provider did not finish in time; completion is unverified.'
+        }
+        if ($process.ExitCode -ne 0) { throw 'The VM provider failed.' }
+        if (-not $Mutation) {
+            $stdout.Wait(); $stderr.Wait()
+            return @($stdout.Result -split "`r?`n" | Where-Object { $_ -ne '' })
+        }
+        return @()
+    } finally { $process.Dispose() }
+}
+
+function Assert-WCProviderIdle {
+    param([Parameter(Mandatory)][string]$Name)
+    if (@(Get-Process -Name $Name -ErrorAction SilentlyContinue).Count) { throw 'The VM provider is busy; a previous operation may still be running.' }
+}
+
+function Invoke-WCVBox {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+    $exe = Join-Path $programFiles 'Oracle\VirtualBox\VBoxManage.exe'
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'VirtualBox is unavailable.' }
+    Assert-WCProviderIdle -Name 'VBoxManage'
+    $mutation = $Arguments.Count -ge 3 -and $Arguments[0] -eq 'snapshot' -and $Arguments[2] -eq 'delete'
+    return @(Invoke-WCProviderProcess -FilePath $exe -Arguments $Arguments -Mutation $mutation -TimeoutSeconds $(if ($mutation) { 1800 } else { 120 }))
+}
+
+function Get-WCVBoxMachines {
+    $identities = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in @(Invoke-WCVBox -Arguments @('list', 'vms'))) {
+        if ($line -notmatch '\{([0-9a-fA-F-]{36})\}\s*$') { throw 'VirtualBox returned an invalid machine identity.' }
+        $id = [guid]::Empty
+        if (-not [guid]::TryParse($Matches[1], [ref]$id)) { throw 'VirtualBox returned an invalid machine identity.' }
+        if (-not $identities.Add($id.ToString())) { throw 'VirtualBox returned a duplicate machine identity.' }
+    }
+    return @($identities)
+}
+
+function Get-WCVBoxMachineInfo {
+    param([Parameter(Mandatory)][string]$Id)
+    $uuid = [guid]::Empty
+    if (-not [guid]::TryParse($Id, [ref]$uuid)) { throw 'Invalid VirtualBox machine identity.' }
+    $path = $null; $state = $null
+    foreach ($line in @(Invoke-WCVBox -Arguments @('showvminfo', $uuid.ToString(), '--machinereadable'))) {
+        if ($line -match '^CfgFile="([^"]+)"$') { $path = $Matches[1] }
+        elseif ($line -match '^VMState="([^"]+)"$') { $state = $Matches[1] }
+    }
+    if (-not $path -or -not $state) { throw 'VirtualBox machine details are incomplete.' }
+    return [pscustomobject]@{ Path = $path; State = $state }
+}
+
+function Test-WCVBoxMachineInScope {
+    param([Parameter(Mandatory)][string]$ConfigPath)
+    $root = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'VirtualBox VMs')).TrimEnd('\')
+    $file = [IO.Path]::GetFullPath($ConfigPath)
+    if (-not $file.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $cursor = $file
+    while ($cursor.Length -ge $root.Length) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'VirtualBox machine path contains a reparse point.' }
+        if ($cursor -ieq $root) { return $true }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $cursor) { throw 'VirtualBox machine path could not be verified.' }
+    }
+    throw 'VirtualBox machine path could not be verified.'
+}
+
+function Get-WCVBoxSnapshots {
+    param([Parameter(Mandatory)][string]$MachineId)
+    $machine = [guid]::Empty
+    if (-not [guid]::TryParse($MachineId, [ref]$machine)) { throw 'Invalid VirtualBox machine identity.' }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $nameKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $uuidKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $lines = @(Invoke-WCVBox -Arguments @('snapshot', $machine.ToString(), 'list', '--machinereadable'))
+    foreach ($line in $lines) {
+        if ($line -match '^SnapshotName([-0-9]*)="(.*)"$') {
+            if (-not $nameKeys.Add($Matches[1])) { throw 'VirtualBox returned a duplicate snapshot.' }
+        } elseif ($line -match '^SnapshotUUID([-0-9]*)="([^"]+)"$') {
+            $key = $Matches[1]; $value = $Matches[2]
+            $id = [guid]::Empty
+            if (-not [guid]::TryParse($value, [ref]$id) -or -not $seen.Add($id.ToString()) -or -not $uuidKeys.Add($key)) { throw 'VirtualBox returned an invalid snapshot identity.' }
+        } elseif ($line -match '^Snapshot(?:Name|UUID)') { throw 'VirtualBox returned an invalid snapshot identity.' }
+    }
+    if ($nameKeys.Count -ne $uuidKeys.Count -or @($nameKeys | Where-Object { -not $uuidKeys.Contains($_) }).Count) { throw 'VirtualBox snapshot inventory is incomplete.' }
+    if (-not $seen.Count -and @($lines | Where-Object { $_.Trim() }).Count) {
+        throw 'VirtualBox snapshot inventory could not be verified.'
+    }
+    return @($seen)
+}
+
+function Remove-WCVBoxSnapshot {
+    param([Parameter(Mandatory)][string]$MachineId, [Parameter(Mandatory)][string]$SnapshotId)
+    $machine = [guid]::Empty; $snapshot = [guid]::Empty
+    if (-not [guid]::TryParse($MachineId, [ref]$machine) -or -not [guid]::TryParse($SnapshotId, [ref]$snapshot)) { throw 'Invalid VirtualBox snapshot identity.' }
+    $null = Invoke-WCVBox -Arguments @('snapshot', $machine.ToString(), 'delete', $snapshot.ToString())
+}
+
+function Invoke-WCVBoxSnapshotCleanup {
+    $removed = 0; $failed = 0
+    try { $machines = @(Get-WCVBoxMachines) } catch { return @{ removed = 0; failed = 1 } }
+    foreach ($machine in $machines) {
+        try {
+            $info = Get-WCVBoxMachineInfo $machine
+            if (-not (Test-WCVBoxMachineInScope $info.Path)) { continue }
+            $before = @(Get-WCVBoxSnapshots $machine)
+            if ($before.Count -and $info.State -ne 'poweroff') { $failed++; continue }
+            foreach ($snapshot in $before) {
+                try { Remove-WCVBoxSnapshot $machine $snapshot } catch { $failed++ }
+            }
+            $after = @(Get-WCVBoxSnapshots $machine)
+            foreach ($snapshot in $before) {
+                if ($snapshot -in $after) { $failed++ } else { $removed++ }
+            }
+            if ($after.Count) { $failed++ }
+        } catch { $failed++ }
+    }
+    return @{ removed = $removed; failed = $failed }
+}
+
+function Invoke-WCVmrun {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    $paths = @(foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if ($base) { Join-Path $base 'VMware\VMware Workstation\vmrun.exe' }
+    })
+    $exe = @($paths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    if (-not $exe.Count) { throw 'VMware Workstation is unavailable.' }
+    Assert-WCProviderIdle -Name 'vmrun'
+    $mutation = $Arguments[0] -eq 'deleteSnapshot'
+    return @(Invoke-WCProviderProcess -FilePath $exe[0] -Arguments (@('-T', 'ws') + $Arguments) -Mutation $mutation -TimeoutSeconds $(if ($mutation) { 1800 } else { 120 }))
+}
+
+function Get-WCVmwareMachines {
+    $root = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
+    if (-not (Test-Path -LiteralPath $root -PathType Container -ErrorAction Stop)) { return @() }
+    return @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.vmx' -Force -ErrorAction Stop | ForEach-Object { $_.FullName })
+}
+
+function Test-WCVmwareMachineInScope {
+    param([Parameter(Mandatory)][string]$ConfigPath)
+    $root = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'Documents\Virtual Machines')).TrimEnd('\')
+    $file = [IO.Path]::GetFullPath($ConfigPath)
+    if (-not $file.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($file) -ine '.vmx') { return $false }
+    $cursor = $file
+    while ($cursor.Length -ge $root.Length) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'VMware machine path contains a reparse point.' }
+        if ($cursor -ieq $root) { return $true }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $cursor) { throw 'VMware machine path could not be verified.' }
+    }
+    throw 'VMware machine path could not be verified.'
+}
+
+function Get-WCVmrunInventory {
+    param([Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$Header)
+    $lines = @(Invoke-WCVmrun -Arguments $Arguments)
+    if (-not $lines.Count -or $lines[0] -notmatch ('^' + [regex]::Escape($Header) + ':\s*(\d+)\s*$')) { throw 'VMware inventory could not be verified.' }
+    $expected = [int]$Matches[1]
+    $values = @($lines | Select-Object -Skip 1 | Where-Object { $_.Trim() })
+    if ($values.Count -ne $expected) { throw 'VMware inventory count is inconsistent.' }
+    return $values
+}
+
+function Invoke-WCVmwareSnapshotCleanup {
+    $removed = 0; $failed = 0
+    try {
+        $machines = @(Get-WCVmwareMachines)
+        if (-not $machines.Count) { return @{ removed = 0; failed = 0 } }
+        $running = @((Get-WCVmrunInventory -Arguments @('list') -Header 'Total running VMs') | ForEach-Object {
+            if (-not [IO.Path]::IsPathRooted($_)) { throw 'VMware returned an invalid running machine identity.' }
+            [IO.Path]::GetFullPath($_)
+        })
+    } catch { return @{ removed = 0; failed = 1 } }
+    foreach ($machine in $machines) {
+        try {
+            if (-not (Test-WCVmwareMachineInScope $machine)) { $failed++; continue }
+            $before = @(Get-WCVmrunInventory -Arguments @('listSnapshots', $machine) -Header 'Total snapshots')
+            $canonicalMachine = [IO.Path]::GetFullPath($machine)
+            if ($before.Count -and @($running | Where-Object { $_ -ieq $canonicalMachine }).Count) { $failed++; continue }
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($snapshot in $before) {
+                if ($snapshot -notmatch '^[A-Za-z0-9_][A-Za-z0-9_. -]{0,119}$' -or -not $seen.Add($snapshot)) {
+                    throw 'VMware returned an ambiguous snapshot name.'
+                }
+            }
+            foreach ($snapshot in $before) {
+                try { $null = Invoke-WCVmrun -Arguments @('deleteSnapshot', $machine, $snapshot) } catch { $failed++ }
+            }
+            $after = @(Get-WCVmrunInventory -Arguments @('listSnapshots', $machine) -Header 'Total snapshots')
+            foreach ($snapshot in $before) {
+                if ($snapshot -cin $after) { $failed++ } else { $removed++ }
+            }
+            if ($after.Count) { $failed++ }
+        } catch { $failed++ }
+    }
+    return @{ removed = $removed; failed = $failed }
+}
+
+function Get-WCVirtualMachineArtifactRemainders {
+    $count = 0
+    $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
+    if (Test-Path -LiteralPath $vmwareRoot -PathType Container -ErrorAction Stop) {
+        foreach ($pattern in @('*-0000*.vmdk', '*.vmsn', 'vmware*.log')) {
+            $count += @(Get-ChildItem -LiteralPath $vmwareRoot -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+        }
+    }
+    $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
+    if (Test-Path -LiteralPath $virtualBoxRoot -PathType Container -ErrorAction Stop) {
+        foreach ($dir in @(Get-ChildItem -LiteralPath $virtualBoxRoot -Directory -Recurse -Force -ErrorAction Stop | Where-Object { $_.Name -eq 'Snapshots' })) {
+            foreach ($pattern in @('*.vdi', '*.vbox-prev')) {
+                $count += @(Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+            }
+        }
+        foreach ($pattern in @('VBox.log', 'VBoxSVC.log')) {
+            $count += @(Get-ChildItem -LiteralPath $virtualBoxRoot -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+        }
+    }
+    foreach ($path in @((Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'), (Join-Path $env:ProgramData 'VMware\vmnetnat.log'), (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml'))) {
+        if (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop) { $count++ }
+    }
+    $mru = 'HKCU:\Software\VMware, Inc.\VMware Workstation'
+    if (Test-Path -LiteralPath $mru -ErrorAction Stop) {
+        $count += @((Get-Item -LiteralPath $mru -ErrorAction Stop).Property | Where-Object { $_ -match '(?i)mru|recent' }).Count
+    }
+    return $count
+}
+
+function Invoke-WCVirtualMachineArtifactCleanup {
+    $result = @{ removed = 0; failed = 0 }
+    $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
+    if (Test-Path -LiteralPath $virtualBoxRoot -PathType Container) {
+        $snapshotResult = Invoke-WCVBoxSnapshotCleanup
+        $result.removed += [int]$snapshotResult.removed
+        $result.failed += [int]$snapshotResult.failed
+    }
+    $vmwareResult = Invoke-WCVmwareSnapshotCleanup
+    $result.removed += [int]$vmwareResult.removed
+    $result.failed += [int]$vmwareResult.failed
+    try { if ((Get-WCVirtualMachineArtifactRemainders) -gt 0) { $result.failed++ } }
+    catch { $result.failed++ }
+    return $result
+}
+'@
+
+
+$script:ScheduledDockerFunctions = @'
+function New-WCDockerStartInfo {
+    param([Parameter(Mandatory)][string]$Executable, [Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][string[]]$Arguments, [bool]$Mutation)
+    $all = @('--config', $ConfigPath, '--host', 'npipe:////./pipe/dockerDesktopLinuxEngine') + $Arguments
+    if (@($all | Where-Object { $_ -match '[\x00-\x1f"]' }).Count) { throw 'Invalid Docker provider invocation.' }
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Executable
+    $start.Arguments = (@($all | ForEach-Object { '"' + $_ + '"' }) -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = -not $Mutation
+    $start.RedirectStandardError = -not $Mutation
+    foreach ($key in @($start.EnvironmentVariables.Keys)) {
+        if ($key -match '^(?i:DOCKER_|HTTP_PROXY$|HTTPS_PROXY$|ALL_PROXY$|NO_PROXY$)') { $start.EnvironmentVariables.Remove($key) }
+    }
+    return $start
+}
+
+function Invoke-WCDocker {
+    param([Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][string[]]$Arguments, [bool]$Mutation = $false)
+    $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+    $exe = Join-Path $programFiles 'Docker\Docker\resources\bin\docker.exe'
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf -ErrorAction Stop)) { throw 'Docker Desktop CLI is unavailable.' }
+    if (@(Get-Process -Name 'docker' -ErrorAction SilentlyContinue).Count) { throw 'A Docker CLI operation is already running.' }
+    $start = New-WCDockerStartInfo -Executable $exe -ConfigPath $ConfigPath -Arguments $Arguments -Mutation $Mutation
+    $process = [Diagnostics.Process]::Start($start)
+    if (-not $process) { throw 'Docker Desktop CLI could not start.' }
+    try {
+        if (-not $Mutation) {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+        }
+        $timeout = if ($Mutation) { 1800000 } else { 120000 }
+        if (-not $process.WaitForExit($timeout)) {
+            if ($Mutation) { $script:WCDockerMutationTimedOut = $true }
+            else { try { $process.Kill() } catch {} }
+            throw 'Docker Desktop operation timed out and remains unverified.'
+        }
+        if ($process.ExitCode -ne 0) { throw 'Docker Desktop operation failed.' }
+        if (-not $Mutation) {
+            $stdout.Wait(); $stderr.Wait()
+            return @($stdout.Result -split "`r?`n" | Where-Object { $_ -ne '' })
+        }
+        return @()
+    } finally { $process.Dispose() }
+}
+
+function Get-WCDockerDesktopIdentity {
+    param([Parameter(Mandatory)][string]$ConfigPath)
+    $lines = @(Invoke-WCDocker -ConfigPath $ConfigPath -Arguments @('info', '--format', '{{json .}}'))
+    if ($lines.Count -ne 1) { throw 'Docker Desktop identity was not verified.' }
+    try { $info = $lines[0] | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Docker Desktop identity was not verified.' }
+    if ([string]$info.OSType -cne 'linux' -or [string]$info.OperatingSystem -cnotin @('Docker Desktop', 'Docker Desktop (containerized)') -or -not [string]$info.ID) {
+        throw 'The local Linux Docker Desktop engine was not verified.'
+    }
+    return [string]$info.ID
+}
+
+function Invoke-WCCheckedDocker {
+    param([string]$ConfigPath, [string]$Identity, [string[]]$Arguments, [bool]$Mutation = $false)
+    if ((Get-WCDockerDesktopIdentity $ConfigPath) -cne $Identity) { throw 'Docker Desktop engine identity changed.' }
+    return @(Invoke-WCDocker -ConfigPath $ConfigPath -Arguments $Arguments -Mutation $Mutation)
+}
+
+function Get-WCDockerResources {
+    param([string]$ConfigPath, [string]$Identity)
+    $containers = @(Invoke-WCCheckedDocker $ConfigPath $Identity @('container', 'ls', '--all', '--quiet', '--no-trunc'))
+    $images = @(Invoke-WCCheckedDocker $ConfigPath $Identity @('image', 'ls', '--all', '--quiet', '--no-trunc'))
+    $volumes = @(Invoke-WCCheckedDocker $ConfigPath $Identity @('volume', 'ls', '--quiet'))
+    foreach ($id in $containers) { if ($id -notmatch '^[0-9a-f]{64}$') { throw 'Docker container inventory was invalid.' } }
+    foreach ($id in $images) { if ($id -notmatch '^(sha256:)?[0-9a-f]{64}$') { throw 'Docker image inventory was invalid.' } }
+    if (@($volumes | Where-Object { -not $_.Trim() -or $_ -match '[\x00-\x1f]' }).Count) { throw 'Docker volume inventory was invalid.' }
+    return @{ containers = @($containers | Sort-Object -Unique); images = @($images | Sort-Object -Unique); volumes = @($volumes | Sort-Object -Unique) }
+}
+
+function Get-WCDockerArtifactRemainders {
+    $count = 0
+    $root = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
+    if (Test-Path -LiteralPath $root -PathType Container -ErrorAction Stop) {
+        $count += @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.vhdx' -Force -ErrorAction Stop).Count
+    }
+    $log = Join-Path $env:APPDATA 'Docker\log.txt'
+    if (Test-Path -LiteralPath $log -PathType Leaf -ErrorAction Stop) { $count++ }
+    return $count
+}
+
+function Get-WCDockerLocalVolumes {
+    param([string]$ConfigPath, [string]$Identity, [string[]]$Names)
+    $eligible = [Collections.Generic.List[string]]::new()
+    $excluded = 0
+    foreach ($name in $Names) {
+        if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') { throw 'Docker volume identity was invalid.' }
+        $lines = @(Invoke-WCCheckedDocker $ConfigPath $Identity @('volume', 'inspect', '--format', '{{json .}}', $name))
+        if ($lines.Count -ne 1) { throw 'Docker volume inspection was incomplete.' }
+        try { $volume = $lines[0] | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Docker volume inspection was invalid.' }
+        if ([string]$volume.Name -cne $name) { throw 'Docker volume identity changed.' }
+        $options = if ($null -eq $volume.Options) { 0 } elseif ($volume.Options -is [pscustomobject]) { @($volume.Options.PSObject.Properties).Count } else { -1 }
+        $expectedPath = '/var/lib/docker/volumes/' + $name + '/_data'
+        if ([string]$volume.Driver -ceq 'local' -and [string]$volume.Scope -ceq 'local' -and $options -eq 0 -and [string]$volume.Mountpoint -ceq $expectedPath) {
+            $eligible.Add($name)
+        } else { $excluded++ }
+    }
+    return @{ eligible = @($eligible); excluded = $excluded }
+}
+
+function Get-WCDockerBuildCacheCount {
+    param([string]$ConfigPath, [string]$Identity)
+    $lines = @(Invoke-WCCheckedDocker $ConfigPath $Identity @('system', 'df', '--format', '{{json .}}'))
+    $rows = @($lines | ForEach-Object { $_ | ConvertFrom-Json -ErrorAction Stop } | Where-Object { $_.Type -ceq 'Build Cache' })
+    if ($rows.Count -ne 1 -or [string]$rows[0].TotalCount -notmatch '^\d+$') { throw 'Docker build cache readback is unavailable.' }
+    return [int64]$rows[0].TotalCount
+}
+
+function Invoke-WCDockerDesktopCleanup {
+    $result = @{ removed = 0; failed = 0 }
+    $script:WCDockerMutationTimedOut = $false
+    $config = Join-Path ([IO.Path]::GetTempPath()) ('wincommander-docker-cli-' + [guid]::NewGuid())
+    try {
+        $null = New-Item -ItemType Directory -Path $config -ErrorAction Stop
+        $identity = Get-WCDockerDesktopIdentity $config
+        $before = Get-WCDockerResources $config $identity
+        $volumes = Get-WCDockerLocalVolumes $config $identity $before.volumes
+        foreach ($id in $before.containers) { $null = Invoke-WCCheckedDocker $config $identity @('container', 'rm', '--force', $id) $true }
+        $null = Invoke-WCCheckedDocker $config $identity @('system', 'prune', '--all', '--force') $true
+        foreach ($name in $volumes.eligible) {
+            $verified = Get-WCDockerLocalVolumes $config $identity @($name)
+            if ($verified.eligible.Count -ne 1) { $result.failed++; continue }
+            $null = Invoke-WCCheckedDocker $config $identity @('volume', 'rm', $name) $true
+        }
+        if ($volumes.excluded) { $result.failed++ }
+        $after = Get-WCDockerResources $config $identity
+        $result.removed = [Math]::Max(0, $before.containers.Count - $after.containers.Count) + [Math]::Max(0, $before.images.Count - $after.images.Count) + [Math]::Max(0, $before.volumes.Count - $after.volumes.Count)
+        if ($after.containers.Count -or $after.images.Count -or $after.volumes.Count -or (Get-WCDockerBuildCacheCount $config $identity) -gt 0 -or (Get-WCDockerArtifactRemainders) -gt 0) { $result.failed++ }
+    } catch { $result.failed++ }
+    finally {
+        if (-not $script:WCDockerMutationTimedOut) {
+            $absolute = [IO.Path]::GetFullPath($config)
+            $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            if ($absolute.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($absolute) -like 'wincommander-docker-cli-*' -and (Test-Path -LiteralPath $absolute -PathType Container)) {
+                try { [IO.Directory]::Delete($absolute, $false) } catch { }
+            }
+        }
+    }
+    return $result
+}
+'@
+
+
 $script:AutoEraseScripts = @{
+    'dockerDesktopData' = @'
+try {
+    $result = Invoke-WCDockerDesktopCleanup
+    $script:AutoEraseRemoved += [int]$result.removed
+    $script:AutoEraseFailed += [int]$result.failed
+} catch { $script:AutoEraseFailed++ }
+'@
+    'virtualMachineArtifacts' = @'
+try {
+    $result = Invoke-WCVirtualMachineArtifactCleanup
+    $script:AutoEraseRemoved += [int]$result.removed
+    $script:AutoEraseFailed += [int]$result.failed
+} catch { $script:AutoEraseFailed++ }
+'@
+    'wslData' = @'
+try {
+    $before = @(Get-WCScheduledWslInventory)
+    $dockerDistros = @($before | Where-Object { $_.Name -in @('docker-desktop', 'docker-desktop-data') })
+    $eligible = @($before | Where-Object { $_.Name -notin @('docker-desktop', 'docker-desktop-data') })
+    if ($dockerDistros.Count -gt 0) { $script:AutoEraseFailed++ }
+    foreach ($distro in $eligible) {
+        try { Remove-WCScheduledWslDistro $distro.Name }
+        catch { $script:AutoEraseFailed++ }
+    }
+    $after = @(Get-WCScheduledWslInventory)
+    foreach ($distro in $eligible) {
+        $registered = @($after | Where-Object { $_.Name -eq $distro.Name }).Count -gt 0
+        $diskPresent = $distro.Disk -and (Test-Path -LiteralPath $distro.Disk -PathType Leaf -ErrorAction Stop)
+        if (-not $registered -and -not $diskPresent) { $script:AutoEraseRemoved++ }
+        else { $script:AutoEraseFailed++ }
+    }
+    if ($after.Count -gt 0 -or (Test-WCScheduledWslOrphans)) { $script:AutoEraseFailed++ }
+} catch { $script:AutoEraseFailed++ }
+'@
+    'credentialManager' = @'
+try {
+    $before = @(Get-WCScheduledCredentials)
+    foreach ($credential in $before) {
+        try { Remove-WCScheduledCredential $credential.Name $credential.Type }
+        catch { $script:AutoEraseFailed++ }
+    }
+    $after = @(Get-WCScheduledCredentials)
+    foreach ($credential in $before) {
+        $stillPresent = @($after | Where-Object { $_.Name -eq $credential.Name -and $_.Type -eq $credential.Type }).Count -gt 0
+        if (-not $stillPresent) { $script:AutoEraseRemoved++ }
+    }
+    if ($after.Count -gt 0) { $script:AutoEraseFailed++ }
+    # CredEnumerate cannot verify other applications' Windows Vault entries.
+    $script:AutoEraseFailed++
+} catch { $script:AutoEraseFailed++ }
+'@
     # Machine maintenance -------------------------------------------------
     # This is intentionally a SYSTEM task rather than a per-user cleanup
     # task.  It is created together with the bulk "Auto-set scheduled wipes"
@@ -430,48 +998,84 @@ if (`$histPath -and (Test-Path `$histPath)) { Erase-OneFile `$histPath }
 if (Test-Path `$fallback) { Erase-OneFile `$fallback }
 "@
     'dnsCache'          = "ipconfig /flushdns | Out-Null; if (`$LASTEXITCODE -ne 0) { `$script:AutoEraseFailed++ }"
-    'browserFootprints' = @"
-`$chromiumRoots = @(
-    "`$env:LOCALAPPDATA\Google\Chrome\User Data",
-    "`$env:LOCALAPPDATA\Microsoft\Edge\User Data",
-    "`$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data",
-    "`$env:APPDATA\Opera Software\Opera Stable",
-    "`$env:LOCALAPPDATA\Vivaldi\User Data"
-)
-`$chromiumArtifacts = @(
-    'History','History-journal','Cookies','Cookies-journal',
-    'Login Data','Login Data-journal','Top Sites','Top Sites-journal',
-    'Favicons','Favicons-journal','Web Data','Web Data-journal',
-    'Visited Links','Shortcuts','Shortcuts-journal','Media History','Media History-journal'
-)
-foreach (`$root in `$chromiumRoots) {
-    if (-not (Test-Path `$root)) { continue }
-    Get-ChildItem `$root -Directory -ErrorAction SilentlyContinue | Where-Object { `$_.Name -eq 'Default' -or `$_.Name -like 'Profile*' } | ForEach-Object {
-        `$prof = `$_.FullName
-        foreach (`$a in `$chromiumArtifacts) {
-            `$p = Join-Path `$prof `$a
-            if (Test-Path `$p -PathType Leaf) { Erase-OneFile `$p }
-            elseif (Test-Path `$p -PathType Container) { Erase-Dir `$p }
-        }
+    'browserFootprints' = @'
+function Assert-BrowserProfilePath {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $base = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')
+    if (-not $full.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'A browser profile is outside the selected user profile.' }
+    $cursor = $full
+    while ($cursor.Length -ge $base.Length) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser profile path contains a reparse point.' }
+        if ($cursor -ieq $base) { break }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $cursor) { throw 'A browser profile path could not be verified.' }
     }
 }
-`$geckoRoots = @("`$env:APPDATA\Mozilla\Firefox\Profiles", "`$env:LOCALAPPDATA\LibreWolf\Profiles")
-`$geckoArtifacts = @(
-    'places.sqlite','places.sqlite-journal','places.sqlite-wal','places.sqlite-shm',
-    'cookies.sqlite','cookies.sqlite-journal','cookies.sqlite-wal','cookies.sqlite-shm',
-    'logins.json','formhistory.sqlite','favicons.sqlite','favicons.sqlite-journal'
+$pf = $env:ProgramFiles
+$pf86 = ${env:ProgramFiles(x86)}
+$local = $env:LOCALAPPDATA
+$roaming = $env:APPDATA
+$browsers = @(
+    @{ root="$local\Google\Chrome\User Data"; engine='Chromium'; exes=@("$pf\Google\Chrome\Application\chrome.exe", "$pf86\Google\Chrome\Application\chrome.exe", "$local\Google\Chrome\Application\chrome.exe") },
+    @{ root="$local\Microsoft\Edge\User Data"; engine='Chromium'; exes=@("$pf\Microsoft\Edge\Application\msedge.exe", "$pf86\Microsoft\Edge\Application\msedge.exe", "$local\Microsoft\Edge\Application\msedge.exe") },
+    @{ root="$local\BraveSoftware\Brave-Browser\User Data"; engine='Chromium'; exes=@("$pf\BraveSoftware\Brave-Browser\Application\brave.exe", "$pf86\BraveSoftware\Brave-Browser\Application\brave.exe", "$local\BraveSoftware\Brave-Browser\Application\brave.exe") },
+    @{ root="$roaming\Opera Software\Opera Stable"; engine='Opera'; exes=@("$pf\Opera\launcher.exe", "$pf\Opera\opera.exe", "$pf86\Opera\launcher.exe", "$pf86\Opera\opera.exe", "$local\Programs\Opera\launcher.exe", "$local\Programs\Opera\opera.exe") },
+    @{ root="$roaming\Opera Software\Opera GX Stable"; engine='Opera'; exes=@("$pf\Opera GX\launcher.exe", "$pf\Opera GX\opera.exe", "$pf86\Opera GX\launcher.exe", "$pf86\Opera GX\opera.exe", "$local\Programs\Opera GX\launcher.exe", "$local\Programs\Opera GX\opera.exe") },
+    @{ root="$local\Vivaldi\User Data"; engine='Chromium'; exes=@("$pf\Vivaldi\Application\vivaldi.exe", "$local\Vivaldi\Application\vivaldi.exe") },
+    @{ root="$local\Chromium\User Data"; engine='Chromium'; exes=@("$pf\Chromium\Application\chrome.exe", "$pf86\Chromium\Application\chrome.exe") },
+    @{ root="$local\Arc\User Data"; engine='Chromium'; exes=@("$local\Arc\Application\arc.exe") },
+    @{ root="$roaming\Mozilla\Firefox"; engine='Gecko'; exes=@("$pf\Mozilla Firefox\firefox.exe", "$pf86\Mozilla Firefox\firefox.exe") },
+    @{ root="$roaming\LibreWolf"; engine='Gecko'; exes=@("$pf\LibreWolf\librewolf.exe", "$pf86\LibreWolf\librewolf.exe", "$local\LibreWolf\librewolf.exe") },
+    @{ root="$roaming\Floorp"; engine='Gecko'; exes=@("$pf\Floorp\floorp.exe", "$pf86\Floorp\floorp.exe") },
+    @{ root="$roaming\Waterfox"; engine='Gecko'; exes=@("$pf\Waterfox\waterfox.exe", "$pf86\Waterfox\waterfox.exe") },
+    @{ root="$roaming\Zen Browser"; engine='Gecko'; exes=@("$pf\Zen Browser\zen.exe", "$local\Zen Browser\zen.exe", "$roaming\Zen Browser\zen.exe") },
+    @{ root="$roaming\Mullvad Browser"; engine='Gecko'; exes=@("$pf\Mullvad Browser\mullvadbrowser.exe") },
+    @{ root="$roaming\Tor Browser"; engine='Gecko'; exes=@("$pf\Tor Browser\Browser\firefox.exe", "$env:USERPROFILE\Desktop\Tor Browser\Browser\firefox.exe") }
 )
-foreach (`$root in `$geckoRoots) {
-    if (-not (Test-Path `$root)) { continue }
-    Get-ChildItem `$root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        `$prof = `$_.FullName
-        foreach (`$a in `$geckoArtifacts) {
-            `$p = Join-Path `$prof `$a
-            if (Test-Path `$p -PathType Leaf) { Erase-OneFile `$p }
+$chromium = @('History','Cookies','Login Data','Top Sites','Favicons','Web Data','Visited Links','Shortcuts','Cache','Code Cache','IndexedDB','Local Storage','Session Storage','Network','Download Metadata')
+$gecko = @('places.sqlite','cookies.sqlite','logins.json','favicons.sqlite','formhistory.sqlite','cache2','storage','sessionstore.jsonlz4')
+foreach ($browser in $browsers) {
+    try {
+        if (-not @($browser.exes | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }).Count) { continue }
+        if (-not (Test-Path -LiteralPath $browser.root -PathType Container)) { continue }
+        Assert-BrowserProfilePath $browser.root
+        $profiles = @()
+        if ($browser.engine -eq 'Chromium') {
+            $profiles = @(Get-AutoEraseDirectories -Path $browser.root | Where-Object { $_.Name -eq 'Default' -or $_.Name -match '^Profile [0-9]+$' } | ForEach-Object { $_.FullName })
         }
-    }
+        elseif ($browser.engine -eq 'Opera') { $profiles = @($browser.root) }
+        else {
+            $ini = Join-Path $browser.root 'profiles.ini'
+            if (Test-Path -LiteralPath $ini -PathType Leaf) {
+                $section = $false; $profilePath = $null; $relative = $true
+                foreach ($line in @((Get-Content -LiteralPath $ini -ErrorAction Stop) + '[End]')) {
+                    if ($line -match '^\[') {
+                        if ($section -and $profilePath) { $profiles += if ($relative) { Join-Path $browser.root $profilePath } else { $profilePath } }
+                        $section = $line -match '^\[Profile'; $profilePath = $null; $relative = $true
+                    } elseif ($section -and $line -match '^Path=(.+)$') { $profilePath = $Matches[1].Trim() -replace '/', '\' }
+                    elseif ($section -and $line -match '^IsRelative=(\d)') { $relative = $Matches[1] -eq '1' }
+                }
+            }
+            if (-not $profiles.Count) { $profiles = @(Get-AutoEraseDirectories -Path (Join-Path $browser.root 'Profiles') | ForEach-Object { $_.FullName }) }
+        }
+        foreach ($profile in @($profiles | Sort-Object -Unique)) {
+            if (-not (Test-Path -LiteralPath $profile -PathType Container)) { continue }
+            Assert-BrowserProfilePath $profile
+            $artifacts = if ($browser.engine -eq 'Gecko') { $gecko } else { $chromium }
+            foreach ($artifact in $artifacts) {
+                $path = Join-Path $profile $artifact
+                if (-not (Test-Path -LiteralPath $path)) { continue }
+                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser artifact is a reparse point.' }
+                if ($item.PSIsContainer) { Erase-Dir $path } else { Erase-OneFile $path | Out-Null }
+                if (Test-Path -LiteralPath $path) { $script:AutoEraseFailed++ }
+            }
+        }
+    } catch { $script:AutoEraseFailed++ }
 }
-"@
+'@
     'prefetchFiles'     = @"
 Get-AutoEraseFiles -Path "`$env:SystemRoot\Prefetch" -Filter '*.pf' | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
@@ -1108,23 +1712,17 @@ $script:AutoEraseProtectedCategories = @(
 # in sync with MANUAL_ONLY_SCHEDULE_IDS in cleanupManualPolicy.ts.
 $script:AutoEraseManualOnlyCategories = @(
     'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'recallDb',
-    'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
+    'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
     'spotlightCache', 'fontCache', 'legacyIconCache', 'gameCaptures', 'photosCache', 'xboxCache',
     'communicationCaches', 'editorHistory', 'sshState', 'remoteAccessLogs', 'passwordManagerCaches',
     'gameLauncherLogs', 'adobeRecent', 'officeTempFiles', 'neighborCache', 'netbiosCache',
     'geolocationCache', 'vpnPhonebooks', 'proxyCache', 'bitsQueue'
 )
 $script:AutoEraseUnsupportedCategories = [ordered]@{
-    wslData = 'Requires distribution unregister and lifecycle verification.'
-    dockerDesktopData = 'Requires Docker and virtual-disk lifecycle verification.'
-    virtualMachineArtifacts = 'Requires the VM provider to validate snapshot chains.'
-    credentialManager = 'Requires typed credential enumeration and deletion APIs.'
     cloudPlaceholders = 'Requires provider-aware placeholder removal and read-back.'
     inactiveUserProtectionMetadata = 'Requires identity-bound recovery-key authorization.'
     cellularHistory = 'Requires locale-independent mobile-profile APIs.'
     gitActivity = 'Requires typed credential deletion and Git configuration verification.'
-    browserFootprints = 'Requires the installed-browser inventory and profile-aware clear adapter.'
-    wlanProfiles = 'Requires safe migration and explicit reauthorization of existing Wi-Fi tasks.'
     ntfsJournals = 'Requires the native fixed-volume journal reset, sizing preservation, and identity read-back.'
 }
 function Get-AutoEraseSupportedCategories {
@@ -1147,7 +1745,7 @@ $script:AutoEraseHourlyCategories = @(
     'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs', 'defenderHistory',
     'firewallLog', 'appLaunchHistory', 'officeMru', 'reliabilityHistory',
     'explorerSearchHistory', 'remoteAccessLogs', 'gameLauncherLogs', 'spotlightCache',
-    'amcache', 'searchIndex', 'srumData', 'recallDb', 'notepadState', 'developerCaches', 'networkWizardHistory',
+    'amcache', 'searchIndex', 'srumData', 'recallDb', 'notepadState', 'developerCaches', 'networkWizardHistory', 'wslData', 'virtualMachineArtifacts', 'credentialManager', 'dockerDesktopData',
     'werHistory', 'stickyNotes', 'oneDriveMetadata', 'fontCache', 'legacyIconCache',
     'gameCaptures', 'photosCache', 'xboxCache', 'communicationCaches', 'editorHistory',
     'sshState', 'passwordManagerCaches', 'adobeRecent', 'officeTempFiles', 'neighborCache',
@@ -1336,7 +1934,14 @@ __AUTO_ERASE_BODY__
     # has Erase-OneFile / Erase-Dir available regardless of which category it serves.
     $dueFunction = "function Get-AutoEraseNextDue {`n" + ${function:Get-AutoEraseNextDue}.ToString() + "`n}"
     $resultFunction = "function New-AutoEraseResult {`n" + ${function:New-AutoEraseResult}.ToString() + "`n}"
-    $fullScript = $script:EraseFunctions + "`n" + $dueFunction + "`n" + $resultFunction + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
+    $categoryFunctions = switch ($CategoryId) {
+        'credentialManager' { $script:ScheduledCredentialFunctions }
+        'wslData' { $script:ScheduledWslFunctions }
+        'virtualMachineArtifacts' { $script:ScheduledVmFunctions }
+        'dockerDesktopData' { $script:ScheduledDockerFunctions }
+        default { '' }
+    }
+    $fullScript = $script:EraseFunctions + "`n" + $categoryFunctions + "`n" + $dueFunction + "`n" + $resultFunction + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
 
     $storage = Initialize-AutoEraseStorage
     $revisionSuffix = if ($PayloadRevision -gt 0) { ".r$PayloadRevision" } else { '' }
@@ -1586,11 +2191,13 @@ function Set-AutoEraseScheduleCore {
         $settings = New-ScheduledTaskSettingsSet `
                     -AllowStartIfOnBatteries `
                     -DontStopIfGoingOnBatteries `
-                    -StartWhenAvailable `
-                    -Hidden
+                    -StartWhenAvailable
 
         if ($RunAsSystem) {
             $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        } elseif ($CategoryId -in @('credentialManager', 'wslData', 'virtualMachineArtifacts', 'dockerDesktopData')) {
+            # These providers are bound to the user's interactive session.
+            $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
         } else {
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType S4U -RunLevel Highest
         }
@@ -1844,6 +2451,13 @@ function Test-AutoEraseTaskEnabled {
     return $State -in @('Ready', 'Running', 'Queued')
 }
 
+function ConvertTo-AutoEraseTimestamp {
+    param($Value)
+    if ($null -eq $Value -or ($Value -isnot [datetime] -and $Value -isnot [datetimeoffset])) { return $null }
+    if ($Value.Year -le 1900 -or ($Value.Year -eq 1999 -and $Value.Month -eq 11 -and $Value.Day -eq 30)) { return $null }
+    return $Value.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-AutoEraseSchedules {
     try {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1857,6 +2471,7 @@ function Get-AutoEraseSchedules {
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
                 taskName         = $t.TaskName
+                legacy           = ($t.TaskPath -ne $script:SystemMaintenanceTaskPath -or $t.TaskName -ne $identity.taskName)
                 state            = [string]$t.State
                 enabled          = (Test-AutoEraseTaskEnabled ([string]$t.State))
                 intervalMinutes  = $minutes
@@ -1864,8 +2479,8 @@ function Get-AutoEraseSchedules {
                 scope            = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
                 ownerAccount     = $t.Principal.UserId
                 managedByAutoSet = (Test-AutoEraseManagedTask $t)
-                lastRun          = if ($info) { [string]$info.LastRunTime } else { $null }
-                nextRun          = if ($info) { [string]$info.NextRunTime } else { $null }
+                lastRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.LastRunTime } else { $null }
+                nextRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
             }
         }
@@ -1931,7 +2546,8 @@ function Invoke-AutoEraseMigrationCore {
             $currentPayload = $task.Description -like 'System Maintenance scheduled cleanup v6*'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
-            if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload) { continue }
+            $makeVisible = $task.Settings -and $task.Settings.Hidden -eq $true
+            if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload -and -not $makeVisible) { continue }
             if ([string]$task.State -eq 'Running') { throw 'An active scheduled cleanup must finish before its task can be migrated.' }
             $renaming = $task.TaskName -ne $identity.taskName -or $task.TaskPath -ne $script:SystemMaintenanceTaskPath
             if ($renaming -and (Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -ErrorAction SilentlyContinue)) {
@@ -1939,6 +2555,11 @@ function Invoke-AutoEraseMigrationCore {
             }
             $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
             [xml]$xml = $originalXml
+            if ($makeVisible) {
+                $hidden = $xml.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Hidden"]')
+                if (-not $hidden) { throw 'The hidden task setting could not be verified.' }
+                $hidden.InnerText = 'false'
+            }
             if ($upgradePayload) {
                 $repetition = @($task.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
                 if (-not $repetition) { throw 'The existing schedule interval could not be checked.' }

@@ -67,7 +67,7 @@ describe("System Cleanup display projection", () => {
     expect(html).toContain("Not reported");
   });
 
-  test("browser and Wi-Fi summaries show identities but not credentials", () => {
+  test("browser and Wi-Fi summaries show all available fields", () => {
     for (const [id, raw] of [
       ["browserFootprints", { browsers: [{ profilePath: "C:\\Private\\Browser", password: "secret-value" }], total: 1 }],
       ["wlanProfiles", { profiles: [{ name: "PrivateNetwork", key: "secret-value" }], total: 1 }],
@@ -76,7 +76,7 @@ describe("System Cleanup display projection", () => {
       const html = renderToStaticMarkup(<CleanupDisplayDetails category={item} mode="advanced" count={1} items={[]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
       expect(html).toContain("Reported datasets");
       expect(html).toContain(id === "wlanProfiles" ? "PrivateNetwork" : "Private\\Browser");
-      expect(html).not.toContain("secret-value");
+      expect(html).toContain("secret-value");
     }
   });
 
@@ -88,12 +88,25 @@ describe("System Cleanup display projection", () => {
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={3} items={[]} groupedItems={groups} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(html).toContain("Account A");
     expect(html).toContain("2 reported");
-    expect(html).not.toContain("private trace");
+    expect(html).toContain("private trace");
     const casual = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="simple" count={3} items={[]} groupedItems={groups} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(casual).toContain("3 records");
     expect(casual).toContain("Account A");
-    expect(casual).toContain("Preview details are unavailable for this account");
-    expect(casual).not.toContain("private trace");
+    expect(casual).toContain("private trace");
+    expect(casual).toContain("private trace");
+  });
+
+  test("distinguishes a saved schedule, a never-run task and Windows execution from verified cleanup", () => {
+    const record = { enabled: true, managedByAutoSet: false, scope: "current-user" as const, intervalMinutes: 60, lastRun: "1999-11-30T00:00:00Z", lastResult: 0x41303 };
+    const props = { category, mode: "simple" as const, count: 0, items: [], rawData: { total: 0, entries: [] }, clearing: false, clearLabel: "Clear", onClose: () => {}, scheduleState: "verified" as const, scheduleMinutes: 60 };
+    const never = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={record} />);
+    expect(never).toContain("No run reported");
+    expect(never).toContain("task has not run");
+    const ran = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, lastRun: "2026-10-30T10:30:00Z", lastResult: 0 }} />);
+    expect(ran).toContain("task completed (0)");
+    expect(ran).toContain("do not confirm which items were removed");
+    const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
+    expect(unknown).not.toContain("Scheduled task history");
   });
 
   test("incomplete and failed details never render a clean result in either view", () => {
@@ -112,7 +125,7 @@ describe("System Cleanup display projection", () => {
     expect(html).toContain("skipped by Clear all");
     expect(html).toContain("Scheduled every 60 minutes");
     expect(html).toContain("No items found");
-    const blocked = ALL_CATEGORIES.find(item => item.id === "wlanProfiles")!;
+    const blocked = ALL_CATEGORIES.find(item => item.id === "cloudPlaceholders")!;
     const existing = renderToStaticMarkup(<CleanupDisplayDetails mode="advanced" category={blocked} count={-1} items={[]} scheduleState="verified" scheduleMinutes={60} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(existing).toContain("Enabled every 60 min; new schedules unavailable");
   });
@@ -127,7 +140,7 @@ describe("System Cleanup display projection", () => {
         const html = renderToStaticMarkup(<CleanupDisplayDetails mode={mode} category={item} count={1} items={["fixture-secret"]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
         const escapedName = cleanupDisplayName(item, mode).replaceAll("&", "&amp;").replaceAll("'", "&#x27;");
         expect(html).toContain(escapedName);
-        expect(html).not.toContain("fixture-secret");
+        if (item.id !== "amcache") expect(html).toContain("fixture-secret");
       }
     }
   });

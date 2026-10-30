@@ -12,7 +12,7 @@ function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId='dnsCache' } }
 function ConvertTo-AutoEraseTaskArgument { param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$AllowDefaultExcluded) $script:approval=$AllowDefaultExcluded; "mock:${CategoryId}:$IntervalMinutes" }
 function New-ScheduledTaskAction { param($Execute,$Argument) @{ execute=$Execute; argument=$Argument } }
 function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ once=[bool]$Once; interval=$RepetitionInterval; startup=[bool]$AtStartup; logon=[bool]$AtLogOn; user=$User } }
-function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[switch]$StartWhenAvailable,[switch]$Hidden) @{ startWhenAvailable=[bool]$StartWhenAvailable } }
+function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[switch]$StartWhenAvailable,[switch]$Hidden) @{ startWhenAvailable=[bool]$StartWhenAvailable; hidden=[bool]$Hidden } }
 function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ user=$UserId; logon=$LogonType; level=$RunLevel } }
 function Register-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName,$Action,$Trigger,$Principal,$Settings,$Description,[switch]$Force)
@@ -27,7 +27,7 @@ foreach ($id in $eligible) {
     $schedulerId = if ($id -eq 'clipboardHistory') { 'clipboard' } else { $id }
     $system = $id -in $script:AutoEraseSystemCategories
     $expectedUser = if ($system) { 'SYSTEM' } else { 'TestUser' }
-    if ($record.action.argument -ne "mock:$schedulerId`:60" -or $record.triggers.Count -ne 2 -or $record.triggers[0].interval.TotalMinutes -ne 60 -or $record.triggers[1].startup -ne $system -or $record.principal.user -ne $expectedUser -or $record.description -notlike '*(managed)') { throw "Incorrect registration for $id" }
+    if ($record.action.argument -ne "mock:$schedulerId`:60" -or $record.triggers.Count -ne 2 -or $record.triggers[0].interval.TotalMinutes -ne 60 -or $record.triggers[1].startup -ne $system -or $record.principal.user -ne $expectedUser -or $record.description -notlike '*(managed)' -or $record.settings.hidden) { throw "Incorrect registration for $id" }
 }
 foreach ($id in @('notepadState','developerCaches','sshState','passwordManagerCaches')) {
     $result = Set-IndividualAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded
@@ -35,6 +35,16 @@ foreach ($id in @('notepadState','developerCaches','sshState','passwordManagerCa
     $multi = Set-MultiUserAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -TargetUsers 'TestUser' -AllowDefaultExcluded
     if ($multi.results[0].error -or -not $script:approval -or $multi.total -ne 1) { throw "Selected-user authorization was lost for $id" }
 }
+$wsl = Set-IndividualAutoEraseSchedule -CategoryId 'wslData' -IntervalMinutes 60 -AllowDefaultExcluded
+if ($wsl.error -or $wsl.status -ne 'enabled' -or $script:registered[-1].principal.logon -ne 'Interactive' -or -not $script:registered[-1].triggers[1].logon) {
+    throw 'WSL must register for the selected interactive user with a logon trigger.'
+}
+if (-not (Set-IndividualAutoEraseSchedule -CategoryId 'wslData' -IntervalMinutes 60).error) { throw 'WSL must require explicit individual authorization.' }
+if (-not (Set-ManagedAutoEraseSchedule -CategoryId 'wslData' -IntervalMinutes 60).error) { throw 'Bulk Auto-set must not schedule WSL.' }
+$credential = Set-IndividualAutoEraseSchedule -CategoryId 'credentialManager' -IntervalMinutes 60 -AllowDefaultExcluded
+if ($credential.error -or $credential.status -ne 'enabled' -or $script:registered[-1].principal.logon -ne 'Interactive') { throw 'Credential cleanup must register for the interactive user.' }
+if (-not (Set-IndividualAutoEraseSchedule -CategoryId 'credentialManager' -IntervalMinutes 60).error) { throw 'Credential cleanup must require individual authorization.' }
+if (-not (Set-ManagedAutoEraseSchedule -CategoryId 'credentialManager' -IntervalMinutes 60).error) { throw 'Bulk Auto-set must not schedule credential cleanup.' }
 foreach ($id in $script:AutoEraseManualOnlyCategories) {
     $allow = $id -in $script:AutoEraseProtectedCategories
     $result = Set-IndividualAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded:$allow

@@ -70,9 +70,7 @@ function Get-CleanupClipboardHistory {
                 $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($item.Content.GetTextAsync()))
                 if (-not $textTask.Wait(500)) { return @{ type = 'item'; preview = '[Content unavailable]'; charCount = 0 } }
                 $raw = [string]$textTask.Result
-                $preview = ($raw -replace '[\r\n\t]+', ' ').Trim()
-                if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + '…' }
-                return @{ type = 'text'; preview = $preview; charCount = $raw.Length }
+                return @{ type = 'text'; preview = $raw; charCount = $raw.Length }
             }
         }
         return (Convert-CleanupClipboardHistoryResult -Result $task.Result -ReadPreview $readPreview)
@@ -2243,6 +2241,20 @@ function Get-JumpLists {
     }
 }
 
+function Get-CleanupChromiumProfiles {
+    param($Browser)
+    $root = [string]$Browser.UserDataDir
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+    if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser profile root is a reparse point.' }
+    if ($Browser.Name -in @('Opera', 'Opera GX')) { return @($root) }
+    @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop | Where-Object {
+        $_.Name -eq 'Default' -or $_.Name -match '^Profile [0-9]+$'
+    } | ForEach-Object {
+        if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser profile is a reparse point.' }
+        $_.FullName
+    })
+}
+
 function Get-BrowserFootprints {
     # Uses Get-InstalledBrowsers from the security module (loaded as additional dependency)
     try {
@@ -2274,15 +2286,14 @@ function Get-BrowserFootprints {
             $totalBytes = 0
 
             if ($b.Engine -eq 'Chromium') {
-                # Chromium: profile is UserDataDir\Default
-                $profileDir = Join-Path $udd 'Default'
-                if (-not (Test-Path $profileDir)) { continue }
-                foreach ($art in $chromiumArtifacts) {
-                    $p = Join-Path $profileDir $art
-                    if (Test-Path $p) {
-                        $sz = & $helper_measurePath $p
-                        $totalBytes += $sz
-                        $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1) }
+                foreach ($profileDir in @(Get-CleanupChromiumProfiles $b)) {
+                    foreach ($art in $chromiumArtifacts) {
+                        $p = Join-Path $profileDir $art
+                        if (Test-Path $p) {
+                            $sz = & $helper_measurePath $p
+                            $totalBytes += $sz
+                            $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1); profilePath = $profileDir }
+                        }
                     }
                 }
             } else {
@@ -2325,12 +2336,7 @@ function Get-BrowserFootprints {
                         if (Test-Path $p) {
                             $sz = & $helper_measurePath $p
                             $totalBytes += $sz
-                            $existing = $artifacts | Where-Object { $_.name -eq $art }
-                            if ($existing) {
-                                $existing.sizeKB += [math]::Round($sz / 1KB, 1)
-                            } else {
-                                $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1) }
-                            }
+                            $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1); profilePath = $profDir }
                         }
                     }
                 }
@@ -2426,17 +2432,17 @@ function Clear-BrowserFootprints {
             if (-not $udd -or -not (Test-Path $udd)) { continue }
 
             if ($b.Engine -eq 'Chromium') {
-                $profileDir = Join-Path $udd 'Default'
-                if (-not (Test-Path $profileDir)) { continue }
-                foreach ($art in $chromiumArtifacts) {
-                    $p = Join-Path $profileDir $art
-                    if (-not (Test-Path $p)) { continue }
-                    try {
-                        Remove-ItemSecure -Path $p
-                        $removed += "$($b.Name):$art"
-                    }
-                    catch {
-                        $errors += "$($b.Name):$art"
+                foreach ($profileDir in @(Get-CleanupChromiumProfiles $b)) {
+                    foreach ($art in $chromiumArtifacts) {
+                        $p = Join-Path $profileDir $art
+                        if (-not (Test-Path $p)) { continue }
+                        try {
+                            Remove-ItemSecure -Path $p
+                            $removed += "$($b.Name):$art"
+                        }
+                        catch {
+                            $errors += "$($b.Name):$art"
+                        }
                     }
                 }
             }

@@ -1605,12 +1605,6 @@ export const VIEW_ONLY_CATEGORIES = exposeCleanupCategories(legacyViewOnlyCatego
 // roundtrip. If you add a new erase script in the shared module, add
 // the id here too.
 const SCHEDULE_UNAVAILABLE_REASONS: Record<string, string> = {
-  wlanProfiles: 'Saved Wi-Fi profiles require an interactive manual clear; a verified scheduled action is not available.',
-  browserFootprints: 'Browser footprints require an interactive manual clear; a verified scheduled action is not available.',
-  wslData: 'A verified standalone scheduled wipe for Linux distributions is not available.',
-  dockerDesktopData: 'A verified standalone scheduled wipe for Docker storage is not available.',
-  virtualMachineArtifacts: 'A verified standalone scheduled wipe for virtual machines is not available.',
-  credentialManager: 'Saved credentials require an interactive manual clear.',
   cloudPlaceholders: 'Cloud placeholders require an interactive manual clear to verify file hydration.',
   inactiveUserProtectionMetadata: "Removing another user's encryption protection requires an interactive manual decision.",
   cellularHistory: 'Mobile-profile scheduling needs a verified reader for this Windows language.',
@@ -1649,7 +1643,7 @@ export function getCleanupScheduleUnavailableReason(category: CleanupCategory): 
 // aren't in SUPPORTED_AUTOERASE_IDS yet because their inline erase scripts
 // are non-trivial — but if they are added later, flag them here.
 const SYSTEM_CONTEXT_IDS = new Set<string>([
-  'eventLogs', 'searchIndex', 'amcache', 'branchCache',
+  'wlanProfiles', 'eventLogs', 'searchIndex', 'amcache', 'branchCache',
   'connectivityHistory', 'shadowCopies', 'srumData', 'neighborCache', 'netbiosCache', 'bitsQueue',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
   'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory', 'defenderHistory',

@@ -12,7 +12,7 @@ export const DEFAULT_BULK_CLEAR_EXCLUDES = [
 // in auto-erase.ps1 in sync.
 export const MANUAL_ONLY_SCHEDULE_IDS = [
   'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'recallDb',
-  'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
+  'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches', 'networkWizardHistory', 'werHistory', 'stickyNotes', 'oneDriveMetadata',
   'spotlightCache', 'fontCache', 'legacyIconCache', 'gameCaptures', 'photosCache', 'xboxCache',
   'communicationCaches', 'editorHistory', 'sshState', 'remoteAccessLogs', 'passwordManagerCaches',
   'gameLauncherLogs', 'adobeRecent', 'officeTempFiles', 'neighborCache', 'netbiosCache',
@@ -35,7 +35,7 @@ const DEFAULT_WARNINGS: Record<string, string> = {
   wlanProfiles: 'This forgets all-user Wi-Fi profiles on available adapters, including their saved credentials. Private and policy-managed profiles are excluded. The current wireless connection may be lost.',
   browserFootprints: 'This removes browser history, cookies and saved browser state. You may be signed out of websites.',
   notepadState: 'This can permanently delete unsaved Notepad tabs and drafts.',
-  wslData: 'This can permanently delete Linux distribution storage and local files.',
+  wslData: 'This can permanently delete registered Linux distributions and their files. Scheduled cleanup runs while the selected user is signed in and leaves Docker-managed distributions unchanged.',
   dockerDesktopData: 'This can permanently delete local Docker images, containers and volumes.',
   virtualMachineArtifacts: 'This can permanently delete virtual-machine snapshots and local configuration.',
   developerCaches: 'This can remove developer caches, local credentials and configuration.',
@@ -57,7 +57,7 @@ export function getCleanupManualConfirmation(
   return {
     title: action === 'schedule' ? `Schedule ${category.label}?` : `Clear ${category.label}?`,
     description: action === 'schedule'
-      ? `${warning} This card is excluded from automatic setup by default. Enabling this individual schedule authorizes the same wipe every ${minutes} minutes, including overdue work after the computer comes back online. It continues until you turn it off.`
+      ? `${warning}${category.id === 'virtualMachineArtifacts' ? ' Scheduled cleanup uses VirtualBox and VMware to remove snapshots from powered-off machines while the selected user is signed in. Logs, configuration and unmanaged artifacts can remain; the run reports incomplete when they do.' : category.id === 'credentialManager' ? ' Scheduled cleanup removes Windows credentials while the selected user is signed in. Other apps’ Vault entries are not covered, so the run reports incomplete.' : category.id === 'dockerDesktopData' ? ' Scheduled cleanup targets the local Docker Desktop Linux engine while the selected user is signed in. Bind-mounted files, remote or Windows engines and external volumes are not cleared. The disk image and logs can remain; unhandled items make the run incomplete.' : ''} This card is excluded from automatic setup by default. Enabling this individual schedule authorizes this cleanup every ${minutes} minutes, including overdue work after the computer comes back online. It continues until you turn it off.`
       : `${warning} This card is excluded from bulk cleanup by default. Continue with this individual clear? This cannot be undone.`,
     confirmLabel: action === 'schedule' ? 'Enable recurring wipe' : 'Clear this card',
   };

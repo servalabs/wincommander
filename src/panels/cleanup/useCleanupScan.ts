@@ -516,6 +516,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Render the last verified snapshot immediately. Task Scheduler remains
     // authoritative and replaces this cache silently after panel startup.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>(readScheduleCache);
+    const [scheduleRecordsById, setScheduleRecordsById] = useState<NonNullable<ReturnType<typeof readCleanupScheduleSnapshot>>["records"]>({});
     const [disabledSchedulesById, setDisabledSchedulesById] = useState<Record<string, { intervalMinutes: number | null; managedByAutoSet: boolean; scope: CleanupScheduleScope }>>({});
     const [scheduleState, setScheduleState] = useState<"checking" | "verified" | "unavailable">("checking");
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
@@ -535,6 +536,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const snapshot = readCleanupScheduleSnapshot(res.data.schedules, CLEANUP_SCHEDULE_IDS);
             if (!snapshot) { setScheduleState("unavailable"); return null; }
             setSchedulesById(snapshot.schedules);
+            setScheduleRecordsById(snapshot.records);
             setDisabledSchedulesById(snapshot.disabledSchedules);
             writeScheduleCache(snapshot.schedules);
             setAutoSetScheduleIds(snapshot.managedIds);
@@ -1300,6 +1302,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleCardClearAllUsers,
         schedulesById,
         disabledSchedulesById,
+        scheduleRecordsById,
         scheduleState,
         refreshSchedules,
         hasScheduledWipes: scheduleState === "verified" && autoSetScheduleIds.size > 0,

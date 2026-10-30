@@ -14,6 +14,7 @@ import {
 import { showError, showSuccess } from "../../utils/toast";
 import { useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import CleanupDisplayDetails from "../cleanup/CleanupDisplayDetails";
+import type { CleanupScheduleRecord } from "../../panels/cleanup/cleanupScheduleReadback";
 import type { CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import "./TraceDetailDialog.css";
 
@@ -32,8 +33,10 @@ interface TraceDetailDialogProps {
   scheduleState?: "checking" | "verified" | "unavailable";
   scheduleMinutes?: number | null;
   scheduleDisabled?: boolean;
+  scheduleRecord?: CleanupScheduleRecord;
   excludedFromBulk?: boolean;
   scopeLabel?: string;
+  accountLabel?: string;
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   clearing: boolean;
   onClose: () => void;
@@ -53,8 +56,10 @@ export default function TraceDetailDialog({
   scheduleState,
   scheduleMinutes,
   scheduleDisabled,
+  scheduleRecord,
   excludedFromBulk = false,
   scopeLabel,
+  accountLabel,
   groupedItems,
   clearing,
   onClose,
@@ -89,7 +94,7 @@ export default function TraceDetailDialog({
   if (displayMode) {
     return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems} excludedFromBulk={excludedFromBulk}
       error={error} clearing={clearing} clearDisabled={clearDisabled} clearLabel={clearLabel} onClose={onClose} onClear={onClear}
-      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} scheduleDisabled={scheduleDisabled} verification={verification} scopeLabel={scopeLabel} />;
+      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} scheduleDisabled={scheduleDisabled} scheduleRecord={scheduleRecord} verification={verification} scopeLabel={scopeLabel} accountLabel={accountLabel} />;
   }
 
   const datasetCount = groupedViews.length

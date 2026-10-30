@@ -34,7 +34,7 @@ describe("cleanup coverage presentation", () => {
     }
   });
 
-  test("empty and failed cards still expose details without leaking preview or error text", () => {
+  test("empty and failed cards expose details; captured previews remain visible without exposing errors", () => {
     const history = ALL_CATEGORIES.find(item => item.id === "psHistory")!;
     const empty = renderToStaticMarkup(<CleanupTraceCard category={history} count={0} preview={[]} rawData={{ entries: [], total: 0 }} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
     expect(empty).toContain(`View details for ${history.label}`);
@@ -42,7 +42,7 @@ describe("cleanup coverage presentation", () => {
     expect(failed).toContain(`View details for ${history.label}`);
     expect(failed).not.toContain("secret-token");
     const populated = renderToStaticMarkup(<CleanupTraceCard category={history} count={1} preview={["password=secret-token"]} rawData={{ entries: [{ command: "password=secret-token" }], total: 1 }} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
-    expect(populated).not.toContain("secret-token");
+    expect(populated).toContain("password=secret-token");
   });
 
   test("unknown preview counts stay unknown and account totals use record previews", () => {

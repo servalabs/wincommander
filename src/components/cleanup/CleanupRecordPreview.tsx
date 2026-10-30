@@ -34,15 +34,13 @@ function sizeLabel(value: unknown): string | null {
   return value >= 1024 ? `${(value / 1024).toFixed(1)} MB` : `${value.toFixed(value < 100 ? 1 : 0)} KB`;
 }
 
-function visibleText(value: unknown, redactSecrets = false): string | null {
-  if (typeof value !== "string" || !value.trim()) return null;
-  // History commands can contain credentials even when the field is named "command".
-  if (redactSecrets && /\b(password|passwd|passphrase|secret|token|credential|api[_-]?key)(?:\s|[:=])/i.test(value)) return "Sensitive value hidden";
-  return value.replace(/(https?:\/\/)[^@\s/]+@/gi, "$1[redacted]@");
+function visibleText(value: unknown): string | null {
+  return typeof value === "string" ? (value === "" ? "(empty)" : value) : null;
 }
 
 function metadata(row: RecordObject, categoryId: string): string[] {
   const facts: string[] = [];
+  const used = new Set<string>();
   const values = new Map(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
   const field = (key: string) => values.get(key.toLowerCase());
   const fields: Array<[string[], string]> = [
@@ -78,34 +76,50 @@ function metadata(row: RecordObject, categoryId: string): string[] {
     [["elevated"], "Elevated"],
   ];
   for (const [keys, label] of fields) {
-    const value = keys.map(key => visibleText(field(key), ["Command", "Value", "Description"].includes(label))).find(Boolean);
-    if (value) facts.push(`${label}: ${value}`);
+    for (const key of keys) {
+      const value = visibleText(field(key));
+      if (value) { facts.push(`${label}: ${value}`); used.add(key.toLowerCase()); }
+    }
   }
   if (["rdpHistory", "connectivityHistory", "ntUserTraces"].includes(categoryId)) {
-    const key = visibleText(field("key"), true);
-    if (key) facts.push(`Key: ${key}`);
+    const key = visibleText(field("key"));
+    if (key) { facts.push(`Key: ${key}`); used.add("key"); }
   }
   const sizeBytes = field("sizeBytes");
   const bytes = typeof sizeBytes === "number" ? sizeBytes / 1024 : undefined;
   const sizeMB = field("sizeMB");
   const mb = typeof sizeMB === "number" ? sizeMB * 1024 : undefined;
   const kb = sizeLabel(field("sizeKB") ?? bytes ?? mb);
-  if (kb) facts.push(`Size: ${kb}`);
+  if (kb) { facts.push(`Size: ${kb}`); for (const key of ["sizekb", "sizebytes", "sizemb"]) if (values.has(key)) used.add(key); }
   for (const [key, label] of [["pid", "PID"], ["count", "Count"], ["ttl", "TTL"], ["recordTypeRaw", "Type code"], ["dataLength", "Data length"], ["timeStamp", "Timestamp"]] as const) {
     const value = field(key);
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) facts.push(`${label}: ${value}`);
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) { facts.push(`${label}: ${value}`); used.add(key.toLowerCase()); }
   }
   for (const [key, label] of [["present", "Present"], ["persistent", "Persistent"], ["clientAccessible", "Client accessible"]] as const) {
     const value = field(key);
-    if (typeof value === "boolean") facts.push(`${label}: ${value ? "Yes" : "No"}`);
+    if (typeof value === "boolean") { facts.push(`${label}: ${value ? "Yes" : "No"}`); used.add(key.toLowerCase()); }
   }
   for (const [key, label] of [["lastRun", "Last run"], ["lastModified", "Last modified"], ["deletedTime", "Deleted"], ["modified", "Modified"], ["lastSeen", "Last seen"], ["created", "Created"], ["timestamp", "Date"]] as const) {
     const value = field(key);
     if (typeof value === "string" && value.trim()) {
       const display = /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : value;
-      facts.push(`${label}: ${display}`);
+      facts.push(`${label}: ${display}`); used.add(key.toLowerCase());
     }
   }
+  // Include every remaining value returned for this record, including new
+  // producer fields, without relying on a fixed field allowlist.
+  const append = (key: string, value: unknown) => {
+    if (value === null || value === undefined) return;
+    const label = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
+    if (isObject(value)) {
+      for (const [child, childValue] of Object.entries(value)) append(`${label} ${child}`, childValue);
+    } else if (Array.isArray(value)) {
+      for (const [index, child] of value.entries()) append(`${label} ${index + 1}`, child);
+    } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      facts.push(`${label}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : value === "" ? "(empty)" : value}`);
+    }
+  };
+  for (const [key, value] of Object.entries(row)) if (!used.has(key.toLowerCase())) append(key, value);
   return facts;
 }
 
@@ -134,7 +148,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return input.profiles.map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
   }
   if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
-    return input.historyItems.map((_, index) => ({ label: `Clipboard item ${index + 1}`, facts: ["Content not supplied by the scan"] }));
+    return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [] }));
   }
   if (id === "netDrives" && Array.isArray(input.drives)) {
     return input.drives.map((value, index) => {
@@ -148,88 +162,78 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   }
   const browsers = Array.isArray(input.browsers) ? input.browsers : input.records;
   if (id === "browserFootprints" && Array.isArray(browsers)) {
-    return browsers.filter(isObject).map((browser, index) => {
+    return browsers.filter(isObject).flatMap((browser, index) => {
       const name = typeof browser.browser === "string" ? browserNames[browser.browser.trim().toLowerCase()] : undefined;
       const size = sizeLabel(browser.totalSizeKB);
       const artifacts = Array.isArray(browser.artifacts) ? browser.artifacts.filter(isObject).flatMap((artifact) => {
         const label = typeof artifact.name === "string" ? artifactNames[artifact.name.trim().toLowerCase()] ?? visibleText(artifact.name) : undefined;
         if (!label) return [];
         const artifactSize = sizeLabel(artifact.sizeKB);
-        return [artifactSize ? `${label}: ${artifactSize}` : label];
+        const profilePath = visibleText(artifact.profilePath);
+        return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : []), `Artifact: ${label}`, ...(profilePath ? [`Profile: ${profilePath}`] : []), ...(artifactSize ? [`Artifact size: ${artifactSize}`] : [])] }];
       }) : [];
-      return { label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : []), ...artifacts] };
+      return artifacts.length ? artifacts : [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : [])] }];
     });
   }
-  // Show known record fields without exposing arbitrary credential fields.
-  for (const key of ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems", "drives", "items", "paths"]) {
-    const values = input[key];
-    if (!Array.isArray(values) || !values.length) continue;
-    return values.map((value, index) => {
-      const text = visibleText(value, true);
-      return { label: `Record ${index + 1}`, facts: isObject(value) ? metadata(value, id) : text ? [text] : [] };
-    });
-  }
+  // Multiple scan collections can contain independent records. Keep each
+  // collection rather than stopping after the first populated array.
+  const collections = ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems", "drives", "items", "paths"]
+    .flatMap(key => Array.isArray(input[key]) && input[key].length ? [{ key, values: input[key] as unknown[] }] : []);
+  if (collections.length) return collections.flatMap(({ key, values }) => values.map((value, index) => {
+    const text = visibleText(value);
+    const facts = isObject(value) ? metadata(value, id) : text ? [text] : [];
+    if (collections.length > 1) facts.unshift(`Dataset: ${key}`);
+    return { label: `Record ${index + 1}`, facts };
+  }));
   return [];
+}
+
+export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: string): boolean {
+  return !accountLabel && (categoryId === "wlanProfiles" || categoryId === "clipboardHistory");
 }
 
 export default function CleanupRecordPreview({ categoryId, rawData, mode, accountLabel }: { categoryId: string; rawData: unknown; mode: CleanupDisplayMode; accountLabel?: string }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [sortDescending, setSortDescending] = useState(false);
-  const { getWlanProfileSecrets, getClipboardHistoryStatus } = useBackend();
+  const backend = useBackend();
+  const backendRef = useRef(backend);
+  backendRef.current = backend;
   const [secrets, setSecrets] = useState<Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null>(null);
   const [secretError, setSecretError] = useState<string | null>(null);
   const [clipboardItems, setClipboardItems] = useState<Array<{ type: string; preview: string; charCount: number }> | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
-  const [loadingClipboard, setLoadingClipboard] = useState(false);
   const [loadingSecrets, setLoadingSecrets] = useState(false);
-  const revealRequest = useRef(0);
   useEffect(() => {
+    let active = true;
     setSecrets(null);
     setClipboardItems(null);
     setClipboardNotice(null);
-    setLoadingClipboard(false);
     setSecretError(null);
     setLoadingSecrets(false);
-    return () => { revealRequest.current += 1; };
-  }, [categoryId, rawData]);
-  const togglePasswords = async () => {
-    if (secrets) { revealRequest.current += 1; setSecrets(null); setSecretError(null); return; }
-    const request = ++revealRequest.current;
-    setLoadingSecrets(true);
-    setSecretError(null);
-    try {
-      const result = await getWlanProfileSecrets();
-      if (request !== revealRequest.current) return;
-      if (result.success && result.data && Array.isArray(result.data.profiles)) setSecrets(result.data.profiles);
-      else setSecretError(result.error || "Passwords could not be retrieved.");
-    } catch {
-      if (request === revealRequest.current) setSecretError("Passwords could not be retrieved.");
-    } finally {
-      if (request === revealRequest.current) setLoadingSecrets(false);
+    if (categoryId === "wlanProfiles" && shouldLoadCurrentUserDetails(categoryId, accountLabel)) {
+      setLoadingSecrets(true);
+      void backendRef.current.getWlanProfileSecrets().then(result => {
+        if (!active) return;
+        if (result.success && result.data && Array.isArray(result.data.profiles)) setSecrets(result.data.profiles);
+        else setSecretError(result.error || "Passwords could not be retrieved.");
+      }).catch(() => { if (active) setSecretError("Passwords could not be retrieved."); })
+        .finally(() => { if (active) setLoadingSecrets(false); });
     }
-  };
-  const toggleClipboardDetails = async () => {
-    if (clipboardItems) { revealRequest.current += 1; setClipboardItems(null); setClipboardNotice(null); return; }
-    const request = ++revealRequest.current;
-    setLoadingClipboard(true);
-    setClipboardNotice(null);
-    try {
-      const result = await getClipboardHistoryStatus(true);
-      if (request !== revealRequest.current) return;
-      if (result.success && result.data && Array.isArray(result.data.historyItems)) {
-        setClipboardItems(result.data.historyItems);
-        if (result.data.partial || result.data.historyReadStatus !== "complete") setClipboardNotice(result.data.message || "Some clipboard details may be unavailable.");
-      } else setClipboardNotice(result.error || "Clipboard details could not be retrieved.");
-    } catch {
-      if (request === revealRequest.current) setClipboardNotice("Clipboard details could not be retrieved.");
-    } finally {
-      if (request === revealRequest.current) setLoadingClipboard(false);
+    if (categoryId === "clipboardHistory" && shouldLoadCurrentUserDetails(categoryId, accountLabel)) {
+      void backendRef.current.getClipboardHistoryStatus(true).then(result => {
+        if (!active) return;
+        if (result.success && result.data && Array.isArray(result.data.historyItems)) {
+          setClipboardItems(result.data.historyItems);
+          if (result.data.partial || result.data.historyReadStatus !== "complete") setClipboardNotice(result.data.message || "Some clipboard details may be unavailable.");
+        } else setClipboardNotice(result.error || "Clipboard details could not be retrieved.");
+      }).catch(() => { if (active) setClipboardNotice("Clipboard details could not be retrieved."); });
     }
-  };
+    return () => { active = false; };
+  }, [categoryId, rawData, accountLabel]);
   const all = useMemo(() => clipboardItems ? clipboardItems.map((item, index) => ({
     label: `Clipboard item ${index + 1}`,
-    facts: [`Type: ${visibleText(item.type) ?? "Unknown"}`, `Preview: ${visibleText(item.preview, true) ?? "Unavailable"}`, `Characters: ${item.charCount}`],
+    facts: metadata(item, categoryId),
   })) : getSafeCleanupPreview(categoryId, rawData), [categoryId, rawData, clipboardItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -257,21 +261,15 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       <div><h3>Found details</h3><p>{all.length} {all.length === 1 ? "item" : "items"} available; the scan total is above.</p></div>
       <label><span className="sr-only">Filter found details</span><input type="search" value={query} placeholder="Filter details" aria-label={accountLabel ? `Filter ${accountLabel} details` : "Filter details"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
     </div>
-    {categoryId === "clipboardHistory" && !accountLabel ? <div className="cleanup-record-preview__reveal">
-      <button type="button" disabled={loadingClipboard} onClick={toggleClipboardDetails}>{loadingClipboard ? "Loading clipboard details…" : clipboardItems ? "Hide clipboard details" : "Show clipboard details"}</button>
-      {clipboardNotice ? <span role="status">{clipboardNotice}</span> : null}
-    </div> : null}
-    {categoryId === "wlanProfiles" ? <div className="cleanup-record-preview__reveal">
-      <button type="button" disabled={loadingSecrets} onClick={togglePasswords}>{loadingSecrets ? "Loading passwords…" : secrets ? "Hide passwords" : "Show passwords"}</button>
-      {secretError ? <span role="alert">{secretError}</span> : null}
-    </div> : null}
+    {clipboardNotice ? <p role="status">{clipboardNotice}</p> : null}
+    {secretError ? <p role="alert">{secretError}</p> : null}
     <div className="cleanup-readable-detail__table cleanup-record-preview__table"><table>
       <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort items ${sortDescending ? "ascending" : "descending"}`}># {sortDescending ? "↓" : "↑"}</button></th>{columns.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
       <tbody>{rows.map(row => {
         const cells = new Map<string, string[]>();
         if (categoryId === "amcache" || categoryId === "ntUserTraces") cells.set("Category", [row.label.replace(/ \d+$/, "")]);
         if (categoryId === "wlanProfiles") {
-          let password = "Hidden";
+          let password = accountLabel ? "Unavailable for this account" : loadingSecrets ? "Loading…" : "Unavailable";
           if (secrets) {
             const profiles = isObject(rawData) && Array.isArray(rawData.profiles) ? rawData.profiles : [];
             const profile = profiles[row.number - 1];
@@ -282,13 +280,17 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
                 ? matches[0].password || "Empty password" : "Unavailable";
             } else password = "Unavailable";
           }
+          // A scan may already contain a password; prefer it until a fresh
+          // local lookup returns a verified result for this adapter.
+          const profile = isObject(rawData) && Array.isArray(rawData.profiles) ? rawData.profiles[row.number - 1] : undefined;
+          if (!secrets && isObject(profile) && typeof profile.password === "string") password = profile.password;
           cells.set("Password", [password]);
         }
         for (const fact of row.facts) {
           const separator = fact.indexOf(": ");
           const label = separator < 0 ? "Details" : fact.slice(0, separator);
           const value = separator < 0 ? fact : fact.slice(separator + 2);
-          cells.set(label, [...(cells.get(label) ?? []), value]);
+          if (categoryId !== "wlanProfiles" || label !== "Password" || !cells.has(label)) cells.set(label, [...(cells.get(label) ?? []), value]);
         }
         return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>

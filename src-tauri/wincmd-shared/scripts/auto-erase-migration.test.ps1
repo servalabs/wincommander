@@ -57,9 +57,17 @@ foreach ($section in @('Triggers','Principals','Settings')) {
     if ($before.Task.$section.OuterXml -ne $after.Task.$section.OuterXml) { throw "Migration changed $section" }
 }
 if ($after.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v6 (managed)') { throw 'Managed ownership was lost.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v6 (managed)'
+$script:task | Add-Member -NotePropertyName Settings -NotePropertyValue ([pscustomobject]@{ Hidden=$true }) -Force
+$script:originalXml = $script:registeredXml -replace '</Settings>', '<Hidden>true</Hidden></Settings>'
+$script:registeredXml = ''; $script:registrations = 0
+$visible = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
+if ($visible.error -or $script:registrations -ne 1) { throw 'An owned hidden task could not be made visible.' }
+[xml]$visibleXml = $script:registeredXml
+if ($visibleXml.Task.Settings.Hidden -ne 'false' -or $visibleXml.Task.Settings.Enabled -ne 'false' -or $visibleXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $visibleXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'Visibility migration changed schedule, identity or enabled state.' }
 $script:task.Category = 'browserFootprints'; $script:task.State = 'Ready'
 $script:task.TaskName = 'ProtectedSyntheticTask'; $script:registrations = 0
 $result = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($result.error -or $script:disabled.Count -ne 1 -or $script:registrations -or $result.disabledProtected.Count -ne 1) { throw 'Protected legacy task was not disabled without rewriting its payload.' }
-if ($script:locks.Count -ne 2 -or $script:locks[0] -ne 'dnsCache' -or $script:locks[1] -ne 'browserFootprints') { throw 'Migration did not acquire the category lock.' }
+if ($script:locks.Count -ne 3 -or $script:locks[0] -ne 'dnsCache' -or $script:locks[1] -ne 'dnsCache' -or $script:locks[2] -ne 'browserFootprints') { throw 'Migration did not acquire the category lock.' }
 Write-Output 'Passed: v4 payload upgrade preserves interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'

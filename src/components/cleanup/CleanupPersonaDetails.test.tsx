@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { getSafeCleanupPreview } from "./CleanupRecordPreview";
+import { getSafeCleanupPreview, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -23,7 +23,7 @@ describe("System Cleanup persona details", () => {
       expect(html).toContain("2 records");
       expect(html).toContain("Synthetic App");
       expect(html).not.toContain("Detail level");
-      expect(html).not.toContain("secret-value");
+      expect(html).toContain("secret-value");
       expect(html).toContain("file.txt");
     }
     expect(casual).not.toContain("Scan coverage");
@@ -31,20 +31,37 @@ describe("System Cleanup persona details", () => {
     expect(secure).toContain("Record categories");
   });
 
-  test("shows browser profiles and Wi-Fi names without passwords", () => {
+  test("does not request current-user secrets while inspecting another account", () => {
+    expect(shouldLoadCurrentUserDetails("wlanProfiles")).toBe(true);
+    expect(shouldLoadCurrentUserDetails("clipboardHistory")).toBe(true);
+    expect(shouldLoadCurrentUserDetails("wlanProfiles", "Another account")).toBe(false);
+    expect(shouldLoadCurrentUserDetails("clipboardHistory", "Another account")).toBe(false);
+  });
+
+  test("shows available browser and Wi-Fi details directly", () => {
     const browser = ALL_CATEGORIES.find(category => category.id === "browserFootprints")!;
     const wifi = ALL_CATEGORIES.find(category => category.id === "wlanProfiles")!;
-    const browserHtml = renderToStaticMarkup(<CleanupDisplayDetails category={browser} mode="advanced" count={1} items={[]} rawData={{ browsers: [{ browser: "Google Chrome", profilePath: "C:\\Private\\Profile", totalSizeKB: 2, artifacts: [{ name: "History", sizeKB: 1 }] }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    const browserHtml = renderToStaticMarkup(<CleanupDisplayDetails category={browser} mode="advanced" count={1} items={[]} rawData={{ browsers: [{ browser: "Google Chrome", profilePath: "C:\\Private\\Profile", totalSizeKB: 2, artifacts: [{ name: "History", sizeKB: 1, profilePath: "C:\\Private\\Profile\\Profile 1" }] }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(browserHtml).toContain("Google Chrome");
-    expect(browserHtml).toContain(">History</th>");
+    expect(browserHtml).toContain(">Artifact</th>");
+    expect(browserHtml).toContain(">History</td>");
+    expect(browserHtml).toContain("C:\\Private\\Profile\\Profile 1");
     expect(browserHtml).toContain(">1.0 KB</td>");
     expect(browserHtml).toContain("Private\\Profile");
     const wifiHtml = renderToStaticMarkup(<CleanupDisplayDetails category={wifi} mode="simple" count={1} items={[]} rawData={{ profiles: [{ name: "PrivateNetwork", password: "secret-value" }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(wifiHtml).toContain("Found details");
     expect(wifiHtml).toContain("PrivateNetwork");
-    expect(wifiHtml).toContain("Show passwords");
-    expect(wifiHtml).toContain(">Hidden</td>");
-    expect(wifiHtml).not.toContain("secret-value");
+    expect(wifiHtml).not.toContain("Show passwords");
+    expect(wifiHtml).toContain("secret-value");
+  });
+
+  test("shows browser artifact profile paths from each installed profile", () => {
+    const rows = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Google Chrome", artifacts: [
+      { name: "History", profilePath: "C:\\Browser\\Profile 1" },
+      { name: "Cookies", profilePath: "C:\\Browser\\Profile 2" },
+    ] }] });
+    expect(rows[0].facts.join(" ")).toContain("Profile 1");
+    expect(rows[0].facts.join(" ")).toContain("Profile 2");
   });
 
   test("shows the activity record returned by the scan", () => {
@@ -54,14 +71,14 @@ describe("System Cleanup persona details", () => {
     expect(html).toContain("secret.exe");
   });
 
-  test("shows file and drive records without fabricating clipboard contents", () => {
+  test("shows supplied clipboard, file and drive records", () => {
     const clipboard = getSafeCleanupPreview("clipboardHistory", { historyItems: [{ preview: "sensitive clipboard", type: "text" }] });
     const drives = getSafeCleanupPreview("netDrives", { drives: [{ Name: "Z:", DisplayRoot: "\\\\private-server\\secret" }] });
     const recycle = getSafeCleanupPreview("recycleBin", { items: [{ name: "private file.txt", path: "C:\\private" }] });
     expect(clipboard[0].label).toBe("Clipboard item 1");
     expect(drives[0].label).toBe("Drive Z:");
     expect(recycle[0].label).toBe("Recycle Bin record 1");
-    expect(JSON.stringify(clipboard)).not.toContain("sensitive clipboard");
+    expect(JSON.stringify(clipboard)).toContain("sensitive clipboard");
     expect(JSON.stringify(drives)).toContain("private-server");
     expect(JSON.stringify(recycle)).toContain("private file.txt");
   });
@@ -88,15 +105,15 @@ describe("System Cleanup persona details", () => {
     }
   });
 
-  test("shows process names, file locations and ordinary commands without credential fields", () => {
+  test("shows all captured process fields and command text", () => {
     const process = getSafeCleanupPreview("processIntel", { processes: [{ name: "example.exe", pid: 42, path: "C:\\Apps\\example.exe", signed: "Valid", signer: "Example Inc", elevated: "No", password: "do-not-show" }] });
     expect(process[0].facts.join(" ")).toContain("example.exe");
     expect(process[0].facts.join(" ")).toContain("PID: 42");
     expect(process[0].facts.join(" ")).toContain("C:\\Apps\\example.exe");
-    expect(JSON.stringify(process)).not.toContain("do-not-show");
+    expect(JSON.stringify(process)).toContain("do-not-show");
     const history = getSafeCleanupPreview("psHistory", { entries: [{ command: "Get-Process" }, { command: "connect --password hunter2" }] });
     expect(history[0].facts.join(" ")).toContain("Get-Process");
-    expect(JSON.stringify(history)).not.toContain("hunter2");
+    expect(JSON.stringify(history)).toContain("hunter2");
   });
 
   test("shows account activity records supplied under records", () => {
@@ -123,14 +140,26 @@ describe("System Cleanup persona details", () => {
     }
   });
 
-  test("accepts producer field casing and never renders credential fields", () => {
+  test("accepts producer field casing and displays returned credential fields", () => {
     const [dns] = getSafeCleanupPreview("dnsCache", { entries: [{ Name: "example.test", Data: "192.0.2.1", RecordType: "A", TTL: 300, Status: "Success", Password: "never-render", token: "never-render" }] });
     expect(dns.facts.join(" ")).toContain("example.test");
     expect(dns.facts.join(" ")).toContain("192.0.2.1");
     expect(dns.facts.join(" ")).toContain("Type: A");
     expect(dns.facts.join(" ")).toContain("TTL: 300");
     expect(dns.facts.join(" ")).toContain("Success");
-    expect(JSON.stringify(dns)).not.toContain("never-render");
+    expect(JSON.stringify(dns)).toContain("never-render");
+  });
+
+  test("shows full clipboard content including whitespace and empty values", () => {
+    const value = `${"a".repeat(120)}\n  line two\tend`;
+    const [clipboard] = getSafeCleanupPreview("clipboardHistory", { historyItems: [{ preview: value, type: "text", charCount: value.length, extra: "" }] });
+    expect(clipboard.facts.join(" ")).toContain(value);
+    expect(clipboard.facts.join(" ")).toContain("Extra: (empty)");
+  });
+
+  test("preserves unrecognised and simultaneously supplied fields", () => {
+    const [row] = getSafeCleanupPreview("dnsCache", { entries: [{ name: "name", displayName: "display", metadata: { source: "adapter" }, tags: ["first", "second"], token: "sample-token" }] });
+    for (const value of ["name", "display", "adapter", "first", "second", "sample-token"]) expect(row.facts.join(" ")).toContain(value);
   });
 
   test("renders each DNS field in its own column with a compact number", () => {
@@ -150,11 +179,11 @@ describe("System Cleanup persona details", () => {
     for (const value of ["Section: Answer", "Data length: 4", "Type code: 1"]) expect(dns.facts.join(" ")).toContain(value);
   });
 
-  test("shows registry keys for history without exposing Wi-Fi keys", () => {
+  test("shows supplied registry keys and Wi-Fi keys", () => {
     const history = getSafeCleanupPreview("rdpHistory", { entries: [{ host: "example", key: "HKCU\\Software\\Example" }] });
     expect(history[0].facts.join(" ")).toContain("HKCU\\Software\\Example");
     const wifi = getSafeCleanupPreview("wlanProfiles", { profiles: [{ name: "Example", key: "secret-value" }] });
-    expect(JSON.stringify(wifi)).not.toContain("secret-value");
+    expect(JSON.stringify(wifi)).toContain("secret-value");
   });
 
   test("distinguishes same-name Wi-Fi profiles on different reported adapters", () => {
@@ -164,6 +193,6 @@ describe("System Cleanup persona details", () => {
     ] });
     expect(rows[0].facts.join(" ")).toContain("adapter-1");
     expect(rows[1].facts.join(" ")).toContain("adapter-2");
-    expect(JSON.stringify(rows)).not.toContain("never-render");
+    expect(JSON.stringify(rows)).toContain("never-render");
   });
 });

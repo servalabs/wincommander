@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleRow } from "./cleanupScheduleReadback";
+import { canShowCleanupScheduleForSelection, isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleRow } from "./cleanupScheduleReadback";
 
 const relevant = new Set(["dnsCache", "amcache"]);
 const ready: CleanupScheduleRow = { categoryId: "dnsCache", enabled: true, state: "Ready", scope: "current-user", intervalMinutes: 60, targetUser: null, managedByAutoSet: true };
@@ -29,4 +29,39 @@ test("preserves a disabled task separately and rejects duplicate local owners in
   const system = { ...ready, scope: "system" as const };
   expect(readCleanupScheduleSnapshot([ready, system], relevant)).toBeNull();
   expect(readCleanupScheduleSnapshot([system, ready], relevant)).toBeNull();
+});
+
+test("uses the verified canonical task when disabled legacy tasks remain", () => {
+  const canonical = { ...ready, legacy: false, managedByAutoSet: false };
+  const old = { ...ready, legacy: true, state: "Disabled", enabled: false };
+  for (const rows of [[canonical, old], [old, canonical]]) {
+    const snapshot = readCleanupScheduleSnapshot(rows, relevant)!;
+    expect(snapshot.schedules.dnsCache).toBe(60);
+    expect(snapshot.disabledSchedules.dnsCache).toBeUndefined();
+    expect(snapshot.managedIds.has("dnsCache")).toBe(false);
+  }
+  expect(readCleanupScheduleSnapshot([canonical, { ...old, enabled: true, state: "Ready" }], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([canonical, { ...old, scope: "system" }], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...canonical, legacy: undefined }, old], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...old, legacy: undefined }, canonical], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([old, { ...old }], relevant)).toBeNull();
+});
+
+
+test("only displays task history for the selected verified local task", () => {
+  const canonical = { ...ready, legacy: false, lastRun: "2026-10-30T10:30:00Z", lastResult: 0, nextRun: "2026-10-30T11:30:00Z" };
+  const old = { ...ready, legacy: true, state: "Disabled", enabled: false, lastResult: 1 };
+  const other = { ...ready, scope: "other-user" as const, targetUser: "Other", lastResult: 2 };
+  expect(readCleanupScheduleSnapshot([old, canonical, other], relevant)!.records.dnsCache.lastResult).toBe(0);
+  expect(readCleanupScheduleSnapshot([canonical, { ...canonical, scope: "system" }], relevant)).toBeNull();
+});
+
+
+test("never attributes current-user task history to another account", () => {
+  const own = readCleanupScheduleSnapshot([ready], relevant)!.records.dnsCache;
+  expect(canShowCleanupScheduleForSelection(true, false, own)).toBe(true);
+  expect(canShowCleanupScheduleForSelection(false, false, own)).toBe(false);
+  expect(canShowCleanupScheduleForSelection(false, true, own)).toBe(false);
+  expect(canShowCleanupScheduleForSelection(false, true, { ...own, scope: "system" })).toBe(true);
+  expect(canShowCleanupScheduleForSelection(false, true, undefined)).toBe(false);
 });

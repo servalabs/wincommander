@@ -1605,6 +1605,7 @@ export function useBackend() {
         schedules: Array<{
           categoryId: string;
           taskName: string;
+          legacy?: boolean;
           enabled: boolean;
           state?: string;
           scope?: "system" | "current-user" | "other-user";

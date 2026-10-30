@@ -1,3 +1,4 @@
+import { canShowCleanupScheduleForSelection } from "./cleanupScheduleReadback";
 // Recreated System Cleanup panel: one panel-owned scroller, preserved layout,
 // and the existing backend hook contracts.
 import { Button, Icon } from "@/components/ui/bp";
@@ -121,6 +122,12 @@ export default function SystemCleanupPanel() {
     });
     const traceDetailCategory = traceDetailCatId ? allTraceCategories.find((cat) => cat.id === traceDetailCatId) : undefined;
     const traceDetailData = traceDetailCatId ? cardDataMap[traceDetailCatId] : undefined;
+    const traceScheduleRecord = traceDetailCatId ? scan.scheduleRecordsById[traceDetailCatId] : undefined;
+    const traceScheduleMatchesScope = !!traceDetailCategory && canShowCleanupScheduleForSelection(
+        scan.isViewingCurrentUser || (!traceDetailCategory.scopeAware && !traceDetailCategory.systemWide),
+        !!traceDetailCategory.systemWide,
+        traceScheduleRecord,
+    );
     const otherDetailCategory = otherDetail
         ? allTraceCategories.find((cat) => cat.id === otherDetail.catId)
         : undefined;
@@ -306,11 +313,12 @@ export default function SystemCleanupPanel() {
                     rawData={traceDetailData?.raw}
                     error={traceDetailData?.error}
                     verification={(traceDetailData as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
-                    scheduleState={scheduleState}
-                    scheduleMinutes={scan.schedulesById[traceDetailCategory.id] ?? null}
-                    scheduleDisabled={scheduleState === "verified" && !!scan.disabledSchedulesById[traceDetailCategory.id]}
+                    scheduleState={traceScheduleMatchesScope ? scheduleState : "unavailable"}
+                    scheduleMinutes={traceScheduleMatchesScope ? (scan.schedulesById[traceDetailCategory.id] ?? null) : null}
+                    scheduleRecord={scheduleState === "verified" && traceScheduleMatchesScope ? traceScheduleRecord : undefined}
+                    scheduleDisabled={scheduleState === "verified" && traceScheduleMatchesScope && !!scan.disabledSchedulesById[traceDetailCategory.id]}
                     excludedFromBulk={scan.clearAllExcludes.has(traceDetailCategory.id)}
-                    scopeLabel={traceDetailCategory.systemWide ? "This device" : selectedDisplay || "Current Windows user"}
+                    scopeLabel={traceDetailCategory.systemWide ? "This device" : traceDetailCategory.scopeAware ? selectedDisplay || "Current Windows user" : "Current Windows user"}
                     clearing={traceDetailData?.clearing ?? false}
                     onClose={() => setTraceDetailCatId(null)}
                     onClear={traceDetailCategory.clearDataKey && !isInvestigator
@@ -338,6 +346,7 @@ export default function SystemCleanupPanel() {
                     verification={(otherUserDataMap[otherDetail.catId] as typeof traceDetailData & { verification?: CleanupVerification })?.verification}
                     excludedFromBulk={scan.clearAllExcludes.has(otherDetail.catId)}
                     scopeLabel={selectedDisplay || "Selected Windows user"}
+                    accountLabel={selectedDisplay || "Selected Windows user"}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
                     onClear={!isInvestigator && canSwitchUsers

@@ -8,6 +8,10 @@ export interface CleanupScheduleRow {
   intervalMinutes: number;
   targetUser: string | null;
   managedByAutoSet?: boolean;
+  legacy?: boolean;
+  lastRun?: string | null;
+  lastResult?: number | null;
+  nextRun?: string | null;
 }
 
 export interface CleanupScheduleRecord {
@@ -15,6 +19,9 @@ export interface CleanupScheduleRecord {
   managedByAutoSet: boolean;
   scope: CleanupScheduleScope;
   enabled: boolean;
+  lastRun?: string | null;
+  lastResult?: number | null;
+  nextRun?: string | null;
 }
 
 /** Rejects ambiguous, unknown, or internally contradictory local task state. */
@@ -23,6 +30,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
   const schedules: Record<string, number> = {};
   const disabledSchedules: Record<string, Omit<CleanupScheduleRecord, "enabled">> = {};
   const managedIds = new Set<string>();
+  const localRows: Record<string, Array<{ row: CleanupScheduleRow; record: CleanupScheduleRecord }>> = {};
   for (const row of rows) {
     if (!row || typeof row.categoryId !== "string") return null;
     const id = row.categoryId === "clipboard" ? "clipboardHistory" : row.categoryId;
@@ -31,14 +39,26 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     if (!["Ready", "Running", "Queued", "Disabled"].includes(row.state ?? "")) return null;
     if (typeof row.managedByAutoSet !== "boolean" || typeof row.enabled !== "boolean") return null;
     const enabled = row.state !== "Disabled";
-    if (row.enabled !== enabled || records[id]) return null;
+    if (row.enabled !== enabled) return null;
     const interval = Number.isFinite(row.intervalMinutes) && row.intervalMinutes > 0 ? row.intervalMinutes : null;
     if (enabled && interval === null) return null;
-    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled };
+    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, lastRun: typeof row.lastRun === "string" ? row.lastRun : null, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null };
+    (localRows[id] ??= []).push({ row, record });
+  }
+  for (const [id, candidates] of Object.entries(localRows)) {
+    let selected = candidates[0];
+    if (candidates.length > 1) {
+      const active = candidates.filter(({ record }) => record.enabled);
+      if (active.length !== 1 || active[0].row.legacy !== false || candidates.some(({ row, record }) =>
+        record.scope !== active[0].record.scope || (!record.enabled && row.legacy !== true))) return null;
+      selected = active[0];
+    }
+    const { record } = selected;
+    const { enabled, intervalMinutes: interval } = record;
     records[id] = record;
     if (enabled && interval !== null) schedules[id] = interval;
-    else disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope };
-    if (row.managedByAutoSet) managedIds.add(id);
+    else disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope };
+    if (record.managedByAutoSet) managedIds.add(id);
   }
   return { records, schedules, disabledSchedules, managedIds };
 }
@@ -49,4 +69,9 @@ export function isVerifiedManagedSchedule(record: CleanupScheduleRecord | undefi
 
 export function isVerifiedIndividualSchedule(record: CleanupScheduleRecord | undefined, requestedMinutes: number, returnedMinutes: number | undefined, scope: CleanupScheduleScope): boolean {
   return returnedMinutes === requestedMinutes && !!record && record.enabled && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
+}
+
+/** The local snapshot cannot describe a different Windows account. */
+export function canShowCleanupScheduleForSelection(isCurrentUser: boolean, isSystemWide: boolean, record?: CleanupScheduleRecord): boolean {
+  return isCurrentUser || (isSystemWide && record?.scope === "system");
 }

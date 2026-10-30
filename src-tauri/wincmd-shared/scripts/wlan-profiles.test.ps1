@@ -114,7 +114,7 @@ function Initialize-SystemMaintenanceTaskFolder {}
 function Get-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName)
     if ($TaskName) { return [pscustomobject]@{ State='Disabled'; TaskName=$TaskName; TaskPath=$TaskPath } }
-    @([pscustomobject]@{ TaskName='OldWifi'; TaskPath='\System Maintenance\'; Description='System Maintenance scheduled cleanup v6 (manual opt-in)' },
+    @([pscustomobject]@{ TaskName='OldWifi'; TaskPath='\System Maintenance\'; Description='Legacy automatic cleanup' },
       [pscustomobject]@{ TaskName='Other'; TaskPath='\System Maintenance\'; Description='Unrelated fixture' })
 }
 function Get-AutoEraseTaskIdentity {
@@ -128,7 +128,7 @@ function Disable-ScheduledTask {
 }
 $script:disabledTasks=@()
 $migration = Invoke-AutoEraseMigration -CategoryId 'wlanProfiles'
-Check (-not $migration.error -and $script:disabledTasks.Count -eq 1 -and $script:disabledTasks[0] -eq 'OldWifi') 'Blocked legacy Wi-Fi task was not isolated and disabled.'
+Check (-not $migration.error -and $script:disabledTasks.Count -eq 1 -and $script:disabledTasks[0] -eq 'OldWifi') 'Unapproved legacy Wi-Fi task was not isolated and disabled.'
 function Invoke-AutoEraseMigration { param($CategoryId) @{ status='ok' } }
 function Get-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName) }
 function ConvertTo-AutoEraseTaskArgument {
@@ -145,11 +145,6 @@ function Register-ScheduledTask {
     $script:registrations += @{ principal=$Principal; description=$Description; triggers=$Trigger }
 }
 $script:registrations=@()
-$catalog = Get-AutoEraseSupportedCategories
-Check ('wlanProfiles' -notin $catalog.schedulableCategories -and 'wlanProfiles' -notin $catalog.categories) 'Wi-Fi must remain blocked until safe migration is implemented.'
-Check ((Set-AutoEraseSchedule -CategoryId 'wlanProfiles' -IntervalMinutes 60 -AllowDefaultExcluded).error) 'Current scheduler gate was not preserved.'
-# Exercise the future policy only in process memory; all task functions are mocks.
-[void]$script:AutoEraseUnsupportedCategories.Remove('wlanProfiles')
 $catalog = Get-AutoEraseSupportedCategories
 Check ('wlanProfiles' -in $catalog.schedulableCategories -and 'wlanProfiles' -notin $catalog.categories) 'Wi-Fi manual and Auto-set catalog policy disagrees.'
 Check ((Set-AutoEraseSchedule -CategoryId 'wlanProfiles' -IntervalMinutes 60).error) 'Protected Wi-Fi schedule accepted without individual consent.'

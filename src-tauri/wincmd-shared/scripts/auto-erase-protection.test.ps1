@@ -24,7 +24,7 @@ foreach ($id in $protected) {
 foreach ($id in $script:AutoEraseUnsupportedCategories.Keys) {
     if (-not (Set-AutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded).error) { throw "Unsupported request reached setup: $id" }
 }
-if ($script:AutoEraseManualOnlyCategories.Count -ne 31) { throw 'Expected 31 individually configured categories.' }
+if ($script:AutoEraseManualOnlyCategories.Count -ne 33) { throw 'Expected 33 individually configured categories.' }
 foreach ($id in $script:AutoEraseManualOnlyCategories) {
     if ($id -in $advertised) { throw "Individual-only category was advertised for Auto-set: $id" }
     $bulk = Set-AutoEraseSchedule -CategoryId ($id.ToUpperInvariant()) -IntervalMinutes 60 -ManagedByAutoSet -AllowDefaultExcluded
