@@ -4,8 +4,8 @@ import { ALL_CATEGORIES } from '../../panels/cleanup/cleanupCategories';
 import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_SCHEDULE_ONLY_IDS, OTHER_ACCOUNT_READ_ONLY_IDS } from '../../panels/cleanup/cleanupOtherAccountScheduleOnly';
 import CleanupTraceCard from './CleanupTraceCard';
 
-test('three protected categories have schedule-only cards for one selected account', () => {
-  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(3);
+test('two protected categories have schedule-only cards for one selected account', () => {
+  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(2);
   for (const id of OTHER_ACCOUNT_SCHEDULE_ONLY_IDS) {
     const category = ALL_CATEGORIES.find(item => item.id === id)!;
     expect(category).not.toBe(undefined);
@@ -25,4 +25,5 @@ test('three protected categories have schedule-only cards for one selected accou
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('sshState')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('passwordManagerCaches')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('wslData')).toBe(true);
+  expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('dockerDesktopData')).toBe(true);
 });

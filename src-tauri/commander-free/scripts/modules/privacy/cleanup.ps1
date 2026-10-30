@@ -6188,7 +6188,7 @@ function Get-CleanupSummaryAllUsers {
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
                  'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
-    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData')
+    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
@@ -6259,7 +6259,7 @@ function Get-CleanupSummaryAllUsers {
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
-        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches') }).Count -gt 0) {
+        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches','dockerDesktopData') }).Count -gt 0) {
             # Strategy: try the live SID path in HKEY_USERS FIRST — this works for
             # any user who is logged in (interactive, RDP, disconnected session, etc.)
             # without needing reg load. Only fall back to reg load for truly offline users.
@@ -6304,7 +6304,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false; $dockerUnavailable = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
@@ -6396,6 +6396,12 @@ function Get-CleanupSummaryAllUsers {
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($records | ForEach-Object { $_.name })
                         }
+                        'dockerDesktopData' {
+                            $r = Get-DockerDesktopDataInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
                         'crashDumps' {
                             $r = Get-CrashDumpList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
@@ -6471,6 +6477,53 @@ function Get-CleanupSummaryAllUsers {
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'dockerDesktopData' {
+                        # This is read-only metadata for selected profile defaults.
+                        # System-wide and custom disks and engine state are excluded.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='Docker WSL disk'; relative='AppData\Local\Docker\wsl'; tree=$true },
+                            @{ label='Docker VMM disk'; relative='AppData\Local\Docker\vm-data\DockerDesktop.vhdx'; tree=$false },
+                            @{ label='Docker log'; relative='AppData\Roaming\Docker\log.txt'; tree=$false }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName; $available = $true; $sourceItem = $null
+                            $components = @($source.relative -split '\\')
+                            for ($i = 0; $i -lt $components.Count; $i++) {
+                                $sourcePath = Join-Path $sourcePath $components[$i]
+                                try { $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $dockerUnavailable = $true; break }
+                                if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (($i -lt $components.Count - 1 -or $source.tree) -and -not $sourceItem.PSIsContainer) -or ($i -eq $components.Count - 1 -and -not $source.tree -and $sourceItem.PSIsContainer)) { $available = $false; $dockerUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[object]]::new()
+                            $queue.Enqueue($sourceItem)
+                            while ($queue.Count -gt 0) {
+                                $candidate = $queue.Dequeue()
+                                if ($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) { $dockerUnavailable = $true; continue }
+                                if ($candidate.PSIsContainer) {
+                                    try {
+                                        $directory = Get-Item -LiteralPath $candidate.FullName -Force -ErrorAction Stop
+                                        if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $dockerUnavailable = $true; continue }
+                                        foreach ($child in @(Get-ChildItem -LiteralPath $candidate.FullName -Force -ErrorAction Stop)) { $queue.Enqueue($child) }
+                                    } catch { $dockerUnavailable = $true }
+                                    continue
+                                }
+                                if ($source.tree -and $candidate.Name -notlike '*.vhdx') { continue }
+                                $count++
+                                if ($records.Count -lt $previewMax) {
+                                    $records += @{ name="$($source.label): $($candidate.Name)"; path=$candidate.FullName; sizeKB=[math]::Round($candidate.Length / 1KB, 1); modified=$candidate.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                    $items += "$($source.label): $($candidate.Name)"
+                                }
+                            }
+                        }
+                    }
                     'wslData' {
                         # Inspect the selected SID's registration only. Do not
                         # invoke wsl.exe in the operator's account, and do not
@@ -7022,6 +7075,7 @@ function Get-CleanupSummaryAllUsers {
                 $categoryRecord.message = 'Some sources could not be checked.'
                 if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
                 if ($cat -eq 'wslData' -and -not $isCurrentUser) { $categoryRecord.message = 'Only this account’s registered WSL distributions were checked; disks and provider-managed data were not inspected.'; $categoryRecord.coverage = 'Selected registry registrations only' }
+                if ($cat -eq 'dockerDesktopData' -and -not $isCurrentUser) { $categoryRecord.message = if ($dockerUnavailable) { 'Some default Docker locations could not be checked; custom locations and other engines were not inspected.' } else { 'Only selected profile Docker defaults were checked; custom locations and other engines were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
                 if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
             }
             if ($delegated -and $r -and -not $scanError) {

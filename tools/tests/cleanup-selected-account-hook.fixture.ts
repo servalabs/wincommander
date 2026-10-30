@@ -40,7 +40,7 @@ const backend = {
   getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
     calls.push(['scan', ids, targets]);
     const id = ids[0];
-    const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : 'Password manager cache';
+    const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : id === 'dockerDesktopData' ? 'Docker disk' : 'Password manager cache';
     return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name, path: 'C:\\Users\\Other\\fixture' }] }] }] } };
   },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
@@ -97,6 +97,14 @@ expect(hook.otherUserDataMap.wslData.count).toBe(-1);
 expect(hook.otherUserDataMap.wslData.raw).toMatchObject({ partial: true, records: [{ name: 'Linux distribution' }] });
 await hook.handleOtherUserClear({ id: 'wslData' } as never);
 await hook.handleCardClearAllUsers({ id: 'wslData' } as never);
+expect(calls).toHaveLength(0);
+await hook.loadUserView(other, ['dockerDesktopData']);
+expect(calls.shift()).toEqual(['scan', ['dockerDesktopData'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.dockerDesktopData.count).toBe(-1);
+expect(hook.otherUserDataMap.dockerDesktopData.raw).toMatchObject({ partial: true, records: [{ name: 'Docker disk' }] });
+await hook.handleOtherUserClear({ id: 'dockerDesktopData' } as never);
+await hook.handleCardClearAllUsers({ id: 'dockerDesktopData' } as never);
 expect(calls).toHaveLength(0);
 
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);
