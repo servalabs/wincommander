@@ -1304,7 +1304,7 @@ function Get-FleetForensicProjection {
             'network_wizard_history' { $result = Get-NetworkWizardHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read network-wizard summaries.') }; return (& $metadataProjection 'network_wizard_history' 'Network wizard history' $result 'Network wizard metadata') }
             'wer_history' { $result = Get-WERHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read WER-history summaries.') }; return (& $metadataProjection 'wer_history' 'Windows Error Reporting history' $result 'WER metadata') }
             'inactive_user_protection_metadata' { $result = Get-InactiveUserProtectionMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read inactive-user protection summaries.') }; return (& $metadataProjection 'inactive_user_protection_metadata' 'Inactive-user protection metadata' $result 'Protection metadata') }
-            'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
+            'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
             'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
             'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
             'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
@@ -3613,27 +3613,31 @@ function Get-InactiveUserProtectionMetadataInfo {
 }
 
 function Get-StickyNotesInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.MicrosoftStickyNotes_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try { $root = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'The packages location is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Filter 'Microsoft.MicrosoftStickyNotes_*' -Force -ErrorAction Stop | ForEach-Object {
+                $package = $_
                 foreach ($name in @('plum.sqlite','plum.sqlite-wal','plum.sqlite-shm')) {
-                    $path = Join-Path $_.FullName "LocalState\\$name"
-                    if (Test-Path $path -PathType Leaf -ErrorAction SilentlyContinue) {
-                        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-                        if ($item) {
-                            $files += @{ name = "Sticky Notes: $name"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                            $totalBytes += $item.Length
-                        }
-                    }
+                    $path = Join-Path $package.FullName "LocalState\$name"
+                    try {
+                        try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+                        catch [System.Management.Automation.ItemNotFoundException] { continue }
+                        if ($item.PSIsContainer) { throw 'The Sticky Notes database changed type.' }
+                        $files.Add(@{ name = "Sticky Notes: $name"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        $totalBytes += $item.Length
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Sticky Notes locations could not be checked.' } else { $null } }
 }
 
 function Get-OneDriveMetadataInfo {

@@ -29,6 +29,7 @@ interface CleanupTraceCardProps {
   onViewDetails?: () => void;
   onLoad?: () => void;
   scheduleMinutes?: number | null;
+  scheduleExists?: boolean;
   scheduleDisabled?: boolean;
   schedulePayloadVerified?: boolean | null;
   scheduleBusy?: boolean;
@@ -120,6 +121,7 @@ export default function CleanupTraceCard({
   onViewDetails,
   onLoad,
   scheduleMinutes,
+  scheduleExists,
   scheduleDisabled,
   schedulePayloadVerified,
   scheduleBusy,
@@ -137,7 +139,7 @@ export default function CleanupTraceCard({
   const minInterval = category.minIntervalMinutes ?? 5;
   const showScheduler =
     ((!!onSetSchedule || !!onRequestScheduleAccess) && !!category.schedulable) ||
-    (!!scheduleMinutes && !!onClearSchedule) || !!scheduleDisabled;
+    ((!!scheduleMinutes || !!scheduleExists) && !!onClearSchedule) || !!scheduleDisabled;
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
@@ -219,6 +221,7 @@ export default function CleanupTraceCard({
         categoryLabel={category.label}
         minInterval={minInterval}
         scheduleMinutes={scheduleMinutes}
+        scheduleExists={scheduleExists}
         scheduleDisabled={scheduleDisabled}
         schedulePayloadVerified={schedulePayloadVerified}
         scheduleBusy={scheduleBusy}

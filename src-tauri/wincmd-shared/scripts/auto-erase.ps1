@@ -2877,7 +2877,15 @@ function Get-AutoEraseSchedules {
             if (-not $identity) { continue }
             $info = Get-ScheduledTaskInfo -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction SilentlyContinue
             $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
-            $minutes = if ($repetition) { [int][Xml.XmlConvert]::ToTimeSpan($repetition).TotalMinutes } else { 0 }
+            # A malformed or out-of-range interval belongs to this one task.
+            # Keep it visible as unverified instead of failing the entire list.
+            $minutes = 0
+            if ($repetition) {
+                try {
+                    $totalMinutes = [Xml.XmlConvert]::ToTimeSpan([string]$repetition).TotalMinutes
+                    if ($totalMinutes -gt 0 -and $totalMinutes -le [int]::MaxValue) { $minutes = [int]$totalMinutes }
+                } catch { $minutes = 0 }
+            }
             # Scheduler's Ready state describes the registration, not whether
             # its referenced cleanup script is still present and readable.
             $payloadVerified = $false

@@ -6,6 +6,7 @@ interface CleanupScheduleControlProps {
   categoryLabel: string;
   minInterval: number;
   scheduleMinutes?: number | null;
+  scheduleExists?: boolean;
   scheduleDisabled?: boolean;
   schedulePayloadVerified?: boolean | null;
   scheduleBusy?: boolean;
@@ -37,6 +38,7 @@ export default function CleanupScheduleControl({
   categoryLabel,
   minInterval,
   scheduleMinutes,
+  scheduleExists = false,
   scheduleDisabled = false,
   schedulePayloadVerified,
   scheduleBusy = false,
@@ -57,9 +59,9 @@ export default function CleanupScheduleControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceId = useId();
-  const isScheduled = scheduleState === "verified" && typeof scheduleMinutes === "number" && scheduleMinutes > 0;
+  const isScheduled = scheduleState === "verified" && !scheduleDisabled && (scheduleExists || (typeof scheduleMinutes === "number" && scheduleMinutes > 0));
   const isDisabled = scheduleState === "verified" && scheduleDisabled;
-  const payloadUnverified = (isScheduled || isDisabled) && schedulePayloadVerified !== true;
+  const payloadUnverified = (isScheduled || isDisabled) && (schedulePayloadVerified !== true || (isScheduled && !(typeof scheduleMinutes === "number" && scheduleMinutes > 0)));
   const portalTarget = triggerRef.current
     ?.closest<HTMLElement>('[data-cleanup-panel-root="true"]')
     ?.querySelector<HTMLElement>('[data-cleanup-overlay-root="true"]');

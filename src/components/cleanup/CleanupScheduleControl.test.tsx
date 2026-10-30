@@ -24,6 +24,16 @@ describe("individual cleanup schedule controls", () => {
     expect(markup).toContain("Manage Wi-Fi Profiles scheduled wipe; script or task settings not verified");
   });
 
+  test("offers removal of an enabled task whose interval cannot be read", () => {
+    const markup = renderToStaticMarkup(<CleanupScheduleControl categoryLabel="Wi-Fi Profiles" minInterval={60} scheduleExists scheduleMinutes={null} schedulePayloadVerified={false} onClearSchedule={() => true} />);
+    expect(markup).toContain("Manage Wi-Fi Profiles scheduled wipe; script or task settings not verified");
+    expect(markup).toContain("cleanup script or Windows task settings could not be verified");
+    expect(markup).not.toContain("Schedule a wipe for");
+    const category = { ...ALL_CATEGORIES.find(item => item.id === "wlanProfiles")!, schedulable: false };
+    const card = renderToStaticMarkup(<CleanupTraceCard category={category} count={-1} preview={[]} loading={false} clearing={false} onClear={() => {}} scheduleExists scheduleMinutes={null} schedulePayloadVerified={false} onClearSchedule={() => true} />);
+    expect(card).toContain("Manage Wi-Fi Profiles scheduled wipe; script or task settings not verified");
+  });
+
   test("does not show a schedule control from a clear callback alone", () => {
     const control = renderToStaticMarkup(<CleanupScheduleControl categoryLabel="Wi-Fi Profiles" minInterval={60} onClearSchedule={() => true} />);
     expect(control).toBe("");

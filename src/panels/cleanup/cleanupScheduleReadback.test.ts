@@ -12,6 +12,18 @@ test("keeps an unverified task manageable without reporting its payload as verif
   }
 });
 
+test("keeps an enabled task with an unreadable interval available for removal", () => {
+  const broken = { ...ready, intervalMinutes: 0, payloadVerified: false, managedByAutoSet: false };
+  const snapshot = readCleanupScheduleSnapshot([broken, { ...ready, categoryId: "amcache" }], relevant)!;
+  expect(snapshot.records.dnsCache.enabled).toBe(true);
+  expect(snapshot.records.dnsCache.intervalMinutes).toBeNull();
+  expect(snapshot.schedules.dnsCache).toBeUndefined();
+  expect(snapshot.disabledSchedules.dnsCache).toBeUndefined();
+  expect(snapshot.schedules.amcache).toBe(60);
+  expect(isVerifiedIndividualSchedule(snapshot.records.dnsCache, 60, 60, "current-user")).toBe(false);
+  expect(readCleanupScheduleSnapshot([{ ...broken, payloadVerified: true }], relevant)).toBeNull();
+});
+
 test("accepts only verified state and verifies the expected interval and owner", () => {
   const snapshot = readCleanupScheduleSnapshot([ready], relevant)!;
   expect(snapshot.schedules.dnsCache).toBe(60);

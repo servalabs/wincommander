@@ -143,6 +143,7 @@ export default function CleanupCategoryGrid({
         onViewDetails={detailOpenerMap[cat.id]}
         onLoad={() => handleCardLoad(cat)}
         scheduleMinutes={scheduleState === "verified" ? (schedulesById[cat.id] ?? null) : undefined}
+        scheduleExists={scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
         scheduleDisabled={scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
         schedulePayloadVerified={scheduleRecordsById[cat.id]?.payloadVerified}
         scheduleState={scheduleState}
@@ -155,7 +156,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          schedulesEnabled && scheduleState === "verified" && (!!schedulesById[cat.id] || !!disabledSchedulesById[cat.id])
+          schedulesEnabled && scheduleState === "verified" && !!scheduleRecordsById[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
@@ -264,6 +265,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         scheduleDisabled={isViewingCurrentUser && scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
+        scheduleExists={isViewingCurrentUser && scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
         schedulePayloadVerified={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.payloadVerified : undefined}
         scheduleState={isViewingCurrentUser ? scheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
@@ -277,7 +279,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          isViewingCurrentUser && schedulesEnabled && scheduleState === "verified" && (!!schedulesById[cat.id] || !!disabledSchedulesById[cat.id])
+          isViewingCurrentUser && schedulesEnabled && scheduleState === "verified" && !!scheduleRecordsById[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }

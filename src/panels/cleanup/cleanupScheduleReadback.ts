@@ -65,7 +65,9 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     const enabled = row.state !== "Disabled";
     if (row.enabled !== enabled) return null;
     const interval = Number.isFinite(row.intervalMinutes) && row.intervalMinutes > 0 ? row.intervalMinutes : null;
-    if (enabled && interval === null) return null;
+    // Keep a known task manageable even if its repetition cannot be decoded.
+    // An absent cadence cannot verify a runnable payload.
+    if (enabled && interval === null && row.payloadVerified !== false) return null;
     const lastRun = typeof row.lastRun === "string" && Number.isFinite(Date.parse(row.lastRun)) ? row.lastRun : null;
     const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
     (localRows[id] ??= []).push({ row, record });
@@ -82,7 +84,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     const { enabled, intervalMinutes: interval } = record;
     records[id] = record;
     if (enabled && interval !== null) schedules[id] = interval;
-    else disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified };
+    else if (!enabled) disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified };
     if (record.managedByAutoSet) managedIds.add(id);
   }
   return { records, schedules, disabledSchedules, managedIds };

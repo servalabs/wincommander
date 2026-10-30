@@ -38,6 +38,14 @@ try {
     $script:fixtureTask.Triggers[0] | Add-Member -NotePropertyName StartBoundary -NotePropertyValue ($firstDue.ToString('o'))
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    foreach ($invalidInterval in @('not-an-interval', 'P999999999D', '')) {
+        $script:fixtureTask.Triggers[0].Repetition.Interval = $invalidInterval
+        $badInterval = Get-AutoEraseSchedules
+        if ($badInterval.error -or $badInterval.total -ne 1 -or -not $badInterval.schedules[0].enabled -or $badInterval.schedules[0].intervalMinutes -ne 0 -or $badInterval.schedules[0].payloadVerified) {
+            throw 'An unreadable interval must leave the task listed as enabled and unverified.'
+        }
+    }
+    $script:fixtureTask.Triggers[0].Repetition.Interval = 'PT60M'
     $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.AddMinutes(-120).ToString('o')
     if (-not (Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A migrated payload aligned with an earlier trigger slot must be verified.' }
     $script:fixtureTask.Triggers[0].StartBoundary = $firstDue.AddMinutes(15).ToString('o')
