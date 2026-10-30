@@ -9,6 +9,14 @@ export function hasLimitedCleanupCoverage(id: string, raw: unknown): boolean {
   return object(raw) && (raw.coverage === "limited" || (id === "srumData" && raw.historicalRecordsAvailable === false) || (id === "searchIndex" && typeof raw.coverage === "string" && raw.coverage.length > 0));
 }
 
+export function cleanupCoverageLimitation(id: string, raw: unknown, excludedProfiles: boolean): string | undefined {
+  if (id === "wlanProfiles" && excludedProfiles) return "Private or policy-managed profiles were excluded from cleanup.";
+  if (!hasLimitedCleanupCoverage(id, raw)) return undefined;
+  return object(raw) && typeof raw.coverageNote === "string" && raw.coverageNote.trim()
+    ? raw.coverageNote.trim()
+    : "The scan covers only part of this category.";
+}
+
 const SIMPLE_NAMES: Record<string, string> = {
   shellBags: "Folder history", usbHistory: "USB device history", dnsCache: "Web address cache",
   execCache: "App execution history", netDrives: "Saved network drives", rdpHistory: "Remote desktop history",
@@ -107,7 +115,7 @@ export function cleanupVerificationText(receipt?: CleanupVerification): string {
     case "unchanged": return "The fresh scan did not confirm a change.";
     case "deferred": return "The action is pending; verify after restart.";
     case "failed": return "The clear or verification failed.";
-    case "limited": return "The fresh scan checked eligible Wi-Fi profiles; private or policy-managed profiles were excluded from cleanup.";
+    case "limited": return "The fresh scan had limited coverage. See the scan details for what was checked.";
     case "unverified": return "The result could not be verified by a fresh scan.";
     default: return "No verification receipt reported.";
   }

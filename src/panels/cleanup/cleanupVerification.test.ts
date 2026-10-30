@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createCleanupVerification, retainCleanupVerification } from './cleanupVerification';
 import { reconcileCleanupClear } from './useCleanupScan';
-import { cleanupVerificationText } from './cleanupDisplayModel';
+import { cleanupCoverageLimitation, cleanupVerificationText } from './cleanupDisplayModel';
 
 describe('privacy-safe cleanup verification history', () => {
   test('stores only status and time for guarded outcomes', () => {
@@ -34,7 +34,17 @@ describe('privacy-safe cleanup verification history', () => {
   test('retains the Wi-Fi coverage limitation in the verification message', () => {
     const outcome = reconcileCleanupClear(2, 0, true, true);
     const text = cleanupVerificationText(createCleanupVerification(outcome.result));
-    expect(text).toContain('private or policy-managed profiles were excluded');
+    expect(text).toContain('limited coverage');
     expect(text).not.toContain('no remaining items');
+  });
+
+  test('uses the actual scan coverage and category-specific explanation', () => {
+    const docker = { coverage: 'limited', coverageNote: 'Customized disk locations are not included.' };
+    const vm = { coverage: 'limited', coverageNote: 'Relocated machines were not inspected.' };
+    expect(cleanupCoverageLimitation('dockerDesktopData', docker, false)).toBe(docker.coverageNote);
+    expect(cleanupCoverageLimitation('virtualMachineArtifacts', vm, false)).toBe(vm.coverageNote);
+    expect(cleanupCoverageLimitation('wlanProfiles', {}, true)).toContain('Private or policy-managed');
+    expect(cleanupCoverageLimitation('dnsCache', {}, false)).toBeUndefined();
+    expect(reconcileCleanupClear(2, 0, true, !!cleanupCoverageLimitation('dockerDesktopData', docker, false)).result).toBe('limited');
   });
 });

@@ -18,6 +18,7 @@ import { cleanupProfileKey, isVisibleCleanupProfile, readCleanupProfileInventory
 import { createCleanupProfileReadGate } from "./cleanupProfileReadGate";
 import { OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
+import { cleanupCoverageLimitation } from "./cleanupDisplayModel";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
     invalidateDiskCleanupScheduleStatus,
@@ -942,6 +943,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         after: number;
         removed: number;
         error?: string;
+        coverageNote?: string;
     };
     const clearAndReconcile = async (cat: CleanupCategory, allowDefaultExcluded = false): Promise<ClearOutcome> => {
         const before = Math.max(0, _cleanupCache[cat.id]?.count ?? cardDataMap[cat.id]?.count ?? 0);
@@ -979,7 +981,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 return recordVerification({ result: resetVerified ? 'reset' : 'failed', before, after, removed: 0,
                     error: resetVerified ? undefined : 'Journal reset could not be verified by identity.' });
             }
-            return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded, cat.id === 'wlanProfiles' && payload?.coverageIncomplete === true), before, after, error });
+            const coverageNote = cleanupCoverageLimitation(cat.id, fresh.raw, payload?.coverageIncomplete === true);
+            return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded, !!coverageNote), before, after, error, coverageNote });
         } catch (cause) {
             const fresh = await loadSingleCategory(cat);
             if (!fresh || fresh.error || fresh.count < 0) {
@@ -1204,7 +1207,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
         const outcome = await clearAndReconcile(cat, allowDefaultExcluded);
         if (outcome.result === 'limited') {
-            showError(`${cat.label}: the fresh scan found ${outcome.after} eligible profiles. Private or policy-managed profiles were excluded from cleanup.`);
+            showError(`${cat.label}: the fresh scan found ${outcome.after} items in the checked scope. ${outcome.coverageNote ?? 'The scan had limited coverage.'}`);
         } else if (outcome.result === 'cleared') {
             showSuccess(`${cat.label}: the fresh scan found no records.`);
         } else if (outcome.result === 'reduced') {
@@ -1255,6 +1258,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const reset = withFindings.filter(cat => results.get(cat.id)?.result === 'reset');
         const unchanged = withFindings.filter(cat => results.get(cat.id)?.result === 'unchanged');
         const deferred = withFindings.filter(cat => results.get(cat.id)?.result === 'deferred');
+        const limited = withFindings.filter(cat => results.get(cat.id)?.result === 'limited');
         const failed = withFindings.filter(cat => results.get(cat.id)?.result === 'failed');
         if (cleared.length || reduced.length || reset.length || deferred.length) {
             const summary = [
@@ -1265,12 +1269,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             ].filter(Boolean).join(', ');
             showSuccess(`${label}: ${summary}.`);
         }
-        if (unchanged.length || failed.length) {
+        if (unchanged.length || failed.length || limited.length) {
             const unchangedLabels = unchanged.map(cat => cat.label);
             const failedLabels = failed.map(cat => cat.label);
             const parts = [
                 unchangedLabels.length ? `unchanged: ${unchangedLabels.join(', ')}` : '',
                 failedLabels.length ? `failed: ${failedLabels.join(', ')}` : '',
+                limited.length ? `limited scan coverage: ${limited.map(cat => cat.label).join(', ')}` : '',
             ].filter(Boolean).join('; ');
             showError(`${label}: ${parts}.`);
         }
