@@ -14,7 +14,9 @@ $savedStorage = ${function:Initialize-AutoEraseStorage}
 function Initialize-AutoEraseStorage { return @{ scripts = $fixtureRoot } }
 try {
     $null = ConvertTo-AutoEraseTaskArgument -CategoryId 'sshState' -IntervalMinutes 60 -Script $script:AutoEraseScripts['sshState'] -ExecutionScope 'fixture-user' -FirstDueUtc ([DateTime]::UtcNow.ToString('o')) -AllowDefaultExcluded $true
-    $generated = Join-Path $fixtureRoot 'sshState.fixture-user.ps1'
+    $generatedItems = @(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'sshState.fixture-user.g*.ps1' -File)
+    if ($generatedItems.Count -ne 1) { throw 'Exactly one generated SSH task must exist.' }
+    $generated = $generatedItems[0].FullName
     $source = [IO.File]::ReadAllText($generated)
     if (-not $source.Contains('function Invoke-WCSshAdd') -or -not $source.Contains('function Invoke-WCSshProcess')) { throw 'Generated SSH tasks must embed their helpers.' }
     $tokens = $null; $errors = $null

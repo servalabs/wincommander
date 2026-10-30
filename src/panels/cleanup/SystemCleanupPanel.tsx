@@ -319,7 +319,7 @@ export default function SystemCleanupPanel() {
                     scheduleDisabled={scheduleState === "verified" && traceScheduleMatchesScope && !!scan.disabledSchedulesById[traceDetailCategory.id]}
                     excludedFromBulk={scan.clearAllExcludes.has(traceDetailCategory.id)}
                     scopeLabel={traceDetailCategory.systemWide ? "This device" : traceDetailCategory.scopeAware ? selectedDisplay || "Current Windows user" : "Current Windows user"}
-                    accountName={traceDetailCategory.id === "developerCaches" && scan.isViewingCurrentUser ? scan.availableUsers.find(profile => profile.isCurrent)?.name : undefined}
+                    accountName={traceDetailCategory.id === "developerCaches" && scan.isViewingCurrentUser ? scan.currentUser || undefined : undefined}
                     clearing={traceDetailData?.clearing ?? false}
                     onClose={() => setTraceDetailCatId(null)}
                     onClear={traceDetailCategory.clearDataKey && !isInvestigator

@@ -49,7 +49,7 @@ $first = @($revealed.profiles | Where-Object { $_.name -ceq "Cafe's network" -an
 $second = @($revealed.profiles | Where-Object { $_.name -ceq "Cafe's network" -and $_.interfaceId -eq $adapterB })[0]
 Check ($first.password -eq 'synthetic-password' -and $first.passwordStatus -eq 'available') 'Explicit reveal failed for an available key.'
 Check ($null -eq $second.password -and $second.passwordStatus -eq 'unavailable') 'Denied duplicate profile exposed or reused another adapter key.'
-Check ($script:keyReads.Count -eq 3) 'Explicit reveal did not inspect each all-user adapter profile.'
+Check ($script:keyReads.Count -eq 5 -and @($revealed.additionalProfiles).Count -eq 2) 'Explicit reveal did not inspect all reported adapter profiles.'
 Reset-Fixture
 $result = Invoke-WCWlanClear
 Check ($result.ok -and $result.removed -eq 2 -and $result.failed -eq 0) 'All-user profiles were not verified removed.'

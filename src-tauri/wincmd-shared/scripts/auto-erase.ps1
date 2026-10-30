@@ -2129,14 +2129,24 @@ function Get-AutoEraseNextDue {
 }
 
 function New-AutoEraseResult {
-    param([DateTime]$CompletedUtc, $LastSuccess, [int]$IntervalMinutes, [int]$Removed, [int]$Deferred, [int]$Failed)
+    param([DateTime]$CompletedUtc, $LastSuccess, [int]$IntervalMinutes, [int]$Removed, [int]$Deferred, [int]$Failed, [DateTime]$ScheduledDueUtc = [DateTime]::MinValue)
     $completed = $CompletedUtc.ToUniversalTime()
+    # Windows repeats at fixed scheduled slots, not completion time. Advance to
+    # the first slot after completion so a short run does not miss every other trigger.
+    $nextDue = $completed.AddMinutes($IntervalMinutes)
+    if ($ScheduledDueUtc -ne [DateTime]::MinValue) {
+        $due = $ScheduledDueUtc.ToUniversalTime()
+        $intervalTicks = [TimeSpan]::FromMinutes($IntervalMinutes).Ticks
+        $elapsedTicks = [Math]::Max([long]0, ($completed - $due).Ticks)
+        $steps = [Math]::Floor($elapsedTicks / [double]$intervalTicks) + 1
+        $nextDue = $due.AddTicks([long]($steps * $intervalTicks))
+    }
     $success = ($Failed -eq 0 -and $Deferred -eq 0)
     if ($success) { $LastSuccess = $completed }
     @{
         attemptedUtc = $completed.ToString('o')
         lastSuccessfulUtc = if ($LastSuccess) { $LastSuccess.ToUniversalTime().ToString('o') } else { $null }
-        nextDueUtc = $completed.AddMinutes($IntervalMinutes).ToString('o')
+        nextDueUtc = $nextDue.ToString('o')
         intervalMinutes = $IntervalMinutes; success = $success
         removed = $Removed; deferred = $Deferred; failed = $Failed
     }
@@ -2216,7 +2226,7 @@ __AUTO_ERASE_BODY__
                 # clear can never silently report success while leaving traces.
                 try {
                     `$completedUtc = (Get-Date).ToUniversalTime()
-                    `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed
+                    `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed `$schedule.nextDue
                     `$res.payloadGeneration = `$payloadGeneration
                     [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.g`$payloadGeneration.result.json")), (`$res | ConvertTo-Json -Compress))
                     [System.IO.File]::WriteAllText(`$marker, (`$res | ConvertTo-Json -Compress))
@@ -2468,7 +2478,9 @@ function Set-AutoEraseScheduleCore {
 
         $eraseScript = $script:AutoEraseScripts[$CategoryId]
         $scope = if ($RunAsSystem) { 'system' } else { "user-$TargetUser" }
-        $firstDueUtc = [DateTime]::UtcNow.AddMinutes($IntervalMinutes).ToString('o')
+        $firstDue = [DateTime]::UtcNow.AddMinutes($IntervalMinutes)
+        $firstDue = [DateTime]::new($firstDue.Ticks - ($firstDue.Ticks % [TimeSpan]::TicksPerSecond), [DateTimeKind]::Utc)
+        $firstDueUtc = $firstDue.ToString('o')
         $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope -FirstDueUtc $firstDueUtc -AllowDefaultExcluded ([bool]$AllowDefaultExcluded)
 
         $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
@@ -2487,7 +2499,7 @@ function Set-AutoEraseScheduleCore {
         #      catch-up semantics. Uses -AtStartup for SYSTEM tasks (boot
         #      time, no user session needed) and -AtLogOn for S4U tasks
         #      (user-context, fires on each interactive logon of TargetUser).
-        $triggerInterval = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($IntervalMinutes) `
+        $triggerInterval = New-ScheduledTaskTrigger -Once -At ($firstDue.ToLocalTime()) `
                             -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
                             -RepetitionDuration (New-TimeSpan -Days 9999)
         if ($RunAsSystem) {
@@ -2512,11 +2524,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v19 (manual opt-in)'
+            'System Maintenance scheduled cleanup v20 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v19 (managed)'
+            'System Maintenance scheduled cleanup v20 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v19'
+            'System Maintenance scheduled cleanup v20'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2768,7 +2780,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16|17|18|19) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16|17|18|19|20) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2934,7 +2946,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19|20) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2942,7 +2954,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v19(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v20(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
@@ -2969,9 +2981,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 19
+                $revision = 20
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v19 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v19 (managed)' } else { 'System Maintenance scheduled cleanup v19' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v20 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v20 (managed)' } else { 'System Maintenance scheduled cleanup v20' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

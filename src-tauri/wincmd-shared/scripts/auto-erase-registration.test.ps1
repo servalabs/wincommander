@@ -59,7 +59,7 @@ foreach ($id in $eligible) {
 }
 foreach ($id in @('notepadState','developerCaches','sshState','passwordManagerCaches')) {
     $result = Set-IndividualAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded
-    if ($result.error -or -not $script:approval -or $script:registered[-1].description -ne 'System Maintenance scheduled cleanup v19 (manual opt-in)') { throw "Explicit manual authorization was lost for $id" }
+    if ($result.error -or -not $script:approval -or $script:registered[-1].description -ne 'System Maintenance scheduled cleanup v20 (manual opt-in)') { throw "Explicit manual authorization was lost for $id" }
     $multi = Set-MultiUserAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -TargetUsers 'TestUser' -AllowDefaultExcluded
     if ($multi.results[0].error -or -not $script:approval -or $multi.total -ne 1) { throw "Selected-user authorization was lost for $id" }
 }

@@ -214,7 +214,9 @@ $null = New-Item -ItemType Directory -Path $fixtureRoot -ErrorAction Stop
 function Initialize-AutoEraseStorage { return @{ scripts = $fixtureRoot } }
 try {
     $null = ConvertTo-AutoEraseTaskArgument -CategoryId 'virtualMachineArtifacts' -IntervalMinutes 60 -Script $script:AutoEraseScripts['virtualMachineArtifacts'] -ExecutionScope 'fixture-user' -FirstDueUtc ([DateTime]::UtcNow.ToString('o')) -AllowDefaultExcluded $true
-    $generated = Join-Path $fixtureRoot 'virtualMachineArtifacts.fixture-user.ps1'
+    $generatedItems = @(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'virtualMachineArtifacts.fixture-user.g*.ps1' -File)
+    Assert-WCVmTest ($generatedItems.Count -eq 1) 'Exactly one generated VM task must exist.'
+    $generated = $generatedItems[0].FullName
     $source = [IO.File]::ReadAllText($generated)
     Assert-WCVmTest ($source.Contains('function Invoke-WCVirtualMachineArtifactCleanup') -and $source.Contains('Invoke-WCVirtualMachineArtifactCleanup')) 'Scheduled script must embed the VM provider and action.'
     $tokens = $null; $errors = $null

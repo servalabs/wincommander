@@ -29,3 +29,14 @@ foreach ($counts in @(@(1, 0), @(0, 1))) {
 $result = New-AutoEraseResult -CompletedUtc $completed -LastSuccess $previous -IntervalMinutes 60 -Removed 1 -Deferred 0 -Failed 0
 if (-not $result.success -or [DateTime]::Parse($result.lastSuccessfulUtc).ToUniversalTime() -ne $completed) { throw 'A successful clear did not advance the last success.' }
 Write-Output 'Passed: initial, overdue, failed, interval-change, and duplicate-trigger timing.'
+
+# Completion a few seconds after the slot must not postpone the next scheduled trigger.
+$slot = [DateTime]::Parse('2026-10-05T00:00:00Z').ToUniversalTime()
+$normal = New-AutoEraseResult -CompletedUtc $slot.AddSeconds(2) -ScheduledDueUtc $slot -IntervalMinutes 60 -Removed 0 -Deferred 0 -Failed 0
+if ([DateTime]::Parse($normal.nextDueUtc).ToUniversalTime() -ne $slot.AddHours(1)) { throw 'A short run missed the next Windows trigger.' }
+Assert-Due ([pscustomobject]$normal) 60 '2026-10-05T01:00:00Z'
+# A delayed catch-up advances past missed slots and does not repeat in the same slot.
+$delayed = New-AutoEraseResult -CompletedUtc $slot.AddMinutes(125) -ScheduledDueUtc $slot -IntervalMinutes 60 -Removed 0 -Deferred 0 -Failed 0
+if ([DateTime]::Parse($delayed.nextDueUtc).ToUniversalTime() -ne $slot.AddHours(3)) { throw 'Delayed cleanup did not advance to the next scheduled slot.' }
+Assert-Due ([pscustomobject]$delayed) 60 '2026-10-05T03:00:00Z'
+Write-Output 'Passed: fixed scheduled cadence and delayed catch-up.'
