@@ -76,7 +76,7 @@ model; the private Pro roadmap owns future paid work.
 
 ## Deliberately separate products or decisions
 
-- Mobile UI and phone lifecycle remain secureOS/Privon responsibilities.
+- Native mobile endpoint UI and phone lifecycle remain secureOS/Privon responsibilities. A responsive Fleet Console accessed in a phone browser is a separate web interface, not a native endpoint app.
 - Full case acquisition, sealing, and examiner workflow remain Investigator
   responsibilities.
 - Provider-native Wazuh/Velociraptor administration stays in their own tools;

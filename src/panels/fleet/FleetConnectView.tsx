@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/icon";
 import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
+import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -79,6 +80,7 @@ export default function FleetConnectView() {
   const [busy, setBusy] = useState(false);
   const [repairingTrust, setRepairingTrust] = useState(false);
   const [machineTrustBound, setMachineTrustBound] = useState<boolean | null>(null);
+  const [shieldPolicyStatus, setShieldPolicyStatus] = useState<"verified" | "effective_config_unavailable" | "unverified" | null>(null);
   // enrolling: true between a successful connect() call and first connected=true poll.
   const [enrolling, setEnrolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,10 +192,21 @@ export default function FleetConnectView() {
   useEffect(() => {
     if (!fleetEntitled || !wasEnrolled) return;
     let cancelled = false;
-    invoke<{ trustBound: boolean }>("fleet_machine_trust_status")
-      .then((result) => { if (!cancelled) setMachineTrustBound(result.trustBound); })
-      .catch(() => { if (!cancelled) setMachineTrustBound(null); });
-    return () => { cancelled = true; };
+    let requestSequence = 0;
+    const refresh = () => {
+      const sequence = ++requestSequence;
+      void invoke<{ trustBound: unknown; shieldPolicyStatus?: unknown }>("fleet_machine_trust_status")
+        .then((result) => {
+          if (cancelled || sequence !== requestSequence) return;
+          if (typeof result?.trustBound !== "boolean") throw new Error("Malformed Fleet trust status");
+          setMachineTrustBound(result.trustBound);
+          setShieldPolicyStatus(fleetShieldProfileStatus(result));
+        })
+        .catch(() => { if (!cancelled && sequence === requestSequence) { setMachineTrustBound(null); setShieldPolicyStatus("unverified"); } });
+    };
+    refresh();
+    const timer = setInterval(refresh, 15_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [fleetEntitled, wasEnrolled]);
 
   async function repairMachineTrust() {
@@ -203,6 +216,7 @@ export default function FleetConnectView() {
     try {
       await invoke("fleet_repair_machine_trust");
       setMachineTrustBound(true);
+      setShieldPolicyStatus("unverified");
       startSteadyPoll();
     } catch (reason) {
       setError(typeof reason === "string" ? reason : "Machine trust repair failed.");
@@ -466,6 +480,16 @@ export default function FleetConnectView() {
           )}
           {fleetEntitled ? (
             <>
+              {wasEnrolled && shieldPolicyStatus === "effective_config_unavailable" && (
+                <p className="fleet-connect-enrolling" role="alert">
+                  The last verified Fleet policy has no applicable Shield configuration. Previous settings are kept, but Shield policy cannot be verified. A Fleet Stop may wait while Shield is running because ownership cannot be confirmed. Ask your Fleet administrator to review the device's policy assignment.
+                </p>
+              )}
+              {wasEnrolled && shieldPolicyStatus === "unverified" && (
+                <p className="fleet-connect-enrolling" role="alert">
+                  This device's Shield policy cannot currently be verified. Check the Fleet service and policy assignment.
+                </p>
+              )}
               {machineTrustBound === false && wasEnrolled && status.deviceId === persistedDeviceId && (
                 <div>
                   <p className="fleet-connect-enrolling">
