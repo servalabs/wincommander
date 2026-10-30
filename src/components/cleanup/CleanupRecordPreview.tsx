@@ -374,7 +374,11 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       const name = typeof browser.browser === "string" ? browserNames[browser.browser.trim().toLowerCase()] : undefined;
       const size = sizeLabel(browser.totalSizeKB);
       const { artifacts: browserArtifacts, ...browserDetails } = browser;
-      const artifacts = Array.isArray(browserArtifacts) ? browserArtifacts.filter(isObject).flatMap((artifact) => {
+      const artifacts = Array.isArray(browserArtifacts) ? browserArtifacts.flatMap((artifact) => {
+        if (!isObject(artifact)) {
+          const value = visibleObservation(artifact);
+          return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : []), ...(value !== null ? [`Artifact: ${value}`] : [])] }];
+        }
         const label = (typeof artifact.name === "string" ? artifactNames[artifact.name.trim().toLowerCase()] ?? visibleText(artifact.name) : undefined) ?? "Unnamed artifact";
         const artifactSize = sizeLabel(artifact.sizeKB);
         const profilePath = visibleText(artifact.profilePath);

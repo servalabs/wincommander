@@ -15,6 +15,7 @@ function Get-Process {
 }
 function Test-Path { $false }
 function Get-CimInstance { $null }
+function Get-CleanupProcessElevation { param([int]$ProcessId) 'Unknown' }
 $populated = Get-ProcessIntelligence
 if ($populated.error -or @($populated.processes).Count -ne 1 -or $populated.processes[0].name -ne 'synthetic.exe') {
     throw 'Process Review did not return the one synthetic process.'

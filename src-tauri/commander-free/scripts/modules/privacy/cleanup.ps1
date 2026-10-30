@@ -6833,9 +6833,22 @@ function Get-CleanupSummaryAllUsers {
                         if ($hiveAvailable) {
                             $k = "$hiveRoot\Network"
                             if (Test-CleanupSummaryPath $k) {
-                                $drives = Get-ChildItem $k -EA Stop
+                                $drives = @(Get-ChildItem -LiteralPath $k -EA Stop)
                                 $count = @($drives).Count
-                                $items = @($drives) | Select-Object -First $previewMax | ForEach-Object { $_.PSChildName }
+                                foreach ($drive in $drives) {
+                                    if ($records.Count -ge $previewMax) { break }
+                                    $row = @{ name = [string]$drive.PSChildName; path = [string]$drive.PSPath }
+                                    try {
+                                        $mapping = Get-ItemProperty -LiteralPath $drive.PSPath -ErrorAction Stop
+                                        foreach ($property in @($mapping.PSObject.Properties)) {
+                                            if ($property.Name -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { continue }
+                                            $row[$property.Name] = $property.Value
+                                        }
+                                        if ($null -ne $mapping.RemotePath) { $row.DisplayRoot = $mapping.RemotePath }
+                                    } catch { $categoryPartial = $true; $row.readStatus = 'unavailable' }
+                                    $records += $row
+                                    $items += [string]$drive.PSChildName
+                                }
                             }
                         } else { $items = @("[registry unavailable]") }
                     }

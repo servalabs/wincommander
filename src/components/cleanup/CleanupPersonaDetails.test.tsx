@@ -256,6 +256,16 @@ describe("System Cleanup persona details", () => {
     expect(browsers[0].facts).toEqual(["Value: unparsed browser"]);
   });
 
+  test("preserves malformed browser artifact observations alongside normal artifacts", () => {
+    const rows = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Chrome", profilePath: "C:\\profile", artifacts: [{ name: "History", sizeKB: 2 }, "unparsed artifact", [1, 2], null] }] });
+    expect(rows.length).toBe(4);
+    expect(rows[0].facts).toContain("Artifact: History");
+    expect(rows[1].facts).toContain("Artifact: unparsed artifact");
+    expect(rows[2].facts).toContain("Artifact: [1,2]");
+    expect(rows[3].facts).toContain("Artifact: Unavailable");
+    expect(rows.every(row => row.facts.includes("Location: C:\\profile"))).toBe(true);
+  });
+
   test("shows browser artifact profile paths from each installed profile", () => {
     const rows = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Google Chrome", artifacts: [
       { name: "History", profilePath: "C:\\Browser\\Profile 1", customDetail: "first-only" },
