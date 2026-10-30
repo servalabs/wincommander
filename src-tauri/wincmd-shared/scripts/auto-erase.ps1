@@ -1554,6 +1554,7 @@ foreach (`$t in `$targets) {
 if (Test-Path `$memdmp) { Erase-OneFile `$memdmp }
 "@
     'walFiles'          = @"
+`$script:AutoEraseCoverageIncomplete = `$true
 foreach (`$root in @(`$env:LOCALAPPDATA, `$env:APPDATA)) {
     `$files = @(foreach (`$pattern in @('*.wal','*.shm')) { Get-AutoEraseFiles -Path `$root -Filter `$pattern -Recurse -Depth 5 })
     Erase-FileSet @(`$files | Select-Object -First 100)
@@ -1712,6 +1713,7 @@ foreach (`$pattern in `$officePatterns) {
 }
 "@
     'embeddedWebCache'   = @"
+`$script:AutoEraseCoverageIncomplete = `$true
 Get-AutoEraseDirectories -Path "`$env:LOCALAPPDATA" -Recurse -Filter 'EBWebView' -Depth 4 | ForEach-Object { Erase-Dir `$_.FullName }
 "@
     'p2pUpdateCache'     = @"
@@ -1729,6 +1731,7 @@ if (Test-Path `$racDir) {
 }
 "@
     'remoteAccessLogs' = @'
+$script:AutoEraseCoverageIncomplete = $true
 $roots = @(
     (Join-Path $env:APPDATA 'TeamViewer'),
     (Join-Path $env:APPDATA 'AnyDesk'),
@@ -1743,6 +1746,7 @@ foreach ($root in $roots) {
 }
 '@
     'gameLauncherLogs' = @'
+$script:AutoEraseCoverageIncomplete = $true
 foreach ($root in @(
     (Join-Path ${env:ProgramFiles(x86)} 'Steam\logs'),
     (Join-Path $env:LOCALAPPDATA 'EpicGamesLauncher\Saved\Logs'),
@@ -1850,7 +1854,8 @@ Invoke-AutoEraseWithServices -Names DPS -Body {
 }
 '@
     'recallDb' = @'
-foreach ($relative in @('CoreAIPlatform.00','ConnectedDevicesPlatform')) {
+$script:AutoEraseCoverageIncomplete = $true
+foreach ($relative in @('CoreAIPlatform.00','Microsoft\Windows\Recall','ConnectedDevicesPlatform','Microsoft\Windows\ActionCenter')) {
     foreach ($pattern in @('*.db','*.db-wal','*.db-shm','*.db-journal','*.edb')) {
         Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA $relative) -Filter $pattern -Recurse)
     }
@@ -1915,11 +1920,13 @@ Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') | Where-
 }
 '@
     'communicationCaches' = @'
+$script:AutoEraseCoverageIncomplete = $true
 foreach ($relative in @('Microsoft\Teams\Cache','Microsoft\Teams\IndexedDB','Slack\Cache','Slack\IndexedDB','Slack\Local Storage\leveldb','discord\Cache','discord\IndexedDB','discord\Local Storage\leveldb')) {
     Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA $relative) -Recurse)
 }
 '@
     'editorHistory' = @'
+$script:AutoEraseCoverageIncomplete = $true
 foreach ($pattern in @('storage.json','state.vscdb')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA 'Code\User\globalStorage') -Filter $pattern) }
 Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA 'Code\User\History') -Recurse)
 Get-AutoEraseDirectories -Path (Join-Path $env:APPDATA 'JetBrains') | ForEach-Object {
@@ -1993,11 +2000,14 @@ $cache = @(& nbtstat.exe -c 2>&1)
 if ($LASTEXITCODE -ne 0 -or @($cache | Where-Object { $_ -match '<[0-9A-Fa-f]{2}>' }).Count) { throw 'NetBIOS-cache cleanup could not be verified.' }
 '@
     'geolocationCache' = @'
+# Location consent metadata is displayed by the scan but not cleared here.
+$script:AutoEraseCoverageIncomplete = $true
 Invoke-AutoEraseWithServices -Names lfsvc -Body {
     Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:ProgramData 'Microsoft\Windows\LfSvc') -Recurse)
 }
 '@
     'vpnPhonebooks' = @'
+$script:AutoEraseCoverageIncomplete = $true
 foreach ($root in @((Join-Path $env:APPDATA 'Microsoft\Network\Connections\Pbk'), (Join-Path $env:LOCALAPPDATA 'Microsoft\Network\Connections'), (Join-Path $env:ProgramData 'Microsoft\Network\Connections\Pbk'))) {
     foreach ($pattern in @('rasphone.pbk','*.log','*.etl')) { Erase-FileSet @(Get-AutoEraseFiles -Path $root -Filter $pattern -Recurse) }
 }
