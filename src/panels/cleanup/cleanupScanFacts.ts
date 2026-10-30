@@ -4,6 +4,7 @@ export type CleanupScanFact = { label: string; value: string };
 // the result count, coverage, or preview indicators elsewhere in the dialog.
 const structuralFields = new Set(['total', 'count', 'sampleCount', 'previewLimit', 'truncated', 'scannedAt', 'scanTime']);
 const labels: Record<string, string> = {
+  runMruOrder: 'Run history order',
   pcaSvcState: 'Compatibility Assistant service',
   wsearchState: 'Windows Search service',
   spoolerState: 'Print Spooler service',
@@ -24,7 +25,9 @@ export function getCleanupScanFacts(data: unknown, failed = false): CleanupScanF
     if (key === 'coverage' && typeof value === 'string' && /^(complete|limited|partial)$/i.test(value.trim())) return [];
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return [];
     if (typeof value === 'number' && !Number.isFinite(value)) return [];
-    if (typeof value === 'string' && !value.trim()) return [];
+    if (typeof value === 'string' && !value.trim()) {
+      return key === 'runMruOrder' ? [{ label: labels.runMruOrder, value: '(empty)' }] : [];
+    }
     const label = labels[key] ?? key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/^./, c => c.toUpperCase());
     return [{ label, value: typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value) }];
   });

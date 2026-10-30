@@ -10,6 +10,11 @@ describe('cleanup scan details', () => {
     ]);
   });
 
+  test('shows the captured Run history order, including an empty order', () => {
+    expect(getCleanupScanFacts({ scanFacts: { runMruOrder: 'ba' } })).toEqual([{ label: 'Run history order', value: 'ba' }]);
+    expect(getCleanupScanFacts({ runMruOrder: '' })).toEqual([{ label: 'Run history order', value: '(empty)' }]);
+  });
+
   test('keeps both boolean values without treating false as missing', () => {
     expect(getCleanupScanFacts({ clipboardHistoryDisabled: false, cloudClipboardDisabled: true })).toEqual([
       { label: 'Clipboard history disabled', value: 'No' },

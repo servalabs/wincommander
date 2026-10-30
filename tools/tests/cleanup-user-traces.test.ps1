@@ -21,8 +21,9 @@ function Get-ItemProperty {
 }
 $script:mode = 'valid'; $result = Get-NTUserTraces
 if ($result.error -or $result.total -ne 4 -or $result.sections[0].entries[0].value -ne 'example' -or $result.sections[0].entries[0].rawValue -ne 'example\1') { throw 'Readable registry details or original RunMRU value were not returned.' }
+if ($result.runMruOrder -ne 'a' -or $result.sections[0].mruOrder -ne 'a') { throw 'RunMRU ordering metadata was dropped.' }
 $script:mode = 'late-denial'; $result = Get-NTUserTraces
-if (-not $result.error -or $result.ContainsKey('total') -or @($result.sections).Count -ne 2 -or $result.sections[0].entries[0].rawValue -ne 'example\1' -or $result.sections[1].entries[0].value -ne 'example') { throw 'Late denial did not preserve earlier registry sections with an unknown total.' }
+if (-not $result.error -or $result.ContainsKey('total') -or @($result.sections).Count -ne 2 -or $result.sections[0].entries[0].rawValue -ne 'example\1' -or $result.sections[1].entries[0].value -ne 'example' -or $result.runMruOrder -ne 'a') { throw 'Late denial did not preserve earlier registry sections with an unknown total.' }
 $script:mode = 'missing'; $result = Get-NTUserTraces
 if ($result.error -or $result.total -ne 0) { throw 'Missing registry keys were not reported as empty.' }
 foreach ($mode in @('denied', 'property-denied')) {

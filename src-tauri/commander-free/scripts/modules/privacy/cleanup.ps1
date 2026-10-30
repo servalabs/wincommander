@@ -3127,6 +3127,7 @@ function Get-RecycleBinInfo {
 function Get-NTUserTraces {
     # Returns all RunMRU, TypedPaths, TypedURLs, WordWheelQuery values
     $sections = @()
+    $runMruOrder = $null
     try {
 
         # RunMRU
@@ -3136,14 +3137,16 @@ function Get-NTUserTraces {
         try { $null = Get-Item -Path $runMruPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $runMruExists = $false }
         if ($runMruExists) {
             $props = Get-ItemProperty -Path $runMruPath -ErrorAction Stop
-            $order = $props.MRUList
+            $runMruOrder = $props.MRUList
             if ($props) {
                 $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^(PS|MRUList)' } | ForEach-Object {
                     $runMru += @{ key = $_.Name; value = ($_.Value -replace '\\1$',''); rawValue = $_.Value }
                 }
             }
         }
-        $sections += @{ name = 'RunMRU'; count = $runMru.Count; entries = $runMru }
+        $runSection = @{ name = 'RunMRU'; count = $runMru.Count; entries = $runMru }
+        if ($null -ne $runMruOrder) { $runSection.mruOrder = $runMruOrder }
+        $sections += $runSection
 
         # TypedPaths
         $tpPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths'
@@ -3189,14 +3192,20 @@ function Get-NTUserTraces {
 
         $totalCount = 0
         foreach ($section in $sections) { $totalCount += [int]$section['count'] }
-        @{ sections = $sections; total = $totalCount }
+        $result = @{ sections = $sections; total = $totalCount }
+        if ($null -ne $runMruOrder) { $result.runMruOrder = $runMruOrder }
+        $result
     }
-    catch { @{ error = $true; message = $_.Exception.Message; sections = $sections } }
+    catch {
+        $result = @{ error = $true; message = $_.Exception.Message; sections = $sections }
+        if ($null -ne $runMruOrder) { $result.runMruOrder = $runMruOrder }
+        $result
+    }
 }
 
 function Get-NotepadStateFiles {
+    $files = @()
     try {
-        $files = @()
         $packageRoot = Join-Path $env:LOCALAPPDATA 'Packages'
         $packages = @()
         try {
@@ -3222,7 +3231,7 @@ function Get-NotepadStateFiles {
         }
         @{ files = $files; total = $files.Count; packageFound = ($packages.Count -gt 0); totalSizeKB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum, 1) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; message = $_.Exception.Message; files = $files } }
 }
 
 function Get-PCAInfo {
@@ -6444,7 +6453,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $extraScanFacts = @{}; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
@@ -7191,8 +7200,12 @@ function Get-CleanupSummaryAllUsers {
                             )
                             foreach ($source in $traceSources) {
                                 if (Test-CleanupSummaryPath $source.path) {
-                                    $props = (Get-Item -LiteralPath $source.path -EA Stop).Property |
-                                        Where-Object { $_ -ne '(default)' -and -not ($source.section -eq 'RunMRU' -and $_ -match '^MRUList') }
+                                    $allProps = @((Get-Item -LiteralPath $source.path -EA Stop).Property)
+                                    if ($source.section -eq 'RunMRU' -and $allProps -contains 'MRUList') {
+                                        try { $extraScanFacts.runMruOrder = Get-ItemPropertyValue -LiteralPath $source.path -Name 'MRUList' -EA Stop }
+                                        catch { $categoryPartial = $true }
+                                    }
+                                    $props = $allProps | Where-Object { $_ -ne '(default)' -and -not ($source.section -eq 'RunMRU' -and $_ -eq 'MRUList') }
                                     foreach ($prop in @($props)) {
                                         $raw = Get-ItemPropertyValue -LiteralPath $source.path -Name $prop -EA Stop
                                         $original = $raw
@@ -7201,7 +7214,10 @@ function Get-CleanupSummaryAllUsers {
                                         if ($records.Count -lt $previewMax) {
                                             # Preserve binary bytes and empty values; display may decode text separately.
                                             $record = @{ section=$source.section; key=$prop; value=$raw }
-                                            if ($source.section -eq 'RunMRU') { $record.rawValue = $original }
+                                            if ($source.section -eq 'RunMRU') {
+                                                $record.rawValue = $original
+                                                if ($extraScanFacts.ContainsKey('runMruOrder')) { $record.mruOrder = $extraScanFacts.runMruOrder }
+                                            }
                                             $records += $record
                                             $items += "$($source.section)\$prop"
                                         }
@@ -7299,6 +7315,11 @@ function Get-CleanupSummaryAllUsers {
                     if ($value -is [string] -or $value -is [bool] -or $value -is [ValueType]) { $facts[$key] = $value }
                 }
                 if ($facts.Count) { $categoryRecord.scanFacts = $facts }
+            }
+            if ($cat -eq 'ntUserTraces' -and $delegated -and $r -and $r.ContainsKey('runMruOrder')) { $extraScanFacts.runMruOrder = $r.runMruOrder }
+            if ($extraScanFacts.Count) {
+                if (-not $categoryRecord.scanFacts) { $categoryRecord.scanFacts = @{} }
+                foreach ($key in $extraScanFacts.Keys) { $categoryRecord.scanFacts[$key] = $extraScanFacts[$key] }
             }
             if ($detailPage) {
                 $categoryRecord.records = $detailPage.records; $categoryRecord.items = @(); $categoryRecord.sampleCount = @($detailPage.records).Count

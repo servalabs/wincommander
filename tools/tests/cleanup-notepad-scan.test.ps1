@@ -15,6 +15,7 @@ try {
     $script:missing = $false
     function Get-Item {
         param([string]$LiteralPath, [switch]$Force, $ErrorAction)
+        if ($script:lateDeny -and $LiteralPath -like '*Microsoft.WindowsNotepad_two*') { throw [UnauthorizedAccessException]::new('Synthetic later denial.') }
         if ($script:deny) { throw [UnauthorizedAccessException]::new('Synthetic access denial.') }
         if ($script:missing) { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent path.') }
         [pscustomobject]@{ FullName = $LiteralPath; PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory }
@@ -30,6 +31,10 @@ try {
     }
     $result = Get-NotepadStateFiles
     if ($result.error -or $result.total -ne 2 -or $result.packageFound -ne $true -or @($result.files | Where-Object { $_.path -notlike '*\nested\tab.bin' }).Count) { throw 'Notepad scanner omitted files or a package.' }
+    $script:lateDeny = $true
+    $result = Get-NotepadStateFiles
+    if (-not $result.error -or $result.ContainsKey('total') -or @($result.files).Count -ne 1 -or $result.files[0].path -notlike '*Microsoft.WindowsNotepad_one*') { throw 'Later denial must retain captured files and an unknown total.' }
+    $script:lateDeny = $false
     $script:missing = $true
     $result = Get-NotepadStateFiles
     if ($result.error -or $result.total -ne 0 -or $result.packageFound) { throw 'Absent packages must be reported as empty.' }
