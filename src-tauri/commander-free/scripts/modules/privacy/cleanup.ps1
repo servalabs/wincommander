@@ -3157,7 +3157,7 @@ function Get-WSLDataInfo {
                 if (Test-Path $vhdx -PathType Leaf -ErrorAction SilentlyContinue) {
                     $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
                     if ($item -and $seenVhdx.Add($item.FullName)) {
-                        $files += @{ name = "Store WSL: $($_.Name)\\LocalState\\ext4.vhdx"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                        $files += @{ name = "Store WSL: $($_.Name)\\LocalState\\ext4.vhdx"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                         $totalBytes += $item.Length
                     }
                 }
@@ -3185,7 +3185,7 @@ function Get-WSLDataInfo {
                 }
                 if ($seenVhdx.Add($item.FullName)) {
                     $label = if ($name) { "WSL: $name\\ext4.vhdx" } else { "WSL: $($_.PSChildName)\\ext4.vhdx" }
-                    $files += @{ name = $label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $files += @{ name = $label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                     $totalBytes += $item.Length
                 }
             }
@@ -3450,7 +3450,7 @@ function Get-NetworkWizardHistoryInfo {
 }
 
 function Get-WERHistoryInfo {
-    # Values are reported by name only so the viewer doesn't disclose consent or exclusion contents.
+    # Return the locally available value and its type alongside its registry name.
     try {
         $files = @()
         foreach ($root in @('HKCU:\Software\Microsoft\Windows\Windows Error Reporting', 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting')) {
@@ -3459,7 +3459,7 @@ function Get-WERHistoryInfo {
                 try { $item = Get-Item -LiteralPath $path -ErrorAction Stop }
                 catch [System.Management.Automation.ItemNotFoundException] { continue }
                 foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                    $files += @{ name = "$root\\$suffix value: $property"; sizeKB = 0; modified = '' }
+                    $files += @{ name = "$root\\$suffix value: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' }
                 }
                 Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop | ForEach-Object {
                     $files += @{ name = "$root\\$suffix subkey: $($_.PSChildName)"; sizeKB = 0; modified = '' }
@@ -6362,8 +6362,13 @@ function Get-CleanupSummaryAllUsers {
                     'embeddedWebCache' {
                         # Match Get-EmbeddedWebCacheInfo: EBWebView folders under LOCALAPPDATA, depth-capped
                         $dirs = if (Test-CleanupSummaryPath $localApp) { @(Get-ChildItem -LiteralPath $localApp -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -EA Stop) } else { @() }
-                        $count = $dirs.Count
-                        $items = $dirs | Select-Object -First $previewMax | ForEach-Object { Split-Path (Split-Path $_.FullName -Parent) -Leaf }
+                        $count = @($dirs).Count
+                        $records = @($dirs | Select-Object -First $previewMax | ForEach-Object {
+                            $dir = $_
+                            $size = (Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -EA Stop | Measure-Object -Property Length -Sum).Sum
+                            @{ source=(Split-Path (Split-Path $dir.FullName -Parent) -Leaf); name='EBWebView'; path=$dir.FullName; sizeKB=[math]::Round(([long]$size) / 1KB, 1); modified=$dir.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                        })
+                        $items = @($records | ForEach-Object { $_.source })
                     }
                     'rdpHistory' {
                         if ($hiveAvailable) {

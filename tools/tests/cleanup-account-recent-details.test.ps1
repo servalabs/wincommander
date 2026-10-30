@@ -17,7 +17,8 @@ function Test-IsAdmin { return $true }
 function Get-LoggedInUsers { return @{ users=@($fixtureUser) } }
 function Get-Item { param([string]$LiteralPath, [switch]$Force, $ErrorAction) if ($LiteralPath -like '*wpndatabase.db*') { return [pscustomobject]@{ Name=[IO.Path]::GetFileName($LiteralPath); FullName=$LiteralPath; PSIsContainer=$false; Length=2048; LastWriteTime=[datetime]'2026-01-02' } }; [pscustomobject]@{ FullName=$LiteralPath; PSIsContainer=$true } }
 function Get-ChildItem {
-    param([Alias('Path')]$LiteralPath, [string[]]$Include, [switch]$File, [switch]$Recurse, [int]$Depth, [string]$Filter, [switch]$Force, [Alias('EA')]$ErrorAction)
+    param([Alias('Path')]$LiteralPath, [string[]]$Include, [switch]$File, [switch]$Directory, [switch]$Recurse, [int]$Depth, [string]$Filter, [switch]$Force, [Alias('EA')]$ErrorAction)
+    if ($Directory -and $Filter -eq 'EBWebView') { return [pscustomobject]@{ Name='EBWebView'; FullName="$LiteralPath\FixtureApp\EBWebView"; LastWriteTime=[datetime]'2026-01-02' } }
     if (-not $File) { throw 'Expected file inventory.' }
     if ($Include) {
         if (-not $Recurse) { throw 'Expected recursive database inventory.' }
@@ -56,4 +57,7 @@ foreach ($category in @('webCache','thumbnailDb','notificationDb','activitiesTim
     $rows = @(@($summary.users)[0].categories[0].records)
     if (-not $rows.Count -or @($rows | Where-Object { -not $_.name -or -not $_.path -or $_.sizeKB -ne 2 -or -not $_.modified }).Count) { throw "Other-account $category records lost file details." }
 }
+$summary = Get-CleanupSummaryAllUsers -CategoryIds 'embeddedWebCache' -TargetUsers $fixtureUser
+$row = @(@($summary.users)[0].categories[0].records)[0]
+if ($row.source -ne 'FixtureApp' -or $row.name -ne 'EBWebView' -or $row.path -notlike '*\FixtureApp\EBWebView' -or $row.sizeKB -ne 2 -or -not $row.modified) { throw 'Other-account embedded web cache lost its source, path, size or date.' }
 Write-Output 'Passed: other-account cleanup records retain their returned file details.'

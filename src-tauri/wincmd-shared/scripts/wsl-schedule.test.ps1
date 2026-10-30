@@ -5,6 +5,18 @@ Assert-True ($script:ScheduledWslFunctions.Contains('WaitForExit(300000)') -and 
 
 # Denied registry, package or disk access must never be mistaken for absence.
 . ([scriptblock]::Create($script:ScheduledWslFunctions))
+# WSL normally emits UTF-16LE, but an inventory consisting entirely of
+# non-ASCII characters need not contain a zero byte or a final newline.
+$unicodeName = [string]::Concat([char]0x4E2D, [char]0x6587)
+$unicodeInventory = @([pscustomobject]@{ Name=$unicodeName })
+$wide = [Text.Encoding]::Unicode.GetBytes($unicodeName)
+Assert-True (-not ($wide -contains 0)) 'Fixture must exercise UTF-16 without null bytes.'
+Assert-True (@(Convert-WCScheduledWslProviderBytes -Bytes $wide -Inventory $unicodeInventory)[0] -ceq $unicodeName) 'UTF-16 inventory without null bytes was not decoded.'
+$utf8 = [Text.Encoding]::UTF8.GetBytes($unicodeName)
+Assert-True (@(Convert-WCScheduledWslProviderBytes -Bytes $utf8 -Inventory $unicodeInventory)[0] -ceq $unicodeName) 'UTF-8 inventory was not decoded.'
+$threw = $false
+try { Convert-WCScheduledWslProviderBytes -Bytes $wide -Inventory @([pscustomobject]@{ Name='different' }) | Out-Null } catch { $threw = $true }
+Assert-True $threw 'Provider output that differs from the registry must fail closed.'
 $script:probeMode = 'denied'
 function Get-Item {
     param([string]$LiteralPath, [switch]$Force, $ErrorAction)

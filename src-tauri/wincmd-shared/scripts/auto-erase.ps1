@@ -474,7 +474,39 @@ function Invoke-WCSshAdd {
 . ([scriptblock]::Create($script:ScheduledSshFunctions))
 
 $script:ScheduledWslFunctions = @'
+function Convert-WCScheduledWslProviderBytes {
+    param([byte[]]$Bytes, $Inventory)
+    $expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($Inventory)) { if (-not $expected.Add([string]$entry.Name)) { throw 'Duplicate WSL registry identity.' } }
+    $encodings = @()
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
+        $encodings = @([Text.UnicodeEncoding]::new($false, $true, $true))
+    } elseif ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        $encodings = @([Text.UTF8Encoding]::new($true, $true))
+    } else {
+        $encodings = @([Text.UnicodeEncoding]::new($false, $false, $true), [Text.UTF8Encoding]::new($false, $true))
+    }
+    foreach ($encoding in $encodings) {
+        try {
+            $text = $encoding.GetString($Bytes).TrimStart([char]0xFEFF)
+            $names = [Collections.Generic.List[string]]::new()
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($line in @($text -split "`r?`n")) {
+                $name = $line.Trim()
+                if (-not $name) { continue }
+                if ($name -match '[\x00-\x1f"\\]' -or $name.StartsWith('-') -or -not $seen.Add($name)) { throw 'WSL provider inventory is ambiguous.' }
+                $names.Add($name)
+            }
+            if ($seen.Count -ne $expected.Count) { continue }
+            $matches = $true
+            foreach ($name in $seen) { if (-not $expected.Contains($name)) { $matches = $false; break } }
+            if ($matches) { return @($names.ToArray()) }
+        } catch { continue }
+    }
+    throw 'WSL provider and registry inventories differ or could not be decoded.'
+}
 function Get-WCScheduledWslProviderNames {
+    param($Inventory)
     $exe = Join-Path $env:SystemRoot 'System32\wsl.exe'
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf -ErrorAction Stop)) { throw 'The WSL provider is unavailable.' }
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -493,23 +525,11 @@ function Get-WCScheduledWslProviderNames {
         }
         $copy.Wait(); $stderr.Wait()
         if ($process.ExitCode -ne 0) { throw 'WSL inventory could not be verified.' }
-        $bytes = $output.ToArray()
-        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $text = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2) }
-        elseif (@($bytes | Where-Object { $_ -eq 0 }).Count) {
-            if ($bytes.Length % 2) { throw 'Invalid WSL inventory encoding.' }
-            $text = [Text.Encoding]::Unicode.GetString($bytes)
-        } else { $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF) }
-        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-        foreach ($line in @($text -split "`r?`n")) {
-            $name = $line.Trim()
-            if (-not $name) { continue }
-            if ($name -match '[\x00-\x1f"\\]' -or $name.StartsWith('-') -or -not $seen.Add($name)) { throw 'WSL provider inventory is ambiguous.' }
-            $name
-        }
+        Convert-WCScheduledWslProviderBytes -Bytes ($output.ToArray()) -Inventory $Inventory
     } finally { $output.Dispose(); $process.Dispose() }
 }
 function Assert-WCScheduledWslProviderInventory($Inventory) {
-    $names = @(Get-WCScheduledWslProviderNames)
+    $names = @(Get-WCScheduledWslProviderNames -Inventory $Inventory)
     $registry = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in @($Inventory)) { $null = $registry.Add([string]$entry.Name) }
     if ($names.Count -ne $registry.Count) { throw 'WSL provider and registry inventories differ.' }
@@ -2483,11 +2503,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v15 (manual opt-in)'
+            'System Maintenance scheduled cleanup v16 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v15 (managed)'
+            'System Maintenance scheduled cleanup v16 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v15'
+            'System Maintenance scheduled cleanup v16'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2739,7 +2759,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2895,7 +2915,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2903,7 +2923,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v15(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v16(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
@@ -2930,9 +2950,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 15
+                $revision = 16
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v15 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v15 (managed)' } else { 'System Maintenance scheduled cleanup v15' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v16 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v16 (managed)' } else { 'System Maintenance scheduled cleanup v16' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

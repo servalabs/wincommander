@@ -14,6 +14,7 @@ import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupSch
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
+import { resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
@@ -575,12 +576,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 const data = res.data;
                 if (res.success && data) {
                     const realProfiles = (data.profiles ?? []).filter(isRealVisibleProfile);
-                    const current =
-                        realProfiles.find((u) => u.isCurrent)?.name ??
-                        realProfiles.find((u) => u.name === data.currentUser)?.name ??
-                        realProfiles[0]?.name ??
-                        data.currentUser ??
-                        '';
+                    const current = resolveCurrentCleanupProfile(realProfiles, data.currentUser);
                     setAvailableUsers(realProfiles);
                     setCurrentUser(current);
                     setIsAdminUser(!!data.isAdmin);
