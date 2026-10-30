@@ -2462,8 +2462,13 @@ function Set-AutoEraseScheduleCore {
         })
         if ($existingTasksAtName.Count -gt 1) { throw 'The existing task name could not be verified uniquely.' }
         $existing = if ($existingTasksAtName.Count -eq 1) { $existingTasksAtName[0] } else { $null }
-        if ($existing -and -not (Get-AutoEraseTaskIdentity $existing)) {
-            throw 'A task with this name belongs to another application. It was left unchanged.'
+        if ($existing) {
+            $existingIdentity = Get-AutoEraseTaskIdentity $existing
+            # The task name contains only a truncated SID hash; even a valid
+            # cleanup task at that name can belong to a different account.
+            if (-not $existingIdentity -or $existingIdentity.categoryId -ne $CategoryId -or $existingIdentity.ownerSid -ne $ownerSid) {
+                throw 'A task with this name belongs to a different owner or application. It was left unchanged.'
+            }
         }
 
         if ($PreserveExisting -and $existing) {

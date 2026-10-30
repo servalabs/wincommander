@@ -293,6 +293,16 @@ describe("System Cleanup persona details", () => {
     expect(rows[0].facts.join(" ")).toContain("C:\\Reports");
   });
 
+  test("preserves flat activity observations alongside grouped entries in an incomplete scan", () => {
+    const activity = ALL_CATEGORIES.find(category => category.id === "ntUserTraces")!;
+    const raw = { partial: true, records: [{ name: "TypedPaths", entries: [{ value: "C:\\Grouped" }] }, { entry: "C:\\Flat" }] };
+    const detail = renderToStaticMarkup(<CleanupDisplayDetails category={activity} mode="advanced" count={-1} items={[]} rawData={raw} error="Incomplete" clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(detail).toContain("C:\\Grouped");
+    expect(detail).toContain("C:\\Flat");
+    expect(detail).toContain("Scan incomplete");
+    expect(detail).toContain("disabled");
+  });
+
   test("keeps source identifiers and extra fields on grouped records", () => {
     const [application] = getSafeCleanupPreview("amcache", { entries: [{ category: "NewInventoryType", count: 1, location: "inventory-key", sample: [{ name: "example" }] }] });
     expect(application.facts.join(" ")).toContain("Category source: NewInventoryType");

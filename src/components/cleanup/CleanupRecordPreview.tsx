@@ -160,8 +160,13 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   const activitySections = Array.isArray(input.sections) ? input.sections : input.records;
   if (id === "ntUserTraces" && Array.isArray(activitySections) && activitySections.some(section => isObject(section) && Array.isArray(section.entries))) {
     const sectionNames: Record<string, string> = { RunMRU: "Run command", TypedPaths: "Typed path", TypedURLs: "Typed web address", WordWheelQuery: "Search entry" };
-    return activitySections.filter(isObject).flatMap((section) => {
-      if (!Array.isArray(section.entries)) return [];
+    return activitySections.flatMap((section, sectionIndex) => {
+      // A partial response can contain both grouped sections and individual
+      // observations. Preserve the latter even when other groups have entries.
+      if (!isObject(section) || !Array.isArray(section.entries)) {
+        const value = visibleText(section);
+        return [{ label: `Activity record ${sectionIndex + 1}`, facts: isObject(section) ? metadata(section, id) : value ? [`Value: ${value}`] : [] }];
+      }
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
       const { name: sourceSection, count: _count, entries: _entries, ...sectionDetails } = section;
       return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []))] }));

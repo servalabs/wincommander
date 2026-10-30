@@ -35,7 +35,7 @@ function Get-ScheduledTask {
     }
     if ($script:existing) { [pscustomobject]@{ TaskPath=$script:SystemMaintenanceTaskPath; TaskName=(Get-AutoEraseTaskName 'dnsCache' 'S-1-5-21-1-2-3-1001'); State='Ready'; CategoryId='dnsCache'; OwnerSid='S-1-5-21-1-2-3-1001' } }
 }
-function Get-AutoEraseTaskIdentity { param($Task) if ($script:unowned) { return $null }; @{ categoryId=$Task.CategoryId; ownerSid=$Task.OwnerSid } }
+function Get-AutoEraseTaskIdentity { param($Task) if ($script:unowned) { return $null }; if ($script:collision) { return @{ categoryId=$Task.CategoryId; ownerSid='S-1-5-21-1-2-3-2002' } }; @{ categoryId=$Task.CategoryId; ownerSid=$Task.OwnerSid } }
 function ConvertTo-AutoEraseTaskArgument { param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$AllowDefaultExcluded) $script:approval=$AllowDefaultExcluded; "mock:${CategoryId}:$IntervalMinutes" }
 function New-ScheduledTaskAction { param($Execute,$Argument) @{ execute=$Execute; argument=$Argument } }
 function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ once=[bool]$Once; at=$At; interval=$RepetitionInterval; startup=[bool]$AtStartup; logon=[bool]$AtLogOn; user=$User } }
@@ -116,6 +116,9 @@ $script:existing = $true
 $script:unowned = $true
 if (-not (Set-IndividualAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60).error -or $script:registered.Count -ne $before) { throw 'An unrelated task was replaced.' }
 $script:unowned = $false
+$script:collision = $true
+if (-not (Set-IndividualAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60).error -or $script:registered.Count -ne $before) { throw 'A recognizable task owned by another account was replaced.' }
+$script:collision = $false
 $preserved = Set-ManagedAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60
 if ($preserved.status -ne 'alreadyConfigured' -or $script:registered.Count -ne $before) { throw 'Existing task was not preserved.' }
 Write-Output "Passed: $($eligible.Count) eligible categories registered in mocks; existing task preserved."

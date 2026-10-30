@@ -6419,6 +6419,14 @@ function Get-CleanupSummaryAllUsers {
                             # UserAssist ROT13 decoded paths + MuiCache exe keys + RecentApps.
                             # Deduplicate across all sources the same way.
                             $seen = @{}
+                            $addExecutionEntry = {
+                                param([string]$EntryPath, [string]$EntrySource)
+                                if (-not [string]::IsNullOrWhiteSpace($EntryPath) -and -not $seen.ContainsKey($EntryPath)) {
+                                    $seen[$EntryPath] = $true
+                                    $items += $EntryPath
+                                    $records += @{ path = $EntryPath; source = $EntrySource }
+                                }
+                            }
 
                             # HKLM AppCompat Store + Persisted (same for every user, no hive needed)
                             foreach ($hklmP in @(
@@ -6429,7 +6437,7 @@ function Get-CleanupSummaryAllUsers {
                                     $p = Get-ItemProperty $hklmP -EA Stop
                                     if ($p) {
                                         $p.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
-                                            if ($_.Name -and -not $seen.ContainsKey($_.Name)) { $seen[$_.Name] = $true; $items += $_.Name }
+                                            . $addExecutionEntry $_.Name (Split-Path -Leaf $hklmP)
                                         }
                                     }
                                 }
@@ -6451,7 +6459,7 @@ function Get-CleanupSummaryAllUsers {
                                                     else { [char]$c }
                                                 }) -join ''
                                                 $d = $d -replace '^\\\?\\', ''
-                                                if ($d -and -not $seen.ContainsKey($d)) { $seen[$d] = $true; $items += $d }
+                                                . $addExecutionEntry $d 'UserAssist'
                                             }
                                         }
                                     }
@@ -6463,18 +6471,23 @@ function Get-CleanupSummaryAllUsers {
                             if (Test-CleanupSummaryPath $muiK) {
                                 (Get-Item $muiK -EA Stop).Property |
                                     Where-Object { $_ -notmatch '^PS' -and $_ -ne 'LangID' } |
-                                    ForEach-Object { if (-not $seen.ContainsKey($_)) { $seen[$_] = $true; $items += $_ } }
+                                    ForEach-Object { . $addExecutionEntry $_ 'MuiCache' }
                             }
 
-                            # RecentApps — AppId property under each subkey
+                            # Match the current-user scanner: the executable path is AppPath.
                             $raK = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Search\RecentApps"
                             if (Test-CleanupSummaryPath $raK) {
                                 Get-ChildItem $raK -EA Stop | ForEach-Object {
                                     $p2 = Get-ItemProperty $_.PSPath -EA Stop
-                                    if ($p2 -and $p2.AppId -and -not $seen.ContainsKey($p2.AppId)) {
-                                        $seen[$p2.AppId] = $true
-                                        $items += $p2.AppId
-                                    }
+                                    if ($p2 -and $p2.AppPath) { . $addExecutionEntry $p2.AppPath 'RecentApps' }
+                                }
+                            }
+
+                            $shimCachePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache'
+                            if (Test-CleanupSummaryPath $shimCachePath) {
+                                $shimData = Get-ItemProperty -LiteralPath $shimCachePath -ErrorAction Stop
+                                if ($shimData -and $shimData.AppCompatCache) {
+                                    . $addExecutionEntry "ShimCache (Binary Blob - $($shimData.AppCompatCache.Length) bytes)" 'ShimCache'
                                 }
                             }
 
