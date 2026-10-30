@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, ClipboardImage, clipboardDetailRecord, readClipboardImageChunk, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -15,6 +15,28 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("does not repeat clipboard text or claim an image needs another viewer", () => {
+    const text = clipboardDetailRecord({ text: "example text", preview: "example text", formats: ["Text"] });
+    expect(text.text).toBe("example text");
+    expect(text.preview).toBeUndefined();
+    const image = clipboardDetailRecord({ formats: ["Bitmap"], preview: "[Content requires another viewer]" });
+    expect(image.preview).toBeUndefined();
+    expect(image.formats).toEqual(["Bitmap"]);
+    const unavailable = clipboardDetailRecord({ formats: ["Other"], preview: "[Content requires another viewer]" });
+    expect(unavailable.preview).toBe("[Content requires another viewer]");
+  });
+  test("shows a load control for clipboard images and accepts only bounded raster data", () => {
+    const html = renderToStaticMarkup(<ClipboardImage itemId="synthetic-id" load={async () => ({ success: false })} />);
+    expect(html).toContain("Load image");
+    const value = { status: "complete", imageMime: "image/png", imageBase64: "AQID", offset: 0, totalBytes: 3, nextOffset: null, snapshotHash: "a".repeat(64) };
+    expect([...readClipboardImageChunk(value, 0)!.bytes]).toEqual([1, 2, 3]);
+    expect(readClipboardImageChunk({ ...value, imageMime: "image/svg+xml" }, 0)).toBeNull();
+    expect(readClipboardImageChunk({ ...value, imageBase64: "bad!" }, 0)).toBeNull();
+    expect(readClipboardImageChunk({ ...value, status: "too-large" }, 0)).toBeNull();
+    expect(readClipboardImageChunk({ ...value, nextOffset: 3 }, 0)).toBeNull();
+    expect(readClipboardImageChunk(value, 0, "b".repeat(64))).toBeNull();
+    expect(readClipboardImageChunk({ ...value, totalBytes: 64 * 1024 * 1024 + 1 }, 0)).toBeNull();
+  });
   test("retains numeric and boolean observations in record arrays", () => {
     const rows = getSafeCleanupPreview("execCache", { records: [0, false, 42, true] });
     expect(rows.map(row => row.facts)).toEqual([["Value: 0"], ["Value: No"], ["Value: 42"], ["Value: Yes"]]);

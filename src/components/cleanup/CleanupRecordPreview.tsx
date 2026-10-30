@@ -13,6 +13,15 @@ function wifiProfiles(input: unknown): unknown[] {
   return [...clearable, ...(Array.isArray(input.additionalProfiles) ? input.additionalProfiles : [])];
 }
 
+export function clipboardDetailRecord(item: RecordObject): RecordObject {
+  const details = { ...item };
+  // A text preview is the same full text returned in `text`; do not show it
+  // twice. Bitmap-only items have a dedicated image control in this view.
+  if (typeof details.text === "string" && details.preview === details.text) delete details.preview;
+  if (Array.isArray(details.formats) && details.formats.includes("Bitmap") && details.preview === "[Content requires another viewer]") delete details.preview;
+  return details;
+}
+
 // These are product-provided category labels, never values supplied by a scan.
 const amcacheLabels: Record<string, string> = {
   InventoryApplication: "Application", InventoryApplicationFile: "Application file",
@@ -51,6 +60,63 @@ function visibleScalar(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return visibleText(value);
+}
+
+// A fresh, bounded chunk is checked before it is joined with any earlier
+// chunk. The digest also binds all chunks to the same clipboard snapshot.
+export function readClipboardImageChunk(value: unknown, expectedOffset: number, expectedHash = "") {
+  if (!isObject(value) || value.status !== "complete" || typeof value.imageMime !== "string" ||
+      !["image/png", "image/jpeg", "image/bmp", "image/gif", "image/webp"].includes(value.imageMime) ||
+      typeof value.imageBase64 !== "string" || value.imageBase64.length === 0 || value.imageBase64.length > 349528 ||
+      value.imageBase64.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.imageBase64) ||
+      !Number.isSafeInteger(value.offset) || value.offset !== expectedOffset || !Number.isSafeInteger(value.totalBytes) ||
+      (value.totalBytes as number) < 1 || (value.totalBytes as number) > 64 * 1024 * 1024 ||
+      typeof value.snapshotHash !== "string" || !/^[a-f0-9]{64}$/.test(value.snapshotHash) || (expectedHash && value.snapshotHash !== expectedHash)) return null;
+  try {
+    const decoded = atob(value.imageBase64);
+    const bytes = Uint8Array.from(decoded, character => character.charCodeAt(0));
+    const end = expectedOffset + bytes.length;
+    if (!bytes.length || bytes.length > 256 * 1024 || end > (value.totalBytes as number) ||
+        (end === value.totalBytes ? value.nextOffset !== null : value.nextOffset !== end)) return null;
+    return { bytes, mime: value.imageMime, totalBytes: value.totalBytes as number, hash: value.snapshotHash, nextOffset: value.nextOffset as number | null };
+  } catch { return null; }
+}
+
+export function ClipboardImage({ itemId, load }: { itemId: string; load: (id: string, offset: number, hash: string) => Promise<{ success: boolean; data?: unknown; error?: string }> }) {
+  const [image, setImage] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  useEffect(() => () => { if (image) URL.revokeObjectURL(image); }, [image]);
+  async function loadImage() {
+    setLoading(true); setMessage(null);
+    try {
+      let offset = 0, hash = "", mime = "", total = 0;
+      let bytes: Uint8Array<ArrayBuffer> | null = null;
+      while (true) {
+        const result = await load(itemId, offset, hash);
+        if (!active.current) return;
+        const chunk = result.success ? readClipboardImageChunk(result.data, offset, hash) : null;
+        if (!chunk || (bytes && (chunk.totalBytes !== total || chunk.mime !== mime))) {
+          const status = isObject(result.data) ? result.data.status : undefined;
+          setMessage(status === "too-large" ? "This image is too large to display here." : status === "unsupported" ? "This image format is not supported." : status === "changed" ? "The clipboard image changed. Open the details again to refresh it." : "The image could not be verified or is no longer available.");
+          return;
+        }
+        if (!bytes) { total = chunk.totalBytes; mime = chunk.mime; hash = chunk.hash; bytes = new Uint8Array(total); }
+        bytes.set(chunk.bytes, offset);
+        if (chunk.nextOffset === null) break;
+        offset = chunk.nextOffset;
+      }
+      const digest = await crypto.subtle.digest("SHA-256", bytes.buffer);
+      if (!active.current) return;
+      const actual = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+      if (actual !== hash) { setMessage("The clipboard image changed and could not be verified."); return; }
+      setImage(URL.createObjectURL(new Blob([bytes], { type: mime })));
+    } catch { if (active.current) setMessage("The image could not be read."); }
+    finally { if (active.current) setLoading(false); }
+  }
+  return <div>{image ? <img src={image} alt="Clipboard image" style={{ maxWidth: "100%", maxHeight: 240, objectFit: "contain" }} /> : <button type="button" disabled={loading} onClick={loadImage}>{loading ? "Loading image…" : "Load image"}</button>}{message ? <p role="status">{message}</p> : null}</div>;
 }
 
 function activityEntry(section: unknown, entry: RecordObject): RecordObject {
@@ -190,7 +256,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return wifiProfiles(input).map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
   }
   if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
-    return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [] }));
+    return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(clipboardDetailRecord(item), id) : [] }));
   }
   if (id === "netDrives" && Array.isArray(input.drives)) {
     return input.drives.map((value, index) => {
@@ -340,7 +406,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   backendRef.current = backend;
   const [secrets, setSecrets] = useState<Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null>(null);
   const [secretError, setSecretError] = useState<string | null>(null);
-  const [clipboardItems, setClipboardItems] = useState<Array<{ type: string; preview: string; charCount: number }> | null>(null);
+  const [clipboardItems, setClipboardItems] = useState<Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount: number }> | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   const [loadingSecrets, setLoadingSecrets] = useState(false);
   const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
@@ -430,7 +496,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const shownData = expandedRaw ?? rawData;
   const all = useMemo(() => clipboardItems ? clipboardItems.map((item, index) => ({
     label: `Clipboard item ${index + 1}`,
-    facts: metadata(item, categoryId),
+    facts: metadata(clipboardDetailRecord(item), categoryId),
   })) : getSafeCleanupPreview(categoryId, shownData), [categoryId, shownData, clipboardItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -446,9 +512,10 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       labels.add(separator < 0 ? "Details" : fact.slice(0, separator));
     }
     if (categoryId === "wlanProfiles") labels.add("Password");
+    if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.formats?.includes("Bitmap"))) labels.add("Image");
     if (!labels.size) labels.add("Details");
     return [...labels];
-  }, [all, categoryId]);
+  }, [all, categoryId, clipboardItems]);
   if (!all.length && !clipboardItems && !(isObject(shownData) && shownData.truncated === true && accountName)) return null;
   const pageSize = mode === "simple" ? 5 : 10;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
@@ -480,7 +547,10 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           const value = separator < 0 ? fact : fact.slice(separator + 2);
           if (categoryId !== "wlanProfiles" || label !== "Password" || !cells.has(label)) cells.set(label, [...(cells.get(label) ?? []), value]);
         }
-        return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
+        const clipboardItem = categoryId === "clipboardHistory" ? clipboardItems?.[row.number - 1] : undefined;
+        return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
+          ? <ClipboardImage key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryImage(id, offset, hash)} />
+          : cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>
     </table></div>
     {!rows.length ? <p role="status">{clipboardItems && all.length === 0 && !query.trim() ? "No clipboard items were returned by the latest check." : "No items match this filter."}</p> : null}

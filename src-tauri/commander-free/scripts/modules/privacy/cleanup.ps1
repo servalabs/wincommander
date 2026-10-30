@@ -45,6 +45,32 @@ function Convert-CleanupClipboardHistoryResult {
     return @{ status = 'complete'; items = $items }
 }
 
+function Convert-CleanupClipboardItemDetails {
+    param($Item, [hashtable]$FormatNames, [scriptblock]$ReadTextFormat)
+    $formats = @($Item.Content.AvailableFormats | ForEach-Object { [string]$_ })
+    $details = @{ type = 'item'; formats = $formats; id = [string]$Item.Id; timestamp = [string]$Item.Timestamp; charCount = 0 }
+    $unavailable = [Collections.Generic.List[string]]::new()
+    foreach ($name in @('text', 'html', 'rtf')) {
+        $format = [string]$FormatNames[$name]
+        if (-not $format -or $format -notin $formats) { continue }
+        try {
+            $value = & $ReadTextFormat $Item $name
+            if ($null -eq $value) { throw 'Clipboard content unavailable.' }
+            $details[$name] = [string]$value
+            if ($name -eq 'text') { $details.type = 'text'; $details.preview = [string]$value; $details.charCount = ([string]$value).Length }
+        } catch { $unavailable.Add($format) }
+    }
+    if ($unavailable.Count) { $details.unavailableFormats = @($unavailable.ToArray()) }
+    # Do not suggest a separate viewer is needed when the returned HTML/RTF
+    # is already present or the bitmap can be loaded by the local image view.
+    if (-not $details.ContainsKey('preview')) {
+        if ($details.ContainsKey('html') -or $details.ContainsKey('rtf')) { $details.type = 'rich text' }
+        elseif ($formats -contains 'Bitmap') { $details.type = 'image' }
+        else { $details.contentStatus = 'Content unavailable for the available formats.' }
+    }
+    return $details
+}
+
 function Get-CleanupClipboardHistory {
     param([bool]$IncludePreviews = $false)
     try {
@@ -64,13 +90,15 @@ function Get-CleanupClipboardHistory {
             $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
             $readPreview = {
                 param($item)
-                if (-not $item.Content.Contains([Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text)) {
-                    return @{ type = 'other'; preview = '[Image or other content]'; charCount = 0 }
+                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf }
+                $readText = {
+                    param($entry, $format)
+                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } }
+                    $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($operation))
+                    if (-not $textTask.Wait(500)) { throw 'Clipboard content timed out.' }
+                    return [string]$textTask.Result
                 }
-                $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($item.Content.GetTextAsync()))
-                if (-not $textTask.Wait(500)) { return @{ type = 'item'; preview = '[Content unavailable]'; charCount = 0 } }
-                $raw = [string]$textTask.Result
-                return @{ type = 'text'; preview = $raw; charCount = $raw.Length }
+                return (Convert-CleanupClipboardItemDetails -Item $item -FormatNames $formats -ReadTextFormat $readText)
             }
         }
         return (Convert-CleanupClipboardHistoryResult -Result $task.Result -ReadPreview $readPreview)
@@ -79,8 +107,81 @@ function Get-CleanupClipboardHistory {
     }
 }
 
+# Read one selected image at a time. A bounded response avoids placing every
+# clipboard image in one backend reply; no temporary file is written.
+function Convert-CleanupClipboardImageStream {
+    param([System.IO.Stream]$Stream, [long]$Offset = 0, [string]$ExpectedHash = '', [long]$MaxBytes = 67108864)
+    $chunkSize = 262144
+    if (-not $Stream -or $MaxBytes -lt 1 -or $MaxBytes -gt 67108864 -or $Offset -lt 0 -or ($Offset % $chunkSize) -ne 0 -or ($Offset -gt 0 -and $ExpectedHash -notmatch '^[0-9a-f]{64}$') -or ($ExpectedHash -and $ExpectedHash -notmatch '^[0-9a-f]{64}$')) { return @{ status = 'unavailable' } }
+    $buffer = New-Object byte[] 65536
+    $chunk = [IO.MemoryStream]::new(); $header = [IO.MemoryStream]::new()
+    $hasher = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+    $total = [long]0
+    try {
+        while ($true) {
+            $read = $Stream.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) { break }
+            if ($total + $read -gt $MaxBytes) { return @{ status = 'too-large' } }
+            $hasher.AppendData($buffer, 0, $read)
+            if ($header.Length -lt 12) { $header.Write($buffer, 0, [Math]::Min($read, 12 - [int]$header.Length)) }
+            $start = [Math]::Max($Offset, $total); $end = [Math]::Min($Offset + $chunkSize, $total + $read)
+            if ($end -gt $start) { $chunk.Write($buffer, [int]($start - $total), [int]($end - $start)) }
+            $total += $read
+        }
+        if ($Offset -ge $total) { return @{ status = 'unavailable' } }
+        $hash = [BitConverter]::ToString($hasher.GetHashAndReset()).Replace('-', '').ToLowerInvariant()
+        if ($ExpectedHash -and $hash -ne $ExpectedHash) { return @{ status = 'changed' } }
+        $bytes = $header.ToArray()
+        $mime = $null
+        if ($bytes.Length -ge 8 -and [BitConverter]::ToString($bytes, 0, 8) -eq '89-50-4E-47-0D-0A-1A-0A') { $mime = 'image/png' }
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xff -and $bytes[1] -eq 0xd8 -and $bytes[2] -eq 0xff) { $mime = 'image/jpeg' }
+        elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0x42 -and $bytes[1] -eq 0x4d) { $mime = 'image/bmp' }
+        elseif ($bytes.Length -ge 6 -and [Text.Encoding]::ASCII.GetString($bytes, 0, 6) -in @('GIF87a','GIF89a')) { $mime = 'image/gif' }
+        elseif ($bytes.Length -ge 12 -and [Text.Encoding]::ASCII.GetString($bytes, 0, 4) -eq 'RIFF' -and [Text.Encoding]::ASCII.GetString($bytes, 8, 4) -eq 'WEBP') { $mime = 'image/webp' }
+        if (-not $mime) { return @{ status = 'unsupported' } }
+        $next = $Offset + $chunk.Length
+        return @{ status = 'complete'; imageMime = $mime; imageBase64 = [Convert]::ToBase64String($chunk.ToArray()); offset = $Offset; totalBytes = $total; nextOffset = if ($next -lt $total) { $next } else { $null }; snapshotHash = $hash }
+    } catch { return @{ status = 'unavailable' } }
+    finally { $chunk.Dispose(); $header.Dispose(); $hasher.Dispose() }
+}
+
+function Get-CleanupClipboardImage {
+    param([string]$ItemId, [long]$Offset = 0, [string]$ExpectedHash = '')
+    if ([string]::IsNullOrWhiteSpace($ItemId) -or $ItemId.Length -gt 256) { return @{ status = 'unavailable' } }
+    $stream = $null; $randomStream = $null
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $referenceType = [Windows.Storage.Streams.RandomAccessStreamReference, Windows.Storage.Streams, ContentType=WindowsRuntime]
+        $streamType = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable' } }
+        $historyTask = $asTask.MakeGenericMethod([Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]).Invoke($null, @([Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()))
+        if (-not $historyTask.Wait(2000) -or [string]$historyTask.Result.Status -ne 'Success') { return @{ status = 'unavailable' } }
+        $matches = @($historyTask.Result.Items | Where-Object { [string]$_.Id -ceq $ItemId })
+        if ($matches.Count -ne 1 -or -not $matches[0].Content.Contains([Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Bitmap)) { return @{ status = 'unavailable' } }
+        $bitmapTask = $asTask.MakeGenericMethod($referenceType).Invoke($null, @($matches[0].Content.GetBitmapAsync()))
+        if (-not $bitmapTask.Wait(2000) -or -not $bitmapTask.Result) { return @{ status = 'unavailable' } }
+        $openTask = $asTask.MakeGenericMethod($streamType).Invoke($null, @($bitmapTask.Result.OpenReadAsync()))
+        if (-not $openTask.Wait(2000) -or -not $openTask.Result) { return @{ status = 'unavailable' } }
+        $randomStream = $openTask.Result
+        if ($randomStream.Size -gt 67108864) { return @{ status = 'too-large' } }
+        $stream = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($randomStream)
+        return (Convert-CleanupClipboardImageStream -Stream $stream -Offset $Offset -ExpectedHash $ExpectedHash)
+    } catch { return @{ status = 'unavailable' } }
+    finally {
+        if ($stream) { try { $stream.Dispose() } catch { } }
+        if ($randomStream) { try { $randomStream.Dispose() } catch { } }
+    }
+}
+
 function Get-ClipboardHistoryStatus {
-    param([bool]$IncludePreviews = $false)
+    param([bool]$IncludePreviews = $false, [string]$ImageItemId = '', [long]$ImageOffset = 0, [string]$ImageSnapshot = '')
+    if ($PSBoundParameters.ContainsKey('ImageItemId')) { return (Get-CleanupClipboardImage -ItemId $ImageItemId -Offset $ImageOffset -ExpectedHash $ImageSnapshot) }
     try {
         $cb    = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -EA SilentlyContinue
         # Also detect if an external policy (GPO/MDM we didn't set) is blocking things.
@@ -1322,7 +1423,7 @@ function Get-FleetForensicProjection {
             'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
             'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
             'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
-            'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
+            'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
             'netbios_cache' { $result = Get-NetBIOSCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read NetBIOS-cache summaries.') }; return (& $metadataProjection 'netbios_cache' 'NetBIOS cache' $result 'NetBIOS cache metadata') }
             'geolocation_cache' { $result = Get-GeolocationCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read geolocation-cache summaries.') }; return (& $metadataProjection 'geolocation_cache' 'Geolocation cache' $result 'Geolocation metadata') }
             'vpn_phonebooks' { $result = Get-VPNPhonebooksInfo; if ($result.error) { return (& $empty 'System Cleanup could not read VPN-phonebook summaries.') }; return (& $metadataProjection 'vpn_phonebooks' 'VPN phonebooks' $result 'VPN metadata') }
@@ -4054,14 +4155,14 @@ function Get-FirewallLogInfo {
 }
 
 function Get-NeighborCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
         Get-NetNeighbor -ErrorAction Stop | Where-Object { $_.State -ne 'Permanent' } | ForEach-Object {
-            $files += @{ name = "Neighbor: $($_.InterfaceAlias) $($_.IPAddress) ($($_.State))"; sizeKB = 0; modified = '' }
+            $files.Add(@{ name = "Neighbor: $($_.InterfaceAlias) $($_.IPAddress) ($($_.State))"; interfaceAlias = [string]$_.InterfaceAlias; interfaceIndex = $_.InterfaceIndex; address = [string]$_.IPAddress; linkLayerAddress = [string]$_.LinkLayerAddress; state = [string]$_.State; addressFamily = [string]$_.AddressFamily; sizeKB = 0; modified = '' })
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some neighbor-cache entries could not be checked.' } else { $null } }
 }
 
 function Get-NetBIOSCacheInfo {

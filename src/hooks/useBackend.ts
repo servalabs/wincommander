@@ -1551,7 +1551,8 @@ export function useBackend(retainCleanupScanErrors = false) {
     // Scheduled Clipboard Erase — REMOVED, replaced by setAutoEraseSchedule('clipboard', n)
     disableClipboardHistory: () => execute("Disable-ClipboardHistory"),
     enableClipboardHistory: () => execute("Enable-ClipboardHistory"),
-    getClipboardHistoryStatus: (includePreviews = false) => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ type: string; preview: string; charCount: number }>; historyReadStatus?: string; partial?: boolean; message?: string }>("Get-ClipboardHistoryStatus", { IncludePreviews: includePreviews }),
+    getClipboardHistoryStatus: (includePreviews = false) => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount: number }>; historyReadStatus?: string; partial?: boolean; message?: string }>("Get-ClipboardHistoryStatus", { IncludePreviews: includePreviews }),
+    getClipboardHistoryImage: (itemId: string, offset = 0, snapshot = "") => execute<{ status: string; imageMime?: string; imageBase64?: string; offset?: number; totalBytes?: number; nextOffset?: number | null; snapshotHash?: string }>("Get-ClipboardHistoryStatus", { ImageItemId: itemId, ImageOffset: offset, ImageSnapshot: snapshot }),
     disableCloudClipboardSync: () => execute("Disable-CloudClipboardSync"),
     enableCloudClipboardSync: () => execute("Enable-CloudClipboardSync"),
 

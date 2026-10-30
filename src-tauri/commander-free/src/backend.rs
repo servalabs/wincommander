@@ -5310,7 +5310,10 @@ pub(crate) async fn run_backend_script_with_timeout(
         .iter()
         .map(|(k, v)| {
             let kl = k.to_lowercase();
-            let is_secret = kl.contains("password") || kl.contains("keyfile");
+            let is_secret = kl.contains("password")
+                || kl.contains("keyfile")
+                || (command == "Get-ClipboardHistoryStatus"
+                    && matches!(kl.as_str(), "imageitemid" | "imagesnapshot"));
             (k.as_str(), if is_secret { "***" } else { v.as_str() })
         })
         .collect();
