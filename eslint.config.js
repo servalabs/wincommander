@@ -103,6 +103,7 @@ const LEGACY_RAW_INVOKE_FILES = [
 export default [
   {
     ignores: [
+      ".dev/**",
       "dist/**",
       "node_modules/**",
       "src-tauri/**",
