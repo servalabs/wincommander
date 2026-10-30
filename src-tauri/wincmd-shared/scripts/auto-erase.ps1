@@ -3124,7 +3124,9 @@ function Test-AutoEraseRunnablePayload {
     $expectedLogon = if ($isSystem) { 'ServiceAccount' } elseif ($Identity.categoryId -in @('credentialManager', 'wslData', 'virtualMachineArtifacts', 'dockerDesktopData')) { 'Interactive' } else { 'S4U' }
     if ([string]$Task.Principal.LogonType -ne $expectedLogon -or (-not $isSystem -and [string]$Task.Principal.RunLevel -ne 'Highest')) { return $false }
     $argument = [string](@($Task.Actions)[0].Arguments)
-    if ($argument -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
+    # An owned file is only useful if PowerShell actually runs it. Extra
+    # switches (especially -Command) can change what Scheduler executes.
+    if ($argument -notmatch '(?i)^-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "([^"]+)"$') { return $false }
     $body = Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction Stop
     # Protected categories only execute after explicit per-card authorization.
     # A valid-looking script with the flag removed or false immediately exits.

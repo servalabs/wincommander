@@ -38,6 +38,12 @@ try {
     $script:fixtureTask.Triggers[0] | Add-Member -NotePropertyName StartBoundary -NotePropertyValue ($firstDue.ToString('o'))
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    # A valid script path does not prove the action will run it: -Command can
+    # alter PowerShell's invocation even when the -File argument remains.
+    $script:fixtureTask.Actions[0].Arguments = '-Command "Write-Output skipped" ' + $argument
+    $alteredArguments = Get-AutoEraseSchedules
+    if ($alteredArguments.error -or $alteredArguments.total -ne 1 -or $alteredArguments.schedules[0].payloadVerified) { throw 'Extra PowerShell arguments must not be verified as the generated action.' }
+    $script:fixtureTask.Actions[0].Arguments = $argument
     $knownTask = $script:fixtureTask
     $unresolvedTask = [pscustomobject]@{
         TaskPath = $knownTask.TaskPath; TaskName = $knownTask.TaskName; State = 'Ready'

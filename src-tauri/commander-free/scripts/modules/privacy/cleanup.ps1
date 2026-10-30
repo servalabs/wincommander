@@ -4065,17 +4065,21 @@ function Get-NeighborCacheInfo {
 }
 
 function Get-NetBIOSCacheInfo {
+    $files = @()
     try {
-        $files = @()
-        foreach ($line in @(& nbtstat.exe -c 2>$null)) {
+        $LASTEXITCODE = 0
+        $output = @(& nbtstat.exe -c 2>$null)
+        $exitCode = $LASTEXITCODE
+        foreach ($line in $output) {
             $text = ([string]$line).Trim()
             if ($text -match '<[0-9A-F]{2}>' -and $text -notmatch 'NetBIOS Remote Cache') {
                 $files += @{ name = "NetBIOS cache: $text"; sizeKB = 0; modified = '' }
             }
         }
+        if ($exitCode -ne 0) { throw 'NetBIOS cache could not be checked.' }
         @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    catch { @{ error = $true; message = 'NetBIOS cache could not be checked.'; files = @($files); total = @($files).Count; totalSizeMB = 0 } }
 }
 
 function Get-GeolocationCacheInfo {
