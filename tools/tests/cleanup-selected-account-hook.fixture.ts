@@ -37,6 +37,10 @@ const backend = {
     { name: 'Other', sid: other, path: 'C:\\Users\\Other', isCurrent: false },
   ], currentUser: 'Self', currentSid: current, isAdmin: true } }),
   getAutoEraseSchedules: async () => ({ success: true, data: { schedules: rows } }),
+  getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
+    calls.push(['scan', ids, targets]);
+    return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id: 'sshState', count: 1, partial: true, status: 'partial', message: 'SSH agent state cannot be checked for another account.', records: [{ name: 'SSH known_hosts', path: 'C:\\Users\\Other\\.ssh\\known_hosts' }] }] }] } };
+  },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
     calls.push(['set', ...args]);
     rows = [{ categoryId: 'browserFootprints', state: 'Ready', enabled: true, scope: 'other-user', targetUser: 'MACHINE\\Other', ownerSid: responseOwner, intervalMinutes: 60, payloadVerified: true, managedByAutoSet: false, legacy: false }];
@@ -67,6 +71,15 @@ hook.handleSwitchUser(other);
 hook = render();
 expect(hook.selectedOwnerSid).toBe(other);
 expect(hook.otherScheduleState).toBe('verified');
+
+await hook.loadUserView(other, ['sshState']);
+expect(calls.shift()).toEqual(['scan', ['sshState'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.sshState.count).toBe(-1);
+expect(hook.otherUserDataMap.sshState.raw).toMatchObject({ partial: true, records: [{ name: 'SSH known_hosts' }] });
+await hook.handleOtherUserClear({ id: 'sshState' } as never);
+await hook.handleCardClearAllUsers({ id: 'sshState' } as never);
+expect(calls).toHaveLength(0);
 
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);
 expect(requestedConfirmation).toContain(other);

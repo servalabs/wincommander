@@ -13,6 +13,13 @@ const developerCaches = DEEP_DFIR_CATEGORIES.find(category => category.id === "d
 const clipboard = STANDARD_CATEGORIES.find(category => category.id === "clipboardHistory")!;
 
 describe("cleanup scan results", () => {
+  test("late user activity scan failures retain earlier observations and an unknown count", () => {
+    const data = { error: true, message: "A later source was unavailable", sections: [{ name: "RunMRU", count: 1, entries: [{ key: "a", value: "example", rawValue: "example\\1" }] }] };
+    const result = readCleanupScanResult(userTraces, { success: true, data });
+    expect(result.count).toBe(-1);
+    expect(result.error).toBe("A later source was unavailable");
+    expect(result.raw).toEqual(data);
+  });
   test("keeps all returned command history records beyond the old 300-row limit", () => {
     const entries = Array.from({ length: 650 }, (_, id) => ({ id, command: `command-${id}` }));
     const result = readCleanupScanResult(history, { success: true, data: { total: 650, entries, sampleCount: 650, previewLimit: 650, truncated: false } });

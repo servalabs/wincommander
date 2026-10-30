@@ -16,6 +16,7 @@ export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanup
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
 import { cleanupProfileKey, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
 import { createCleanupProfileReadGate } from "./cleanupProfileReadGate";
+import { OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
@@ -371,7 +372,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const ticket = profileReadGate.current.begin();
         setOtherUserLoading(true);
         try {
-            const res = await getCleanupSummaryAllUsers(categoryIds ?? [], [username]);
+            const res = await getCleanupSummaryAllUsers(categoryIds ?? [...MULTI_USER_CLEANUP_IDS, ...OTHER_ACCOUNT_READ_ONLY_IDS], [username]);
             if (!profileReadGate.current.isCurrent(ticket)) return false;
             if (res.success && res.data?.users?.length === 1 && !(res.data as { error?: boolean }).error &&
                 ((/^S-1-5-21-/i.test(username) && res.data.users[0].sid?.toLowerCase() === username.toLowerCase()) ||
@@ -384,7 +385,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 const next: Record<string, CardData> = {};
                 const requestedIds = categoryIds?.length ? new Set(categoryIds) : null;
                 for (const cat of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]) {
-                    if (!cat.scopeAware || !MULTI_USER_CLEANUP_IDS.has(cat.id)) continue;
+                    if (!cat.scopeAware || (!MULTI_USER_CLEANUP_IDS.has(cat.id) && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id))) continue;
                     if (requestedIds && !requestedIds.has(cat.id)) continue;
                     const d = byId[cat.id];
                     next[cat.id] = {
@@ -1289,7 +1290,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // "Clear for {selected user}" in the sub-section.
     const handleOtherUserClear = async (cat: CleanupCategory) => {
-        if (!selectedUser) return;
+        if (!selectedUser || !MULTI_USER_CLEANUP_IDS.has(cat.id)) return;
         const accepted = await requestConfirm({
             title: `Clear ${cat.label}?`,
             description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward. This cannot be undone.`,
@@ -1301,6 +1302,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // "Clear for all users" in the sub-section (admin-only, scopeAware-only).
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
+        if (!MULTI_USER_CLEANUP_IDS.has(cat.id)) return;
         const accepted = await requestConfirm({
             title: `Clear ${cat.label} for all users?`,
             description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all user profiles the backend can access? The ${availableUsers.length} detected profiles shown here may not include every account; this action may affect profiles beyond the list. This cannot be undone.`,

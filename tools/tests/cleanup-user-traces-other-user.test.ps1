@@ -15,6 +15,7 @@ function Get-LoggedInUsers { return @{ users=@($fixtureUser) } }
 function Get-Item {
     param([Alias('Path')][string]$LiteralPath, [switch]$Force, [Alias('EA')]$ErrorAction)
     if ($LiteralPath -eq 'Registry::HKEY_USERS\S-1-5-21-999-999-999-998') { return [pscustomobject]@{ PSIsContainer=$true } }
+    if ($LiteralPath -like '*Explorer\RunMRU') { return [pscustomobject]@{ Property=@('a') } }
     if ($LiteralPath -like '*Internet Explorer\TypedURLs') { return [pscustomobject]@{ Property=@('url1') } }
     if ($LiteralPath -like '*Explorer\WordWheelQuery') { return [pscustomobject]@{ Property=@('0', 'empty', 'MRUListEx') } }
     throw [System.Management.Automation.ItemNotFoundException]::new()
@@ -22,6 +23,7 @@ function Get-Item {
 function Get-ItemPropertyValue {
     param([Alias('Path')][string]$LiteralPath, [string]$Name, [Alias('EA')]$ErrorAction)
     if ($LiteralPath -like '*Internet Explorer\TypedURLs' -and $Name -eq 'url1') { return 'https://fixture.invalid/' }
+    if ($LiteralPath -like '*Explorer\RunMRU' -and $Name -eq 'a') { return 'example\1' }
     if ($Name -eq '0') { return ,([byte[]](0x41, 0, 0, 0)) }
     if ($Name -eq 'empty') { return '' }
     if ($Name -eq 'MRUListEx') { return ,([byte[]](0, 0, 0, 0)) }
@@ -29,7 +31,9 @@ function Get-ItemPropertyValue {
 }
 $result = Get-CleanupSummaryAllUsers -CategoryIds 'ntUserTraces' -TargetUsers $fixtureUser
 $category = @($result.users)[0].categories[0]
-if ($category.error -or $category.count -ne 4) { throw 'Selected account trace count did not include all values.' }
+if ($category.error -or $category.count -ne 5) { throw 'Selected account trace count did not include all values.' }
+$run = @($category.records | Where-Object { $_.section -eq 'RunMRU' -and $_.key -eq 'a' })
+if ($run.Count -ne 1 -or $run[0].value -ne 'example' -or $run[0].rawValue -ne 'example\1') { throw 'RunMRU original value was not retained.' }
 $url = @($category.records | Where-Object { $_.section -eq 'TypedURLs' -and $_.key -eq 'url1' })
 if ($url.Count -ne 1 -or $url[0].value -ne 'https://fixture.invalid/') { throw 'Internet Explorer TypedURLs was not read.' }
 $binary = @($category.records | Where-Object { $_.section -eq 'WordWheelQuery' -and $_.key -eq '0' })

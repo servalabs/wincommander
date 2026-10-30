@@ -355,7 +355,7 @@ export default function SystemCleanupPanel() {
                     scheduleDisabled={scan.otherScheduleState === "verified" && !!scan.otherScheduleSnapshot?.disabledSchedules[otherDetail.catId]}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
-                    onClear={!isInvestigator && canSwitchUsers
+                    onClear={!isInvestigator && canSwitchUsers && otherDetail.catId !== 'sshState'
                         ? () => {
                             const cat = allTraceCategories.find(c => c.id === otherDetail.catId);
                             setOtherDetail(null);

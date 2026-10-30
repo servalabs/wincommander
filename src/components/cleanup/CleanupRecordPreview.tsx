@@ -233,6 +233,7 @@ function metadata(row: RecordObject, categoryId: string): string[] {
   const facts: string[] = [];
   const used = new Set<string>();
   const values = new Map(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
+  const chosenKeys = new Map(Object.keys(row).map(key => [key.toLowerCase(), key]));
   const field = (key: string) => values.get(key.toLowerCase());
   const fields: Array<[string[], string]> = [
     [["name", "friendlyName", "processName", "displayName", "title"], "Name"],
@@ -316,7 +317,13 @@ function metadata(row: RecordObject, categoryId: string): string[] {
       facts.push(`${label}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : value === "" ? "(empty)" : value}`);
     }
   };
-  for (const [key, value] of Object.entries(row)) if (!used.has(key.toLowerCase())) append(key, value);
+  for (const [key, value] of Object.entries(row)) {
+    const lower = key.toLowerCase();
+    // Matching common fields is case-insensitive, but returned objects may
+    // contain distinct keys that differ only by case. Only suppress the
+    // actual key already rendered; retain every other returned value.
+    if (!used.has(lower) || chosenKeys.get(lower) !== key) append(key, value);
+  }
   return facts;
 }
 
@@ -345,24 +352,24 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       }
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
       const { name: sourceSection, count: _count, entries: _entries, ...sectionDetails } = section;
-      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleScalar(entry) !== null ? [`Value: ${visibleScalar(entry)}`] : []))] }));
+      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : [`Value: ${visibleObservation(entry) ?? "Unavailable"}`])] }));
     });
   }
   if (id === "wlanProfiles" && (Array.isArray(input.profiles) || Array.isArray(input.additionalProfiles))) {
-    return wifiProfiles(input).map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
+    return wifiProfiles(input).map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [`Value: ${visibleObservation(profile) ?? "Unavailable"}`] }));
   }
   if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
-    return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(clipboardDetailRecord(item), id) : [] }));
+    return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(clipboardDetailRecord(item), id) : [`Value: ${visibleObservation(item) ?? "Unavailable"}`] }));
   }
   if (id === "netDrives" && Array.isArray(input.drives)) {
     return input.drives.map((value, index) => {
       const candidate = isObject(value) ? value.Name ?? value.localName : null;
       const drive = typeof candidate === "string" && /^[A-Za-z]:?$/.test(candidate.trim()) ? candidate.trim().replace(/:?$/, ":").toUpperCase() : null;
-      return { label: drive ? `Drive ${drive}` : `Network drive ${index + 1}`, facts: isObject(value) ? metadata(value, id) : [] };
+      return { label: drive ? `Drive ${drive}` : `Network drive ${index + 1}`, facts: isObject(value) ? metadata(value, id) : [`Value: ${visibleObservation(value) ?? "Unavailable"}`] };
     });
   }
   if (id === "recycleBin" && Array.isArray(input.items)) {
-    return input.items.map((item, index) => ({ label: `Recycle Bin record ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [] }));
+    return input.items.map((item, index) => ({ label: `Recycle Bin record ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [`Value: ${visibleObservation(item) ?? "Unavailable"}`] }));
   }
   const browsers = Array.isArray(input.browsers) ? input.browsers : input.records;
   if (id === "browserFootprints" && Array.isArray(browsers)) {

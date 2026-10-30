@@ -22,7 +22,7 @@ import {
 import { packCleanCards } from "./cleanupCardLayout";
 import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
 import { cleanupAccountScopeLabel, cleanupProfileKey } from "./cleanupProfileIdentity";
-import { isOtherAccountScheduleOnly } from "./cleanupOtherAccountScheduleOnly";
+import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -197,7 +197,7 @@ export default function CleanupCategoryGrid({
     (cat) =>
       cat.scopeAware &&
       cat.usabilityTier === tier &&
-      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
+      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || (!isViewingAllUsers && !!selectedOwnerSid && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
   );
   const userCardData = (cat: CleanupCategory) => {
     if (!isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)) {
@@ -216,6 +216,7 @@ export default function CleanupCategoryGrid({
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
     const scheduleOnly = !isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers);
+    const readOnly = !isViewingCurrentUser && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id);
     const offerAllUsers = canSwitchUsers;
     const canScheduleSelection = isViewingCurrentUser || (!!selectedOwnerSid && !isViewingAllUsers && !cat.schedulerRunAsSystem);
     const selectedScheduleState = isViewingCurrentUser ? scheduleState : otherScheduleState;
@@ -242,7 +243,7 @@ export default function CleanupCategoryGrid({
         excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
         scheduleOnly={scheduleOnly}
-        onClear={scheduleOnly ? undefined : () =>
+        onClear={scheduleOnly || readOnly ? undefined : () =>
           isViewingAllUsers
             ? handleCardClearAllUsers(cat)
             : isViewingCurrentUser
@@ -251,7 +252,7 @@ export default function CleanupCategoryGrid({
         }
         clearDisabled={isInvestigator}
         onClearAllUsers={
-          !scheduleOnly && offerAllUsers && !isViewingAllUsers
+          !scheduleOnly && !readOnly && offerAllUsers && !isViewingAllUsers
             ? () => handleCardClearAllUsers(cat)
             : undefined
         }

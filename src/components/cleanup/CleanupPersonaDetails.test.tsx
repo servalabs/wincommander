@@ -512,6 +512,21 @@ describe("System Cleanup persona details", () => {
     for (const value of ["name", "display", "adapter", "first", "second", "sample-token"]) expect(row.facts.join(" ")).toContain(value);
   });
 
+  test("retains case-distinct fields and unusual device observations", () => {
+    const records = getSafeCleanupPreview("processIntel", { processes: [{ name: "first", Name: "second", sizeKB: 3, sizekb: 4 }] });
+    expect(records[0].facts).toContain("Name: first");
+    expect(records[0].facts).toContain("Name: second");
+    expect(records[0].facts).toContain("Size KB: 3");
+    expect(records[0].facts).toContain("Size: 4.0 KB");
+    for (const [id, key] of [["wlanProfiles", "profiles"], ["clipboardHistory", "historyItems"], ["netDrives", "drives"], ["recycleBin", "items"]]) {
+      const rows = getSafeCleanupPreview(id, { [key]: ["observation", [1, 2], null] });
+      expect(rows.map(row => row.facts)).toEqual([["Value: observation"], ["Value: [1,2]"], ["Value: Unavailable"]]);
+    }
+    const activity = getSafeCleanupPreview("ntUserTraces", { sections: [{ name: "RunMRU", entries: [[1, 2], null] }] });
+    expect(activity[0].facts).toContain("Value: [1,2]");
+    expect(activity[1].facts).toContain("Value: Unavailable");
+  });
+
   test("renders each DNS field in its own column with a compact number", () => {
     const dns = ALL_CATEGORIES.find(category => category.id === "dnsCache")!;
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={dns} mode="advanced" count={1} items={[]} rawData={{ entries: [{ Name: "example.test", Data: "192.0.2.1", TTL: 300, Status: "Success" }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);

@@ -15,11 +15,14 @@ function Get-Item {
 function Get-ItemProperty {
     param($Path, $ErrorAction)
     if ($script:mode -eq 'property-denied') { throw [UnauthorizedAccessException]::new('Synthetic property denial') }
+    if ($script:mode -eq 'late-denial' -and $Path -like '*TypedURLs') { throw [UnauthorizedAccessException]::new('Synthetic later denial') }
     if ($Path -like '*RunMRU') { return [pscustomobject]@{ MRUList = 'a'; a = 'example\1' } }
     return [pscustomobject]@{ item = 'example' }
 }
 $script:mode = 'valid'; $result = Get-NTUserTraces
-if ($result.error -or $result.total -ne 4 -or $result.sections[0].entries[0].value -ne 'example') { throw 'Readable registry details were not returned.' }
+if ($result.error -or $result.total -ne 4 -or $result.sections[0].entries[0].value -ne 'example' -or $result.sections[0].entries[0].rawValue -ne 'example\1') { throw 'Readable registry details or original RunMRU value were not returned.' }
+$script:mode = 'late-denial'; $result = Get-NTUserTraces
+if (-not $result.error -or $result.ContainsKey('total') -or @($result.sections).Count -ne 2 -or $result.sections[0].entries[0].rawValue -ne 'example\1' -or $result.sections[1].entries[0].value -ne 'example') { throw 'Late denial did not preserve earlier registry sections with an unknown total.' }
 $script:mode = 'missing'; $result = Get-NTUserTraces
 if ($result.error -or $result.total -ne 0) { throw 'Missing registry keys were not reported as empty.' }
 foreach ($mode in @('denied', 'property-denied')) {

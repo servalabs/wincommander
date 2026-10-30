@@ -1587,7 +1587,7 @@ function Get-ProcessIntelligence {
         foreach ($p in $procs) {
             try {
             $processId = $p.Id
-            if ($processId -le 0) { continue }
+            if ($processId -le 0) { $partial = $true; continue }
             $processName = $p.ProcessName
             if ([string]::IsNullOrWhiteSpace([string]$processName)) { $partial = $true; continue }
             $path = $null
@@ -1596,26 +1596,35 @@ function Get-ProcessIntelligence {
             try {
                 $path = $p.MainModule.FileName
             }
-            catch {}
+            catch { $partial = $true }
+            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true }
             if ($path -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)) {
                 try {
-                    $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue
+                    $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
                     if ($sig) {
                         $sigStatus = $sig.Status.ToString()
                         if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate) {
                             $signer = $sig.SignerCertificate.Subject
                         }
+                        if ($sigStatus -in @('UnknownError', 'NotSupportedFileFormat', 'Incompatible') -or
+                            ($sigStatus -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$signer))) { $partial = $true }
+                    } else {
+                        $partial = $true
                     }
                 }
                 catch {
                     $sigStatus = "UnknownError"
+                    $partial = $true
                 }
-            }
-            $elevated = Get-CleanupProcessElevation -ProcessId $processId
+            } elseif ($path) { $partial = $true }
+            try { $elevated = Get-CleanupProcessElevation -ProcessId $processId }
+            catch { $elevated = 'Unknown'; $partial = $true }
+            if ($elevated -notin @('Yes', 'No')) { $partial = $true }
             $entries.Add(@{
                 name     = $processName
                 pid      = $processId
-                path     = if ($path) { $path } else { "" }
+                path     = if ($path) { $path } else { $null }
+                pathStatus = if ($path) { 'available' } else { 'unavailable' }
                 signed   = $sigStatus
                 signer   = $signer
                 elevated = $elevated
@@ -3117,8 +3126,8 @@ function Get-RecycleBinInfo {
 
 function Get-NTUserTraces {
     # Returns all RunMRU, TypedPaths, TypedURLs, WordWheelQuery values
+    $sections = @()
     try {
-        $sections = @()
 
         # RunMRU
         $runMruPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
@@ -3130,7 +3139,7 @@ function Get-NTUserTraces {
             $order = $props.MRUList
             if ($props) {
                 $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^(PS|MRUList)' } | ForEach-Object {
-                    $runMru += @{ key = $_.Name; value = ($_.Value -replace '\\1$','') }
+                    $runMru += @{ key = $_.Name; value = ($_.Value -replace '\\1$',''); rawValue = $_.Value }
                 }
             }
         }
@@ -3182,7 +3191,7 @@ function Get-NTUserTraces {
         foreach ($section in $sections) { $totalCount += [int]$section['count'] }
         @{ sections = $sections; total = $totalCount }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; message = $_.Exception.Message; sections = $sections } }
 }
 
 function Get-NotepadStateFiles {
@@ -6179,8 +6188,9 @@ function Get-CleanupSummaryAllUsers {
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
                  'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
+    $supportedCats = @($allCats) + @('sshState')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
-        $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $allCats }
+        $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
 
     if (@($requestedCats).Count -eq 0) { return @{ error = $true; status = 'error'; message = 'No supported per-user cleanup categories were requested.'; users = @(); userCount = 0 } }
@@ -6249,7 +6259,7 @@ function Get-CleanupSummaryAllUsers {
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
-        if (-not $isCurrentUser) {
+        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -ne 'sshState' }).Count -gt 0) {
             # Strategy: try the live SID path in HKEY_USERS FIRST — this works for
             # any user who is logged in (interactive, RDP, disconnected session, etc.)
             # without needing reg load. Only fall back to reg load for truly offline users.
@@ -6368,6 +6378,12 @@ function Get-CleanupSummaryAllUsers {
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
+                        'sshState' {
+                            $r = Get-SSHStateInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
                         'crashDumps' {
                             $r = Get-CrashDumpList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
@@ -6443,6 +6459,28 @@ function Get-CleanupSummaryAllUsers {
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'sshState' {
+                        # The other account's agent is unavailable in this
+                        # session. Inspect known_hosts metadata only.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The Windows users folder cannot be checked safely.' }
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path is unavailable.' }
+                        $sshPath = Join-Path $prof.FullName '.ssh'
+                        if (Test-CleanupSummaryPath $sshPath) {
+                            $ssh = Get-Item -LiteralPath $sshPath -Force -ErrorAction Stop
+                            if (-not $ssh.PSIsContainer -or ($ssh.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The SSH folder cannot be checked safely.' }
+                            $knownHosts = Join-Path $sshPath 'known_hosts'
+                            if (Test-CleanupSummaryPath $knownHosts) {
+                                $file = Get-Item -LiteralPath $knownHosts -Force -ErrorAction Stop
+                                if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The SSH known-hosts file cannot be checked safely.' }
+                                $count = 1
+                                $records = @(@{ name='SSH known_hosts'; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                $items = @('SSH known_hosts')
+                            }
+                        }
+                    }
                     'recentFiles' {
                         $p = Join-Path $appData 'Microsoft\Windows\Recent'
                         if (Test-CleanupSummaryPath $p) {
@@ -6817,11 +6855,14 @@ function Get-CleanupSummaryAllUsers {
                                         Where-Object { $_ -ne '(default)' -and -not ($source.section -eq 'RunMRU' -and $_ -match '^MRUList') }
                                     foreach ($prop in @($props)) {
                                         $raw = Get-ItemPropertyValue -LiteralPath $source.path -Name $prop -EA Stop
+                                        $original = $raw
                                         if ($source.section -eq 'RunMRU' -and $raw -is [string]) { $raw = $raw -replace '\\1$', '' }
                                         $count++
                                         if ($records.Count -lt $previewMax) {
                                             # Preserve binary bytes and empty values; display may decode text separately.
-                                            $records += @{ section=$source.section; key=$prop; value=$raw }
+                                            $record = @{ section=$source.section; key=$prop; value=$raw }
+                                            if ($source.section -eq 'RunMRU') { $record.rawValue = $original }
+                                            $records += $record
                                             $items += "$($source.section)\$prop"
                                         }
                                     }
@@ -6894,6 +6935,7 @@ function Get-CleanupSummaryAllUsers {
             if ($categoryPartial -and -not $scanError) {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
                 $categoryRecord.message = 'Some sources could not be checked.'
+                if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
             }
             if ($delegated -and $r -and -not $scanError) {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
