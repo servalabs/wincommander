@@ -371,6 +371,31 @@ describe("System Cleanup persona details", () => {
     expect(activityPage?.partial).toBe(true);
   });
 
+  test("pages failed account observations without treating them as a successful count", () => {
+    const sid = "S-1-5-21-1-2-3-1001";
+    const hash = `sha256:${"a".repeat(64)}`;
+    const category = { id: "wslData", count: -1, items: [], records: [{ name: "captured" }], sampleCount: 1, previewLimit: 5000, truncated: true, sourceTruncated: false, sourceFailed: true, error: true, status: "error", message: "Registry access failed.", snapshotHash: hash, nextOffset: 1, totalRows: 2 };
+    const data = { users: [{ username: "Other", sid, categories: [category] }] };
+    const first = readExpandedCleanupSummary(data, sid, category.id);
+    expect(first?.count).toBe(-1);
+    expect(first?.sourceFailed).toBe(true);
+    expect(first?.raw).toMatchObject({ error: true, status: "error", partial: true, records: [{ name: "captured" }] });
+    const next = { ...category, records: [{ name: "second" }], nextOffset: null, truncated: false };
+    expect(readExpandedCleanupSummary({ users: [{ ...data.users[0], categories: [next] }] }, sid, category.id, 1, hash)?.count).toBe(-1);
+    expect(readExpandedCleanupSummary(data, "S-1-5-21-1-2-3-1002", category.id)).toBeNull();
+    expect(readExpandedCleanupSummary(data, sid, "dockerDesktopData")).toBeNull();
+    expect(readExpandedCleanupSummary(data, sid, category.id, 0, `sha256:${"b".repeat(64)}`)).toBeNull();
+    for (const change of [{ sourceFailed: false }, { error: false }, { status: "complete" }, { count: 1 }, { message: "" }, { sourceTruncated: undefined }, { truncated: false }]) {
+      expect(readExpandedCleanupSummary({ users: [{ ...data.users[0], categories: [{ ...category, ...change }] }] }, sid, category.id)).toBeNull();
+    }
+    const preview = readCleanupUserSummary({ ...category, truncated: false, detailRefreshAvailable: true });
+    const card = ALL_CATEGORIES.find(item => item.id === category.id)!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={card} mode="advanced" count={preview.count} items={preview.items} rawData={preview.raw} error={preview.error} accountName={sid} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Refresh captured account details");
+    expect(html).toContain("Scan failed");
+    expect(html).toContain("disabled");
+  });
+
   test("offers more account details when an incomplete preview has no rows", () => {
     const preview = readCleanupUserSummary({ count: 2, partial: true, records: [], sampleCount: 0, previewLimit: 0, truncated: true });
     expect(preview.count).toBe(-1);

@@ -7,6 +7,10 @@ $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.L
 . ([scriptblock]::Create($definition.Extent.Text))
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'New-CleanupSummaryCategoryRecord' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
+foreach ($name in @('Test-CleanupSummaryDetailSize', 'ConvertTo-CleanupCanonicalJson', 'Get-CleanupSummaryPage')) {
+    $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
 $script:mode='other'; $script:delegated='success'
 function Test-IsAdmin { $true }
 function Test-WCVisibleUserProfile { param($Name,$DisplayName,$Path) $true }
@@ -35,6 +39,9 @@ function Get-RecentFiles {
     if ($script:delegated -eq 'partial') { return @{ partial=$true; total=7; coverage='Selected locations only'; sourcePath='C:\Fixture'; message='Mock reader incomplete'; entries=@(@{ name='Mock' }) } }
     if ($script:delegated -eq 'lateError') {
         return @{ error=$true; message='Reader failed after collecting an observation'; total=1; entries=@(@{ name='Observed'; path='C:\Fixture\Observed' }) }
+    }
+    if ($script:delegated -eq 'lateMany') {
+        return @{ error=$true; message='Reader failed after collecting observations'; total=5001; entries=@(0..5000 | ForEach-Object { @{ name="Observed $_" } }) }
     }
     @{ total=2; entries=@(@{ name='Mock1' },@{ name='Mock2' }) }
 }
@@ -70,6 +77,23 @@ $script:delegated='lateError'
 $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 $category=$result.users[0].categories[0]
 if (-not $category.error -or $category.count -ne -1 -or @($category.records).Count -ne 1 -or $category.records[0].path -ne 'C:\Fixture\Observed' -or $result.users[0].complete) { throw "Late failure: error=$($category.error), count=$($category.count), rows=$(@($category.records).Count), complete=$($result.users[0].complete)" }
+$script:delegated='lateMany'
+$preview = (Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock').users[0].categories[0]
+if (-not $preview.error -or $preview.count -ne -1 -or @($preview.records).Count -ne 500 -or -not $preview.detailRefreshAvailable) { throw 'Failed preview did not retain observations and offer refresh with an unknown total.' }
+$first = (Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock' -FullDetail $true).users[0].categories[0]
+if (-not $first.error -or -not $first.sourceFailed -or $first.count -ne -1 -or @($first.records).Count -ne 5000 -or $first.nextOffset -ne 5000 -or $first.totalRows -ne 5001) { throw 'Failed scan did not page observations without claiming success.' }
+$last = (Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock' -FullDetail $true -DetailOffset 5000 -SnapshotHash $first.snapshotHash).users[0].categories[0]
+if (-not $last.error -or -not $last.sourceFailed -or $last.count -ne -1 -or @($last.records).Count -ne 1 -or $null -ne $last.nextOffset) { throw 'Failed scan continuation did not retain unknown total.' }
+$changed = (Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock' -FullDetail $true -DetailOffset 5000 -SnapshotHash ('sha256:' + ('b' * 64))).users[0].categories[0]
+if (-not $changed.error -or $changed.sourceFailed -or @($changed.records).Count -ne 0) { throw 'Changed snapshot returned a verified failed-source page.' }
+$one = @(@{ name='Observed' })
+$snapshot = Get-CleanupSummaryPage -Records $one -Count -1 -Category 'recentFiles' -ProfileSid 'S-1-5-21-111-222-333-444' -Offset 0 -ExpectedSnapshot '' -SourceFailure 'First failure'
+foreach ($change in @(@{ sid='S-1-5-21-111-222-333-445'; category='recentFiles'; failure='First failure' }, @{ sid='S-1-5-21-111-222-333-444'; category='rdpHistory'; failure='First failure' }, @{ sid='S-1-5-21-111-222-333-444'; category='recentFiles'; failure='Changed failure' })) {
+    $rejected = $false
+    try { $null = Get-CleanupSummaryPage -Records $one -Count -1 -Category $change.category -ProfileSid $change.sid -Offset 1 -ExpectedSnapshot $snapshot.snapshotHash -SourceFailure $change.failure }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'A changed failed snapshot was accepted.' }
+}
 $script:delegated='success'
 $success=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 if ($success.users[0].total -ne 2 -or -not $success.users[0].complete) { throw 'A successful current-user result changed.' }

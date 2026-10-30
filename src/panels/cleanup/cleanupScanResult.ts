@@ -6,7 +6,7 @@ type ScanResponse = { success?: boolean; data?: unknown; error?: string };
 export function readCleanupUserSummary(data: {
   id?: unknown; count?: unknown; items?: unknown; records?: unknown; error?: boolean;
   partial?: boolean; complete?: boolean; status?: string; message?: string;
-  sampleCount?: unknown; previewLimit?: unknown; truncated?: unknown; coverage?: unknown; scanFacts?: unknown;
+  sampleCount?: unknown; previewLimit?: unknown; truncated?: unknown; coverage?: unknown; scanFacts?: unknown; detailRefreshAvailable?: boolean;
 }): Pick<CardData, 'count' | 'items' | 'raw' | 'error'> {
   const records = Array.isArray(data.records) ? data.records : [];
   const grouped = data.id === 'ntUserTraces' && records.some(row => row && typeof row === 'object' && !Array.isArray(row) && Object.hasOwn(row, 'count'));
@@ -36,6 +36,8 @@ export function readCleanupUserSummary(data: {
       (data.partial === true || data.complete === false || data.status === 'partial');
     const raw = observed.length || Object.keys(scanFacts).length || data.truncated === true || explicitlyPartial ? {
       records: observed, scanFacts, partial: true,
+      ...(data.error === true ? { error: true, status: 'error' } : {}),
+      ...(data.error === true && data.detailRefreshAvailable === true ? { detailRefreshAvailable: true } : {}),
       ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
       ...(data.truncated === true ? { truncated: true } : {}),
     } : undefined;

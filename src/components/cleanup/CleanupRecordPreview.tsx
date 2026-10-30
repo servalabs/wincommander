@@ -478,7 +478,7 @@ export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: num
   } catch { return null; }
 }
 
-export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; sid?: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
+export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; sid?: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean; sourceFailed?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
   const users = data?.users;
   const user = Array.isArray(users) && users.length === 1 ? users[0] : undefined;
   const isSid = /^S-1-5-21-(?:\d+-)+\d+$/i.test(accountName);
@@ -498,7 +498,12 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
   // A page may contain only some activity sections. Their combined count must
   // be checked against the scan total after the final page is assembled.
   let pageCategory = category;
-  const partial = category.partial === true || category.complete === false || category.status === "partial";
+  // A failed source may provide a snapshot of observations collected before
+  // its error. It is display-only and never becomes a verified scan total.
+  const sourceFailed = category.sourceFailed === true && category.error === true && category.status === "error" && category.count === -1 && typeof category.message === "string" && !!category.message.trim();
+  if (category.sourceFailed === true && !sourceFailed) return null;
+  if (sourceFailed && ((category.totalRows as number) < 1 || typeof category.sourceTruncated !== "boolean" || (category.nextOffset !== null && category.truncated !== true))) return null;
+  const partial = sourceFailed || category.partial === true || category.complete === false || category.status === "partial";
   let groupedActivity = categoryId === "ntUserTraces" && !!category.records?.some(row => isObject(row) && Object.hasOwn(row, "count"));
   let incompleteGroups = false;
   if (groupedActivity) {
@@ -518,16 +523,16 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
   // A partial source can still return snapshot-verified pages of observations.
   // Validate the page structure independently without accepting its total as a
   // complete scan; the outer card remains failed and cannot authorize Clear.
-  if (category.error || (category.status && ["error", "failed", "unknown", "unavailable"].includes(category.status))) return null;
+  if (!sourceFailed && (category.error || (category.status && ["error", "failed", "unknown", "unavailable"].includes(category.status)))) return null;
   // Validate page metadata without dropping malformed observations. A
   // partial source may contain scalar or array rows; those are display-only
   // and must never make its scan count eligible for Clear.
   const validationCategory = partial && Array.isArray(pageCategory.records)
     ? { ...pageCategory, records: pageCategory.records.map(row => !incompleteGroups && isObject(row) ? row : { value: row }) }
     : pageCategory;
-  const summary = readCleanupUserSummary(partial ? { ...validationCategory, partial: false, complete: true, status: "scoped" } : validationCategory);
+  const summary = readCleanupUserSummary(partial ? { ...validationCategory, ...(sourceFailed ? { id: undefined, count: category.totalRows, error: false } : {}), partial: false, complete: true, status: "scoped" } : validationCategory);
   if (summary.count < 0 || !summary.raw) return null;
-  return { ...summary, count: category.count, partial, raw: { ...summary.raw, ...(partial ? { records: pageCategory.records, partial: true } : {}), ...(groupedActivity ? { expectedActivityCount: category.count } : {}) }, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
+  return { ...summary, count: category.count, partial, sourceFailed, sourceFailure: sourceFailed ? category.message! : null, raw: { ...summary.raw, ...(partial ? { records: pageCategory.records, partial: true } : {}), ...(sourceFailed ? { error: true, status: "error" } : {}), ...(groupedActivity ? { expectedActivityCount: category.count } : {}) }, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
 }
 
 export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {
@@ -558,7 +563,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
   const [expandedNotice, setExpandedNotice] = useState<string | null>(null);
   const [loadingExpanded, setLoadingExpanded] = useState(false);
-  const [nextPage, setNextPage] = useState<{ offset: number; hash: string; totalRows: number; count: number; partial: boolean } | null>(null);
+  const [nextPage, setNextPage] = useState<{ offset: number; hash: string; totalRows: number; count: number; partial: boolean; sourceFailed: boolean; sourceFailure: string | null } | null>(null);
   const requestVersion = useRef(0);
   useEffect(() => {
     let active = true;
@@ -603,7 +608,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       const result = await backendRef.current.getCleanupSummaryAllUsers([categoryId], [accountName], true, offset, nextPage?.hash ?? "");
       if (request !== requestVersion.current) return;
       let summary = result.success ? readExpandedCleanupSummary(result.data, accountName, categoryId, offset, nextPage?.hash ?? "") : null;
-      if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows || summary.partial !== nextPage.partial))) {
+      if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows || summary.partial !== nextPage.partial || summary.sourceFailed !== nextPage.sourceFailed || summary.sourceFailure !== nextPage.sourceFailure))) {
         setExpandedNotice(result.error || result.data?.message || "Account details changed or could not be verified. Close and reopen to rescan.");
         return;
       }
@@ -618,7 +623,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           if (request !== requestVersion.current) return;
           const next = continuation.success ? readExpandedCleanupSummary(continuation.data, accountName, categoryId, offset, first.snapshotHash, byteOffset) : null;
           if (!next?.recordChunk || !next.chunkBytes || next.recordChunk.totalBytes !== firstChunk.totalBytes ||
-              next.nextOffset !== first.nextOffset || next.totalRows !== first.totalRows || next.count !== first.count || next.partial !== first.partial || next.sourceTruncated !== first.sourceTruncated) {
+              next.nextOffset !== first.nextOffset || next.totalRows !== first.totalRows || next.count !== first.count || next.partial !== first.partial || next.sourceFailed !== first.sourceFailed || next.sourceFailure !== first.sourceFailure || next.sourceTruncated !== first.sourceTruncated) {
             setExpandedNotice("Account details changed or the large record could not be verified. Close and reopen to rescan.");
             return;
           }
@@ -632,8 +637,8 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
       if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }
       setExpandedRaw(merged);
-      setNextPage(typeof summary.nextOffset === "number" ? { offset: summary.nextOffset, hash: summary.snapshotHash, totalRows: summary.totalRows, count: summary.count, partial: summary.partial } : null);
-      setExpandedNotice(summary.partial ? "More observed details loaded. The scan remains incomplete." : `Refreshed account scan: ${summary.count} items reported.`);
+      setNextPage(typeof summary.nextOffset === "number" ? { offset: summary.nextOffset, hash: summary.snapshotHash, totalRows: summary.totalRows, count: summary.count, partial: summary.partial, sourceFailed: summary.sourceFailed, sourceFailure: summary.sourceFailure } : null);
+      setExpandedNotice(summary.sourceFailed ? `The fresh scan failed: ${summary.sourceFailure} The total remains unknown.` : summary.partial ? "More observed details loaded. The scan remains incomplete." : isObject(rawData) && rawData.error === true ? `The fresh detail scan reported ${summary.count} items. Rescan the card to update its status.` : `Refreshed account scan: ${summary.count} items reported.`);
       if (offset === 0) setPage(0);
     } catch {
       if (request === requestVersion.current) setExpandedNotice("Full details could not be read.");
@@ -669,7 +674,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   // A failed detail refresh is meaningful even if the earlier scan supplied
   // no preview rows. Keep its explanation visible instead of returning an
   // empty panel that looks like a successful empty result.
-  if (!all.length && !clipboardItems && !clipboardNotice && !(isObject(shownData) && shownData.truncated === true && accountName)) return null;
+  if (!all.length && !clipboardItems && !clipboardNotice && !(isObject(shownData) && (shownData.truncated === true || shownData.detailRefreshAvailable === true) && accountName)) return null;
   const pageSize = mode === "simple" ? 5 : 10;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
   const rows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
@@ -681,6 +686,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     {categoryId === "wlanProfiles" && isObject(shownData) && Array.isArray(shownData.additionalProfiles) && shownData.additionalProfiles.length > 0 ? <p>Additional per-user or policy-managed profiles are shown for reference. The scan total and Clear action cover only all-user profiles.</p> : null}
     {isObject(shownData) && shownData.truncated === true ? <p role="status">Only part of this scan is shown; {accountName && (!expandedRaw || nextPage) ? "load more account details to expand this preview." : "additional records were not returned."}</p> : null}
     {isObject(shownData) && shownData.truncated === true && accountName && (!expandedRaw || nextPage) ? <button type="button" disabled={loadingExpanded} onClick={loadFullDetails}>{loadingExpanded ? "Loading account details…" : "Load more account details"}</button> : null}
+    {isObject(shownData) && shownData.detailRefreshAvailable === true && shownData.truncated !== true && accountName && !expandedRaw ? <button type="button" disabled={loadingExpanded} onClick={loadFullDetails}>{loadingExpanded ? "Refreshing account details…" : "Refresh captured account details"}</button> : null}
     {expandedNotice ? <p role="status">{expandedNotice}</p> : null}
     {clipboardNotice ? <p role="status">{clipboardNotice}</p> : null}
     {secretError ? <p role="alert">{secretError}</p> : null}

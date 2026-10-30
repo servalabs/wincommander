@@ -6074,7 +6074,7 @@ function ConvertTo-CleanupCanonicalJson {
 }
 
 function Get-CleanupSummaryPage {
-    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot, [int]$ChunkOffset = 0)
+    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot, [int]$ChunkOffset = 0, [string]$SourceFailure = '')
     if ($Offset -lt 0 -or $ChunkOffset -lt 0 -or (($Offset -gt 0 -or $ChunkOffset -gt 0) -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ChunkOffset -eq 0 -and $ExpectedSnapshot)) {
         throw 'The account detail page request is invalid.'
     }
@@ -6092,7 +6092,9 @@ function Get-CleanupSummaryPage {
             $null = $sha.TransformBlock($length, 0, $length.Length, $length, 0)
             if ($bytes.Length) { $null = $sha.TransformBlock($bytes, 0, $bytes.Length, $bytes, 0) }
         }
-        & $hashText (ConvertTo-CleanupCanonicalJson @{ version=2; category=$Category; sid=$ProfileSid; count=$Count; rows=$Records.Count })
+        $header = @{ version=2; category=$Category; sid=$ProfileSid; count=$Count; rows=$Records.Count }
+        if ($SourceFailure) { $header.sourceFailure = $SourceFailure }
+        & $hashText (ConvertTo-CleanupCanonicalJson $header)
         foreach ($record in $Records) { & $hashText (ConvertTo-CleanupCanonicalJson $record) }
         $null = $sha.TransformFinalBlock([byte[]]@(), 0, 0)
         $snapshot = 'sha256:' + [BitConverter]::ToString($sha.Hash).Replace('-', '').ToLowerInvariant()
@@ -6154,6 +6156,9 @@ function New-CleanupSummaryCategoryRecord {
         previewLimit = $previewMax
         truncated = (-not $ScanError -and $Count -gt $visibleCount)
     }
+    # A failed scan cannot establish whether its preview is complete. Offer a
+    # fresh detail scan if it captured anything, without inventing a total.
+    if ($ScanError -and $returned.Count -gt 0) { $record.detailRefreshAvailable = $true }
     if ($limited) { $record.coverage = 'limited' }
     return $record
 }
@@ -7191,8 +7196,12 @@ function Get-CleanupSummaryAllUsers {
                 })
             }
             $detailPage = $null
-            if ($FullDetail -and -not $scanError) {
-                try { $detailPage = Get-CleanupSummaryPage -Records @($records) -Count $count -Category $cat -ProfileSid $prof.SID -Offset $DetailOffset -ExpectedSnapshot $SnapshotHash -ChunkOffset $DetailChunkOffset }
+            if ($FullDetail -and (-not $scanError -or @($records).Count -gt 0)) {
+                try {
+                    $pageArgs = @{ Records=@($records); Count=$count; Category=$cat; ProfileSid=$prof.SID; Offset=$DetailOffset; ExpectedSnapshot=$SnapshotHash; ChunkOffset=$DetailChunkOffset }
+                    if ($scanError) { $pageArgs.SourceFailure = $scanError }
+                    $detailPage = Get-CleanupSummaryPage @pageArgs
+                }
                 catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
@@ -7224,6 +7233,7 @@ function Get-CleanupSummaryAllUsers {
                 $categoryRecord.sourceTruncated = $categoryRecord.truncated
                 $categoryRecord.truncated = $categoryRecord.truncated -or ($null -ne $detailPage.nextOffset) -or ($null -ne $detailPage.recordChunk)
                 $categoryRecord.snapshotHash = $detailPage.snapshotHash; $categoryRecord.nextOffset = $detailPage.nextOffset; $categoryRecord.totalRows = $detailPage.totalRows
+                if ($scanError) { $categoryRecord.sourceFailed = $true }
                 if ($detailPage.recordChunk) { $categoryRecord.recordChunk = $detailPage.recordChunk }
             }
             $categories += $categoryRecord
