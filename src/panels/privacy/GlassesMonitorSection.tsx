@@ -6,25 +6,11 @@
 // reconciles the Rust watcher; this card only shows status and recent hits.
 
 import { Switch, Button, Tag } from "@/components/ui/bp";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useState } from "react";
+import { clearGlassesMonitorRecent, getGlassesMonitorRecent, getGlassesMonitorStatus, type GlassesDetection, type GlassesMonitorStatus } from "../../hooks/useGlassesMonitor";
 import SectionCard from "../../components/shared/SectionCard";
 import PrivacyEventTable from "./PrivacyEventTable";
-
-interface GlassesDetection {
-  vendor: string;
-  rule: string;
-  confidence: "low" | "medium" | "high";
-  rssi: number;
-  detectedAt: string;
-}
-
-interface GlassesMonitorStatus {
-  running: boolean;
-  radio: "stopped" | "starting" | "scanning" | "radio_unavailable" | "error";
-  recentCount: number;
-}
 
 interface Props {
   enabled: boolean;
@@ -62,8 +48,8 @@ export default function GlassesMonitorSection({ enabled, onPatch }: Props) {
   const refresh = useCallback(async () => {
     try {
       const [nextStatus, nextRecent] = await Promise.all([
-        invoke<GlassesMonitorStatus>("glasses_monitor_status"),
-        invoke<GlassesDetection[]>("get_glasses_monitor_recent"),
+        getGlassesMonitorStatus(),
+        getGlassesMonitorRecent(),
       ]);
       setStatus(nextStatus);
       setRecent(nextRecent);
@@ -84,7 +70,7 @@ export default function GlassesMonitorSection({ enabled, onPatch }: Props) {
   }, [enabled, refresh]);
 
   const clearRecent = async () => {
-    await invoke("clear_glasses_monitor_recent").catch(() => undefined);
+    await clearGlassesMonitorRecent().catch(() => undefined);
     void refresh();
   };
 

@@ -1000,6 +1000,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "ed25519-dalek",
+ "fleet-proto",
  "rand 0.8.8",
  "serde",
  "serde_json",

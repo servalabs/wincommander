@@ -798,6 +798,12 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         summary: "Re-check and re-apply the latest policy immediately",
         payload_schema: None,
     },
+    CommandMeta {
+        catalog_id: "privacy_shield.inspect",
+        action_class: ActionClass::Safe,
+        summary: "Read Privacy Shield state and locally stored settings without changing them",
+        payload_schema: Some(r#"{"type":"object","additionalProperties":false}"#),
+    },
     // ── Privacy toggles: 21 on/off pairs. enable = apply protection (Safe),
     // disable = remove it (Destructive → confirm gate). Must stay 1:1 with
     // commander-pro's COMMAND_CATALOG (a drift-guard test enforces it).
@@ -1795,8 +1801,11 @@ pub struct ShieldNativeOptions {
 
 impl ShieldNativeOptions {
     pub fn is_bounded(&self) -> bool {
-        matches!(self.model_level.as_str(), "nano" | "small" | "medium" | "large")
-            && self.confidence.is_finite() && (0.0..=1.0).contains(&self.confidence)
+        matches!(
+            self.model_level.as_str(),
+            "nano" | "small" | "medium" | "large"
+        ) && self.confidence.is_finite()
+            && (0.0..=1.0).contains(&self.confidence)
             && self.overlay_opacity <= 255
             && (1..=10_000).contains(&self.wake_delay_ms)
             && self.device_wake_multiplier.is_finite()
@@ -1806,6 +1815,99 @@ impl ShieldNativeOptions {
             && (1..=100).contains(&self.buffer_frames)
             && (1..=4).contains(&self.capture_speed)
     }
+}
+
+/// Local WinCommander settings read during a command-bound Shield inspection.
+/// These values may be absent on older devices and are never proof that a
+/// running detector adopted them. Only `ShieldNativeOptions` describes the
+/// observed process launch options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShieldStoredSettings {
+    pub wake_delay_seconds: Option<u32>,
+    pub device_wake_multiplier: Option<f64>,
+    pub multi_face_wake_multiplier: Option<f64>,
+    pub detection_buffer_frames: Option<u32>,
+    pub gaze_detection_enabled: Option<bool>,
+    pub anti_peeping_enabled: Option<bool>,
+    pub camera_hunter_enabled: Option<bool>,
+    pub look_away_notifications_enabled: Option<bool>,
+    pub multiple_faces_notifications_enabled: Option<bool>,
+    pub phone_notifications_enabled: Option<bool>,
+    pub fleet_notification_limit: Option<u32>,
+    pub fleet_notification_window_seconds: Option<u32>,
+}
+
+impl ShieldStoredSettings {
+    pub fn is_bounded(&self) -> bool {
+        self.wake_delay_seconds
+            .is_none_or(|value| (50..=1_500).contains(&value))
+            && self
+                .device_wake_multiplier
+                .is_none_or(|value| value.is_finite() && (1.0..=20.0).contains(&value))
+            && self
+                .multi_face_wake_multiplier
+                .is_none_or(|value| value.is_finite() && (1.0..=20.0).contains(&value))
+            && self
+                .detection_buffer_frames
+                .is_none_or(|value| (1..=8).contains(&value))
+            && self
+                .fleet_notification_limit
+                .is_none_or(|value| value <= 1_000)
+            && self
+                .fleet_notification_window_seconds
+                .is_none_or(|value| (1..=86_400).contains(&value))
+    }
+}
+
+/// One device-observed step in a signed Privacy Shield policy update. The
+/// authenticated check-in identifies the device; an unrelated Start/Stop
+/// command ID must never be attached to this epoch-bound record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShieldPolicyProgress {
+    pub event_id: String,
+    pub attempt_id: String,
+    pub epoch_version: i64,
+    pub epoch_signature_hash: String,
+    pub resolution_revision: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_generation: Option<String>,
+    pub shield_revision: i64,
+    pub stage: ShieldPolicyProgressStage,
+    pub sampled_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<ShieldPolicyProgressReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShieldPolicyProgressStage {
+    Received,
+    Pausing,
+    Paused,
+    SettingsApplied,
+    Restarting,
+    Verifying,
+    Verified,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShieldPolicyProgressReason {
+    NativeStatusUnavailable,
+    StopRejected,
+    StopNotObserved,
+    PolicyPreflightFailed,
+    PolicyApplyFailed,
+    IntentSuperseded,
+    StartRejected,
+    StartNotObserved,
+    NativeOptionsUnavailable,
+    NativeOptionsMismatch,
+    StoredSettingsMismatch,
+    TransportUnavailable,
 }
 
 // ── Clipboard Guard + Ink Receipt device reports (plan §4.4, §5.6) ───────
@@ -2298,7 +2400,41 @@ mod tests {
         assert!(serde_json::from_value::<ShieldNativeOptions>(with_missing).is_err());
         let mut with_invalid = options;
         with_invalid["confidence"] = serde_json::json!(9.0);
-        assert!(!serde_json::from_value::<ShieldNativeOptions>(with_invalid).unwrap().is_bounded());
+        assert!(!serde_json::from_value::<ShieldNativeOptions>(with_invalid)
+            .unwrap()
+            .is_bounded());
+    }
+
+    #[test]
+    fn shield_inspection_is_safe_and_stored_settings_are_closed() {
+        #[cfg(feature = "command-metadata")]
+        {
+            let inspect = COMMAND_METADATA
+                .iter()
+                .find(|item| item.catalog_id == "privacy_shield.inspect")
+                .unwrap();
+            assert_eq!(inspect.action_class, ActionClass::Safe);
+            let schema: Value = serde_json::from_str(inspect.payload_schema.unwrap()).unwrap();
+            assert_eq!(schema["additionalProperties"], false);
+        }
+        let stored = serde_json::json!({
+            "wakeDelaySeconds": 150, "deviceWakeMultiplier": 5.0,
+            "multiFaceWakeMultiplier": 5.0, "detectionBufferFrames": 2,
+            "gazeDetectionEnabled": false, "antiPeepingEnabled": true,
+            "cameraHunterEnabled": true, "lookAwayNotificationsEnabled": false,
+            "multipleFacesNotificationsEnabled": true, "phoneNotificationsEnabled": true,
+            "fleetNotificationLimit": 0, "fleetNotificationWindowSeconds": 60,
+        });
+        let parsed: ShieldStoredSettings = serde_json::from_value(stored.clone()).unwrap();
+        assert!(parsed.is_bounded());
+        let mut with_extra = stored.clone();
+        with_extra["cameraName"] = Value::String("private device".into());
+        assert!(serde_json::from_value::<ShieldStoredSettings>(with_extra).is_err());
+        let mut invalid = stored;
+        invalid["wakeDelaySeconds"] = serde_json::json!(1);
+        assert!(!serde_json::from_value::<ShieldStoredSettings>(invalid)
+            .unwrap()
+            .is_bounded());
     }
 
     fn security_snapshot() -> SecuritySnapshotResult {

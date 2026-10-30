@@ -108,6 +108,14 @@ pub async fn native_confirm_action(app: &tauri::AppHandle, action: DestructiveAc
     .await
 }
 
+pub async fn native_confirm_fleet_trust_repair(app: &tauri::AppHandle) -> bool {
+    native_confirm(
+        app,
+        "Repair machine trust for this already-linked Fleet device? This reconnects the same device and does not request to leave Fleet.",
+    )
+    .await
+}
+
 pub(super) async fn native_confirm(app: &tauri::AppHandle, detail: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     // The dialog is a control only because a human answers it. The CLI runtime's

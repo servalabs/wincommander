@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The relay's fixed image and parents must remain administrator/SYSTEM owned.
 
-use super::PeerAuthError;
+use crate::peer_auth::PeerAuthError;
 use std::{
     os::windows::{
         fs::{MetadataExt, OpenOptionsExt},
@@ -29,23 +29,28 @@ pub(super) fn verify_path(path: &Path) -> Result<(), PeerAuthError> {
     // ProgramData itself permits creation of unrelated subfolders. Only WinCommander,
     // its bin directory, and the image determine this already-provisioned machine pin.
     for part in path.ancestors().take(3) {
-        if std::fs::symlink_metadata(part)
-            .map_err(|_| PeerAuthError::IdentityUnavailable)?
-            .file_attributes()
-            & 0x400
-            != 0
-        {
-            return Err(PeerAuthError::PathNotAllowed);
-        }
-        let file = std::fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES | 0x0002_0000)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(part)
-            .map_err(|_| PeerAuthError::IdentityUnavailable)?;
-        unsafe {
-            verify(file.as_raw_handle())?;
-        }
+        verify_component(part)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_component(part: &Path) -> Result<(), PeerAuthError> {
+    if std::fs::symlink_metadata(part)
+        .map_err(|_| PeerAuthError::IdentityUnavailable)?
+        .file_attributes()
+        & 0x400
+        != 0
+    {
+        return Err(PeerAuthError::PathNotAllowed);
+    }
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | 0x0002_0000)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(part)
+        .map_err(|_| PeerAuthError::IdentityUnavailable)?;
+    unsafe {
+        verify(file.as_raw_handle())?;
     }
     Ok(())
 }

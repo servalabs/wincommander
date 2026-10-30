@@ -9,6 +9,24 @@ import { invoke } from "@tauri-apps/api/core";
 import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
+export interface GlassesDetection {
+  vendor: string;
+  rule: string;
+  confidence: "low" | "medium" | "high";
+  rssi: number;
+  detectedAt: string;
+}
+
+export interface GlassesMonitorStatus {
+  running: boolean;
+  radio: "stopped" | "starting" | "scanning" | "radio_unavailable" | "error";
+  recentCount: number;
+}
+
+export const getGlassesMonitorStatus = () => invoke<GlassesMonitorStatus>("glasses_monitor_status");
+export const getGlassesMonitorRecent = () => invoke<GlassesDetection[]>("get_glasses_monitor_recent");
+export const clearGlassesMonitorRecent = () => invoke("clear_glasses_monitor_recent");
+
 export default function useGlassesMonitor(
   enabled: boolean,
   onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,

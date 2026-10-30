@@ -11,6 +11,7 @@ pub(crate) struct ConnectionPlan {
     signing_key: String,
     initial: bool,
     needs_confirmation: bool,
+    enrollment_identity_changes: bool,
 }
 
 impl ConnectionPlan {
@@ -45,11 +46,12 @@ impl ConnectionPlan {
             return Err("An enrolled Fleet verification key cannot be cleared by Connect".into());
         }
         let prior = binding(current);
-        let changing = policy_key.is_some_and(|key| key != signing_key)
+        let enrollment_identity_changes = policy_key.is_some_and(|key| key != signing_key)
             || (!current.app.fleet.signing_key_pub.is_empty()
                 && current.app.fleet.signing_key_pub != signing_key)
             || (!current.app.fleet.server_url.is_empty()
-                && current.app.fleet.server_url != server_url)
+                && current.app.fleet.server_url != server_url);
+        let changing = enrollment_identity_changes
             || (super::local_write::managed(current) && current.app.fleet.dispatch != dispatch);
         let initial = !super::local_write::managed(current)
             && current.app.fleet.server_url.is_empty()
@@ -62,11 +64,20 @@ impl ConnectionPlan {
             signing_key,
             initial,
             needs_confirmation: changing,
+            enrollment_identity_changes,
         })
     }
 
     pub(crate) fn needs_confirmation(&self) -> bool {
         self.needs_confirmation
+    }
+
+    pub(crate) fn needs_service_challenge(&self) -> bool {
+        self.initial || self.enrollment_identity_changes
+    }
+
+    pub(crate) fn allows_trust_replacement(&self) -> bool {
+        self.enrollment_identity_changes
     }
 
     pub(crate) fn confirmation_binding(&self) -> String {

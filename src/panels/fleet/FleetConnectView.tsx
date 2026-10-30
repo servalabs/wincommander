@@ -77,6 +77,8 @@ export default function FleetConnectView() {
   const [signingKeyPub, setSigningKeyPub] = useState("");
   const [status, setStatus] = useState<FleetStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [repairingTrust, setRepairingTrust] = useState(false);
+  const [machineTrustBound, setMachineTrustBound] = useState<boolean | null>(null);
   // enrolling: true between a successful connect() call and first connected=true poll.
   const [enrolling, setEnrolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +186,31 @@ export default function FleetConnectView() {
     return () => { stopPoll(); stopUnenrollPoll(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fleetEntitled, licenseLoading]);
+
+  useEffect(() => {
+    if (!fleetEntitled || !wasEnrolled) return;
+    let cancelled = false;
+    invoke<{ trustBound: boolean }>("fleet_machine_trust_status")
+      .then((result) => { if (!cancelled) setMachineTrustBound(result.trustBound); })
+      .catch(() => { if (!cancelled) setMachineTrustBound(null); });
+    return () => { cancelled = true; };
+  }, [fleetEntitled, wasEnrolled]);
+
+  async function repairMachineTrust() {
+    setError(null);
+    setBusy(true);
+    setRepairingTrust(true);
+    try {
+      await invoke("fleet_repair_machine_trust");
+      setMachineTrustBound(true);
+      startSteadyPoll();
+    } catch (reason) {
+      setError(typeof reason === "string" ? reason : "Machine trust repair failed.");
+    } finally {
+      setRepairingTrust(false);
+      setBusy(false);
+    }
+  }
 
   async function connect() {
     // The Connect button is an explicit request for this paid service. Open the
@@ -438,11 +465,24 @@ export default function FleetConnectView() {
             </p>
           )}
           {fleetEntitled ? (
-            <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
-              {busy
-                ? (unenrollInfo ? "Checking…" : "Requesting…")
-                : unenrollInfo ? "Refresh status" : "Request to leave"}
-            </Button>
+            <>
+              {machineTrustBound === false && wasEnrolled && status.deviceId === persistedDeviceId && (
+                <div>
+                  <p className="fleet-connect-enrolling">
+                    This device is linked, but its local service has no machine trust record.
+                    An administrator can repair it using the same device identity. This does not request to leave Fleet.
+                  </p>
+                  <Button variant="outline" size="sm" disabled={busy} onClick={repairMachineTrust}>
+                    {repairingTrust ? "Repairing…" : "Repair machine trust"}
+                  </Button>
+                </div>
+              )}
+              <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
+                {busy && !repairingTrust
+                  ? (unenrollInfo ? "Checking…" : "Requesting…")
+                  : unenrollInfo ? "Refresh status" : "Request to leave"}
+              </Button>
+            </>
           ) : <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
       ) : isReconnecting ? (

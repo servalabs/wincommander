@@ -761,7 +761,7 @@ export type PendingSearchJob = { job_id: string, query: string, max_hits_per_dev
  * independently-revised sections in one server-signed envelope so every
  * agent receives the same policy decision atomically.
  */
-export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
+export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, enrollment_generation: string | null, config_revision: bigint | null, resolution_revision: bigint | null, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
 /**
  * Latest independent Shield revision for the organisation, including a
  * tombstone/empty shield section.  This prevents replaying an older

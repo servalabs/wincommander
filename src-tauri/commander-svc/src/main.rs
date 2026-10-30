@@ -63,6 +63,7 @@ mod reconciler;
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod diagnostics;
 mod policy_store;
+mod fleet_machine_policy;
 mod vault_access;
 
 #[cfg(windows)]

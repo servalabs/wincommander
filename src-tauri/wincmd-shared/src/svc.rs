@@ -118,6 +118,12 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.clipboard.report_event"
             | "svc.clipboard.set_enabled"
             | "svc.policy.install_epoch"
+            | "svc.fleet.provision_trust"
+            | "svc.fleet.begin_enrollment"
+            | "svc.fleet.replace_trust"
+            | "svc.fleet.get_trust"
+            | "svc.fleet.install_policy"
+            | "svc.fleet.get_policy"
             | "svc.vault.get_policy"
             | "svc.vault.list_principals"
             | "svc.vault.apply_owner_fragment"
@@ -350,6 +356,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // the active ruleset — SessionHelper only says "a pinned, in-session
         // peer may call this verb", not "trust its payload".
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.get_trust" => CapabilityClass::Privileged,
+        "svc.fleet.install_policy" | "svc.fleet.get_policy" => CapabilityClass::SessionHelper,
 
         // ── Ink Receipt (D-2 / plan §4.3, §5) ─────────────────────────────
         "svc.ink_receipt.get_policy" => CapabilityClass::ReadOnly,
@@ -683,6 +691,18 @@ mod tests {
             classify_verb("svc.policy.install_epoch"),
             CapabilityClass::SessionHelper
         );
+    }
+
+    #[test]
+    fn machine_fleet_trust_requires_admin_and_policy_requires_pinned_helper() {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.get_trust"] {
+            assert!(is_known_verb(verb));
+            assert_eq!(classify_verb(verb), CapabilityClass::Privileged);
+        }
+        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy"] {
+            assert!(is_known_verb(verb));
+            assert_eq!(classify_verb(verb), CapabilityClass::SessionHelper);
+        }
     }
 
     // ── classify_verb: Ink Receipt verbs (D-2 / plan §5) ─────────────────────

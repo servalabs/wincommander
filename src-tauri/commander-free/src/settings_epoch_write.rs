@@ -19,6 +19,12 @@ pub(super) fn apply(epoch: &Epoch) -> Result<AppSettings, String> {
     apply_with(epoch, super::write_settings_internal)
 }
 
+/// Check the same signature, epoch and candidate schema as `apply`, without
+/// writing anything. A later apply rechecks them under the settings lock.
+pub(super) fn preflight(epoch: &Epoch) -> Result<AppSettings, String> {
+    prepare(&super::read_settings()?, epoch)
+}
+
 fn apply_with(
     epoch: &Epoch,
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,

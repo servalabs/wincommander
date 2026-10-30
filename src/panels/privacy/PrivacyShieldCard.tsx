@@ -20,6 +20,7 @@ import {
     resolveLocalFleetPrivacyShieldControl,
 } from "../../lib/fleetPrivacyShieldControl";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
+import { privacyShieldStopError, privacyShieldStopVerificationError } from "../../lib/privacyShieldStop";
 
 // Module-level cache — survives panel unmount/remount
 let _shieldRunningCache: boolean | null = null;
@@ -112,6 +113,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
     const [localLoading, setLocalLoading] = useState(false);
+    const [stopError, setStopError] = useState<string | null>(null);
     const [showShieldIntro, setShowShieldIntro] = useState(false);
     // Single disclosure for every non-essential control (was split across a
     // header row, two always-visible mini-grids, and this chevron — now one
@@ -482,6 +484,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, [privacyShieldRunning, localLoading]);
 
     const handleToggle = async () => {
+        setStopError(null);
         const operationId = newDiagnosticOperationId("privacy_shield");
         if (fleetShieldSessionLocked) {
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "stop", stage: "authorization", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn", retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "local_sensitive", context: { state: "fleet_managed" } });
@@ -560,20 +563,19 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 }
             } else {
                 const res = await executeBackendCommand<{ success: boolean; message?: string }>("Stop-PrivacyShield", {});
-                await consumeElapsedSession();
-                invalidateShieldQuota();
-                if (res.success) { recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); }
+                let failure = privacyShieldStopError(res);
+                if (!failure) {
+                    failure = privacyShieldStopVerificationError(
+                        await executeBackendCommand<{ running?: boolean }>("Get-PrivacyShieldStatus", {}),
+                    );
+                }
+                if (!failure) { await consumeElapsedSession(); invalidateShieldQuota(); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); }
                 else {
-                    // Belt-and-braces: also call the Rust-side process killer
-                    // so a stuck Python that the PS Stop-Process missed still
-                    // dies on the user's click instead of forcing Task Manager.
-                    await invoke("kill_privacy_shield_process").catch(() => {});
-                    setPrivacyShieldRunning(false);
-                    await invoke("update_tray_shield_label", { running: false }).catch(() => {});
-                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "recovery", lifecycle: "applied", outcome: "recovered", errorCode: "PSH.STOP.FORCED", severity: "warn", retryability: "never", suggestedNextAction: "review_status", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "force_stopped" } });
+                    setStopError(failure);
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.STOP.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "unknown" } });
                 }
             }
-        } catch (e) { recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
+        } catch (e) { if (!targetState) setStopError("Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
             setLocalLoading(false);
@@ -614,6 +616,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             armed={privacyShieldRunning === true}
         >
             <div className="flex flex-col gap-5">
+                {stopError && <div role="alert" className="text-sm text-[var(--color-warning)]">{stopError}</div>}
                 <div className="physical-shield-head">
                     <div className="physical-shield-copy flex flex-col gap-2 min-w-0">
                         {/* Title row — name + info icon only. "How it works" and
