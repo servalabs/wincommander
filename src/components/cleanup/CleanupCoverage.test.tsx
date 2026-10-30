@@ -11,6 +11,25 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("an empty developer-cache inventory with limited coverage is not shown as clean", () => {
+    const cache = ALL_CATEGORIES.find(item => item.id === "developerCaches")!;
+    const raw = { files: [], total: 0, coverage: "limited" };
+    const html = renderToStaticMarkup(<CleanupTraceCard category={cache} count={0} preview={[]} rawData={raw} loading={false} clearing={false} onViewDetails={() => {}} />);
+    expect(html).toContain('data-cleanup-state="limited"');
+    expect(html).not.toContain('data-cleanup-state="clean"');
+  });
+  test("combined details explain an omitted account even when returned accounts have complete results", () => {
+    const recent = ALL_CATEGORIES.find(item => item.id === "recentFiles")!;
+    const message = "Account inventory changed or a profile was missing. Refresh accounts and scan again.";
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={recent} mode="advanced" count={-1} items={[]} error={message}
+      groupedItems={[{ title: "Reported account", count: 0, items: [], rawData: { records: [] } }]}
+      clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Account scan incomplete");
+    expect(html).toContain(message);
+    expect(html).toContain("Reported account: 0 reported");
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("No items found");
+  });
   test("combined details retain each account's specific incomplete explanation and records", () => {
     const wsl = ALL_CATEGORIES.find(item => item.id === "wslData")!;
     const groups = [

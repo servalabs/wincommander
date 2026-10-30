@@ -392,6 +392,7 @@ export default function SystemCleanupPanel() {
                         count={d?.count ?? -1}
                         items={[]}
                         groupedItems={groupedItems}
+                        error={d?.error}
                         excludedFromBulk={scan.clearAllExcludes.has(combinedDetail.catId)}
                         scopeLabel="Detected Windows profiles"
                         clearing={false}

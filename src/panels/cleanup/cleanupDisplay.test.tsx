@@ -113,6 +113,10 @@ describe("System Cleanup display projection", () => {
     expect(limited).toContain("Incomplete");
     expect(limited).toContain("Removed: 2; deferred: 0; failed: 0");
     expect(limited).toContain("Coverage was limited; some locations were not checked.");
+    const oldReceipt = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false, cleanupOutcome: { attemptedUtc: "2026-10-30T10:31:00Z", success: true, removed: 2, deferred: 0, failed: 0 } }} />);
+    expect(oldReceipt).toContain("Reported completed");
+    expect(oldReceipt).toContain("task script or settings are unverified");
+    expect(oldReceipt).toContain("cannot establish current cleanup coverage");
     const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
     expect(unknown).not.toContain("Scheduled task history");
     const missingScript = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false }} />);
