@@ -6,11 +6,18 @@ import { MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
 import { showError, showWarning } from "../utils/toast";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 
+// Dashboard cards unmount when the user changes pages. Keep the last known
+// policy result for the next mount so the control does not flash a temporary
+// loading message or change width while the background confirmation runs.
+// The cached result is display-only until the fresh request below verifies it.
+let cachedStatus: BluetoothControlStatus | null = null;
+
 export default function useBluetoothControl(isAdmin: boolean | null | undefined) {
   const confirm = useAppConfirm();
-  const [status, setStatus] = useState<BluetoothControlStatus | null>(null);
+  const [status, setStatus] = useState<BluetoothControlStatus | null>(() => cachedStatus);
   const [busy, setBusy] = useState(false);
-  const [refreshing, setRefreshing] = useState(true);
+  const [refreshing, setRefreshing] = useState(cachedStatus === null);
+  const [verified, setVerified] = useState(false);
   const mounted = useRef(false);
   const operating = useRef(false);
   const reading = useRef(false);
@@ -23,6 +30,7 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
       void showWarning(failure === undefined ? issue.message : describeBluetoothFailure(failure, issue.message), undefined, { kind: "notification" }).catch(() => undefined);
     }
     lastIssue.current = issue?.key ?? null;
+    cachedStatus = next;
     setStatus(next);
   }, []);
 
@@ -33,9 +41,25 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
     if (mounted.current) setRefreshing(true);
     try {
       const next = parseBluetoothControlStatus(await invoke<unknown>("bluetooth_control_status"));
-      if (mounted.current && epoch.current === requestEpoch) reportStatus(next);
+      if (mounted.current && epoch.current === requestEpoch) {
+        reportStatus(next);
+        setVerified(true);
+      }
     } catch (error) {
-      if (mounted.current && epoch.current === requestEpoch) reportStatus(null, error);
+      if (mounted.current && epoch.current === requestEpoch) {
+        // A previous result may remain visible while this read is retried, but
+        // it must not authorise a policy change until Windows confirms it.
+        if (cachedStatus) {
+          if (lastIssue.current !== "unavailable") {
+            void showWarning(describeBluetoothFailure(error), undefined, { kind: "notification" }).catch(() => undefined);
+          }
+          lastIssue.current = "unavailable";
+          setStatus(cachedStatus);
+        } else {
+          reportStatus(null, error);
+        }
+        setVerified(false);
+      }
     } finally {
       reading.current = false;
       if (mounted.current && epoch.current === requestEpoch) setRefreshing(false);
@@ -85,10 +109,14 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
         throw error;
       }
       const next = parseBluetoothControlStatus(await invoke<unknown>("bluetooth_control_set", { blocked, capabilityToken }));
-      if (mounted.current) reportStatus(next);
+      if (mounted.current) {
+        reportStatus(next);
+        setVerified(true);
+      }
     } catch (error) {
       if (mounted.current) {
-        setStatus(null);
+        setStatus(cachedStatus);
+        setVerified(false);
         lastIssue.current = "unavailable";
         void showError(describeBluetoothFailure(error), undefined, { kind: "notification" }).catch(() => undefined);
       }
@@ -98,5 +126,5 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
     }
   }, [confirm, isAdmin, refresh, reportStatus, status]);
 
-  return { status, busy, refreshing, change };
+  return { status, busy, refreshing, verified, change };
 }

@@ -7693,6 +7693,16 @@
       ]
     },
     {
+      "id": "tauri:cancel_disk_scan",
+      "name": "cancel_disk_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:cancel_paste_monitor_snooze",
       "name": "cancel_paste_monitor_snooze",
       "transport": "tauri",
@@ -8232,6 +8242,46 @@
       ]
     },
     {
+      "id": "tauri:duplicate_finder_group_page",
+      "name": "duplicate_finder_group_page",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_open",
+      "name": "duplicate_finder_open",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_page",
+      "name": "duplicate_finder_page",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_progress",
+      "name": "duplicate_finder_progress",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:duplicate_finder_remove",
       "name": "duplicate_finder_remove",
       "transport": "tauri",
@@ -8244,6 +8294,16 @@
     {
       "id": "tauri:duplicate_finder_scan",
       "name": "duplicate_finder_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:duplicate_finder_scan_local",
+      "name": "duplicate_finder_scan_local",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -8921,6 +8981,26 @@
     {
       "id": "tauri:get_disk_children",
       "name": "get_disk_children",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_disk_file_types",
+      "name": "get_disk_file_types",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_disk_scan_progress",
+      "name": "get_disk_scan_progress",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -9776,9 +9856,8 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/App.tsx",
-        "src/components/LicenseQuickPanel.tsx",
-        "src/hooks/useProcessElevation.ts",
-        "src/panels/identity/components/AppLicensePanel.tsx"
+        "src/hooks/useBackend.ts",
+        "src/hooks/useProcessElevation.ts"
       ]
     },
     {
@@ -10098,6 +10177,16 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:open_disk_item",
+      "name": "open_disk_item",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:open_event_log",
       "name": "open_event_log",
       "transport": "tauri",
@@ -10125,7 +10214,6 @@
         "src/components/EverythingSearchBar.tsx",
         "src/components/MetadataScrubberDialog.tsx",
         "src/components/dashboard/RecentDownloadsCard.tsx",
-        "src/components/tweaks/managers/StartupManager.tsx",
         "src/panels/runtime\u002dvisibility/index.tsx",
         "src/panels/search\u002dfiles/index.tsx"
       ]
@@ -10621,6 +10709,16 @@
     {
       "id": "tauri:routine_cleaner_scan",
       "name": "routine_cleaner_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:routine_cleaner_scan_projects",
+      "name": "routine_cleaner_scan_projects",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -11813,6 +11911,16 @@
     {
       "id": "tauri:uninstall_leftovers_remove",
       "name": "uninstall_leftovers_remove",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:uninstall_leftovers_reveal",
+      "name": "uninstall_leftovers_reveal",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

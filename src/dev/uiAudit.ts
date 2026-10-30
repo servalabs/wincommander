@@ -1,3 +1,6 @@
+import { diskAnalyzerAuditResponse } from "./diskAnalyzerAudit";
+import { fileHygieneAuditResponse } from "./fileHygieneAudit";
+import { routineCleanerAuditResponse } from "./routineCleanerAudit";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { DECOY_APP_SETTINGS, DECOY_INVENTORY } from "../lib/decoyFakeData";
 import { modulesForPersona } from "../types/modules";
@@ -1022,44 +1025,11 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "wifi_guard_status":
       return { schemaVersion: 2, instanceId: "synthetic-ui-audit", baselineRevision: 1, running: false, collectorHealthy: false, health: "needsReview", observedAt: new Date().toISOString(), pollIntervalSecs: 5, errorCode: null, interfaces: [{ interfaceId: "{00000000-0000-0000-0000-000000000001}", name: "Audit Wi-Fi", state: "connected", ssid: "Audit Wi-Fi", ssidHex: "41756469742057692d4669", bssid: "00:11:22:33:44:55", authAlgorithm: 7, cipherAlgorithm: 4, authStrength: 3, signal: 82, trust: "learned" }] };
     case "routine_cleaner_scan":
-      return {
-        items: [
-          { id: "audit-edge-cache", category: "browsers", label: "Microsoft Edge cache", path: "C:\\Audit\\Browser\\Edge\\Cache", bytes: 8_388_608, fileCount: 128, recommended: true, operation: "delete", truncated: false },
-          { id: "audit-firefox-thumbnails", category: "browsers", label: "Firefox thumbnail cache", path: "C:\\Audit\\Browser\\Firefox\\thumbnails", bytes: 1_310_720, fileCount: 42, recommended: true, operation: "delete", truncated: false },
-          { id: "audit-app-cache", category: "applications", label: "Audit application cache", path: "C:\\Audit\\Cache", bytes: 2_621_440, fileCount: 18, recommended: true, operation: "delete", truncated: false },
-          { id: "audit-shader-cache", category: "gaming", label: "DirectX shader cache", path: "C:\\Audit\\Gaming\\D3DCache", bytes: 67_108_864, fileCount: 320, recommended: true, operation: "delete", truncated: false },
-          { id: "audit-launcher-logs", category: "gaming", label: "Game launcher logs", path: "C:\\Audit\\Gaming\\Launcher\\Logs", bytes: 786_432, fileCount: 12, recommended: false, operation: "delete", truncated: false },
-          { id: "audit-sqlite-journals", category: "databases", label: "Orphaned SQLite journals", path: "C:\\Audit\\Databases", bytes: 3_670_016, fileCount: 7, recommended: false, operation: "delete", truncated: false },
-        ],
-        totalBytes: 83_886_080,
-        totalFiles: 527,
-        skippedTargets: 0,
-        cancelled: false,
-      };
+      return routineCleanerAuditResponse();
     case "run_disk_scan":
-      return {
-        scanRoot: "C:\\Audit",
-        totalSize: 40_802_189_312,
-        freeSpace: 496_068_722_688,
-        driveCapacity: 1_099_511_627_776,
-        fileCount: 8_421,
-        folderCount: 614,
-        wiztreeFound: true,
-      };
     case "get_disk_children":
-      return [
-        { name: "Cases", fullPath: "C:\\Audit\\Cases", size: 19_327_352_832, allocated: 19_341_262_848, isDir: true, lastModified: "2026-08-01T22:20:00Z", fileCount: 3_216, folderCount: 188 },
-        { name: "Downloads", fullPath: "C:\\Audit\\Downloads", size: 9_663_676_416, allocated: 9_671_524_352, isDir: true, lastModified: "2026-08-01T21:48:00Z", fileCount: 804, folderCount: 37 },
-        { name: "AppData", fullPath: "C:\\Audit\\AppData", size: 6_442_450_944, allocated: 6_451_462_144, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 4_288, folderCount: 389 },
-        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0 },
-      ];
     case "get_large_disk_items":
-      return [
-        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
-        { name: "case-archive.zip", fullPath: "C:\\Audit\\Cases\\case-archive.zip", size: 2_576_980_377, allocated: 2_577_006_592, isDir: false, lastModified: "2026-08-01T20:12:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
-        { name: "capture-session.mkv", fullPath: "C:\\Audit\\Cases\\capture-session.mkv", size: 1_395_864_576, allocated: 1_395_867_648, isDir: false, lastModified: "2026-08-01T18:52:00Z", fileCount: 1, folderCount: 0, itemType: "Video", cleanupHint: "Large media file", risk: "review" },
-        { name: "BrowserCache", fullPath: "C:\\Audit\\AppData\\BrowserCache", size: 754_974_720, allocated: 756_023_296, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 944, folderCount: 48, itemType: "Folder", cleanupHint: "Cache candidate", risk: "temporary" },
-      ];
+      return diskAnalyzerAuditResponse(command);
     case "registry_cleaner_scan":
       return { entries: [{ id: "registry-audit-clsid", classId: "{00000000-0000-0000-0000-AUDIT000001}", serverKind: "InprocServer32", missingServer: "C:\\Audit\\Missing\\audit-shell.dll", hive: "HKCU" }], skippedEntries: 1 };
     case "explorer_context_menu_scan":
@@ -1289,6 +1259,6 @@ export function installUiAuditMocks(): void {
         },
       };
     }
-    return uiAuditDirectResponse(command);
+    return fileHygieneAuditResponse(command, args) ?? diskAnalyzerAuditResponse(command, args) ?? uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });
 }

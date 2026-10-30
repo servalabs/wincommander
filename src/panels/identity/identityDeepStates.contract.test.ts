@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const identity = readFileSync("src/panels/identity/index.tsx", "utf8");
 const license = readFileSync("src/panels/identity/components/AppLicensePanel.tsx", "utf8");
 const quickLicense = readFileSync("src/components/LicenseQuickPanel.tsx", "utf8");
+const backend = readFileSync("src/hooks/useBackend.ts", "utf8");
 
 describe("settings deep-state contracts", () => {
   test("a rejected censorship apply clears busy state and reports failure", () => {
@@ -19,10 +20,11 @@ describe("settings deep-state contracts", () => {
 
   test("keeps shared-device licence removal behind an elevated administrator token", () => {
     for (const source of [license, quickLicense]) {
-      expect(source).toContain('invoke<boolean>("is_current_process_elevated")');
+      expect(source).toContain("isCurrentProcessElevated()");
       expect(source).toContain("canRemoveDeviceLicense");
       expect(source).toContain("Administrator approval is required to remove this device license");
     }
+    expect(backend).toContain('invoke<boolean>("is_current_process_elevated")');
     expect(license).toContain("disabled={!canRemoveDeviceLicense}");
     expect(quickLicense).toContain("disabled={loading || !canRemoveDeviceLicense}");
   });

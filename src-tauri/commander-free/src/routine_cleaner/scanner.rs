@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::rules::{validate_recursive_containment, ScanTarget, TargetOperation};
-use super::{CachedCleanerItem, CachedFile, RoutineCleanerItem, RoutineCleanerScan};
+use super::{
+    CachedCleanerItem, CachedFile, RoutineCleanerEntryPreview, RoutineCleanerItem,
+    RoutineCleanerScan, MAX_PREVIEW_ENTRIES_PER_TARGET,
+};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -11,6 +15,7 @@ use uuid::Uuid;
 
 const RECENT_FILE_AGE: Duration = Duration::from_secs(60 * 60);
 const MAX_FILES_PER_TARGET: usize = 50_000;
+const MAX_ENTRIES_PER_TARGET: usize = 200_000;
 
 pub(super) fn scan_targets(
     targets: Vec<ScanTarget>,
@@ -19,12 +24,24 @@ pub(super) fn scan_targets(
     let mut public_items = Vec::new();
     let mut cached_items = Vec::new();
     let mut skipped_targets = 0;
+    let mut seen = HashSet::new();
     for target in targets {
         if cancelled.load(Ordering::Acquire) {
             break;
         }
         match scan_target(target, cancelled) {
-            Ok(Some((public, cached))) => {
+            Ok(Some((mut public, mut cached))) => {
+                if cached.operation == TargetOperation::Delete {
+                    cached.files.retain(|file| seen.insert(file.path.clone()));
+                    public.file_count = cached.files.len();
+                    public.bytes = cached.files.iter().map(|file| file.bytes).sum();
+                    public.entry_count = cached.files.len();
+                    public.entries_truncated = cached.files.len() > MAX_PREVIEW_ENTRIES_PER_TARGET;
+                    public.entries = preview_entries(&cached.files, cached.operation);
+                    if cached.files.is_empty() {
+                        continue;
+                    }
+                }
                 public_items.push(public);
                 cached_items.push(cached);
             }
@@ -42,6 +59,7 @@ pub(super) fn scan_targets(
     let total_files = public_items.iter().map(|item| item.file_count).sum();
     Ok((
         RoutineCleanerScan {
+            scan_root: None,
             items: public_items,
             total_bytes,
             total_files,
@@ -71,15 +89,23 @@ fn scan_target(
         }
     }
     let canonical_root = fs::canonicalize(&target.path).map_err(|error| error.to_string())?;
+    if target.category == "projects"
+        && !validate_recursive_containment(&target.path, &canonical_root)
+    {
+        return Ok(None);
+    }
     if let Some(containment_root) = &target.containment_root {
         if canonical_root == *containment_root || !canonical_root.starts_with(containment_root) {
             return Ok(None);
         }
     }
     let (files, bytes, truncated) = match target.operation {
-        TargetOperation::Delete => {
-            collect_deletable_files(&canonical_root, target.minimum_age, cancelled)
-        }
+        TargetOperation::Delete => collect_deletable_files(
+            &canonical_root,
+            target.minimum_age,
+            cancelled,
+            MAX_ENTRIES_PER_TARGET,
+        ),
         TargetOperation::Vacuum => scan_database(&canonical_root)?,
     };
     if files.is_empty() || bytes == 0 {
@@ -90,13 +116,20 @@ fn scan_target(
         TargetOperation::Delete => "delete",
         TargetOperation::Vacuum => "vacuum",
     };
+    let entry_count = files.len();
     let public = RoutineCleanerItem {
         id: id.clone(),
         category: target.category.clone(),
         label: target.label.clone(),
+        description: target.description.clone(),
         path: target.path.to_string_lossy().into_owned(),
+        path_display: target.path.to_str().map(str::to_owned),
         bytes,
-        file_count: files.len(),
+        file_count: entry_count,
+        entries: preview_entries(&files, target.operation),
+        entry_count,
+        entries_limit: MAX_PREVIEW_ENTRIES_PER_TARGET,
+        entries_truncated: entry_count > MAX_PREVIEW_ENTRIES_PER_TARGET,
         recommended: target.recommended,
         operation: operation.into(),
         truncated,
@@ -106,6 +139,7 @@ fn scan_target(
         label: target.label,
         root: target.path,
         canonical_root,
+        requires_plain_path: target.category == "projects",
         files,
         operation: target.operation,
     };
@@ -116,44 +150,65 @@ fn collect_deletable_files(
     root: &Path,
     minimum_age: Duration,
     cancelled: &AtomicBool,
+    entry_limit: usize,
 ) -> (Vec<CachedFile>, u64, bool) {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let now = SystemTime::now();
     let mut bytes = 0u64;
     let mut truncated = false;
+    let mut partial = false;
+    let mut entries_scanned = 0;
     while let Some(directory) = stack.pop() {
         if cancelled.load(Ordering::Acquire) {
             break;
         }
         let Ok(directory_metadata) = fs::symlink_metadata(&directory) else {
+            partial = true;
             continue;
         };
         if !directory_metadata.is_dir()
             || directory_metadata.file_type().is_symlink()
             || is_reparse_point(&directory_metadata)
         {
+            partial = true;
             continue;
         }
         let Ok(canonical_directory) = fs::canonicalize(&directory) else {
+            partial = true;
             continue;
         };
         if !canonical_directory.starts_with(root) {
+            partial = true;
             continue;
         }
         let Ok(entries) = fs::read_dir(&canonical_directory) else {
+            partial = true;
             continue;
         };
-        for entry in entries.flatten() {
-            if files.len() >= MAX_FILES_PER_TARGET {
+        for entry in entries {
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    partial = true;
+                    continue;
+                }
+            };
+            if files.len() >= MAX_FILES_PER_TARGET || entries_scanned >= entry_limit {
                 truncated = true;
                 break;
             }
+            entries_scanned += 1;
             let path = entry.path();
             let Ok(metadata) = fs::symlink_metadata(&path) else {
+                partial = true;
                 continue;
             };
             if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+                partial = true;
                 continue;
             }
             if metadata.is_dir() {
@@ -163,12 +218,14 @@ fn collect_deletable_files(
             {
                 let identity = file_identity(&path);
                 if cfg!(windows) && identity.is_none() {
+                    partial = true;
                     continue;
                 }
                 bytes = bytes.saturating_add(metadata.len());
                 files.push(CachedFile {
                     file_identity: identity,
                     path,
+                    actual_bytes: metadata.len(),
                     bytes: metadata.len(),
                     minimum_age,
                 });
@@ -178,7 +235,7 @@ fn collect_deletable_files(
             break;
         }
     }
-    (files, bytes, truncated)
+    (files, bytes, truncated || partial)
 }
 
 fn scan_database(path: &Path) -> Result<(Vec<CachedFile>, u64, bool), String> {
@@ -192,6 +249,7 @@ fn scan_database(path: &Path) -> Result<(Vec<CachedFile>, u64, bool), String> {
     Ok((
         vec![CachedFile {
             path: path.to_path_buf(),
+            actual_bytes: size,
             bytes: estimated,
             minimum_age: Duration::ZERO,
             file_identity: None,
@@ -199,6 +257,24 @@ fn scan_database(path: &Path) -> Result<(Vec<CachedFile>, u64, bool), String> {
         estimated,
         false,
     ))
+}
+
+fn preview_entries(
+    files: &[CachedFile],
+    operation: TargetOperation,
+) -> Vec<RoutineCleanerEntryPreview> {
+    let mut ordered: Vec<_> = files.iter().collect();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    ordered
+        .into_iter()
+        .take(MAX_PREVIEW_ENTRIES_PER_TARGET)
+        .map(|file| RoutineCleanerEntryPreview {
+            id: Uuid::new_v4().to_string(),
+            path: file.path.to_str().map(str::to_owned),
+            actual_size_bytes: file.actual_bytes,
+            estimated_reclaim_bytes: (operation == TargetOperation::Vacuum).then_some(file.bytes),
+        })
+        .collect()
 }
 
 pub(super) fn has_sqlite_header(path: &Path) -> bool {
@@ -251,58 +327,16 @@ pub(crate) fn file_identity(_path: &Path) -> Option<(u32, u64)> {
 }
 
 #[cfg(windows)]
-fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+pub(super) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     metadata.file_attributes() & 0x400 != 0
 }
 
 #[cfg(not(windows))]
-fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+pub(super) fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn recognizes_sqlite_header() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.db");
-        fs::write(&path, b"SQLite format 3\0rest").unwrap();
-        assert!(has_sqlite_header(&path));
-    }
-    #[test]
-    fn rejects_non_sqlite_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.db");
-        fs::write(&path, b"not a database").unwrap();
-        assert!(!has_sqlite_header(&path));
-    }
-
-    #[test]
-    fn preserves_files_that_become_recent_during_a_cleaner_session() {
-        let now = SystemTime::now();
-        assert!(!is_old_enough(Some(now), now, Duration::from_secs(0)));
-        assert!(is_old_enough(
-            Some(now.checked_sub(Duration::from_secs(60 * 60 + 1)).unwrap()),
-            now,
-            Duration::from_secs(0),
-        ));
-        assert!(!is_old_enough(
-            Some(now.checked_sub(Duration::from_secs(60 * 60 + 1)).unwrap()),
-            now,
-            Duration::from_secs(24 * 60 * 60),
-        ));
-        assert!(!is_old_enough(None, now, Duration::ZERO));
-        assert!(!is_old_enough(
-            Some(now.checked_add(Duration::from_secs(1)).unwrap()),
-            now,
-            Duration::ZERO,
-        ));
-        assert!(is_old_enough(
-            Some(now.checked_sub(RECENT_FILE_AGE).unwrap()),
-            now,
-            Duration::ZERO,
-        ));
-    }
-}
+#[path = "scanner_tests.rs"]
+mod tests;

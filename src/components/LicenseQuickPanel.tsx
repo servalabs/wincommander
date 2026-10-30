@@ -1,5 +1,4 @@
 import { Input } from "@/components/ui/input";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../hooks/useBackend";
 import useInvestigatorInstall from "../hooks/useInvestigatorInstall";
@@ -10,7 +9,7 @@ import LicenseQuickStats from "./LicenseQuickStats";
 import { licenseStateLabel } from "../utils/licensePresentation";
 
 export default function LicenseQuickPanel() {
-  const { getLicenseStatus, activateAppLicense, refreshAppLicense, deactivateAppLicense } = useBackend();
+  const { getLicenseStatus, activateAppLicense, refreshAppLicense, deactivateAppLicense, isCurrentProcessElevated } = useBackend();
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [licenseKey, setLicenseKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -130,7 +129,7 @@ export default function LicenseQuickPanel() {
 
   useEffect(() => {
     let active = true;
-    void invoke<boolean>("is_current_process_elevated")
+    void isCurrentProcessElevated()
       .then((elevated) => {
         if (active) setCanRemoveDeviceLicense(elevated);
       })
@@ -140,7 +139,7 @@ export default function LicenseQuickPanel() {
         if (active) setCanRemoveDeviceLicense(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [isCurrentProcessElevated]);
 
   // isTrialActive covers both: a local free trial AND a server-activated trial key
   // (where the admin worker sets plan = "trial"). The key path uses the normal

@@ -25,15 +25,26 @@ pub(super) fn clean_items(
             result.cancelled = true;
             break;
         }
+        if item.requires_plain_path
+            && !super::rules::validate_recursive_containment(&item.root, &item.canonical_root)
+        {
+            result.errors.push(RoutineCleanerError {
+                id: item.id,
+                label: item.label,
+                reason: "Project artifact path changed or crosses a link; scan again.".into(),
+            });
+            continue;
+        }
         match item.operation {
             TargetOperation::Delete => {
                 let (files, bytes, errors) = clean_file_group(&item, cancelled);
                 result.files_cleaned += files;
                 result.bytes_recovered = result.bytes_recovered.saturating_add(bytes);
-                if errors.is_empty() {
+                result.cancelled = cancelled.load(Ordering::Acquire);
+                if errors.is_empty() && !result.cancelled {
                     result.items_cleaned += 1;
                     cleaned_ids.push(item.id);
-                } else {
+                } else if !errors.is_empty() {
                     result.errors.push(RoutineCleanerError {
                         id: item.id,
                         label: item.label,
@@ -56,6 +67,7 @@ pub(super) fn clean_items(
             },
         }
     }
+    result.cancelled |= cancelled.load(Ordering::Acquire);
     (result, cleaned_ids)
 }
 
@@ -88,7 +100,7 @@ fn validate_cached_metadata(
     if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse_point(metadata) {
         return Err("cached file is no longer a regular file".into());
     }
-    if metadata.len() != file.bytes || current_identity != file.file_identity {
+    if metadata.len() != file.actual_bytes || current_identity != file.file_identity {
         return Err("cached file identity changed after the scan".into());
     }
     if !is_old_enough(
@@ -323,6 +335,7 @@ mod tests {
         let metadata = file.metadata().unwrap();
         CachedFile {
             path: path.to_path_buf(),
+            actual_bytes: metadata.len(),
             bytes: metadata.len(),
             minimum_age: Duration::ZERO,
             file_identity: super::super::scanner::file_identity(path),
@@ -340,8 +353,10 @@ mod tests {
             label: "Test cache".into(),
             root: root.clone(),
             canonical_root: fs::canonicalize(&root).unwrap(),
+            requires_plain_path: false,
             files: vec![super::super::CachedFile {
                 path: substituted,
+                actual_bytes: 1,
                 bytes: 1,
                 minimum_age: Duration::ZERO,
                 file_identity: None,

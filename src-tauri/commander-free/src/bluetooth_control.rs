@@ -73,4 +73,34 @@ mod tests {
         )
         .is_err());
     }
+
+    /// Opt-in desktop acceptance check for the real authenticated SYSTEM
+    /// service. It stays disabled in ordinary test runs because it reads this
+    /// machine's Windows policy rather than a fixture.
+    #[tokio::test]
+    async fn live_service_reports_a_recognized_bluetooth_state_when_requested() {
+        if std::env::var_os("WINCOMMANDER_LIVE_BLUETOOTH_SERVICE_TEST").is_none() {
+            return;
+        }
+
+        let response = crate::svc_client::call("svc.bluetooth.policy.status", json!({}))
+            .await
+            .expect("live Bluetooth policy service should return a status");
+        let state = response["state"]
+            .as_str()
+            .expect("Bluetooth policy status should include a state");
+        eprintln!("Live Bluetooth policy service state: {state}");
+        assert!(
+            matches!(
+                state,
+                "allowed"
+                    | "blocked"
+                    | "externally_managed"
+                    | "unsupported"
+                    | "pending"
+                    | "legacy_recovery_required"
+            ),
+            "unexpected Bluetooth policy state: {state}"
+        );
+    }
 }

@@ -1,11 +1,26 @@
 import { expect, test } from "bun:test";
 import type { RoutineCleanerItem, RoutineCleanerScan } from "../../hooks/useBackend";
-import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems } from "./routineCleanerHelpers";
+import { APP_CACHE_CLEANUP_CATEGORIES, getPopulatedRoutineCleanerCategories, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, toggleRoutineCategorySelection } from "./routineCleanerHelpers";
 
 const items: RoutineCleanerItem[] = [
-  { id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false },
-  { id: "browser-1", category: "browsers", label: "Cache", path: "C:\\Cache", bytes: 100, fileCount: 1, recommended: false, operation: "delete", truncated: false },
-  { id: "system-2", category: "system", label: "Icons", path: "C:\\Icons", bytes: 50, fileCount: 1, recommended: true, operation: "delete", truncated: false },
+  {
+    description: null,
+    id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false,
+    pathDisplay: "C:\\Temp", entries: [
+      { id: "system-1-file-1", path: "C:\\Temp\\first.tmp", actualSizeBytes: 120, estimatedReclaimBytes: null },
+      { id: "system-1-file-2", path: "C:\\Temp\\second.tmp", actualSizeBytes: 80, estimatedReclaimBytes: null },
+    ], entryCount: 2, entriesLimit: 100, entriesTruncated: false,
+  },
+  {
+    id: "browser-1", category: "browsers", label: "Cache", path: "C:\\Cache", bytes: 100, fileCount: 1, recommended: false, operation: "delete", truncated: false,
+    description: null,
+    pathDisplay: "C:\\Cache", entries: [{ id: "browser-1-file-1", path: "C:\\Cache\\cache.bin", actualSizeBytes: 100, estimatedReclaimBytes: null }], entryCount: 1, entriesLimit: 100, entriesTruncated: false,
+  },
+  {
+    id: "system-2", category: "system", label: "Icons", path: "C:\\Icons", bytes: 50, fileCount: 1, recommended: true, operation: "delete", truncated: false,
+    description: null,
+    pathDisplay: "C:\\Icons", entries: [{ id: "system-2-file-1", path: "C:\\Icons\\cache.db", actualSizeBytes: 50, estimatedReclaimBytes: null }], entryCount: 1, entriesLimit: 100, entriesTruncated: false,
+  },
 ];
 
 test("groups preview items by their backend category", () => {
@@ -14,12 +29,27 @@ test("groups preview items by their backend category", () => {
   expect(groups.browsers?.map((item) => item.id)).toEqual(["browser-1"]);
 });
 
+test("preview categories include only cache types with scan targets in canonical order", () => {
+  const categories = getPopulatedRoutineCleanerCategories(items);
+  expect(categories.map((group) => group.id)).toEqual(["system", "browsers"]);
+  expect(categories[0]?.description).toBe("Temporary files, caches, and diagnostics");
+  expect(getPopulatedRoutineCleanerCategories([])).toEqual([]);
+});
+
 test("recommended selection excludes opt-in targets", () => {
   expect(getRecommendedItemIds(items)).toEqual(["system-1", "system-2"]);
 });
 
 test("selected item helper ignores IDs absent from the latest scan", () => {
   expect(getSelectedItems(items, new Set(["system-1", "expired-id"])).map((item) => item.id)).toEqual(["system-1"]);
+});
+
+test("category selection preserves other categories and clears only after the whole category is selected", () => {
+  const partial = new Set(["system-1", "browser-1"]);
+  const selected = toggleRoutineCategorySelection(items, partial, "system");
+  expect([...selected].sort()).toEqual(["browser-1", "system-1", "system-2"]);
+  expect([...toggleRoutineCategorySelection(items, selected, "system")]).toEqual(["browser-1"]);
+  expect([...partial]).toEqual(["system-1", "browser-1"]);
 });
 
 test("clean reconciliation retains failed items and recomputes preview totals", () => {
@@ -31,7 +61,7 @@ test("clean reconciliation retains failed items and recomputes preview totals", 
 });
 
 test("app-cache cleanup excludes the system category that Windows disk cleanup already owns", () => {
-  expect(APP_CACHE_CLEANUP_CATEGORIES).toEqual(["browsers", "applications", "gaming", "databases"]);
+  expect(APP_CACHE_CLEANUP_CATEGORIES).toEqual(["browsers", "applications", "developers", "ai", "gaming", "databases"]);
   expect(APP_CACHE_CLEANUP_CATEGORIES).not.toContain("system");
   expect(getRoutineCleanerCategories(APP_CACHE_CLEANUP_CATEGORIES).map((category) => category.id)).toEqual(APP_CACHE_CLEANUP_CATEGORIES);
 });

@@ -1,0 +1,54 @@
+.maintenance-cache-card-header {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+}
+
+.maintenance-cache-heading {
+  flex: 1 1 17rem;
+  min-width: 0;
+}
+
+.maintenance-cache-heading [data-slot="card-description"] {
+  margin-top: 0.4rem;
+}
+
+.maintenance-cache-header-actions {
+  display: flex;
+  flex: 1 1 35rem;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem 1rem;
+}
+
+.maintenance-cache-header-selection {
+  display: flex;
+  flex: 1 1 10rem;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.maintenance-cache-header-selection strong {
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.maintenance-cache-header-selection span {
+  color: var(--text-mute);
+  font-size: 0.65rem;
+  overflow-wrap: anywhere;
+}
+
+.maintenance-cache-header-buttons {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

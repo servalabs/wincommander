@@ -1,238 +1,84 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { Icon, Button, Tag, Spinner, InputGroup } from "@/components/ui/bp";
-import { invoke } from "@tauri-apps/api/core";
+import { Button, Tag, Spinner, InputGroup } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
-import { executeBackendCommand } from "../../../hooks/useBackend";
+import { executeBackendCommand, type StartupImpactEntry } from "../../../hooks/useBackend";
 import { showSuccess, showError } from "../../../utils/toast";
 import { enabledRowsFirst } from "./systemManagerSort";
+import { recordMaintenanceOperation } from "../../../hooks/useMaintenanceHistory";
+import { useAppConfirm } from "../../shared/AppConfirmDialog";
+import { matchesStartupSearch, startupIdentity, startupSignature, type StartupItem } from "./startupReview";
+import { StartupReviewRow } from "./StartupReviewRow";
 import "./SystemManagers.css";
-import { AnimatedList, AnimatedTableRow, staggerDelay } from "../../shared/AnimatedList";
+import "./StartupReview.css";
 
-// Mirrors the PSCustomObject shape returned by Get-StartupItems
-// (src-tauri/commander-free/scripts/modules/tweaks/startup-manager.ps1).
-interface StartupItem {
-    Name: string;
-    Command: string;
-    RamUsageMB: number;
-    Status: string;          // "Running" | "Stopped" | "Disabled"
-    IsEnabled: boolean;
-    Source: string;          // "Registry" | "Folder" | "File" (backup)
-    Location: string;
-    Recommendation: "Keep" | "Disable" | "Neutral";
-    Category: string;
-    Description: string;
-}
+export default function StartupManager({ embedded = false, scanKey = 0, reviewEntries = [] }: { embedded?: boolean; scanKey?: number; reviewEntries?: StartupImpactEntry[] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [items, setItems] = useState<StartupItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string>();
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const embeddedScanKey = useRef<number | undefined>(undefined);
+  const requestConfirm = useAppConfirm();
 
-function extractCommandPath(command: string): string | null {
-    const trimmed = command.trim();
-    if (!trimmed) return null;
-    const quoted = trimmed.match(/^"([^"]+)"/);
-    if (quoted?.[1]) return quoted[1];
-    const exe = trimmed.match(/^([A-Z]:\\[^\s]+?\.(?:exe|lnk|bat|cmd|ps1))/i);
-    if (exe?.[1]) return exe[1];
-    return null;
-}
+  const refresh = useCallback(async () => {
+    setLoading(true); setError(undefined);
+    try {
+      const res = await executeBackendCommand<StartupItem[] | { error?: boolean; message?: string }>("Get-StartupItems");
+      if (res.success && Array.isArray(res.data)) setItems(res.data);
+      else throw new Error(res.error || (!Array.isArray(res.data) && res.data?.message) || "Failed to load startup items");
+    } catch (cause) { setError(String(cause)); }
+    finally { setLoading(false); setLoaded(true); }
+  }, []);
 
-function parentFolder(path: string): string {
-    const clean = path.replace(/\\+$/, "");
-    const idx = clean.lastIndexOf("\\");
-    return idx > 0 ? clean.slice(0, idx) : clean;
-}
-
-export default function StartupManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
-    // Collapsed by default — the data fetch only fires on first open so
-    // the Tweaks panel doesn't pay a Get-StartupItems round-trip on every
-    // mount (these subpanels stack vertically and were dominating load
-    // time on slow machines).
-    const [isOpen, setIsOpen] = useState(false);
-    const [items, setItems] = useState<StartupItem[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [pending, setPending] = useState<Set<string>>(new Set());
-    const [filter, setFilter] = useState("");
-    const embeddedScanKey = useRef<number | undefined>(undefined);
-
-    const refresh = useCallback(async () => {
-        setLoading(true);
-        const res = await executeBackendCommand<StartupItem[] | { error?: boolean; message?: string }>("Get-StartupItems");
-        setLoading(false);
-        if (res.success && Array.isArray(res.data)) {
-            setItems(res.data);
-        } else if (!res.success) {
-            showError(res.error || "Failed to load startup items");
-        }
-    }, []);
-
-    useEffect(() => {
-        if (embedded) {
-            if (embeddedScanKey.current !== scanKey) {
-                embeddedScanKey.current = scanKey;
-                void refresh();
-            }
-            return;
-        }
-        if (isOpen && items.length === 0 && !loading) void refresh();
-    }, [embedded, isOpen, items.length, loading, refresh, scanKey]);
-
-    const handleToggle = useCallback(async (item: StartupItem) => {
-        setPending(prev => new Set(prev).add(item.Name));
-        const cmd = item.IsEnabled ? "Disable-StartupItem" : "Enable-StartupItem";
-        const res = await executeBackendCommand<{ success?: boolean; message?: string }>(cmd, {
-            Name: item.Name,
-            Location: item.Location,
-        });
-        setPending(prev => {
-            const next = new Set(prev);
-            next.delete(item.Name);
-            return next;
-        });
-        if (res.success && res.data?.success !== false) {
-            showSuccess(`${item.IsEnabled ? "Disabled" : "Enabled"} ${item.Name}`);
-            refresh();
-        } else {
-            showError(res.error || res.data?.message || "Failed to toggle startup item");
-        }
-    }, [refresh]);
-
-    const filtered = useMemo(() => {
-        const q = filter.trim().toLowerCase();
-        const matches = !q ? items : items.filter(i =>
-            i.Name.toLowerCase().includes(q) ||
-            (i.Description || "").toLowerCase().includes(q) ||
-            (i.Category || "").toLowerCase().includes(q));
-        return enabledRowsFirst(matches, item => item.IsEnabled);
-    }, [items, filter]);
-
-    const totalRam = useMemo(
-        () => items.filter(i => i.Status === "Running").reduce((s, i) => s + (i.RamUsageMB || 0), 0),
-        [items],
-    );
-
-    const headerRight = (
-        <>
-            <span className="system-manager-caption">Startup apps, live signal, memory cost, source, and command path.</span>
-            <div className="system-manager-actions">
-                <Tag minimal>{`${items.length} entries`}</Tag>
-                <Tag minimal intent="warning">{`${totalRam.toFixed(0)} MB running`}</Tag>
-                {!embedded && <Button minimal icon="refresh" aria-label="Refresh startup items" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
-            </div>
-        </>
-    );
-
-    const body = (
-        <>
-            <InputGroup
-                aria-label="Search startup items"
-                placeholder="Search startup items..."
-                leftIcon="search"
-                value={filter}
-                onChange={e => setFilter(e.currentTarget.value)}
-                className="system-manager-filter"
-            />
-            <AnimatedList className="system-manager-list system-manager-list--startup">
-                {loading && items.length === 0 && <Spinner size={20} />}
-                {!loading && filtered.length === 0 && (
-                    <div style={{ color: "var(--color-text-muted)", padding: 12, fontSize: 12 }}>
-                        No startup items match.
-                    </div>
-                )}
-                {filtered.map((item, idx) => {
-                    const isPending = pending.has(item.Name);
-                    const commandPath = extractCommandPath(item.Command);
-                    const rowKey = item.Location + "::" + item.Name;
-                    // "Neutral" backend value is unclear in the UI — relabel to
-                    // "Optional" with an explanatory tooltip so users know it
-                    // means the call is theirs (no strong keep/disable signal).
-                    const recIntent =
-                        item.Recommendation === "Keep" ? "success" :
-                        item.Recommendation === "Disable" ? "warning" : "none";
-                    const recLabel = item.Recommendation === "Neutral" ? "Optional" : item.Recommendation;
-                    const recTip =
-                        item.Recommendation === "Keep" ? "Recommended to keep enabled — important for normal use." :
-                        item.Recommendation === "Disable" ? "Recommended to disable — speeds up boot, not needed at startup." :
-                        "No strong recommendation — keep or disable based on whether you use this app at startup.";
-                    return (
-                        <AnimatedTableRow
-                            key={rowKey}
-                            layoutId={rowKey}
-                            entranceDelay={staggerDelay(idx)}
-                        >
-                            <div
-                                className="system-manager-row system-manager-row--startup"
-                                style={{
-                                    // opacity fade when disabled — compositor-friendly, no reflow
-                                    opacity: item.IsEnabled ? 1 : 0.55,
-                                    transition: "opacity var(--dur-normal) var(--ease)",
-                                }}
-                            >
-                                <div style={{ minWidth: 0 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                                        <Icon icon={item.Source === "Folder" ? "folder-close" : "database"} size={12} />
-                                        <span style={{ fontWeight: 600, fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>{item.Name}</span>
-                                        {item.Description !== "Unknown Application" && (
-                                            <span style={{
-                                                fontSize: 11,
-                                                color: "var(--color-text-muted)",
-                                                overflow: "hidden",
-                                                textOverflow: "ellipsis",
-                                                whiteSpace: "nowrap",
-                                                minWidth: 0,
-                                            }}>· {item.Description}</span>
-                                        )}
-                                    </div>
-                                    {/* Command / path — folded to two lines max so a long
-                                        install path doesn't push the row sideways out of the
-                                        System Managers card (previously single-line ellipsis
-                                        sometimes still spilled when the grid couldn't shrink). */}
-                                    <button
-                                        type="button"
-                                        className="system-manager-path"
-                                        aria-label={`Open folder containing ${item.Name}`}
-                                        onClick={() => commandPath && invoke("open_path", { path: parentFolder(commandPath) }).catch(() => {})}
-                                        disabled={!commandPath}
-                                        title={commandPath ? `${item.Command}\nClick to open containing folder` : item.Command}
-                                    >
-                                        {item.Command}
-                                    </button>
-                                </div>
-                                <Tag minimal intent={recIntent as any} title={recTip}>{recLabel}</Tag>
-                                <Tag minimal>{item.Status === "Running" ? `${item.RamUsageMB.toFixed(0)} MB` : item.Status}</Tag>
-                                <Button
-                                    small
-                                    intent={item.IsEnabled ? "danger" : "success"}
-                                    loading={isPending}
-                                    onClick={() => handleToggle(item)}
-                                    icon={item.IsEnabled ? "disable" : "tick"}
-                                    aria-label={`${item.IsEnabled ? "Disable" : "Enable"} ${item.Name} at startup`}
-                                >
-                                    {item.IsEnabled ? "Disable" : "Enable"}
-                                </Button>
-                            </div>
-                        </AnimatedTableRow>
-                    );
-                })}
-            </AnimatedList>
-        </>
-    );
-
+  useEffect(() => {
     if (embedded) {
-        return (
-            <div className="system-manager-embedded">
-                <div className="system-manager-embedded__meta">{headerRight}</div>
-                {body}
-            </div>
-        );
-    }
+      if (embeddedScanKey.current !== scanKey) { embeddedScanKey.current = scanKey; void refresh(); }
+    } else if (isOpen && !loaded && !loading) void refresh();
+  }, [embedded, isOpen, loaded, loading, refresh, scanKey]);
 
-    return (
-        <SectionCard
-            title="Startup Manager"
-            icon="play"
-            collapsible
-            isOpen={isOpen}
-            onToggle={() => setIsOpen(v => !v)}
-            headerRight={headerRight}
-        >
-            {body}
-        </SectionCard>
-    );
+  const handleToggle = useCallback(async (item: StartupItem) => {
+    if (pending.size || loading) return;
+    if (item.IsEnabled && !await requestConfirm({ title: `Disable ${item.Name} at startup?`, description: "The application stays installed. Its automatic syncing, updates or notifications may stop until you open it.", confirmLabel: "Disable at startup", destructive: false })) return;
+    const identity = startupIdentity(item);
+    setPending(new Set([identity]));
+    try {
+      const res = await executeBackendCommand<{ success?: boolean; message?: string }>(item.IsEnabled ? "Disable-StartupItem" : "Enable-StartupItem", { Name: item.Name, Location: item.Location });
+      if (!res.success || res.data?.success !== true) throw new Error(res.error || res.data?.message || "Failed to change startup entry");
+      recordMaintenanceOperation({ tool: "startup", title: item.IsEnabled ? "Disable startup entry" : "Enable startup entry", outcome: "completed", affectedItems: 1 });
+      showSuccess(`${item.IsEnabled ? "Disabled" : "Enabled"} ${item.Name}`);
+      await refresh();
+    } catch (cause) {
+      recordMaintenanceOperation({ tool: "startup", title: "Change startup entry", outcome: "failed", affectedItems: 0 });
+      showError(String(cause));
+    } finally { setPending(new Set()); }
+  }, [loading, pending.size, refresh, requestConfirm]);
+
+  const filtered = useMemo(() => enabledRowsFirst(items.filter(item => (
+    statusFilter === "all" || (statusFilter === "enabled" && item.IsEnabled) || (statusFilter === "disabled" && !item.IsEnabled)
+    || (statusFilter === "review" && item.Recommendation === "Disable"))
+    && matchesStartupSearch(item, startupSignature(item, reviewEntries), filter)), item => item.IsEnabled), [items, filter, statusFilter, reviewEntries]);
+  const enabled = items.filter(item => item.IsEnabled).length;
+  const isResultsLoading = loading && !items.length;
+  const isResultsEmpty = !loading && !error && !filtered.length;
+  const headerRight = <div className="system-manager-actions"><Tag minimal>{items.length} entries</Tag>{!embedded && <Button minimal icon="refresh" aria-label="Refresh startup items" onClick={event => { event.stopPropagation(); void refresh(); }} loading={loading} disabled={!!pending.size} />}</div>;
+  const body = <>
+    <div className="startup-review-summary"><div><strong>{items.length}</strong><span>Startup entries</span></div><div><strong>{enabled}</strong><span>Enabled at sign-in</span></div><div><strong>{items.length - enabled}</strong><span>Disabled entries</span></div></div>
+    <p className="startup-review-intro">Review what launches when you sign in. Expand an entry for its purpose, publisher and location.</p>
+    <div className="startup-review-toolbar">
+      <div className="startup-review-filters" role="group" aria-label="Filter startup entries">{[["all", "All"], ["enabled", "Enabled"], ["disabled", "Disabled"], ["review", "Review suggested"]].map(([value, label]) => <button type="button" key={value} aria-pressed={statusFilter === value} onClick={() => setStatusFilter(value)}>{label}</button>)}</div>
+      <InputGroup aria-label="Search startup items" placeholder="Search names, publishers or paths…" leftIcon="search" value={filter} onChange={event => setFilter(event.currentTarget.value)} />
+    </div>
+    {error && <p role="alert" className="startup-review-error">{error} <button type="button" onClick={() => void refresh()}>Try again</button></p>}
+    <div className={`startup-review-results${isResultsLoading ? " is-loading" : ""}${isResultsEmpty ? " is-empty" : ""}`} aria-busy={loading}>
+      {isResultsLoading && <Spinner size={20} />}
+      {isResultsEmpty && <p className="system-manager-empty">No startup entries match.</p>}
+      {filtered.map(item => <StartupReviewRow key={startupIdentity(item)} item={item} signature={startupSignature(item, reviewEntries)} pending={pending.has(startupIdentity(item))} busy={loading || !!pending.size} onToggle={() => void handleToggle(item)} />)}
+    </div>
+    <p className="startup-review-footnote">{filtered.length} of {items.length} entries shown · Registry and Startup folders. Services and scheduled tasks have their own views. Removal is not supported here; use Disable to retain the entry.</p>
+  </>;
+  if (embedded) return <div className="system-manager-embedded"><div className="system-manager-embedded__meta">{headerRight}</div>{body}</div>;
+  return <SectionCard title="Startup Manager" icon="play" collapsible isOpen={isOpen} onToggle={() => setIsOpen(value => !value)} headerRight={headerRight}>{body}</SectionCard>;
 }

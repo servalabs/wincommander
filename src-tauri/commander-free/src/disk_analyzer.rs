@@ -1,44 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// src-tauri/commander-free/src/disk_analyzer.rs
-//
-// ═══════════════════════════════════════════════════════════════════════
-// DISK ANALYZER — Native scanner (no WizTree dependency)
-// ═══════════════════════════════════════════════════════════════════════
-//
-// Reimplemented to walk the filesystem natively with std::fs::read_dir
-// rather than shelling out to WizTree's CLI through the Pro sidecar.
-// The frontend's Tauri commands (run_disk_scan, get_disk_children,
-// get_large_disk_items, disk_delete_item) and the wire types (DiskNode,
-// LargeDiskItem, ScanMeta) keep the same shape so the React panel is
-// unchanged. The owner asked for the analyzer to be independent of
-// WizTree, so the dispatch_paid_command path is gone — Free runs the
-// scan itself, no Pro / external tool required.
-//
-// Scan strategy:
-//   1. Recursively read the target tree, accumulating a per-directory
-//      list of immediate children + size totals.
-//   2. Sizes are sorted descending per folder so the panel's drill-down
-//      list lands on the largest entry first.
-//   3. A flat large-items list (files + folders ≥ threshold) is built
-//      during the walk for the "Large items" view.
-//   4. Everything lives in a process-local in-memory cache keyed by
-//      absolute folder path. A fresh run_disk_scan replaces the cache.
+mod explorer;
+mod file_types;
+mod large;
+#[cfg(test)]
+mod live_tests;
+mod progress;
+mod walker;
 
+pub use progress::ScanProgress;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::SystemTime;
+use walker::{walk_dir, WalkAccum};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskNode {
+    pub entry_id: u64,
     pub name: String,
     pub full_path: String,
     pub size: u64,
-    pub allocated: u64,
+    pub allocated: Option<u64>,
     pub is_dir: bool,
     pub last_modified: String,
     pub file_count: u64,
@@ -48,10 +35,11 @@ pub struct DiskNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LargeDiskItem {
+    pub entry_id: u64,
     pub name: String,
     pub full_path: String,
     pub size: u64,
-    pub allocated: u64,
+    pub allocated: Option<u64>,
     pub is_dir: bool,
     pub last_modified: String,
     pub file_count: u64,
@@ -64,6 +52,7 @@ pub struct LargeDiskItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanMeta {
+    pub scan_id: String,
     pub scan_root: String,
     pub total_size: u64,
     pub free_space: u64,
@@ -74,6 +63,13 @@ pub struct ScanMeta {
     /// scan is in-process and always available. The field was named
     /// `wiztree_found` when the analyzer shelled out to WizTree.
     pub wiztree_found: bool,
+    pub complete: bool,
+    pub skipped_entries: u64,
+    pub skipped_links: u64,
+    pub truncated: bool,
+    pub cancelled: bool,
+    pub size_basis: String,
+    pub allocated_size_available: bool,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -111,142 +107,6 @@ fn cache() -> &'static Mutex<ScanCache> {
 // in-memory list bounded on huge volumes.
 const MIN_LARGE_BYTES: u64 = 16 * 1024 * 1024; // 16 MB
 
-// ═══════════════════════════════════════════════════════════════════════
-// Native recursive walker
-// ═══════════════════════════════════════════════════════════════════════
-
-struct WalkAccum {
-    children_by_dir: HashMap<String, Vec<DiskNode>>,
-    large: Vec<LargeDiskItem>,
-    total_files: u64,
-    total_folders: u64,
-    total_size: u64,
-}
-
-impl WalkAccum {
-    fn new() -> Self {
-        Self {
-            children_by_dir: HashMap::new(),
-            large: Vec::new(),
-            total_files: 0,
-            total_folders: 0,
-            total_size: 0,
-        }
-    }
-}
-
-/// Recursively walk `dir`, populating `acc`. Returns a `DiskNode` summary
-/// for `dir` itself so the parent walker can place it in its own children
-/// list. Errors at any depth are swallowed (locked directories, permission
-/// denied) — partial trees are better than failing the whole scan.
-fn walk_dir(dir: &Path, acc: &mut WalkAccum) -> DiskNode {
-    let name = dir
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
-    let full_path = dir.to_string_lossy().into_owned();
-
-    let mut size_sum: u64 = 0;
-    let mut file_count: u64 = 0;
-    let mut folder_count: u64 = 0;
-    let mut my_children: Vec<DiskNode> = Vec::new();
-
-    if let Ok(read) = fs::read_dir(dir) {
-        for entry in read.flatten() {
-            let path = entry.path();
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let last_modified = format_mtime(metadata.modified().ok());
-
-            if metadata.is_dir() {
-                let child = walk_dir(&path, acc);
-                size_sum += child.size;
-                file_count += child.file_count;
-                folder_count += child.folder_count + 1;
-                my_children.push(child);
-            } else {
-                let file_size = metadata.len();
-                size_sum += file_size;
-                file_count += 1;
-                let child_full = path.to_string_lossy().into_owned();
-                let child_name = path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| child_full.clone());
-
-                let node = DiskNode {
-                    name: child_name.clone(),
-                    full_path: child_full.clone(),
-                    size: file_size,
-                    allocated: file_size,
-                    is_dir: false,
-                    last_modified: last_modified.clone(),
-                    file_count: 0,
-                    folder_count: 0,
-                };
-
-                if file_size >= MIN_LARGE_BYTES {
-                    acc.large.push(LargeDiskItem {
-                        name: child_name,
-                        full_path: child_full,
-                        size: file_size,
-                        allocated: file_size,
-                        is_dir: false,
-                        last_modified,
-                        file_count: 0,
-                        folder_count: 0,
-                        item_type: classify_file(&node.name),
-                        cleanup_hint: cleanup_hint(&node.name, &node.full_path, false),
-                        risk: risk_for(&node.full_path),
-                    });
-                }
-
-                my_children.push(node);
-            }
-        }
-    }
-
-    // Sort children by size descending so the frontend drill-down lands
-    // on the largest items first.
-    my_children.sort_by_key(|b| std::cmp::Reverse(b.size));
-
-    acc.total_files += file_count;
-    acc.total_folders += folder_count;
-    acc.total_size = acc.total_size.max(size_sum); // root holds the max
-
-    let dir_node = DiskNode {
-        name,
-        full_path: full_path.clone(),
-        size: size_sum,
-        allocated: size_sum,
-        is_dir: true,
-        last_modified: String::new(),
-        file_count,
-        folder_count,
-    };
-
-    if dir_node.size >= MIN_LARGE_BYTES {
-        acc.large.push(LargeDiskItem {
-            name: dir_node.name.clone(),
-            full_path: full_path.clone(),
-            size: dir_node.size,
-            allocated: dir_node.allocated,
-            is_dir: true,
-            last_modified: dir_node.last_modified.clone(),
-            file_count: dir_node.file_count,
-            folder_count: dir_node.folder_count,
-            item_type: "Folder".to_string(),
-            cleanup_hint: cleanup_hint(&dir_node.name, &dir_node.full_path, true),
-            risk: risk_for(&dir_node.full_path),
-        });
-    }
-
-    acc.children_by_dir.insert(full_path, my_children);
-    dir_node
-}
-
 fn format_mtime(t: Option<SystemTime>) -> String {
     match t {
         Some(st) => match st.duration_since(SystemTime::UNIX_EPOCH) {
@@ -281,19 +141,19 @@ fn cleanup_hint(name: &str, path: &str, is_dir: bool) -> String {
     let lower_path = path.to_ascii_lowercase();
     if is_dir {
         if lower_path.contains("\\temp") || lower_path.contains("/temp") {
-            return "Temporary files — usually safe to clear.".into();
+            return "Temporary folder — close applications and review its contents.".into();
         }
         if lower_path.contains("appdata\\local\\temp") {
             return "User Temp folder — clear when programs are closed.".into();
         }
         if lower_name == "node_modules" || lower_name == "target" || lower_name == "dist" {
-            return "Build artifacts — regenerable from source.".into();
+            return "Possible project artifacts — verify the project and build configuration before removal.".into();
         }
         return "Folder — review before deleting.".into();
     }
     if lower_name.ends_with(".log") || lower_name.ends_with(".tmp") || lower_name.ends_with(".bak")
     {
-        return "Log/temp/backup file — usually safe to delete.".into();
+        return "Log, temporary or backup file — may contain diagnostics or recoverable work; review before removal.".into();
     }
     if lower_name.ends_with(".iso") || lower_name.ends_with(".vhd") || lower_name.ends_with(".vhdx")
     {
@@ -313,7 +173,7 @@ fn risk_for(path: &str) -> String {
     if lower.contains("\\users\\") || lower.contains("/users/") {
         return "medium".into();
     }
-    "low".into()
+    "medium".into()
 }
 
 #[cfg(target_os = "windows")]
@@ -375,33 +235,53 @@ fn drive_free_and_total(_root: &Path) -> (u64, u64) {
 #[tauri::command]
 pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
     let root = PathBuf::from(&path);
-    if !root.exists() {
-        return Err(format!("Path does not exist: {}", path));
+    if !root.is_absolute() || !root.is_dir() {
+        return Err("Choose an existing absolute folder path.".into());
     }
+    let metadata = fs::symlink_metadata(&root).map_err(|error| error.to_string())?;
+    if walker::is_link(&metadata) {
+        return Err("Choose a real folder rather than a link or reparse point.".into());
+    }
+    explorer::reject_link_components(&root)?;
+    let root = explorer::display_path(fs::canonicalize(root).map_err(|error| error.to_string())?);
+    let scan_guard = progress::ScanGuard::begin()?;
+    *cache()
+        .lock()
+        .map_err(|_| "scan cache lock poisoned".to_string())? = ScanCache::empty();
     let root_clone = root.clone();
     // Walk on a blocking-friendly task — recursive read_dir is sync.
     let result = tokio::task::spawn_blocking(move || {
         let mut acc = WalkAccum::new();
-        let root_node = walk_dir(&root_clone, &mut acc);
-        (acc, root_node)
+        let root_node = walk_dir(&root_clone, &mut acc, &progress::CANCELLED, 0, 0);
+        (acc, root_node, scan_guard)
     })
     .await
     .map_err(|e| format!("scan task failed: {}", e))?;
 
-    let (mut acc, root_node) = result;
+    let (mut acc, root_node, _scan_guard) = result;
     // Sort large items by size descending.
     acc.large.sort_by_key(|b| std::cmp::Reverse(b.size));
 
     let (free, capacity) = drive_free_and_total(&root);
 
     let meta = ScanMeta {
-        scan_root: path,
+        scan_id: uuid::Uuid::new_v4().to_string(),
+        scan_root: root.to_string_lossy().into_owned(),
         total_size: root_node.size,
         free_space: free,
         drive_capacity: capacity,
         file_count: root_node.file_count,
         folder_count: root_node.folder_count,
         wiztree_found: true,
+        complete: acc.skipped_entries == 0
+            && !acc.truncated
+            && !progress::CANCELLED.load(Ordering::Acquire),
+        skipped_entries: acc.skipped_entries,
+        skipped_links: acc.skipped_links,
+        truncated: acc.truncated,
+        cancelled: progress::CANCELLED.load(Ordering::Acquire),
+        size_basis: "logical".into(),
+        allocated_size_available: false,
     };
 
     let mut guard = cache().lock().map_err(|e| format!("cache lock: {}", e))?;
@@ -412,32 +292,22 @@ pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
 }
 
 #[tauri::command]
+pub fn cancel_disk_scan() {
+    progress::cancel();
+}
+
+#[tauri::command]
+pub fn get_disk_scan_progress() -> ScanProgress {
+    progress::snapshot()
+}
+
+#[tauri::command]
 pub async fn get_disk_children(path: String) -> Result<Vec<DiskNode>, String> {
     let guard = cache().lock().map_err(|e| format!("cache lock: {}", e))?;
     match guard.children.get(&path) {
         Some(v) => Ok(v.clone()),
         None => Err("No scan data. Run a scan first.".into()),
     }
-}
-
-#[tauri::command]
-pub async fn get_large_disk_items(
-    min_size_bytes: Option<u64>,
-    limit: Option<usize>,
-    include_dirs: Option<bool>,
-) -> Result<Vec<LargeDiskItem>, String> {
-    let guard = cache().lock().map_err(|e| format!("cache lock: {}", e))?;
-    let min = min_size_bytes.unwrap_or(MIN_LARGE_BYTES);
-    let inc_dirs = include_dirs.unwrap_or(true);
-    let lim = limit.unwrap_or(500);
-    let out: Vec<LargeDiskItem> = guard
-        .large_items
-        .iter()
-        .filter(|i| i.size >= min && (inc_dirs || !i.is_dir))
-        .take(lim)
-        .cloned()
-        .collect();
-    Ok(out)
 }
 
 /// Lowercased, separator-normalized path string for case-insensitive Windows
@@ -603,24 +473,32 @@ pub async fn disk_delete_item(
     )?;
     identity.delete_file()?;
 
-    // Evict the deleted entry from the cache so the UI doesn't have to
-    // re-scan to see it gone.
     if let Ok(mut guard) = cache().lock() {
-        guard.children.remove(&path);
-        guard.large_items.retain(|i| i.full_path != path);
-        // Also remove the deleted child from any parent's children list.
-        // Use the raw (non-canonicalized) path here, not `p` — the cache is
-        // keyed by the literal paths walk_dir/run_disk_scan produced, while
-        // `p` was canonicalized above (and on Windows gains a `\\?\` prefix),
-        // so looking it up via `p.parent()` would silently miss the cache.
-        if let Some(parent) = Path::new(&path).parent() {
-            let parent_key = parent.to_string_lossy().into_owned();
-            if let Some(siblings) = guard.children.get_mut(&parent_key) {
-                siblings.retain(|c| c.full_path != path);
-            }
-        }
+        *guard = ScanCache::empty();
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn open_disk_item(scan_id: String, item_id: u64) -> Result<(), String> {
+    explorer::open_disk_item(scan_id, item_id).await
+}
+
+#[tauri::command]
+pub async fn get_large_disk_items(
+    min_size_bytes: Option<u64>,
+    limit: Option<usize>,
+    include_dirs: Option<bool>,
+) -> Result<large::LargeDiskResult, String> {
+    large::get_large_disk_items(min_size_bytes, limit, include_dirs).await
+}
+
+#[tauri::command]
+pub async fn get_disk_file_types(
+    scan_id: String,
+    path: String,
+) -> Result<file_types::DiskFileTypes, String> {
+    file_types::get_disk_file_types(scan_id, path).await
 }
 
 #[cfg(test)]

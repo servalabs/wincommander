@@ -4,6 +4,8 @@ export const ROUTINE_CLEANER_CATEGORIES: Array<{ id: RoutineCleanerCategory; lab
   { id: "system", label: "System", description: "Temporary files, caches, and diagnostics" },
   { id: "browsers", label: "Browsers", description: "Regenerable browser caches" },
   { id: "applications", label: "Applications", description: "Application cache data" },
+  { id: "developers", label: "Developer tools", description: "Package caches and development tooling" },
+  { id: "ai", label: "AI application caches", description: "Regenerable AI application assets" },
   { id: "gaming", label: "Gaming", description: "Launcher and shader caches" },
   { id: "databases", label: "Databases", description: "Safe SQLite optimization targets" },
 ];
@@ -18,6 +20,8 @@ export const ROUTINE_CLEANER_CATEGORIES: Array<{ id: RoutineCleanerCategory; lab
 export const APP_CACHE_CLEANUP_CATEGORIES: RoutineCleanerCategory[] = [
   "browsers",
   "applications",
+  "developers",
+  "ai",
   "gaming",
   "databases",
 ];
@@ -41,6 +45,7 @@ export function groupRoutineCleanerItems(items: RoutineCleanerItem[]): RoutineCl
 export interface RoutineCleanerCategoryGroup {
   id: RoutineCleanerCategory;
   label: string;
+  description: string;
   items: RoutineCleanerItem[];
 }
 
@@ -52,7 +57,7 @@ export interface RoutineCleanerCategoryGroup {
 export function getPopulatedRoutineCleanerCategories(items: RoutineCleanerItem[]): RoutineCleanerCategoryGroup[] {
   const groups = groupRoutineCleanerItems(items);
   return ROUTINE_CLEANER_CATEGORIES
-    .map((category) => ({ id: category.id, label: category.label, items: groups[category.id] ?? [] }))
+    .map((category) => ({ ...category, items: groups[category.id] ?? [] }))
     .filter((category) => category.items.length > 0);
 }
 
@@ -62,6 +67,17 @@ export function getRecommendedItemIds(items: RoutineCleanerItem[]): string[] {
 
 export function getSelectedItems(items: RoutineCleanerItem[], selectedIds: Set<string>): RoutineCleanerItem[] {
   return items.filter((item) => selectedIds.has(item.id));
+}
+
+export function toggleRoutineCategorySelection(items: RoutineCleanerItem[], selectedIds: Set<string>, category: RoutineCleanerCategory): Set<string> {
+  const categoryItems = items.filter((item) => item.category === category);
+  const deselect = categoryItems.every((item) => selectedIds.has(item.id));
+  const next = new Set(selectedIds);
+  for (const item of categoryItems) {
+    if (deselect) next.delete(item.id);
+    else next.add(item.id);
+  }
+  return next;
 }
 
 export function getScanAfterClean(scan: RoutineCleanerScan, cleanedIds: string[]): RoutineCleanerScan {

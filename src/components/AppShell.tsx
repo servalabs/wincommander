@@ -46,7 +46,7 @@ export default function AppShell({
   const previousPanelRef = useRef<PanelId>(activePanel);
   const scale = useDashboardScale(containerRef);
   const isDashboard = activePanel === "dashboard";
-  const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup";
+  const isViewportBoundPanel = activePanel === "search-files" || activePanel === "cleanup" || activePanel === "maintenance";
   const { clearSearch } = useSearchQuery();
   const { personalSettingsStatus, retryPersonalSettingsRecovery } = useAppState();
 
@@ -111,6 +111,7 @@ export default function AppShell({
                element below the intended 100%/scale height — which would
                cause the transform to show at <100% and leave blank space. */
             <div
+              key="dashboard-stage"
               style={{
                 position: 'absolute',
                 top: 0,
@@ -127,9 +128,10 @@ export default function AppShell({
             /* Viewport-bound panels own their scroll lifecycle; let them fill
                the stage instead of nesting inside AppShell page scroll. */
             <div
+              key="panel-stage"
               className={`app-panel-stage flex-1 min-h-0 overflow-x-hidden custom-scrollbar relative ${isViewportBoundPanel ? "overflow-hidden" : "overflow-y-auto"}`}
               ref={contentScrollRef}
-              style={{ paddingBottom: isViewportBoundPanel ? 0 : 56 }}
+              style={{ paddingBottom: isViewportBoundPanel ? 0 : undefined }}
             >
               {children}
             </div>

@@ -1,0 +1,24 @@
+.duplicate-workspace { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.duplicate-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 4px; }
+.duplicate-filters label { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; border: 1px solid var(--border); border-radius: var(--r); padding: 8px 10px; color: var(--text-mute); }
+.duplicate-filters input { min-width: 0; width: 100%; font-size: 12px; color: var(--text); background: transparent; outline: none; }
+.duplicate-filters label:focus-within { outline: 2px solid var(--accent); }
+.duplicate-filters select { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); color: var(--text); font-size: 12px; padding: 8px; }
+.duplicate-filters > span { color: var(--text-mute); font-size: 11px; }
+.duplicate-group { border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
+.duplicate-group summary { display: flex; align-items: center; gap: 12px; padding: 12px; list-style: none; background: var(--surface-2); cursor: pointer; }
+.duplicate-group summary::-webkit-details-marker { display: none; }
+.duplicate-group summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.duplicate-group-heading { flex: 1; min-width: 0; }
+.duplicate-group-heading strong { display: block; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.duplicate-group-heading small { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+.duplicate-members { padding: 2px 10px 4px; }
+.duplicate-member { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+.duplicate-member:last-child { border-bottom: 0; }
+.duplicate-member-location { min-width: 0; flex: 1; }
+.duplicate-member-location strong { display: block; font-weight: 400; font-size: 12px; overflow-wrap: anywhere; }
+.duplicate-member-location small { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 10px; color: var(--text-mute); overflow-wrap: anywhere; }
+.duplicate-member-size { font-size: 11px; white-space: nowrap; color: var(--text-dim); }
+.duplicate-member[data-retained] { background: var(--accent-soft); }
+.duplicate-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-dim); }
+@media (max-width: 700px) { .duplicate-member { flex-wrap: wrap; } .duplicate-member-location { flex-basis: calc(100% - 34px); } .duplicate-member-size { margin-left: 30px; } .duplicate-group summary { flex-wrap: wrap; } }

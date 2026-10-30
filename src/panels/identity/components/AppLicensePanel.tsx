@@ -1,5 +1,4 @@
 import { Button, FormGroup, InputGroup, Tag } from "@/components/ui/bp";
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../../../hooks/useBackend";
 import UniversalCallout from "../../../components/shared/UniversalCallout";
@@ -29,6 +28,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
     activateAppLicense,
     refreshAppLicense,
     deactivateAppLicense,
+    isCurrentProcessElevated,
   } = useBackend();
 
   const [licenseKey, setLicenseKey] = useState("");
@@ -59,7 +59,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
 
   useEffect(() => {
     let active = true;
-    void invoke<boolean>("is_current_process_elevated")
+    void isCurrentProcessElevated()
       .then((elevated) => {
         if (active) setCanRemoveDeviceLicense(elevated);
       })
@@ -69,7 +69,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
         if (active) setCanRemoveDeviceLicense(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [isCurrentProcessElevated]);
 
   const runWithLoading = async (key: string, action: () => Promise<void>) => {
     setLoading((prev) => ({ ...prev, [key]: true }));

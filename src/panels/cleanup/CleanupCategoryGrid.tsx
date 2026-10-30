@@ -20,6 +20,7 @@ import {
   useCleanupScan,
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
+import { PrivacyCleanupReviewDialog, type PrivacyClearReview } from "./PrivacyCleanupReviewDialog";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -49,6 +50,7 @@ export default function CleanupCategoryGrid({
   onOpenCombinedDetail,
   onOpenOtherDetail,
 }: Props) {
+  const [clearReview, setClearReview] = useState<PrivacyClearReview | null>(null);
   const {
     cardDataMap,
     orderedScanCategories,
@@ -83,8 +85,7 @@ export default function CleanupCategoryGrid({
     handleClearSchedule,
   } = scan;
 
-  // The low-impact tab alone owns the bulk-clear exclusion picker and account
-  // selector. The per-tab Scan All control is in the tab navigation above.
+  // Account scope remains visible in every tier; exclusions belong to low impact.
   const isLowImpactTab = tier === "low-impact";
   const tierMeta = CLEANUP_USABILITY_TIERS.find((t) => t.id === tier)!;
 
@@ -125,13 +126,11 @@ export default function CleanupCategoryGrid({
         clearing={d.clearing}
         error={d.error}
         compact={compact}
-        onClear={() =>
-          handleCardClear(
+        onClear={() => setClearReview({ category: cat.label, scope: cat.systemWide ? "Machine scope" : "Current process / fixed operation scope", count: d.count, items: d.items, run: () => void handleCardClear(
             cat,
             cat.id === "unallocatedErase" ? onDriveWipe : undefined,
-          )
-        }
-        clearDisabled={isInvestigator}
+          ) })}
+        clearDisabled={isInvestigator || d.loading || !!d.error}
         onViewDetails={detailOpenerMap[cat.id]}
         onLoad={() => handleCardLoad(cat)}
         scheduleMinutes={
@@ -193,7 +192,6 @@ export default function CleanupCategoryGrid({
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
-    const offerAllUsers = canSwitchUsers;
     return (
       <CleanupTraceCard
         key={cat.id}
@@ -204,19 +202,13 @@ export default function CleanupCategoryGrid({
         clearing={data.clearing}
         error={data.error}
         compact={compact}
-        onClear={() =>
+        onClear={() => setClearReview({ category: cat.label, scope: isViewingAllUsers ? "All authorized user profiles" : selectedDisplay || "Current Windows account", count: data.count, items: data.items, run: () => void (
           isViewingAllUsers
             ? handleCardClearAllUsers(cat)
             : isViewingCurrentUser
               ? handleCardClear(cat)
-              : handleOtherUserClear(cat)
-        }
-        clearDisabled={isInvestigator}
-        onClearAllUsers={
-          offerAllUsers && !isViewingAllUsers
-            ? () => handleCardClearAllUsers(cat)
-            : undefined
-        }
+              : handleOtherUserClear(cat)) })}
+        clearDisabled={isInvestigator || data.loading || !!data.error}
         clearScopeLabel={
           isViewingAllUsers ? "all users" : selectedDisplay || "this user"
         }
@@ -296,12 +288,11 @@ export default function CleanupCategoryGrid({
 
   return (
     <div className="flex flex-col gap-3">
-      {isLowImpactTab && (
-        <>
+      <PrivacyCleanupReviewDialog review={clearReview} onClose={() => setClearReview(null)} />
           {/* The summary counts sit below the tab navigation in
               SystemCleanupPanel. This block keeps only the low-impact bulk
               clear exclusion controls. */}
-          <div className="flex flex-col gap-2 mb-6" data-cleanup-summary="true">
+          {isLowImpactTab && <div className="flex flex-col gap-2 mb-6" data-cleanup-summary="true">
             <div
               className="flex items-center gap-4 px-3 py-2.5 rounded-lg flex-wrap"
               style={{
@@ -432,7 +423,7 @@ export default function CleanupCategoryGrid({
                 ></Popover>
               </div>
             </div>
-          </div>
+          </div>}
 
           {/* Account row — visible immediately. With one real user it shows
            * the default/current profile as a read-only chip; with multiple
@@ -572,8 +563,6 @@ export default function CleanupCategoryGrid({
               )}
             </div>
           )}
-        </>
-      )}
 
       {(activeSysCats.length > 0 ||
         activeUserCats.length > 0 ||

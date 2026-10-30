@@ -63,6 +63,32 @@ flowchart LR
 
 ## Components
 
+The Maintenance frontend separates navigation in
+`src/panels/maintenance/workspace/`, analyzer state and views in
+`src/panels/maintenance/disk-analyzer/`, and pure chart/selection logic in
+`src/lib/diskAnalyzer.ts`, `diskAnalyzerLayout.ts`, and
+`maintenanceSelection.ts`. Existing typed hooks remain the operation entry
+points; application removal and privacy cleanup retain their existing backends.
+`useMaintenanceHistory` stores bounded local display summaries, independently
+of authorization and evidence workflows.
+
+The native disk walker skips reparse points and bounds traversal to 128 levels
+and two million entries. Progress and partial-result metadata accompany its
+process-local scan cache. Large-file threshold queries count all scanned
+matches before returning at most 5,000 files. Explorer actions resolve a
+current scan identifier and entry identifier in the backend, then validate
+the path and reject links; the frontend supplies no executable to launch.
+The routine cleaner uses one owner per overlapping target. Deep Cleanup scans
+supported application cache locations, displays only populated categories, and
+reviews selected targets from its header. The bounded project-artifact command
+remains available to CLI clients;
+the Maintenance UI does not offer arbitrary folder or drive cleanup. Admission
+and mutation recheck plain path components and existing handle-based identity
+constraints before deletion. Windows-managed storage cleanup has its own
+Maintenance workspace; Windows Spotlight, Legacy Icon Cache and BranchCache
+remain among the existing System Cleanup categories with their review and
+confirmation flow.
+
 | Component | Responsibility | Location |
 | :-- | :-- | :-- |
 | Frontend SPA | UI, panel routing, state, IPC wrappers | `src/` (`App.tsx`, `main.tsx`) |
@@ -260,15 +286,23 @@ with delete access, verifies its file identity and handle-resolved final path,
 rechecks its age, and applies deletion to that handle. A strict allowlist
 excludes security and audit-history cleaning from the Free binary.
 
-Storage & files presents a single "Reclaim disk space" card
-(`ReclaimSpaceCard.tsx`) whose segmented control picks *whose* storage is being
-cleared, because the two engines behind it overlap on nine paths otherwise:
-every path `Get-DiskCleanupScan` enumerates except the Recycle Bin is also a
-`cleanTargets` entry in `maintenance-rules/win32/system.json`. Windows-owned
-storage is `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`; app-owned
-regenerable data is `routine_cleaner` with the `system` category withheld
-(`APP_CACHE_CLEANUP_CATEGORIES`). Before the application scan has results the
-scope renders a motion-policy-aware idle/scanning visual.
+The Maintenance tab row separates cache review, duplicates, analysis, startup,
+hygiene, and history. Large Files and File Types are tabs within the analyzer,
+sharing its cached scan scope.
+Chart-only display limits aggregate into Other without changing scan totals;
+the selected-item inspector reserves space independently of chart selection.
+Deep cleanup presents the app cache
+workspace and a separate Windows-storage disclosure (`ReclaimSpaceCard.tsx`).
+Maintenance owns its content scroller so the tab row stays visible. System
+Cleanup keeps browser, application, Windows/system traces, clipboard, network
+and credentials; System Optimization stays in its existing privacy/settings
+area.
+Windows-owned storage uses `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`;
+app-owned regenerable data uses `routine_cleaner` with the overlapping `system`
+category withheld (`APP_CACHE_CLEANUP_CATEGORIES`). Project-only results carry
+their selected folder and stay separate from ordinary application-cache scans.
+Before the application scan has results, the workspace renders an idle or
+scanning state.
 File, shortcut, environment, uninstall-residue, registry, Explorer-menu, and
 ARP tools follow the same preview/revalidate pattern. Malware paths
 remain entirely in `wincommander-pro.exe`: Free constructs trusted session
