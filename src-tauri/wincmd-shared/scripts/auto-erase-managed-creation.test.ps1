@@ -22,6 +22,7 @@ function Set-AutoEraseScheduleCore {
     if ($script:expectManaged -and (-not $PreserveExisting -or -not $ManagedByAutoSet)) { throw 'Managed creation did not force safety flags.' }
     $script:writes++
     $script:lastTarget = $TargetUser
+    $script:lastAllowedDefaultExcluded = [bool]$AllowDefaultExcluded
     if ($TargetUser -eq 'OtherUser' -or ($TargetUser -eq 'SYSTEM' -and $script:failSystem)) { return @{ error=$true; message='Synthetic failure' } }
     @{ status='enabled'; categoryId=$CategoryId }
 }
@@ -89,6 +90,11 @@ if ($oneProfile.error -or $oneProfile.total -ne 1 -or $script:writes -ne ($befor
 $before = $script:writes
 $sidTarget = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'S-1-5-21-2,SYNTHETIC\RenamedAccount'
 if ($sidTarget.error -or $sidTarget.total -ne 1 -or $script:writes -ne ($before + 1) -or $script:lastTarget -ne 'SYNTHETIC\RenamedAccount') { throw 'A profile SID did not resolve to its account or deduplicate against the account name.' }
+$before = $script:writes
+$protectedDenied = Set-MultiUserAutoEraseSchedule -CategoryId browserFootprints -IntervalMinutes 60 -TargetUsers 'S-1-5-21-2'
+if (-not $protectedDenied.error -or $script:writes -ne $before) { throw 'A selected-account protected schedule was accepted without authorization.' }
+$protectedSingle = Set-MultiUserAutoEraseSchedule -CategoryId browserFootprints -IntervalMinutes 60 -TargetUsers 'S-1-5-21-2' -AllowDefaultExcluded
+if ($protectedSingle.error -or $protectedSingle.total -ne 1 -or $script:writes -ne ($before + 1) -or $script:lastTarget -ne 'SYNTHETIC\RenamedAccount' -or -not $script:lastAllowedDefaultExcluded) { throw 'The protected selected-account request did not route exactly one authorized SID to its resolved account.' }
 $script:profileMode = 'unresolved'
 $before = $script:writes
 $unknownSid = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,S-1-5-21-2'
