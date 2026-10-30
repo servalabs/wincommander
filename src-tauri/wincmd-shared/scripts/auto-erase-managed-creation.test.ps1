@@ -53,7 +53,9 @@ $bulkMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinute
 if (-not $bulkMulti.error -or $script:writes -ne $before) { throw 'Managed multi-user setup was not rejected before mutation.' }
 $script:expectManaged = $false
 $manualMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,OtherUser'
-if (-not $manualMulti.error -or $manualMulti.status -ne 'failed' -or $manualMulti.total -ne 2) { throw 'A partial multi-user failure was reported as success.' }
+if (-not $manualMulti.error -or $manualMulti.status -ne 'partial' -or $manualMulti.total -ne 2 -or $manualMulti.completed -ne 1 -or $manualMulti.failed -ne 1 -or $manualMulti.message -notlike '*1 completed and 1 failed*' -or $manualMulti.results.Count -ne 2) { throw 'A partial multi-user failure was not reported with its completed and failed results.' }
+$failedMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'OtherUser'
+if (-not $failedMulti.error -or $failedMulti.status -ne 'failed' -or $failedMulti.completed -ne 0 -or $failedMulti.failed -ne 1) { throw 'A complete multi-user failure was not reported accurately.' }
 $before = $script:writes
 $sameAccount = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,SYNTHETIC\Alias'
 if ($sameAccount.error -or $sameAccount.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'Two aliases of one SID did not produce exactly one schedule.' }

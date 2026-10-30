@@ -1305,7 +1305,7 @@ function Get-FleetForensicProjection {
             'wer_history' { $result = Get-WERHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read WER-history summaries.') }; return (& $metadataProjection 'wer_history' 'Windows Error Reporting history' $result 'WER metadata') }
             'inactive_user_protection_metadata' { $result = Get-InactiveUserProtectionMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read inactive-user protection summaries.') }; return (& $metadataProjection 'inactive_user_protection_metadata' 'Inactive-user protection metadata' $result 'Protection metadata') }
             'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
-            'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
+            'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
             'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
             'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
             'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
@@ -3641,26 +3641,30 @@ function Get-StickyNotesInfo {
 }
 
 function Get-OneDriveMetadataInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $settingsRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $settingsRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings'
-        $exists = $true
-        try { $settingsRoot = (Get-Item -LiteralPath $settingsRoot -Force -ErrorAction Stop).FullName }
-        catch [System.Management.Automation.ItemNotFoundException] { $exists = $false }
-        if ($exists) {
+        try { $root = Get-Item -LiteralPath $settingsRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'OneDrive metadata root is not a directory.' }
+            $settingsRoot = $root.FullName
             Get-ChildItem -LiteralPath $settingsRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                $folder = $_
                 foreach ($pattern in @('*.dat','*.db')) {
-                    Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
-                        $files += @{ name = "OneDrive metadata: $($_.FullName.Substring($settingsRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                        $totalBytes += $_.Length
-                    }
+                    try {
+                        Get-ChildItem -LiteralPath $folder.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ name = "OneDrive metadata: $($_.FullName.Substring($settingsRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                            $totalBytes += $_.Length
+                        }
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some OneDrive metadata locations could not be checked.' } else { $null } }
 }
 
 function Get-CleanupPackageCacheInventory {

@@ -1573,7 +1573,7 @@ const legacyViewOnlyCategories: LegacyCleanupCategory[] = [
   {
     id: 'processIntel',
     label: 'Process Review',
-    description: 'Unsigned/elevated running processes',
+    description: 'Running processes, their signatures and elevation status',
     icon: 'diagnosis',
     color: '#f97316',
     severity: 'warning',

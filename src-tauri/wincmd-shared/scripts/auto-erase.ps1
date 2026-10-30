@@ -2766,7 +2766,13 @@ function Set-MultiUserAutoEraseSchedule {
             -AllowDefaultExcluded:$AllowDefaultExcluded
         $results += $r
     }
-    if (@($results | Where-Object { $_.error }).Count) { return @{ error = $true; status = 'failed'; results = $results; total = $results.Count } }
+    $failures = @($results | Where-Object { $_.error }).Count
+    if ($failures) {
+        $completed = $results.Count - $failures
+        return @{ error = $true; status = if ($completed) { 'partial' } else { 'failed' };
+            message = "Could not verify every selected schedule. $completed completed and $failures failed. Refresh schedule status.";
+            results = $results; total = $results.Count; completed = $completed; failed = $failures }
+    }
     @{ status = 'ok'; results = $results; total = $results.Count }
 }
 
