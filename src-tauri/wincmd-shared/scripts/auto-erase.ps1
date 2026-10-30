@@ -204,6 +204,132 @@ function Invoke-AutoEraseWithServices {
 }
 '@
 
+$script:WlanProfileFunctions = @'
+function Initialize-WCWlanNative {
+    if (([System.Management.Automation.PSTypeName]'WcCleanup.Wlan').Type) { return }
+    Add-Type -ErrorAction Stop -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace WcCleanup {
+    public sealed class WlanProfileEntry { public string InterfaceId; public string Name; public uint Flags; }
+    public sealed class WlanSnapshot { public int InterfaceCount; public string[] Interfaces; public WlanProfileEntry[] Profiles; }
+    public static class Wlan {
+        [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+        private struct InterfaceInfo { public Guid InterfaceGuid; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=256)] public string Description; public int State; }
+        [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+        private struct ProfileInfo { [MarshalAs(UnmanagedType.ByValTStr, SizeConst=256)] public string Name; public uint Flags; }
+        [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanOpenHandle(uint requested, IntPtr reserved, out uint negotiated, out IntPtr handle);
+        [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanCloseHandle(IntPtr handle, IntPtr reserved);
+        [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanEnumInterfaces(IntPtr handle, IntPtr reserved, out IntPtr list);
+        [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanGetProfileList(IntPtr handle, ref Guid iface, IntPtr reserved, out IntPtr list);
+        [DllImport("wlanapi.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] private static extern uint WlanDeleteProfile(IntPtr handle, ref Guid iface, string name, IntPtr reserved);
+        [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern void WlanFreeMemory(IntPtr memory);
+        private static void Check(uint result) { if (result != 0) throw new Win32Exception((int)result); }
+        private static IntPtr Open() { uint negotiated; IntPtr h; Check(WlanOpenHandle(2, IntPtr.Zero, out negotiated, out h)); return h; }
+        public static WlanSnapshot Enumerate() {
+            IntPtr h = Open(), interfaces = IntPtr.Zero;
+            try {
+                Check(WlanEnumInterfaces(h, IntPtr.Zero, out interfaces));
+                if (interfaces == IntPtr.Zero) throw new InvalidOperationException("Wi-Fi adapter enumeration returned no result.");
+                int count = Marshal.ReadInt32(interfaces);
+                if (count <= 0 || count > 1024) throw new InvalidOperationException("Wi-Fi adapters are unavailable or invalid.");
+                var profiles = new List<WlanProfileEntry>();
+                var adapterIds = new List<string>();
+                int ifaceSize = Marshal.SizeOf(typeof(InterfaceInfo));
+                int profileSize = Marshal.SizeOf(typeof(ProfileInfo));
+                for (int i = 0; i < count; i++) {
+                    InterfaceInfo info = (InterfaceInfo)Marshal.PtrToStructure(IntPtr.Add(interfaces, checked(8 + i * ifaceSize)), typeof(InterfaceInfo));
+                    adapterIds.Add(info.InterfaceGuid.ToString("D"));
+                    IntPtr list = IntPtr.Zero;
+                    try {
+                        Guid id = info.InterfaceGuid;
+                        Check(WlanGetProfileList(h, ref id, IntPtr.Zero, out list));
+                        if (list == IntPtr.Zero) throw new InvalidOperationException("Wi-Fi profile enumeration returned no result.");
+                        int n = Marshal.ReadInt32(list);
+                        if (n < 0 || n > 100000) throw new InvalidOperationException("Wi-Fi profile count is invalid.");
+                        for (int j = 0; j < n; j++) {
+                            ProfileInfo profile = (ProfileInfo)Marshal.PtrToStructure(IntPtr.Add(list, checked(8 + j * profileSize)), typeof(ProfileInfo));
+                            if (String.IsNullOrEmpty(profile.Name)) throw new InvalidOperationException("A Wi-Fi profile has no identity.");
+                            profiles.Add(new WlanProfileEntry { InterfaceId = id.ToString("D"), Name = profile.Name, Flags = profile.Flags });
+                        }
+                    } finally { if (list != IntPtr.Zero) WlanFreeMemory(list); }
+                }
+                return new WlanSnapshot { InterfaceCount = count, Interfaces = adapterIds.ToArray(), Profiles = profiles.ToArray() };
+            } finally { if (interfaces != IntPtr.Zero) WlanFreeMemory(interfaces); WlanCloseHandle(h, IntPtr.Zero); }
+        }
+        public static void Delete(string interfaceId, string name) {
+            Guid id;
+            if (!Guid.TryParse(interfaceId, out id) || String.IsNullOrEmpty(name) || name.Length > 255) throw new ArgumentException("Invalid Wi-Fi profile identity.");
+            IntPtr h = Open();
+            try { Check(WlanDeleteProfile(h, ref id, name, IntPtr.Zero)); }
+            finally { WlanCloseHandle(h, IntPtr.Zero); }
+        }
+    }
+}
+"@
+}
+function Get-WCWlanSnapshot {
+    Initialize-WCWlanNative
+    [WcCleanup.Wlan]::Enumerate()
+}
+function Remove-WCWlanEntry {
+    param([Parameter(Mandatory)][string]$InterfaceId, [Parameter(Mandatory)][string]$Name)
+    Initialize-WCWlanNative
+    [WcCleanup.Wlan]::Delete($InterfaceId, $Name)
+}
+function Assert-WCWlanSnapshot {
+    param($Snapshot)
+    if ($null -eq $Snapshot -or [int]$Snapshot.InterfaceCount -le 0 -or $null -eq $Snapshot.Interfaces -or $null -eq $Snapshot.Profiles -or
+        @($Snapshot.Interfaces).Count -ne [int]$Snapshot.InterfaceCount) { throw 'Wi-Fi profile coverage is unavailable.' }
+    $adapterIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($interface in @($Snapshot.Interfaces)) {
+        $id = [Guid]::Empty
+        if (-not [Guid]::TryParse([string]$interface, [ref]$id) -or $id -eq [Guid]::Empty -or -not $adapterIds.Add($id.ToString('D'))) { throw 'Wi-Fi adapter identity is invalid.' }
+    }
+    foreach ($profile in @($Snapshot.Profiles)) {
+        $id = [Guid]::Empty
+        if (-not [Guid]::TryParse([string]$profile.InterfaceId, [ref]$id) -or $id -eq [Guid]::Empty -or
+            [string]::IsNullOrWhiteSpace([string]$profile.Name) -or ([string]$profile.Name).Length -gt 255 -or
+            $null -eq $profile.Flags -or [int64]$profile.Flags -notin @(0,1,2) -or -not $adapterIds.Contains($id.ToString('D'))) { throw 'Wi-Fi profile identity is invalid.' }
+    }
+}
+function Invoke-WCWlanClear {
+    param([string]$Name = '')
+    $removed = 0; $failed = 0; $targets = @()
+    try {
+        $initial = Get-WCWlanSnapshot
+        Assert-WCWlanSnapshot $initial
+        # The previous reader reported all-user profiles only; do not touch
+        # group-policy or private per-user profiles (flags 1 and 2).
+        $targets = @($initial.Profiles | Where-Object { [int64]$_.Flags -eq 0 -and (-not $Name -or $_.Name -ceq $Name) })
+        if ($Name -and $targets.Count -ne 1) { throw 'The selected Wi-Fi profile is unavailable or ambiguous.' }
+        foreach ($target in $targets) {
+            try {
+                $current = Get-WCWlanSnapshot
+                Assert-WCWlanSnapshot $current
+                $matches = @($current.Profiles | Where-Object { $_.InterfaceId -ieq $target.InterfaceId -and $_.Name -ceq $target.Name })
+                # Do not let a name collision or changed profile type widen scope.
+                if ($matches.Count -ne 1 -or [int64]$matches[0].Flags -ne 0) { throw 'Wi-Fi profile identity changed or is ambiguous.' }
+                Remove-WCWlanEntry -InterfaceId $target.InterfaceId -Name $target.Name
+                $after = Get-WCWlanSnapshot
+                Assert-WCWlanSnapshot $after
+                if ($target.InterfaceId -notin @($after.Interfaces) -or @($after.Profiles | Where-Object { $_.InterfaceId -ieq $target.InterfaceId -and $_.Name -ceq $target.Name }).Count) { throw 'Wi-Fi profile removal was not observed.' }
+                $removed++
+            } catch { $failed++ }
+        }
+        $final = Get-WCWlanSnapshot
+        Assert-WCWlanSnapshot $final
+        if (@($initial.Interfaces | Where-Object { $_ -notin @($final.Interfaces) }).Count) { $failed++ }
+        if (@($final.Profiles | Where-Object { [int64]$_.Flags -eq 0 -and (-not $Name -or $_.Name -ceq $Name) }).Count) { $failed++ }
+    } catch { $failed++ }
+    $ok = $failed -eq 0
+    @{ ok = $ok; status = if ($ok) { 'complete' } else { 'failed' }; targeted = $targets.Count; removed = $removed; failed = $failed; stdout = "$(if ($ok) { 'ok' } else { 'fail' }): removed=$removed failed=$failed" }
+}
+'@
+. ([scriptblock]::Create($script:WlanProfileFunctions))
+
 $script:AutoEraseScripts = @{
     # Machine maintenance -------------------------------------------------
     # This is intentionally a SYSTEM task rather than a per-user cleanup
@@ -436,10 +562,12 @@ foreach (`$pcaPath in @(
     }
 }
 "@
-    'wlanProfiles'      = @"
-netsh wlan show profiles 2>`$null | Where-Object { `$_ -match 'All User Profile\s*:\s*(.+)' } | ForEach-Object { `$n = `$Matches[1].Trim(); netsh wlan delete profile name="`$n" 2>`$null | Out-Null }
-Get-ChildItem -Path "`$env:ProgramData\Microsoft\Wlansvc\Profiles\Interfaces" -Recurse -Filter '*.xml' -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-"@
+    'wlanProfiles'      = $script:WlanProfileFunctions + "`n" + @'
+$result = Invoke-WCWlanClear
+$script:AutoEraseRemoved += [int]$result.removed
+$script:AutoEraseFailed += [int]$result.failed
+if (-not $result.ok -and [int]$result.failed -eq 0) { $script:AutoEraseFailed++ }
+'@
     'netDrives' = @'
 $drives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop | Where-Object { $_.DisplayRoot -like '\\*' })
 foreach ($drive in $drives) {
@@ -972,7 +1100,7 @@ $script:AutoEraseUnsupportedCategories = [ordered]@{
     cellularHistory = 'Requires locale-independent mobile-profile APIs.'
     gitActivity = 'Requires typed credential deletion and Git configuration verification.'
     browserFootprints = 'Requires the installed-browser inventory and profile-aware clear adapter.'
-    wlanProfiles = 'Requires locale-independent WLAN-profile enumeration and deletion APIs.'
+    wlanProfiles = 'Requires safe migration and explicit reauthorization of existing Wi-Fi tasks.'
     ntfsJournals = 'Requires the native fixed-volume journal reset, sizing preservation, and identity read-back.'
 }
 function Get-AutoEraseSupportedCategories {
@@ -985,7 +1113,7 @@ function Get-AutoEraseSupportedCategories {
 }
 
 $script:AutoEraseSystemCategories = @(
-    'eventLogs', 'eventTranscript', 'servicingLogs', 'deviceInstallLogs',
+    'wlanProfiles', 'eventLogs', 'eventTranscript', 'servicingLogs', 'deviceInstallLogs',
     'usageTraceLogs', 'appLaunchHistory', 'reliabilityHistory', 'defenderHistory', 'maintenanceTrim',
     'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'branchCache',
     'neighborCache', 'netbiosCache', 'bitsQueue', 'p2pUpdateCache', 'fontCache', 'geolocationCache'

@@ -100,7 +100,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
                 {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples ?? "Not reported"}</td></tr>)}
               </tbody></table></div><p>Preview samples are a selection and may be fewer than the full record count.</p></section> : null}
             {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
-            <p className="cleanup-readable-detail__privacy">Private record contents and credentials are not shown in this summary.</p>
+            <p className="cleanup-readable-detail__privacy">Record details are based on the data returned by this scan.</p>
           </> : null}
           {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><p>Only reported accounts are shown.</p>
             {groupedItems.map((group, index) => <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>

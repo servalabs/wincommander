@@ -1824,34 +1824,20 @@ function Get-ShellBags {
 
 function Get-WlanProfiles {
     param(
-        # The local System Cleanup viewer can request its existing key detail,
-        # but the authenticated Fleet projection must never collect credentials.
-        [bool]$IncludeSecrets = $true
+        # Kept for older callers. Credentials are never requested or returned.
+        [bool]$IncludeSecrets = $false
     )
     try {
-        $profiles = @()
-        $netshOutput = netsh wlan show profiles
-        $profileNames = $netshOutput | Select-String "All User Profile" | ForEach-Object { ($_.ToString().Split(':'))[1].Trim() }
-        
-        foreach ($name in $profileNames) {
-            $password = $null
-            if ($IncludeSecrets) {
-                $passOutput = netsh wlan show profile name="$name" key=clear
-                $passLine = $passOutput | Select-String "Key Content"
-                if ($passLine) {
-                    $password = ($passLine.ToString().Split(':'))[1].Trim()
-                }
-            }
-            
-            $profiles += @{
-                name     = $name
-                password = $password
-            }
-        }
-        @{ profiles = $profiles }
+        $snapshot = Get-WCWlanSnapshot
+        Assert-WCWlanSnapshot $snapshot
+        $profiles = @($snapshot.Profiles | Where-Object { [int64]$_.Flags -eq 0 } | ForEach-Object {
+            @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId }
+        })
+        @{ profiles = $profiles; total = $profiles.Count; adapterCount = [int]$snapshot.InterfaceCount;
+           coverage = 'limited'; coverageNote = 'All-user saved profiles on available Wi-Fi adapters; private and policy profiles are excluded.' }
     }
     catch {
-        @{ error = $true; message = "Failed to get WLAN profiles: $($_.Exception.Message)" }
+        @{ error = $true; message = 'Wi-Fi profiles could not be inspected. Check the WLAN service and adapter.' }
     }
 }
 

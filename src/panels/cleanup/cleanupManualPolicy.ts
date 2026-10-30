@@ -32,7 +32,7 @@ const DEFAULT_WARNINGS: Record<string, string> = {
   connectivityHistory: 'This removes Windows network connection history and signatures.',
   srumData: 'This removes Windows resource-usage history; Windows may rebuild the database.',
   recallDb: 'This removes Windows activity timeline databases and their stored history.',
-  wlanProfiles: 'This removes saved Wi-Fi networks and passwords. The current wireless connection may be lost.',
+  wlanProfiles: 'This forgets all-user Wi-Fi profiles on available adapters, including their saved credentials. Private and policy-managed profiles are excluded. The current wireless connection may be lost.',
   browserFootprints: 'This removes browser history, cookies and saved browser state. You may be signed out of websites.',
   notepadState: 'This can permanently delete unsaved Notepad tabs and drafts.',
   wslData: 'This can permanently delete Linux distribution storage and local files.',

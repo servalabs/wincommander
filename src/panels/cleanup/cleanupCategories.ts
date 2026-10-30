@@ -315,7 +315,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
     id: 'wlanProfiles',
     label: 'Wi-Fi Profiles',
     countUnits: { singular: 'Wi-Fi profile', plural: 'Wi-Fi profiles' },
-    description: 'Saved network profiles',
+    description: 'All-user Wi-Fi profiles on available adapters; private and policy-managed profiles are excluded',
     icon: 'feed',
     color: '#10b981',
     severity: 'warning',

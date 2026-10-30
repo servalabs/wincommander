@@ -49,7 +49,7 @@ export function cleanupDisplayDescription(category: Pick<CleanupCategory, "id" |
 }
 
 const CLEAR_EXPLANATIONS: Record<string, string> = {
-  wlanProfiles: "Removes saved Wi-Fi profiles. You may need to reconnect and enter their passwords again.",
+  wlanProfiles: "Forgets all-user Wi-Fi profiles on available adapters. Private and policy-managed profiles are excluded. You may need to reconnect and enter passwords again.",
   browserFootprints: "Removes browser data across supported browsers and profiles, including legacy Windows browser stores. The scan may not show every profile. This can sign you out and may remove saved passwords.",
   notepadState: "Removes temporary Notepad state, including unsaved tabs.",
   netDrives: "Removes saved network-drive connections. You may need to reconnect them.",

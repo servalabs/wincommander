@@ -1094,7 +1094,7 @@ export interface ProcessIntelligenceEntry {
 
 export interface WlanProfile {
   name: string;
-  password?: string | null;
+  interfaceId?: string;
 }
 
 export interface BluetoothDevice {

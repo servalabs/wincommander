@@ -6459,6 +6459,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Remove\u002dManagedAutoEraseSchedule",
+      "name": "Remove\u002dManagedAutoEraseSchedule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Remove\u002dMicrosoftTeams",
       "name": "Remove\u002dMicrosoftTeams",
       "transport": "backend\u002dscript",
@@ -6813,6 +6821,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Set\u002dIndividualAutoEraseSchedule",
+      "name": "Set\u002dIndividualAutoEraseSchedule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Set\u002dLocalLoginUserHidden",
       "name": "Set\u002dLocalLoginUserHidden",
       "transport": "backend\u002dscript",
@@ -6831,6 +6847,14 @@
       "frontendReferences": [
         "src/components/tweaks/LocalPasswordExpiryCard.tsx"
       ]
+    },
+    {
+      "id": "backend:Set\u002dManagedAutoEraseSchedule",
+      "name": "Set\u002dManagedAutoEraseSchedule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
     },
     {
       "id": "backend:Set\u002dMeshVPNConfig",
@@ -10100,6 +10124,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:open_search_files_from_shortcut",
+      "name": "open_search_files_from_shortcut",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx"
       ]
     },
     {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEEP_DFIR_CATEGORIES, STANDARD_CATEGORIES, VIEW_ONLY_CATEGORIES } from "./cleanupCategories";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
+import { summarizeCleanupResult } from "./cleanupDisplayModel";
 
 const amcache = DEEP_DFIR_CATEGORIES.find(category => category.id === "amcache")!;
 const eventLogs = STANDARD_CATEGORIES.find(category => category.id === "eventLogs")!;
@@ -12,6 +13,15 @@ const developerCaches = DEEP_DFIR_CATEGORIES.find(category => category.id === "d
 const clipboard = STANDARD_CATEGORIES.find(category => category.id === "clipboardHistory")!;
 
 describe("cleanup scan results", () => {
+  test("Wi-Fi profiles show returned names and limited scope", () => {
+    const wifi = STANDARD_CATEGORIES.find(category => category.id === "wlanProfiles")!;
+    const empty = readCleanupScanResult(wifi, { success: true, data: { profiles: [], total: 0, coverage: "limited" } });
+    expect(summarizeCleanupResult({ id: wifi.id, count: empty.count, raw: empty.raw }).state).toBe("limited");
+    const populated = readCleanupScanResult(wifi, { success: true, data: { profiles: [{ name: "Cafe" }], total: 1, coverage: "limited" } });
+    expect(populated.count).toBe(1);
+    expect(populated.items).toEqual(["Cafe"]);
+  });
+
   test("known-empty user details retain their explicitly returned empty dataset", () => {
     expect(readCleanupUserSummary({ count: 0, records: [], items: [] })).toEqual({
       count: 0, items: [], raw: { records: [] },

@@ -47,13 +47,13 @@ describe("System Cleanup display projection", () => {
     expect(summarizeCleanupResult({ id: "wlanProfiles", count: 1, items: [], raw: { profiles: [{}] } }).sampleCount).toBe(1);
   });
 
-  test("renders the same findings in both views without leaking raw content", () => {
+  test("renders available records in both views without exposing credential fields", () => {
     const raw = { ...base.raw, password: "secret-password", entries: [{ category: "InventoryApplication", count: 15, sample: [{ path: "C:\\Private\\secret.txt" }] }] };
     for (const mode of ["simple", "advanced"] as const) {
       const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode={mode} count={15} items={["private preview"]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
       expect(html).toContain("15 records");
       expect(html).not.toContain("secret-password");
-      expect(html).not.toContain("secret.txt");
+      expect(html).toContain("secret.txt");
       expect(html).not.toContain("private preview");
       if (mode === "advanced") expect(html).toContain("Preview samples");
     }
@@ -67,7 +67,7 @@ describe("System Cleanup display projection", () => {
     expect(html).toContain("Not reported");
   });
 
-  test("browser and Wi-Fi summaries show dataset counts without private names or paths", () => {
+  test("browser and Wi-Fi summaries show identities but not credentials", () => {
     for (const [id, raw] of [
       ["browserFootprints", { browsers: [{ profilePath: "C:\\Private\\Browser", password: "secret-value" }], total: 1 }],
       ["wlanProfiles", { profiles: [{ name: "PrivateNetwork", key: "secret-value" }], total: 1 }],
@@ -75,8 +75,7 @@ describe("System Cleanup display projection", () => {
       const item = ALL_CATEGORIES.find(candidate => candidate.id === id)!;
       const html = renderToStaticMarkup(<CleanupDisplayDetails category={item} mode="advanced" count={1} items={[]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
       expect(html).toContain("Reported datasets");
-      expect(html).not.toContain("PrivateNetwork");
-      expect(html).not.toContain("Private\\Browser");
+      expect(html).toContain(id === "wlanProfiles" ? "PrivateNetwork" : "Private\\Browser");
       expect(html).not.toContain("secret-value");
     }
   });
