@@ -1614,6 +1614,7 @@ export function useBackend(retainCleanupScanErrors = false) {
           targetUser: string | null;
           ownerAccount?: string | null;
           managedByAutoSet?: boolean;
+          payloadVerified?: boolean;
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;

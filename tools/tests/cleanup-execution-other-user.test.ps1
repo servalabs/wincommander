@@ -26,7 +26,7 @@ function Get-ItemProperty {
     param([Alias('Path')][string]$LiteralPath, [Alias('EA')]$ErrorAction)
     if ($LiteralPath -like '*Compatibility Assistant\Store') { return [pscustomobject]@{ 'C:\Fixture\store.exe' = 1 } }
     if ($LiteralPath -eq 'fixture-recent-entry') { return [pscustomobject]@{ AppId='not-the-executable'; AppPath='C:\Fixture\recent.exe' } }
-    if ($LiteralPath -like '*Session Manager\AppCompatCache') { return [pscustomobject]@{ AppCompatCache=[byte[]](1,2,3) } }
+    if ($LiteralPath -like '*Session Manager\AppCompatCache') { if ($script:denyShim) { throw 'Access denied' }; return [pscustomobject]@{ AppCompatCache=[byte[]](1,2,3) } }
     throw 'Unexpected property read.'
 }
 $summary = Get-CleanupSummaryAllUsers -CategoryIds 'execCache' -TargetUsers $fixtureUser
@@ -37,4 +37,10 @@ if (@($rows | Where-Object { $_.path -eq 'C:\Fixture\store.exe' -and $_.source -
 if (@($rows | Where-Object { $_.path -eq 'C:\Fixture\recent.exe' -and $_.source -eq 'RecentApps' }).Count -ne 1) { throw 'RecentApps executable path was not retained.' }
 if (@($rows | Where-Object { $_.path -eq 'not-the-executable' }).Count) { throw 'AppId was incorrectly reported as an executable path.' }
 if (@($rows | Where-Object { $_.path -eq 'ShimCache (Binary Blob - 3 bytes)' -and $_.source -eq 'ShimCache' }).Count -ne 1) { throw 'Shared ShimCache details were omitted.' }
+$script:denyShim = $true
+$partial = Get-CleanupSummaryAllUsers -CategoryIds 'execCache' -TargetUsers $fixtureUser
+$partialUser = @($partial.users)[0]
+$partialCategory = $partialUser.categories[0]
+if (-not $partialCategory.partial -or $partialCategory.status -ne 'partial' -or $partialCategory.count -ne 2 -or $partialUser.complete) { throw 'Inaccessible source was not reported as incomplete.' }
+if (@($partialCategory.records | Where-Object { $_.path -eq 'C:\Fixture\store.exe' -or $_.path -eq 'C:\Fixture\recent.exe' }).Count -ne 2) { throw 'Earlier accessible records were discarded.' }
 Write-Output 'Passed: other-account execution details retain paths and sources.'

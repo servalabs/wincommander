@@ -2878,12 +2878,17 @@ function Get-AutoEraseSchedules {
             $info = Get-ScheduledTaskInfo -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction SilentlyContinue
             $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
             $minutes = if ($repetition) { [int][Xml.XmlConvert]::ToTimeSpan($repetition).TotalMinutes } else { 0 }
+            # Scheduler's Ready state describes the registration, not whether
+            # its referenced cleanup script is still present and readable.
+            $payloadVerified = $false
+            try { $payloadVerified = [bool](Test-AutoEraseCurrentPayload -Task $t -Identity $identity) } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
                 taskName         = $t.TaskName
                 legacy           = ($t.TaskPath -ne $script:SystemMaintenanceTaskPath -or $t.TaskName -ne $identity.taskName)
                 state            = [string]$t.State
                 enabled          = (Test-AutoEraseTaskEnabled ([string]$t.State))
+                payloadVerified  = $payloadVerified
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
                 scope            = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }

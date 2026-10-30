@@ -2,7 +2,15 @@ import { expect, test } from "bun:test";
 import { canShowCleanupScheduleForSelection, isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleRow } from "./cleanupScheduleReadback";
 
 const relevant = new Set(["dnsCache", "amcache"]);
-const ready: CleanupScheduleRow = { categoryId: "dnsCache", enabled: true, state: "Ready", scope: "current-user", intervalMinutes: 60, targetUser: null, managedByAutoSet: true };
+const ready: CleanupScheduleRow = { categoryId: "dnsCache", enabled: true, state: "Ready", scope: "current-user", intervalMinutes: 60, targetUser: null, managedByAutoSet: true, payloadVerified: true };
+
+test("keeps an unverified task manageable without reporting its payload as verified", () => {
+  for (const payloadVerified of [false, undefined]) {
+    const snapshot = readCleanupScheduleSnapshot([{ ...ready, managedByAutoSet: false, payloadVerified }], relevant)!;
+    expect(snapshot.schedules.dnsCache).toBe(60);
+    expect(isVerifiedIndividualSchedule(snapshot.records.dnsCache, 60, 60, "current-user")).toBe(false);
+  }
+});
 
 test("accepts only verified state and verifies the expected interval and owner", () => {
   const snapshot = readCleanupScheduleSnapshot([ready], relevant)!;

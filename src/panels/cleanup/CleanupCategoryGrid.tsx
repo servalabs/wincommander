@@ -79,6 +79,7 @@ export default function CleanupCategoryGrid({
     handleCardClearAllUsers,
     schedulesById,
     disabledSchedulesById,
+    scheduleRecordsById,
     scheduleState,
     refreshSchedules,
     scheduleBusyId,
@@ -143,6 +144,7 @@ export default function CleanupCategoryGrid({
         onLoad={() => handleCardLoad(cat)}
         scheduleMinutes={scheduleState === "verified" ? (schedulesById[cat.id] ?? null) : undefined}
         scheduleDisabled={scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
+        schedulePayloadVerified={scheduleRecordsById[cat.id]?.payloadVerified}
         scheduleState={scheduleState}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={autoSetSchedulesBusy || scheduleBusyId === cat.id}
@@ -262,6 +264,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         scheduleDisabled={isViewingCurrentUser && scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
+        schedulePayloadVerified={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.payloadVerified : undefined}
         scheduleState={isViewingCurrentUser ? scheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={

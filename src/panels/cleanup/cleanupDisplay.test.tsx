@@ -97,7 +97,7 @@ describe("System Cleanup display projection", () => {
   });
 
   test("distinguishes a saved schedule, a never-run task and Windows execution from verified cleanup", () => {
-    const record = { enabled: true, managedByAutoSet: false, scope: "current-user" as const, intervalMinutes: 60, lastRun: "1999-11-30T00:00:00Z", lastResult: 0x41303 };
+    const record = { enabled: true, managedByAutoSet: false, scope: "current-user" as const, intervalMinutes: 60, lastRun: "1999-11-30T00:00:00Z", lastResult: 0x41303, payloadVerified: true };
     const props = { category, mode: "simple" as const, count: 0, items: [], rawData: { total: 0, entries: [] }, clearing: false, clearLabel: "Clear", onClose: () => {}, scheduleState: "verified" as const, scheduleMinutes: 60 };
     const never = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={record} />);
     expect(never).toContain("No run reported");
@@ -111,6 +111,8 @@ describe("System Cleanup display projection", () => {
     expect(incomplete).toContain("Removed: 2; deferred: 0; failed: 1");
     const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
     expect(unknown).not.toContain("Scheduled task history");
+    const missingScript = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false }} />);
+    expect(missingScript).toContain("cleanup script could not be verified");
   });
 
   test("incomplete and failed details never render a clean result in either view", () => {

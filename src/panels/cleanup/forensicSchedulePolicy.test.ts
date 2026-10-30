@@ -145,7 +145,7 @@ describe("Secure persona scheduled trace wipes", () => {
     }, async () => ({ success: true, data: { schedules: categories.map((category, index) => ({
       categoryId: category.schedulerCategoryId ?? category.id, enabled: true, state: "Ready", targetUser: null,
       scope: category.schedulerRunAsSystem ? "system" as const : "current-user" as const,
-      intervalMinutes: getAutoScheduleInterval(category, undefined), managedByAutoSet: index === 0,
+      intervalMinutes: getAutoScheduleInterval(category, undefined), managedByAutoSet: index === 0, payloadVerified: true,
     })) } }), categories);
 
     expect(calls.length).toBe(2);

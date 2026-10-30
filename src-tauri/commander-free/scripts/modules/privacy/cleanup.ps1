@@ -6027,7 +6027,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory')) { throw $hiveError }
 
@@ -6433,6 +6433,7 @@ function Get-CleanupSummaryAllUsers {
                                 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store',
                                 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Persisted'
                             )) {
+                                try {
                                 if (Test-CleanupSummaryPath $hklmP) {
                                     $p = Get-ItemProperty $hklmP -EA Stop
                                     if ($p) {
@@ -6441,12 +6442,15 @@ function Get-CleanupSummaryAllUsers {
                                         }
                                     }
                                 }
+                                } catch { $categoryPartial = $true }
                             }
 
                             # UserAssist — ROT13 decode property names under each GUID\Count subkey
                             $uaK = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                            try {
                             if (Test-CleanupSummaryPath $uaK) {
                                 Get-ChildItem $uaK -EA Stop | ForEach-Object {
+                                    try {
                                     $cK = "$($_.PSPath)\Count"
                                     if (Test-CleanupSummaryPath $cK) {
                                         $p = Get-ItemProperty $cK -EA Stop | Select-Object -Property *
@@ -6463,33 +6467,43 @@ function Get-CleanupSummaryAllUsers {
                                             }
                                         }
                                     }
+                                    } catch { $categoryPartial = $true }
                                 }
                             }
+                            } catch { $categoryPartial = $true }
 
                             # MuiCache — property NAME is the exe path (same logic as Get-ExecutionCache)
                             $muiK = "$hiveRoot\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache"
+                            try {
                             if (Test-CleanupSummaryPath $muiK) {
                                 (Get-Item $muiK -EA Stop).Property |
                                     Where-Object { $_ -notmatch '^PS' -and $_ -ne 'LangID' } |
                                     ForEach-Object { . $addExecutionEntry $_ 'MuiCache' }
                             }
+                            } catch { $categoryPartial = $true }
 
                             # Match the current-user scanner: the executable path is AppPath.
                             $raK = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Search\RecentApps"
+                            try {
                             if (Test-CleanupSummaryPath $raK) {
                                 Get-ChildItem $raK -EA Stop | ForEach-Object {
+                                    try {
                                     $p2 = Get-ItemProperty $_.PSPath -EA Stop
                                     if ($p2 -and $p2.AppPath) { . $addExecutionEntry $p2.AppPath 'RecentApps' }
+                                    } catch { $categoryPartial = $true }
                                 }
                             }
+                            } catch { $categoryPartial = $true }
 
                             $shimCachePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache'
+                            try {
                             if (Test-CleanupSummaryPath $shimCachePath) {
                                 $shimData = Get-ItemProperty -LiteralPath $shimCachePath -ErrorAction Stop
                                 if ($shimData -and $shimData.AppCompatCache) {
                                     . $addExecutionEntry "ShimCache (Binary Blob - $($shimData.AppCompatCache.Length) bytes)" 'ShimCache'
                                 }
                             }
+                            } catch { $categoryPartial = $true }
 
                             $count = $seen.Count
                         } else { $items = @("[registry unavailable]") }
@@ -6594,6 +6608,10 @@ function Get-CleanupSummaryAllUsers {
                 catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
+            if ($categoryPartial -and -not $scanError) {
+                $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
+                $categoryRecord.message = 'Some execution history sources could not be checked.'
+            }
             if ($delegated -and $r -and -not $scanError) {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
                 if ($r.partial -eq $true -or $r.complete -eq $false -or $r.status -eq 'partial' -or $r.coverage -eq 'partial' -or $r.accessDenied -eq $true) {

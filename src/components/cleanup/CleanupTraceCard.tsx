@@ -30,6 +30,7 @@ interface CleanupTraceCardProps {
   onLoad?: () => void;
   scheduleMinutes?: number | null;
   scheduleDisabled?: boolean;
+  schedulePayloadVerified?: boolean | null;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -120,6 +121,7 @@ export default function CleanupTraceCard({
   onLoad,
   scheduleMinutes,
   scheduleDisabled,
+  schedulePayloadVerified,
   scheduleBusy,
   scheduleState,
   onRefreshSchedule,
@@ -218,6 +220,7 @@ export default function CleanupTraceCard({
         minInterval={minInterval}
         scheduleMinutes={scheduleMinutes}
         scheduleDisabled={scheduleDisabled}
+        schedulePayloadVerified={schedulePayloadVerified}
         scheduleBusy={scheduleBusy}
         scheduleState={scheduleState}
         onRefreshSchedule={onRefreshSchedule}

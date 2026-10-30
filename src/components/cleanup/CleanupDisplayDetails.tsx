@@ -60,10 +60,11 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
   const dateValue = typeof raw?.scannedAt === "string" ? raw.scannedAt : typeof raw?.scanTime === "string" ? raw.scanTime : "";
   const scanTime = dateValue && Number.isFinite(Date.parse(dateValue)) ? new Date(dateValue).toLocaleString() : "Not reported";
-  const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" ? "Not verified" :
+  const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" || (scheduleRecord && scheduleRecord.payloadVerified !== true) ? "Not verified" :
     scheduleDisabled ? "Disabled" : scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable ? "; new schedules unavailable" : ""}` :
       category.schedulable ? "Off" : "Not available for this card";
-  const simpleScheduleStatus = scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script could not be verified. Remove and recreate the schedule.`
+    : scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
     : scheduleState === "verified" && scheduleMinutes
     ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable ? ". New schedules are unavailable for this cleanup." : "."}`
     : scheduleState === "verified" ? (category.schedulable ? "No automatic cleanup is scheduled." : "Scheduling is not available for this cleanup.")

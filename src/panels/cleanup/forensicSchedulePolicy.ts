@@ -186,8 +186,8 @@ export async function ensureForensicTraceSchedules(
       }
     }
     for (const id of existingActive) {
-      if (!snapshot?.records[id]?.enabled) {
-        summary.alreadyConfigured--; summary.failed++; summary.firstFailure ??= "An existing schedule could not be verified as active.";
+      if (!snapshot?.records[id]?.enabled || snapshot.records[id].payloadVerified !== true) {
+        summary.alreadyConfigured--; summary.failed++; summary.firstFailure ??= "An existing schedule or its cleanup script could not be verified.";
       }
     }
     for (const id of existingDisabled) {

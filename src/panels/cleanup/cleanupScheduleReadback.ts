@@ -21,6 +21,7 @@ export interface CleanupScheduleRow {
   lastResult?: number | null;
   nextRun?: string | null;
   cleanupOutcome?: CleanupScheduledOutcome | null;
+  payloadVerified?: boolean;
 }
 
 export interface CleanupScheduleRecord {
@@ -32,6 +33,7 @@ export interface CleanupScheduleRecord {
   lastResult?: number | null;
   nextRun?: string | null;
   cleanupOutcome?: CleanupScheduledOutcome | null;
+  payloadVerified: boolean | null;
 }
 
 function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOutcome | null {
@@ -65,7 +67,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     const interval = Number.isFinite(row.intervalMinutes) && row.intervalMinutes > 0 ? row.intervalMinutes : null;
     if (enabled && interval === null) return null;
     const lastRun = typeof row.lastRun === "string" && Number.isFinite(Date.parse(row.lastRun)) ? row.lastRun : null;
-    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
+    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
     (localRows[id] ??= []).push({ row, record });
   }
   for (const [id, candidates] of Object.entries(localRows)) {
@@ -80,18 +82,18 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     const { enabled, intervalMinutes: interval } = record;
     records[id] = record;
     if (enabled && interval !== null) schedules[id] = interval;
-    else disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope };
+    else disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified };
     if (record.managedByAutoSet) managedIds.add(id);
   }
   return { records, schedules, disabledSchedules, managedIds };
 }
 
 export function isVerifiedManagedSchedule(record: CleanupScheduleRecord | undefined, intervalMinutes: number, scope: CleanupScheduleScope): boolean {
-  return !!record && record.enabled && record.managedByAutoSet && record.intervalMinutes === intervalMinutes && record.scope === scope;
+  return !!record && record.enabled && record.payloadVerified === true && record.managedByAutoSet && record.intervalMinutes === intervalMinutes && record.scope === scope;
 }
 
 export function isVerifiedIndividualSchedule(record: CleanupScheduleRecord | undefined, requestedMinutes: number, returnedMinutes: number | undefined, scope: CleanupScheduleScope): boolean {
-  return returnedMinutes === requestedMinutes && !!record && record.enabled && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
+  return returnedMinutes === requestedMinutes && !!record && record.enabled && record.payloadVerified === true && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
 }
 
 /** The local snapshot cannot describe a different Windows account. */

@@ -7,6 +7,7 @@ interface CleanupScheduleControlProps {
   minInterval: number;
   scheduleMinutes?: number | null;
   scheduleDisabled?: boolean;
+  schedulePayloadVerified?: boolean | null;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -37,6 +38,7 @@ export default function CleanupScheduleControl({
   minInterval,
   scheduleMinutes,
   scheduleDisabled = false,
+  schedulePayloadVerified,
   scheduleBusy = false,
   scheduleState = "verified",
   onRefreshSchedule,
@@ -57,6 +59,7 @@ export default function CleanupScheduleControl({
   const surfaceId = useId();
   const isScheduled = scheduleState === "verified" && typeof scheduleMinutes === "number" && scheduleMinutes > 0;
   const isDisabled = scheduleState === "verified" && scheduleDisabled;
+  const payloadUnverified = (isScheduled || isDisabled) && schedulePayloadVerified !== true;
   const portalTarget = triggerRef.current
     ?.closest<HTMLElement>('[data-cleanup-panel-root="true"]')
     ?.querySelector<HTMLElement>('[data-cleanup-overlay-root="true"]');
@@ -135,9 +138,9 @@ export default function CleanupScheduleControl({
         className="flex h-[22px] min-w-[22px] flex-shrink-0 items-center gap-0.5 rounded px-1.5 transition-colors"
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
-        data-active={isScheduled ? "true" : "false"}
-        aria-label={isDisabled ? `${categoryLabel} scheduled wipe is disabled` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
-        title={isDisabled ? "Scheduled wipe is disabled · Pro required to change" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
+        data-active={isScheduled && !payloadUnverified ? "true" : "false"}
+        aria-label={payloadUnverified ? `${categoryLabel} scheduled wipe script not verified` : isDisabled ? `${categoryLabel} scheduled wipe is disabled` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
+        title={payloadUnverified ? "Task exists, but its cleanup script could not be verified · Pro required to change" : isDisabled ? "Scheduled wipe is disabled · Pro required to change" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
         onClick={event => {
           event.preventDefault();
           event.stopPropagation();
@@ -145,7 +148,7 @@ export default function CleanupScheduleControl({
         }}
       >
         <Icon icon="time" size={14} />
-        {isScheduled && <span className="text-[8.5px] font-extrabold">{formatInterval(scheduleMinutes!)}</span>}
+        {isScheduled && <span className="text-[8.5px] font-extrabold">{payloadUnverified ? "?" : formatInterval(scheduleMinutes!)}</span>}
         {isDisabled && <span className="text-[8.5px] font-extrabold">OFF</span>}
         <Icon icon="lock" size={9} />
       </button>
@@ -183,10 +186,10 @@ export default function CleanupScheduleControl({
         className="flex h-[22px] min-w-[22px] flex-shrink-0 items-center gap-0.5 rounded px-1.5 transition-colors"
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
-        data-active={isScheduled ? "true" : "false"}
-        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : isDisabled ? `Manage disabled ${categoryLabel} scheduled wipe` : isScheduled ? `${onSetSchedule ? "Change" : "Manage"} ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
+        data-active={isScheduled && !payloadUnverified ? "true" : "false"}
+        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : payloadUnverified ? `Manage ${categoryLabel} scheduled wipe; cleanup script not verified` : isDisabled ? `Manage disabled ${categoryLabel} scheduled wipe` : isScheduled ? `${onSetSchedule ? "Change" : "Manage"} ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
         disabled={scheduleState === "checking" || scheduleBusy}
-        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
+        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : payloadUnverified ? "Task exists, but its cleanup script could not be verified. Remove and recreate this schedule." : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={isOpen ? surfaceId : undefined}
@@ -198,7 +201,7 @@ export default function CleanupScheduleControl({
         }}
       >
         <Icon icon="time" size={14} />
-        {isScheduled && <span className="text-[8.5px] font-extrabold">{formatInterval(scheduleMinutes!)}</span>}
+        {isScheduled && <span className="text-[8.5px] font-extrabold">{payloadUnverified ? "?" : formatInterval(scheduleMinutes!)}</span>}
         {isDisabled && <span className="text-[8.5px] font-extrabold">OFF</span>}
       </button>
 
@@ -227,7 +230,7 @@ export default function CleanupScheduleControl({
           onClick={event => event.stopPropagation()}
         >
           <Menu>
-            <MenuDivider title={isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
+            <MenuDivider title={payloadUnverified ? "Task exists; cleanup script not verified" : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
             {onSetSchedule && PRESET_INTERVALS.filter(preset => preset.minutes >= minInterval).map(preset => (
               <MenuItem
                 key={preset.minutes}
