@@ -3610,9 +3610,17 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            8,
+            9,
             "Fleet mutations require the service gate; machine-scoped status, Shield desired-state reads, and Shield read-back receipts deliberately do not"
         );
+        let repair_start = source
+            .find("pub async fn fleet_repair_machine_trust")
+            .expect("machine trust repair command");
+        let repair_end = source[repair_start..]
+            .find("\n}\n")
+            .map(|offset| repair_start + offset)
+            .expect("machine trust repair end");
+        assert!(source[repair_start..repair_end].contains(&service_gate));
         let status_start = source
             .find("pub async fn fleet_status")
             .expect("fleet_status command");
