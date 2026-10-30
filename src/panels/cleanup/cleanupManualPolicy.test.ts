@@ -80,6 +80,11 @@ describe("explicit per-card cleanup consent", () => {
     }
   });
 
+  test("protected schedule warnings disclose saved passwords and SSH host keys", () => {
+    expect(getCleanupManualConfirmation(cards.find(card => card.id === "browserFootprints")!, "schedule", 60).description).toContain("saved browser passwords");
+    expect(getCleanupManualConfirmation(cards.find(card => card.id === "sshState")!, "schedule", 60).description).toContain("known_hosts");
+  });
+
   test("Auto-set names high-impact cards and explains repeated deletion", () => {
     const eligible = cards.filter(card => card.schedulable && !isAutomaticCleanupExcluded(card.id, new Set()));
     const warning = getCleanupAutoScheduleConfirmation(eligible);

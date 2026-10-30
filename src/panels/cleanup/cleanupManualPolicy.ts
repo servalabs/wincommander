@@ -33,14 +33,14 @@ const DEFAULT_WARNINGS: Record<string, string> = {
   srumData: 'This removes Windows resource-usage history; Windows may rebuild the database.',
   recallDb: 'This removes Windows activity timeline databases and their stored history.',
   wlanProfiles: 'This forgets all-user Wi-Fi profiles on available adapters, including their saved credentials. Private and policy-managed profiles are excluded. The current wireless connection may be lost.',
-  browserFootprints: 'This removes browser history, cookies and saved browser state. You may be signed out of websites.',
+  browserFootprints: 'This removes browser history, cookies, saved browser passwords and other saved browser state. You may be signed out of websites.',
   notepadState: 'This can permanently delete unsaved Notepad tabs and drafts.',
   wslData: 'This can permanently delete registered Linux distributions and their files. Scheduled cleanup runs while the selected user is signed in and leaves Docker-managed distributions unchanged.',
   dockerDesktopData: 'This can permanently delete local Docker images, containers and volumes.',
   virtualMachineArtifacts: 'This can permanently delete virtual-machine snapshots and local configuration.',
   developerCaches: 'This can remove developer caches, local credentials and configuration.',
   credentialManager: 'This removes saved sign-in credentials. You may need to sign in again.',
-  sshState: 'This removes loaded SSH agent identities. Active SSH connections may need authentication again.',
+  sshState: 'This removes loaded SSH agent identities and the saved known_hosts file, including remembered server host keys. Future SSH connections may ask you to verify servers again.',
   passwordManagerCaches: 'This removes password-manager caches and session state. You may need to unlock or sign in again.',
 };
 
