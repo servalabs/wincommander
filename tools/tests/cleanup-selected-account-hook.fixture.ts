@@ -41,6 +41,11 @@ const backend = {
   getAutoEraseSchedules: async () => ({ success: true, data: { schedules: rows } }),
   getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
     calls.push(['scan', ids, targets]);
+    if (targets.length === 0) {
+      const partial = ['sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager'];
+      const categories = partial.filter(id => ids.includes(id)).map(id => ({ id, count: 1, partial: true, status: 'partial', message: 'Selected sources only.', records: [{ name: `${id} observation` }] }));
+      return { success: true, data: { users: [{ sid: current, username: 'Self', categories }, { sid: other, username: 'Other', categories }] } };
+    }
     const id = ids[0];
     const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : id === 'dockerDesktopData' ? 'Docker disk' : id === 'virtualMachineArtifacts' ? 'Virtual machine' : id === 'credentialManager' ? 'Credential storage artifact' : 'Password manager cache';
     return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name, path: 'C:\\Users\\Other\\fixture' }] }] }] } };
@@ -181,4 +186,19 @@ hook = render();
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);
 expect(await hook.handleClearSchedule('browserFootprints')).toBe(false);
 expect(calls).toHaveLength(3);
+await hook.loadAllUsersView();
+const allScan = calls[3];
+expect(allScan[0]).toBe('scan');
+expect(allScan[2]).toEqual([]);
+for (const id of ['sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager']) {
+  expect(allScan[1]).toContain(id);
+}
+hook = render();
+for (const id of ['sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager']) {
+  expect(hook.combinedDataMap[id].count).toBe(-1);
+  expect(hook.allUsersRaw).toHaveLength(2);
+  expect(hook.allUsersRaw[0].categories[id].raw).toMatchObject({ partial: true, records: [{ name: `${id} observation` }] });
+  await hook.handleCardClearAllUsers({ id } as never);
+}
+expect(calls).toHaveLength(4);
 });

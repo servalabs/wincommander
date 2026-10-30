@@ -427,7 +427,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const ticket = profileReadGate.current.begin();
         setOtherUserLoading(true);
         try {
-            const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [], []);
+            const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [...MULTI_USER_CLEANUP_IDS, ...OTHER_ACCOUNT_READ_ONLY_IDS], []);
             if (!profileReadGate.current.isCurrent(ticket)) return false;
             if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
                 setAllUsersRaw(res.data.users.map(u => ({
@@ -486,7 +486,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const combinedDataMap = useMemo<Record<string, CardData>>(() => {
         const map: Record<string, CardData> = {};
         for (const cat of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]) {
-            if (!cat.scopeAware || !MULTI_USER_CLEANUP_IDS.has(cat.id)) continue;
+            if (!cat.scopeAware || (!MULTI_USER_CLEANUP_IDS.has(cat.id) && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id))) continue;
             let total = 0;
             const breakdown: string[] = [];
             let incomplete = allUsersRaw.length === 0;

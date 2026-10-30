@@ -197,7 +197,7 @@ export default function CleanupCategoryGrid({
     (cat) =>
       cat.scopeAware &&
       cat.usabilityTier === tier &&
-      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || (!isViewingAllUsers && !!selectedOwnerSid && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
+      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || ((isViewingAllUsers || !!selectedOwnerSid) && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
   );
   const userCardData = (cat: CleanupCategory) => {
     if (!isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)) {

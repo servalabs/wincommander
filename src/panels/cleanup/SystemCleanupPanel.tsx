@@ -395,7 +395,7 @@ export default function SystemCleanupPanel() {
                         scopeLabel="Detected Windows profiles"
                         clearing={false}
                         onClose={() => setCombinedDetail(null)}
-                        onClear={!isInvestigator && canSwitchUsers
+                        onClear={!isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)
                             ? () => { setCombinedDetail(null); void handleCardClearAllUsers(cat); }
                             : undefined}
                         clearDisabled={(d?.count ?? 0) <= 0}
