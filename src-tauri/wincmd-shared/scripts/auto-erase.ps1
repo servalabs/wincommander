@@ -3003,8 +3003,8 @@ function Invoke-AutoEraseMigrationCore {
                 # A disabled task may have no Scheduler next-run value. Guessing
                 # now + interval would shift its payload out of phase with its
                 # preserved trigger and can skip the next run after re-enabling.
-                if (-not $info.NextRunTime -or $info.NextRunTime -le [DateTime]::MinValue) {
-                    throw 'The existing schedule next run could not be verified. Remove and recreate this individual schedule to keep its timing accurate. The existing task was left unchanged.'
+                if (-not (ConvertTo-AutoEraseTimestamp $info.NextRunTime)) {
+                    throw "The $($identity.categoryId) schedule next run could not be verified. Remove and recreate this individual schedule to keep its timing accurate. The existing task was left unchanged."
                 }
                 $firstDue = $info.NextRunTime.ToUniversalTime()
                 $revision = 20

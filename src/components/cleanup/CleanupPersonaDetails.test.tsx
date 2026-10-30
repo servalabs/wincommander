@@ -198,6 +198,23 @@ describe("System Cleanup persona details", () => {
     expect(html).toContain("first");
   });
 
+  test("allows snapshot-checked pages of incomplete account observations without accepting a complete scan", () => {
+    const preview = readCleanupUserSummary({ count: 2, partial: true, records: [{ command: "first" }], truncated: true });
+    expect(preview.count).toBe(-1);
+    const history = ALL_CATEGORIES.find(category => category.id === "psHistory")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="simple" count={-1} items={[]}
+      groupedItems={[{ title: "Other user", username: "other-folder", count: preview.count, items: preview.items, rawData: preview.raw }]}
+      clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("Load more account details");
+    const category = { id: "psHistory", count: 2, items: [], records: [{ command: "first" }], sampleCount: 1, previewLimit: 5000, truncated: true, partial: true, status: "partial", snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: 1, totalRows: 2 };
+    const data = { users: [{ username: "other-folder", categories: [category] }] };
+    const page = readExpandedCleanupSummary(data, "other-folder", "psHistory");
+    expect(page?.partial).toBe(true);
+    expect(page?.raw.partial).toBe(true);
+    expect(readExpandedCleanupSummary(data, "other-folder", "psHistory", 0, `sha256:${"b".repeat(64)}`)).toBeNull();
+    expect(readExpandedCleanupSummary({ users: [{ username: "other-folder", categories: [{ ...category, error: true }] }] }, "other-folder", "psHistory")).toBeNull();
+  });
+
   test("accepts expanded records only from the requested account and card", () => {
     const category = { id: "psHistory", count: 2, items: ["one", "two"], records: [{ command: "one" }, { command: "two" }], sampleCount: 2, previewLimit: 50000, truncated: false, snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: null, totalRows: 2 };
     const data = { users: [{ username: "folder-name", categories: [category] }] };

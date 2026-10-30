@@ -31,6 +31,7 @@ export function readCleanupUserSummary(data: {
     const raw = observed.length || Object.keys(scanFacts).length ? {
       records: observed, scanFacts, partial: true,
       ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
+      ...(data.truncated === true ? { truncated: true } : {}),
     } : undefined;
     return { count: -1, items: [], error: data.message || 'This user scan was incomplete.', ...(raw ? { raw } : {}) };
   }

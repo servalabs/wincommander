@@ -58,9 +58,11 @@ $script:originalXml = @'
 <Actions><Exec><Command>powershell.exe</Command><Arguments>old-payload</Arguments></Exec></Actions>
 </Task>
 '@
-$script:nextRunTime = [DateTime]::MinValue
-$unknownNext = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
-if (-not $unknownNext.error -or $unknownNext.message -notmatch 'next run could not be verified' -or $script:registrations -ne 0 -or $script:registeredXml) { throw 'An unavailable next run must not change the original task or guess its timing.' }
+foreach ($sentinel in @([DateTime]::MinValue, [datetime]'1899-12-30', [datetime]'1999-11-30')) {
+    $script:nextRunTime = $sentinel
+    $unknownNext = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
+    if (-not $unknownNext.error -or $unknownNext.message -notmatch 'dnsCache schedule next run could not be verified' -or $script:registrations -ne 0 -or $script:registeredXml) { throw 'An unavailable next run must not change the original task or guess its timing.' }
+}
 $script:locks = @()
 $script:nextRunTime = [DateTime]::Parse('2026-11-02T01:00:00Z')
 $result = Invoke-AutoEraseMigration -CategoryId 'dnsCache'

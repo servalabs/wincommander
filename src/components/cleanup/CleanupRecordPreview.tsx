@@ -257,7 +257,7 @@ export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: num
   } catch { return null; }
 }
 
-export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
+export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
   const users = data?.users;
   const user = Array.isArray(users) && users.length === 1 ? users[0] : undefined;
   const matching = user && typeof user.username === "string" && user.username.toLocaleLowerCase() === accountName.toLocaleLowerCase() && Array.isArray(user.categories)
@@ -282,9 +282,14 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
     if (!Number.isSafeInteger(pageTotal) || pageTotal > category.count) return null;
     pageCategory = { ...category, count: pageTotal };
   }
-  const summary = readCleanupUserSummary(pageCategory);
+  // A partial source can still return snapshot-verified pages of observations.
+  // Validate the page structure independently without accepting its total as a
+  // complete scan; the outer card remains failed and cannot authorize Clear.
+  const partial = category.partial === true || category.complete === false || category.status === "partial";
+  if (category.error || (category.status && ["error", "failed", "unknown", "unavailable"].includes(category.status))) return null;
+  const summary = readCleanupUserSummary(partial ? { ...pageCategory, partial: false, complete: true, status: "scoped" } : pageCategory);
   if (summary.count < 0 || !summary.raw) return null;
-  return { ...summary, count: category.count, raw: groupedActivity ? { ...summary.raw, expectedActivityCount: category.count } : summary.raw, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
+  return { ...summary, count: category.count, partial, raw: { ...summary.raw, ...(partial ? { partial: true } : {}), ...(groupedActivity ? { expectedActivityCount: category.count } : {}) }, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
 }
 
 export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {
@@ -314,7 +319,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
   const [expandedNotice, setExpandedNotice] = useState<string | null>(null);
   const [loadingExpanded, setLoadingExpanded] = useState(false);
-  const [nextPage, setNextPage] = useState<{ offset: number; hash: string; totalRows: number; count: number } | null>(null);
+  const [nextPage, setNextPage] = useState<{ offset: number; hash: string; totalRows: number; count: number; partial: boolean } | null>(null);
   const requestVersion = useRef(0);
   useEffect(() => {
     let active = true;
@@ -357,7 +362,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       const result = await backendRef.current.getCleanupSummaryAllUsers([categoryId], [accountName], true, offset, nextPage?.hash ?? "");
       if (request !== requestVersion.current) return;
       let summary = result.success ? readExpandedCleanupSummary(result.data, accountName, categoryId, offset, nextPage?.hash ?? "") : null;
-      if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows))) {
+      if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows || summary.partial !== nextPage.partial))) {
         setExpandedNotice(result.error || result.data?.message || "Account details changed or could not be verified. Close and reopen to rescan.");
         return;
       }
@@ -372,7 +377,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           if (request !== requestVersion.current) return;
           const next = continuation.success ? readExpandedCleanupSummary(continuation.data, accountName, categoryId, offset, first.snapshotHash, byteOffset) : null;
           if (!next?.recordChunk || !next.chunkBytes || next.recordChunk.totalBytes !== firstChunk.totalBytes ||
-              next.nextOffset !== first.nextOffset || next.totalRows !== first.totalRows || next.count !== first.count || next.sourceTruncated !== first.sourceTruncated) {
+              next.nextOffset !== first.nextOffset || next.totalRows !== first.totalRows || next.count !== first.count || next.partial !== first.partial || next.sourceTruncated !== first.sourceTruncated) {
             setExpandedNotice("Account details changed or the large record could not be verified. Close and reopen to rescan.");
             return;
           }
@@ -386,8 +391,8 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
       if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }
       setExpandedRaw(merged);
-      setNextPage(typeof summary.nextOffset === "number" ? { offset: summary.nextOffset, hash: summary.snapshotHash, totalRows: summary.totalRows, count: summary.count } : null);
-      setExpandedNotice(`Refreshed account scan: ${summary.count} items reported.`);
+      setNextPage(typeof summary.nextOffset === "number" ? { offset: summary.nextOffset, hash: summary.snapshotHash, totalRows: summary.totalRows, count: summary.count, partial: summary.partial } : null);
+      setExpandedNotice(summary.partial ? "More observed details loaded. The scan remains incomplete." : `Refreshed account scan: ${summary.count} items reported.`);
       if (offset === 0) setPage(0);
     } catch {
       if (request === requestVersion.current) setExpandedNotice("Full details could not be read.");

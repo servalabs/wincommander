@@ -1342,6 +1342,48 @@ function Get-FleetForensicProjection {
     }
 }
 
+function Get-CleanupProcessElevation {
+    param([int]$ProcessId)
+    try {
+        if (-not ('WcCleanup.ProcessElevation' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace WcCleanup {
+    public static class ProcessElevation {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool GetTokenInformation(IntPtr token, int infoClass, out int elevation, int length, out int returnedLength);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+        public static int Read(int processId) {
+            IntPtr process = OpenProcess(0x1000, false, processId); // PROCESS_QUERY_LIMITED_INFORMATION
+            if (process == IntPtr.Zero) return -1;
+            IntPtr token = IntPtr.Zero;
+            try {
+                if (!OpenProcessToken(process, 0x0008, out token)) return -1; // TOKEN_QUERY
+                int elevation, returned;
+                if (!GetTokenInformation(token, 20, out elevation, sizeof(int), out returned) || returned < sizeof(int)) return -1;
+                return elevation == 0 ? 0 : 1; // TokenElevation
+            } finally {
+                if (token != IntPtr.Zero) CloseHandle(token);
+                CloseHandle(process);
+            }
+        }
+    }
+}
+'@ -ErrorAction Stop
+        }
+        $elevation = [WcCleanup.ProcessElevation]::Read($ProcessId)
+        if ($elevation -eq 1) { return 'Yes' }
+        if ($elevation -eq 0) { return 'No' }
+    } catch { }
+    return 'Unknown'
+}
+
 function Get-ProcessIntelligence {
     try {
         $entries = @()
@@ -1368,17 +1410,7 @@ function Get-ProcessIntelligence {
                     $sigStatus = "UnknownError"
                 }
             }
-            $elevated = "No"
-            try {
-                # Get-WmiObject is gone in PowerShell 7+; Get-CimInstance + Invoke-CimMethod
-                # is the modern path. Silently fallback if neither cooperates.
-                $cimProc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
-                if ($cimProc) {
-                    $owner = Invoke-CimMethod -InputObject $cimProc -MethodName GetOwner -ErrorAction SilentlyContinue
-                    if ($owner -and $owner.User -eq 'SYSTEM') { $elevated = 'Yes' }
-                }
-            }
-            catch {}
+            $elevated = Get-CleanupProcessElevation -ProcessId $p.Id
             $entries += @{
                 name     = $p.ProcessName
                 pid      = $p.Id
