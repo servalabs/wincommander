@@ -41,6 +41,9 @@ $script:admin = $false
 Expect-NoCleanup 'FixtureOther' 'unavailable, ambiguous or not authorized'
 $script:clearCalls = 0
 Expect-NoCleanup '' 'Administrator access is required to clean all user profiles'
+$result = Invoke-CleanupClearAllUsers -CategoryIds 'recentFiles' -TargetUsers $script:currentSid
+if ($result.cleaned -ne 1 -or $script:clearCalls -ne 1) { throw 'An authorized current-user SID selection did not run.' }
+$script:clearCalls = 0
 $result = Invoke-CleanupClearAllUsers -CategoryIds 'recentFiles' -TargetUsers 'FixtureCurrent'
 if ($result.cleaned -ne 1 -or $script:clearCalls -ne 1) { throw 'An authorized explicit current-user selection did not run.' }
 Write-Output 'Passed: failed, empty, invalid, missing and unauthorized profile selections perform no cleanup.'

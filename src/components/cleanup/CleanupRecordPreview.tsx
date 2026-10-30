@@ -448,10 +448,12 @@ export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: num
   } catch { return null; }
 }
 
-export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
+export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; sid?: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
   const users = data?.users;
   const user = Array.isArray(users) && users.length === 1 ? users[0] : undefined;
-  const matching = user && typeof user.username === "string" && user.username.toLocaleLowerCase() === accountName.toLocaleLowerCase() && Array.isArray(user.categories)
+  const isSid = /^S-1-5-21-(?:\d+-)+\d+$/i.test(accountName);
+  const identity = isSid ? user?.sid : user?.username;
+  const matching = user && typeof identity === "string" && identity.toLocaleLowerCase() === accountName.toLocaleLowerCase() && Array.isArray(user.categories)
     ? user.categories.filter(category => category.id === categoryId) : [];
   if (data?.error || matching.length !== 1) return null;
   const category = matching[0];

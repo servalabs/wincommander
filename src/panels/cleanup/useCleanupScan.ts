@@ -14,7 +14,7 @@ import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupSch
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
-import { isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
+import { cleanupProfileKey, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
@@ -325,7 +325,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // enforces this via Test-IsAdmin, so a non-admin is pinned to themselves.
     // When a non-current user is selected, scopeAware cards are populated from
     // Get-CleanupSummaryAllUsers scanned for that single user.
-    const [availableUsers, setAvailableUsers] = useState<Array<{ name: string; displayName?: string; path: string; isCurrent?: boolean }>>([]);
+    const [availableUsers, setAvailableUsers] = useState<Array<{ name: string; sid?: string; displayName?: string; path: string; isCurrent?: boolean }>>([]);
     const [accountInventoryState, setAccountInventoryState] = useState<"loading" | "ready" | "error">("loading");
     const [currentUser, setCurrentUser] = useState<string>('');
     const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
@@ -353,10 +353,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         : "__loading__";
     const hasMultipleAccountChoices = availableUsers.length > 1;
     // Friendly (possibly renamed) name of the account currently in view, for
-    // display. Internal keying still uses the stable folder name (`selectedUser`).
+    // display. Internal selection uses the Windows profile SID when available.
     const selectedDisplay = isViewingAllUsers
         ? 'All users'
-        : (availableUsers.find(u => u.name === (selectedUser || currentUser))?.displayName ?? (selectedUser || currentUser));
+        : (() => { const profile = availableUsers.find(u => cleanupProfileKey(u) === (selectedUser || currentUser)); return profile?.displayName || profile?.name || ''; })();
 
     // Scan one non-current user's scope-aware traces and project them onto the
     // card grid. One backend call returns every category for that user.
@@ -364,7 +364,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         setOtherUserLoading(true);
         try {
             const res = await getCleanupSummaryAllUsers(categoryIds ?? [], [username]);
-            if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
+            if (res.success && res.data?.users?.length === 1 && !(res.data as { error?: boolean }).error &&
+                ((/^S-1-5-21-/i.test(username) && res.data.users[0].sid?.toLowerCase() === username.toLowerCase()) ||
+                 (!/^S-1-5-21-/i.test(username) && res.data.users[0].username?.toLowerCase() === username.toLowerCase()))) {
                 const u = res.data.users[0];
                 const byId: Record<string, { count: number; items: string[]; raw?: unknown; error?: string }> = {};
                 for (const c of u.categories) {
@@ -414,8 +416,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [], []);
             if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
                 setAllUsersRaw(res.data.users.map(u => ({
-                    username: u.username,
-                    displayName: availableUsers.find(a => a.name === u.username)?.displayName ?? u.username,
+                    username: u.sid || u.username,
+                    displayName: availableUsers.find(a => cleanupProfileKey(a).toLowerCase() === (u.sid || u.username).toLowerCase())?.displayName ?? u.username,
                     categories: Object.fromEntries((u.categories ?? []).map(c => {
                         return [c.id, readCleanupUserSummary(c)];
                     })),
@@ -548,7 +550,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
         const data = result.data;
         const realProfiles = (data.profiles ?? []).filter(isVisibleCleanupProfile);
-        const current = resolveCurrentCleanupProfile(realProfiles, data.currentUser);
+        const current = resolveCurrentCleanupProfile(realProfiles, data.currentUser, data.currentSid);
         setAvailableUsers(realProfiles);
         setCurrentUser(current);
         setIsAdminUser(!!data.isAdmin);

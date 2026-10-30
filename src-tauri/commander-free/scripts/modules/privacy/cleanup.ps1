@@ -4943,7 +4943,7 @@ function Invoke-WithUserHive {
     )
     $username  = Split-Path $UserProfilePath -Leaf
     $ntuser    = Join-Path $UserProfilePath 'NTUSER.DAT'
-    $mountName = "WC_TempHive_$username"
+    $mountName = "WC_TempHive_$([guid]::NewGuid().ToString('N'))"
     $mountPath = "HKEY_USERS\$mountName"
 
     if (-not (Test-Path $ntuser)) {
@@ -4953,6 +4953,7 @@ function Invoke-WithUserHive {
 
     # Check the hive isn't already loaded (e.g. user partially logged off)
     $alreadyLoaded = Test-Path "Registry::$mountPath"
+    if ($alreadyLoaded) { throw 'Temporary profile hive name already exists; refusing to reuse it.' }
     if (-not $alreadyLoaded) {
         $loadOut = & reg load $mountPath $ntuser 2>&1
         $loadOk  = ($LASTEXITCODE -eq 0) -and (Test-Path "Registry::$mountPath")
@@ -5905,11 +5906,11 @@ function Invoke-CleanupClearAllUsers {
         throw 'Administrator access is required to clean all user profiles; no cleanup was performed.'
     }
     $profiles = @($allProfiles | Where-Object {
-        ($isAdmin -or $_.SID -eq $mySid) -and ($targetArr.Count -eq 0 -or $targetArr -contains $_.Name)
+        ($isAdmin -or $_.SID -eq $mySid) -and ($targetArr.Count -eq 0 -or $targetArr -contains $_.SID -or $targetArr -contains $_.Name)
     })
     if ($targetArr.Count -gt 0) {
         foreach ($target in $targetArr) {
-            if (@($profiles | Where-Object { $_.Name -eq $target }).Count -ne 1) {
+            if (@($profiles | Where-Object { $_.SID -eq $target -or $_.Name -eq $target }).Count -ne 1) {
                 throw 'A selected user profile is unavailable, ambiguous or not authorized; no cleanup was performed.'
             }
         }
@@ -5923,7 +5924,7 @@ function Invoke-CleanupClearAllUsers {
     foreach ($prof in $profiles) {
         $username      = $prof.Name
         $isCurrentUser = ($prof.SID -eq $mySid)
-        $isLoggedIn    = ($loggedIn -contains $username)
+        $isLoggedIn    = (($loggedIn -contains $username) -or (Test-Path -LiteralPath "Registry::HKEY_USERS\$($prof.SID)"))
 
         if ($isCurrentUser) {
             $catResults = Invoke-CleanupClearForUser -UserProfilePath $prof.FullName `
@@ -6216,12 +6217,16 @@ function Get-CleanupSummaryAllUsers {
     # Administrator. A non-admin caller can only ever see their own account
     # (matched by SID), regardless of what was requested.
     $isAdmin = Test-IsAdmin
-    if (-not $isAdmin) {
-        $allProfiles = $allProfiles | Where-Object { $_.SID -eq $mySid }
-    } elseif ($targetArr.Count -gt 0) {
-        $allProfiles = $allProfiles | Where-Object { $targetArr -contains $_.Name }
+    $allProfiles = @($allProfiles | Where-Object {
+        ($isAdmin -or $_.SID -eq $mySid) -and
+        ($targetArr.Count -eq 0 -or $targetArr -contains $_.SID -or $targetArr -contains $_.Name)
+    })
+    foreach ($target in $targetArr) {
+        if (@($allProfiles | Where-Object { $_.SID -eq $target -or $_.Name -eq $target }).Count -ne 1) {
+            return @{ error = $true; status = 'error'; message = 'The selected user profile is unavailable, ambiguous or not authorized.'; users = @(); userCount = 0 }
+        }
     }
-    if ($FullDetail -and (@($allProfiles).Count -ne 1 -or @($allProfiles)[0].Name -ne $targetArr[0])) {
+    if ($FullDetail -and @($allProfiles).Count -ne 1) {
         return @{ error = $true; status = 'error'; message = 'The selected user profile is unavailable or not authorized.'; users = @(); userCount = 0 }
     }
 
@@ -6240,7 +6245,7 @@ function Get-CleanupSummaryAllUsers {
         $hiveLoaded    = $false
         $hiveAvailable = $true     # false when reg load failed or hive unreachable
         $hiveError     = $null     # surfaced to UI as a warning
-        $mountName     = "WC_TempHive_$username"
+        $mountName     = "WC_TempHive_$([guid]::NewGuid().ToString('N'))"
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
@@ -6262,7 +6267,7 @@ function Get-CleanupSummaryAllUsers {
                         $loadOut = & reg load $mountPath $ntuser 2>&1
                         $loadOk  = ($LASTEXITCODE -eq 0) -and (Test-CleanupSummaryPath "Registry::$mountPath")
                     } else {
-                        $loadOk = $true
+                        $loadOk = $false
                     }
                     if ($loadOk) {
                         $hiveRoot   = "Registry::$mountPath"

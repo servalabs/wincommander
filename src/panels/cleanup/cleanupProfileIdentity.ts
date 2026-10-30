@@ -24,12 +24,22 @@ export async function readCleanupProfileInventory<T>(
 }
 
 /** Do not label an unrelated account as the current user if inventory is incomplete. */
-export function resolveCurrentCleanupProfile(profiles: Array<{ name: string; isCurrent?: boolean }>, currentUser?: string | null): string {
+export function cleanupProfileKey(profile: { name: string; sid?: string }): string {
+  return typeof profile.sid === 'string' && /^S-1-5-21-(?:\d+-)+\d+$/i.test(profile.sid) ? profile.sid : profile.name;
+}
+
+export function resolveCurrentCleanupProfile(profiles: Array<{ name: string; sid?: string; isCurrent?: boolean }>, currentUser?: string | null, currentSid?: string | null): string {
+  if (currentSid) {
+    const matches = profiles.filter(profile => profile.sid?.toLowerCase() === currentSid.toLowerCase());
+    if (matches.length === 1 && matches[0].isCurrent !== false) return cleanupProfileKey(matches[0]);
+    // A supplied SID is authoritative: do not guess from a potentially shared folder name.
+    return '';
+  }
   const marked = profiles.filter(profile => profile.isCurrent === true);
-  if (marked.length === 1) return marked[0].name;
+  if (marked.length === 1) return cleanupProfileKey(marked[0]);
   if (marked.length > 1 || !currentUser) return '';
   const matching = profiles.filter(profile => profile.name.toLocaleLowerCase() === currentUser.toLocaleLowerCase());
-  return matching.length === 1 && matching[0].isCurrent !== false ? matching[0].name : '';
+  return matching.length === 1 && matching[0].isCurrent !== false ? cleanupProfileKey(matching[0]) : '';
 }
 
 /** Label the active scope without guessing which listed profile is the user. */

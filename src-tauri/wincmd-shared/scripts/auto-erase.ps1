@@ -2773,9 +2773,16 @@ function Set-MultiUserAutoEraseSchedule {
             $seenOwners = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
             $uniqueTargets = [Collections.Generic.List[string]]::new()
             foreach ($target in @($targetArr)) {
-                $sid = Resolve-AutoEraseSid ([string]$target)
+                $account = [string]$target
+                # A SID from profile selection must be resolved to the actual
+                # account before it is passed to the scheduler principal and
+                # logon trigger. Never infer that account from a folder name.
+                if ($account -match '^S-1-\d+(?:-\d+)+$') {
+                    $account = Resolve-AutoEraseProfileAccount $account
+                }
+                $sid = Resolve-AutoEraseSid $account
                 if ([string]::IsNullOrWhiteSpace($sid)) { throw 'Account SID is unavailable.' }
-                if ($seenOwners.Add($sid)) { $uniqueTargets.Add([string]$target) }
+                if ($seenOwners.Add($sid)) { $uniqueTargets.Add($account) }
             }
             $targetArr = @($uniqueTargets.ToArray())
         } catch {

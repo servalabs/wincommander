@@ -49,7 +49,13 @@ foreach ($mode in @('deniedFiles','deniedEnumeration')) {
 $script:mode='missingFiles'
 $empty=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock'
 if ($empty.users[0].categories[0].count -ne 0 -or $empty.users[0].categories[0].error -or $empty.users[0].total -ne 0) { throw 'Absent trace folder was not an explicit zero.' }
+$sidResult=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'S-1-5-21-111-222-333-444'
+if ($sidResult.error -or $sidResult.users[0].sid -ne 'S-1-5-21-111-222-333-444') { throw 'SID selection did not return the selected profile.' }
+function Test-IsAdmin { $false }
 $script:mode='current'
+$unauthorized=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'S-1-5-21-111-222-333-444'
+if (-not $unauthorized.error -or @($unauthorized.users).Count -ne 0) { throw 'Unauthorized target was replaced with the current account.' }
+function Test-IsAdmin { $true }
 $script:delegated='error'
 $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 if ($result.users[0].categories[0].count -ne -1 -or -not $result.users[0].categories[0].error) { throw 'Delegated error was reported as zero or complete.' }

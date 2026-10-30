@@ -345,6 +345,10 @@ describe("System Cleanup persona details", () => {
     const category = { id: "psHistory", count: 2, items: ["one", "two"], records: [{ command: "one" }, { command: "two" }], sampleCount: 2, previewLimit: 50000, truncated: false, snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: null, totalRows: 2 };
     const data = { users: [{ username: "folder-name", categories: [category] }] };
     expect(readExpandedCleanupSummary(data, "folder-name", "psHistory")?.count).toBe(2);
+    const withSid = { users: [{ ...data.users[0], sid: "S-1-5-21-1-2-3-1001" }] };
+    expect(readExpandedCleanupSummary(withSid, "S-1-5-21-1-2-3-1001", "psHistory")?.count).toBe(2);
+    expect(readExpandedCleanupSummary(withSid, "S-1-5-21-1-2-3-1002", "psHistory")).toBeNull();
+    expect(readExpandedCleanupSummary(data, "S-1-5-21-1-2-3-1001", "psHistory")).toBeNull();
     expect(readExpandedCleanupSummary(data, "another-user", "psHistory")).toBeNull();
     expect(readExpandedCleanupSummary(data, "folder-name", "recentFiles")).toBeNull();
     expect(readExpandedCleanupSummary({ users: [...data.users, ...data.users] }, "folder-name", "psHistory")).toBeNull();

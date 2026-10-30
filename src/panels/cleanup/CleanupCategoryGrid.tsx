@@ -21,7 +21,7 @@ import {
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
 import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
-import { cleanupAccountScopeLabel } from "./cleanupProfileIdentity";
+import { cleanupAccountScopeLabel, cleanupProfileKey } from "./cleanupProfileIdentity";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -500,13 +500,13 @@ export default function CleanupCategoryGrid({
                         )}
                         {availableUsers.map((u) => (
                           <MenuItem
-                            key={u.path ?? u.name}
+                            key={cleanupProfileKey(u)}
                             icon={u.isCurrent ? "user" : "person"}
                             text={u.displayName ?? u.name}
                             label={u.isCurrent ? "You" : u.name}
-                            active={accountSelectValue === u.name}
+                            active={accountSelectValue === cleanupProfileKey(u)}
                             onClick={() => {
-                              handleSwitchUser(u.name);
+                              handleSwitchUser(cleanupProfileKey(u));
                               setAccountPickerOpen(false);
                             }}
                           />

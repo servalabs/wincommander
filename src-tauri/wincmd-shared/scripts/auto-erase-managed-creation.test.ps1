@@ -86,8 +86,13 @@ if (-not $noProfiles.error -or $noProfiles.status -ne 'failed' -or $noProfiles.t
 $script:profileMode = 'present'
 $oneProfile = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
 if ($oneProfile.error -or $oneProfile.total -ne 1 -or $script:writes -ne ($before + 1) -or $script:lastTarget -ne 'SYNTHETIC\RenamedAccount') { throw 'The discovered profile did not use its SID-resolved account.' }
+$before = $script:writes
+$sidTarget = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'S-1-5-21-2,SYNTHETIC\RenamedAccount'
+if ($sidTarget.error -or $sidTarget.total -ne 1 -or $script:writes -ne ($before + 1) -or $script:lastTarget -ne 'SYNTHETIC\RenamedAccount') { throw 'A profile SID did not resolve to its account or deduplicate against the account name.' }
 $script:profileMode = 'unresolved'
 $before = $script:writes
+$unknownSid = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,S-1-5-21-2'
+if (-not $unknownSid.error -or $unknownSid.total -ne 0 -or $script:writes -ne $before) { throw 'An unresolved profile SID caused a partial write.' }
 $unknownAccount = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
 if (-not $unknownAccount.error -or $unknownAccount.total -ne 0 -or $script:writes -ne $before) { throw 'An unresolved profile account was accepted.' }
 $script:profileMode = 'failed'

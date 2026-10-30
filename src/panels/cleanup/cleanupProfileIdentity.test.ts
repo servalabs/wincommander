@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { cleanupAccountScopeLabel, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
+import { cleanupAccountScopeLabel, cleanupProfileKey, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
 
 describe('cleanup account identity', () => {
   test('distinguishes an empty account list from failed or unavailable inventory', async () => {
@@ -31,6 +31,16 @@ describe('cleanup account identity', () => {
     expect(cleanupAccountScopeLabel('Other', false, false)).toBe('Other');
     expect(cleanupAccountScopeLabel('Alice', true, false)).toBe('Alice (you)');
     expect(cleanupAccountScopeLabel('', false, true)).toBe('All users');
+  });
+  test('selects accounts by SID even when profile folder names collide', () => {
+    const profiles = [
+      { name: 'Alice', sid: 'S-1-5-21-1-2-3-1001' },
+      { name: 'Alice', sid: 'S-1-5-21-1-2-3-1002' },
+    ];
+    expect(cleanupProfileKey(profiles[0])).toBe('S-1-5-21-1-2-3-1001');
+    expect(resolveCurrentCleanupProfile(profiles, 'Alice', profiles[1].sid)).toBe(profiles[1].sid);
+    expect(resolveCurrentCleanupProfile(profiles, 'Alice', 'S-1-5-21-1-2-3-9999')).toBe('');
+    expect(resolveCurrentCleanupProfile(profiles, 'Alice')).toBe('');
   });
   test('supports a matching older response that omits profile flags', () => {
     expect(resolveCurrentCleanupProfile([{ name: 'Folder' }], 'folder')).toBe('Folder');
