@@ -22,6 +22,7 @@ import {
 import { packCleanCards } from "./cleanupCardLayout";
 import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
 import { cleanupAccountScopeLabel, cleanupProfileKey } from "./cleanupProfileIdentity";
+import { isOtherAccountScheduleOnly } from "./cleanupOtherAccountScheduleOnly";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -196,9 +197,12 @@ export default function CleanupCategoryGrid({
     (cat) =>
       cat.scopeAware &&
       cat.usabilityTier === tier &&
-      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id)),
+      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
   );
   const userCardData = (cat: CleanupCategory) => {
+    if (!isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)) {
+      return { count: -1, items: [], loading: false, clearing: false, error: undefined, raw: undefined };
+    }
     const rawData = userViewMap[cat.id];
     return rawData
       ? { ...rawData, loading: rawData.loading || userCardsLoading }
@@ -211,6 +215,7 @@ export default function CleanupCategoryGrid({
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
+    const scheduleOnly = !isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers);
     const offerAllUsers = canSwitchUsers;
     const canScheduleSelection = isViewingCurrentUser || (!!selectedOwnerSid && !isViewingAllUsers && !cat.schedulerRunAsSystem);
     const selectedScheduleState = isViewingCurrentUser ? scheduleState : otherScheduleState;
@@ -236,7 +241,8 @@ export default function CleanupCategoryGrid({
         verification={(data as typeof data & { verification?: CleanupVerification }).verification}
         excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
-        onClear={() =>
+        scheduleOnly={scheduleOnly}
+        onClear={scheduleOnly ? undefined : () =>
           isViewingAllUsers
             ? handleCardClearAllUsers(cat)
             : isViewingCurrentUser
@@ -245,7 +251,7 @@ export default function CleanupCategoryGrid({
         }
         clearDisabled={isInvestigator}
         onClearAllUsers={
-          offerAllUsers && !isViewingAllUsers
+          !scheduleOnly && offerAllUsers && !isViewingAllUsers
             ? () => handleCardClearAllUsers(cat)
             : undefined
         }
@@ -253,7 +259,7 @@ export default function CleanupCategoryGrid({
           isViewingAllUsers ? "all users" : selectedDisplay || "this user"
         }
         onViewDetails={
-          isViewingAllUsers
+          scheduleOnly ? undefined : isViewingAllUsers
             ? () => onOpenCombinedDetail(cat.id)
             : isViewingCurrentUser
               ? detailOpenerMap[cat.id]
@@ -265,7 +271,7 @@ export default function CleanupCategoryGrid({
                     color: cat.color,
                   })
         }
-        onLoad={() =>
+        onLoad={scheduleOnly ? undefined : () =>
           isViewingAllUsers
             ? loadAllUsersView()
             : isViewingCurrentUser

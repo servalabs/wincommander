@@ -25,7 +25,7 @@ interface CleanupTraceCardProps {
   groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   verification?: CleanupVerification;
   excludedFromBulk?: boolean;
-  onClear: () => void;
+  onClear?: () => void;
   onViewDetails?: () => void;
   onLoad?: () => void;
   scheduleMinutes?: number | null;
@@ -44,11 +44,13 @@ interface CleanupTraceCardProps {
   clearDisabled?: boolean;
   /** Completed scans render as four compact rows inside one card footprint. */
   compact?: boolean;
+  /** The selected account supports schedules, but cannot be scanned here. */
+  scheduleOnly?: boolean;
 }
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "not-scanned" | "action-only";
+type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "not-scanned" | "action-only" | "schedule-only";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -108,6 +110,10 @@ const BAND: Record<BandState, BandDef> = {
     icon: "flame",
     label: "One-time action",
   },
+  "schedule-only": {
+    bg: "var(--color-bg-secondary)", borderColor: "var(--color-border)",
+    labelColor: "var(--color-text-muted)", icon: "info-sign", label: "Records unavailable",
+  },
 };
 
 export default function CleanupTraceCard({
@@ -136,6 +142,7 @@ export default function CleanupTraceCard({
   clearScopeLabel,
   clearDisabled,
   compact = false,
+  scheduleOnly = false,
 }: CleanupTraceCardProps) {
   const [showParticles, setShowParticles] = useState(false);
   const minInterval = category.minIntervalMinutes ?? 5;
@@ -148,7 +155,7 @@ export default function CleanupTraceCard({
   const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
   const hasData = count > 0;
-  const hasClear = !!category.clearDataKey;
+  const hasClear = !!category.clearDataKey && !!onClear && !scheduleOnly;
   const isNotLoaded = count === -1 && !isActionOnly && !loading;
   const hasScanOutput = !isActionOnly && (count >= 0 || !!error);
   const infoText = category.description;
@@ -157,7 +164,7 @@ export default function CleanupTraceCard({
     ? summarizeCleanupResult({ id: category.id, count, raw: rawData, error }).categories.map(row => `${row.label}: ${row.count} records`).slice(0, 3)
     : getSafeCleanupPreview(category.id, rawData).slice(0, 3).map(row => [row.label, ...row.facts].join(" · "));
   const scheduleReason = getCleanupScheduleUnavailableReason(category);
-  const bandState: BandState = isActionOnly
+  const bandState: BandState = scheduleOnly ? "schedule-only" : isActionOnly
     ? "action-only"
     : loading
       ? "scanning"
@@ -493,6 +500,7 @@ export default function CleanupTraceCard({
 
         {/* Preview / state content */}
         <div className="flex flex-col gap-0.5 flex-1 overflow-hidden">
+          {scheduleOnly && <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>Records cannot be scanned or cleared for this account here. You can manage its individual schedule.</span>}
           {loading && (
             <div className="flex flex-col gap-1.5 mt-0.5">
               <div
@@ -732,13 +740,13 @@ export default function CleanupTraceCard({
                 actionLabel={category.label}
                 onClear={(e) => {
                   e.stopPropagation();
-                  onClear();
+                  onClear?.();
                 }}
               />
             ))}
 
           {/* Run — action-only full width */}
-          {isActionOnly && (
+          {isActionOnly && onClear && (
             <RunOnceButton
               isRunning={clearing}
               disabled={clearDisabled}

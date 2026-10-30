@@ -109,7 +109,7 @@ test("each protected schedule confirmation identifies the selected account and h
   const target = "Other User (S-1-5-21-100-200-300-1001)";
   for (const id of DEFAULT_BULK_CLEAR_EXCLUDES) {
     const card = cards.find(item => item.id === id)!;
-    expect(card).toBeDefined();
+    expect(card).not.toBe(undefined);
     let calls = 0;
     const allowed = await requestCleanupManualAuthorization(card, "schedule", async options => {
       calls++;

@@ -160,6 +160,6 @@ test("other-account readback confirms removal only for the requested SID", () =>
   const afterFirstRemoval = readCleanupScheduleSnapshot([ready, secondTask], relevant, { ownerSid: firstSid })!;
   expect(afterFirstRemoval.records.dnsCache).toBeUndefined();
   expect(readCleanupScheduleSnapshot([ready, secondTask], relevant, { ownerSid: secondSid })!.records.dnsCache.ownerSid).toBe(secondSid);
-  expect(readCleanupScheduleSnapshot([ready, task, secondTask], relevant, { ownerSid: firstSid })!.records.dnsCache).toBeDefined();
+  expect(readCleanupScheduleSnapshot([ready, task, secondTask], relevant, { ownerSid: firstSid })!.records.dnsCache).not.toBe(undefined);
   expect(readCleanupScheduleSnapshot([{ ...secondTask, ownerSid: null }], relevant, { ownerSid: firstSid })).toBeNull();
 });
