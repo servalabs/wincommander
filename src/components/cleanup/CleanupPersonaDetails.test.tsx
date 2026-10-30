@@ -32,6 +32,16 @@ describe("System Cleanup persona details", () => {
     expect(wifiPasswordForProfile({ name: "Example" }, [], false)).toBe("Unavailable");
   });
 
+  test("shows additional Wi-Fi profiles without adding them to the clearable total", () => {
+    const wifi = ALL_CATEGORIES.find(category => category.id === "wlanProfiles")!;
+    const data = { total: 0, profiles: [], additionalProfiles: [{ name: "Policy network", interfaceId: "adapter-1", profileType: "Group policy", password: "example" }] };
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={wifi} mode="advanced" count={0} items={[]} rawData={data} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("Policy network");
+    expect(html).toContain("Group policy");
+    expect(html).toContain("example");
+    expect(html).toContain("scan total and Clear action cover only all-user profiles");
+  });
+
   test("shows descriptive scan coverage in advanced details", () => {
     const srum = ALL_CATEGORIES.find(category => category.id === "srumData")!;
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={srum} mode="advanced" count={0} items={[]} rawData={{ files: [], coverage: "Database metadata only; historical records are not decoded." }} clearing={false} clearLabel="Clear" onClose={() => {}} />);

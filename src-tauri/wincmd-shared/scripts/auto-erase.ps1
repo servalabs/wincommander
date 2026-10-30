@@ -2239,7 +2239,10 @@ __AUTO_ERASE_BODY__
 
     $storage = Initialize-AutoEraseStorage
     $revisionSuffix = if ($PayloadRevision -gt 0) { ".r$PayloadRevision" } else { '' }
-    $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey$revisionSuffix.ps1"
+    # Stage a new payload for every registration. Reusing a path would mutate
+    # an existing task before Scheduler has accepted its replacement.
+    $generation = [Guid]::NewGuid().ToString('N')
+    $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey$revisionSuffix.g$generation.ps1"
     # UTF8 (with BOM) so Windows PowerShell 5.1 reads it back correctly via -File.
     [System.IO.File]::WriteAllText($scriptPath, $fullScript, [System.Text.Encoding]::UTF8)
 
@@ -2797,7 +2800,7 @@ function Get-AutoEraseRecordedOutcome {
             if (-not $scopeKey.StartsWith('user-', [StringComparison]::Ordinal)) { return $null }
             $root = Join-Path $env:LOCALAPPDATA 'WinCommander\auto-erase'
         }
-        $expected = '^' + [regex]::Escape([string]$Identity.categoryId + '.' + $scopeKey) + '(?:\.r\d+)?\.ps1$'
+        $expected = '^' + [regex]::Escape([string]$Identity.categoryId + '.' + $scopeKey) + '(?:\.r\d+)?(?:\.g[0-9a-f]{32})?\.ps1$'
         if ([IO.Path]::GetFileName($scriptPath) -notmatch $expected) { return $null }
         $path = Join-Path $root ("$($Identity.categoryId).$scopeKey.result.json")
         $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop

@@ -9,10 +9,9 @@ $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language
 . $routerPath
 function ConvertTo-JsonOutput { param($Value) $Value }
 $script:secretRequests = 0
-function netsh {
-    if ($args -contains 'key=clear') { $script:secretRequests++; return '    Key Content : synthetic-only' }
-    return '    All User Profile : Synthetic Network'
-}
+function Get-WCWlanSnapshot { @{ InterfaceCount=1; Profiles=@(@{ Name='Synthetic Network'; InterfaceId='synthetic'; Flags=0 }) } }
+function Assert-WCWlanSnapshot { param($Snapshot) }
+function Get-WCWlanKey { param($InterfaceId, $Name) $script:secretRequests++; 'synthetic-only' }
 $savedCommand = $env:WINCMD_COMMAND; $savedParams = $env:WINCMD_PARAMS_JSON
 try {
     $env:WINCMD_COMMAND = 'Get-WlanProfiles'

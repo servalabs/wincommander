@@ -7,6 +7,12 @@ type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
 const isObject = (value: unknown): value is RecordObject => value !== null && typeof value === "object" && !Array.isArray(value);
 
+function wifiProfiles(input: unknown): unknown[] {
+  if (!isObject(input)) return [];
+  const clearable = Array.isArray(input.profiles) ? input.profiles : Array.isArray(input.records) ? input.records : [];
+  return [...clearable, ...(Array.isArray(input.additionalProfiles) ? input.additionalProfiles : [])];
+}
+
 // These are product-provided category labels, never values supplied by a scan.
 const amcacheLabels: Record<string, string> = {
   InventoryApplication: "Application", InventoryApplicationFile: "Application file",
@@ -159,8 +165,8 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []) }));
     });
   }
-  if (id === "wlanProfiles" && Array.isArray(input.profiles)) {
-    return input.profiles.map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
+  if (id === "wlanProfiles" && (Array.isArray(input.profiles) || Array.isArray(input.additionalProfiles))) {
+    return wifiProfiles(input).map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
   }
   if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
     return input.historyItems.map((item, index) => ({ label: `Clipboard item ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [] }));
@@ -323,7 +329,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       setLoadingSecrets(true);
       void backendRef.current.getWlanProfileSecrets().then(result => {
         if (!active) return;
-        if (result.success && result.data && Array.isArray(result.data.profiles)) setSecrets(result.data.profiles);
+        if (result.success && result.data && Array.isArray(result.data.profiles)) setSecrets([...result.data.profiles, ...(result.data.additionalProfiles ?? [])]);
         else setSecretError(result.error || "Passwords could not be retrieved.");
       }).catch(() => { if (active) setSecretError("Passwords could not be retrieved."); })
         .finally(() => { if (active) setLoadingSecrets(false); });
@@ -418,6 +424,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       <div><h3>Found details</h3><p>{all.length} {all.length === 1 ? "item" : "items"} available; the scan total is above.</p></div>
       <label><span className="sr-only">Filter found details</span><input type="search" value={query} placeholder="Filter details" aria-label={accountLabel ? `Filter ${accountLabel} details` : "Filter details"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
     </div>
+    {categoryId === "wlanProfiles" && isObject(shownData) && Array.isArray(shownData.additionalProfiles) && shownData.additionalProfiles.length > 0 ? <p>Additional per-user or policy-managed profiles are shown for reference. The scan total and Clear action cover only all-user profiles.</p> : null}
     {isObject(shownData) && shownData.truncated === true ? <p role="status">Only part of this scan is shown; {accountName && (!expandedRaw || nextPage) ? "load more account details to expand this preview." : "additional records were not returned."}</p> : null}
     {isObject(shownData) && shownData.truncated === true && accountName && (!expandedRaw || nextPage) ? <button type="button" disabled={loadingExpanded} onClick={loadFullDetails}>{loadingExpanded ? "Loading account details…" : "Load more account details"}</button> : null}
     {expandedNotice ? <p role="status">{expandedNotice}</p> : null}
@@ -429,7 +436,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         const cells = new Map<string, string[]>();
         if (categoryId === "amcache" || categoryId === "ntUserTraces") cells.set("Category", [row.label.replace(/ \d+$/, "")]);
         if (categoryId === "wlanProfiles") {
-          const profiles = isObject(shownData) ? (Array.isArray(shownData.profiles) ? shownData.profiles : Array.isArray(shownData.records) ? shownData.records : []) : [];
+          const profiles = wifiProfiles(shownData);
           const profile = profiles[row.number - 1];
           cells.set("Password", [wifiPasswordForProfile(profile, secrets, loadingSecrets, accountLabel)]);
         }

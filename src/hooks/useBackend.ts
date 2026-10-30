@@ -1540,7 +1540,7 @@ export function useBackend() {
     invokeDiskCleanup: () => execute("Invoke-DiskCleanup"),
     invokeMasterPrivacyClean: () => execute(invokeCommand("MasterPrivacyClean")),
     getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: false }),
-    getWlanProfileSecrets: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: true }),
+    getWlanProfileSecrets: () => execute<{ profiles: WlanProfile[]; additionalProfiles?: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: true }),
     removeWlanProfile: (name: string, allowDefaultExcluded = false) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name, AllowDefaultExcluded: allowDefaultExcluded }),
     getBluetoothDevices: () => execute<{ devices: BluetoothDevice[] }>("Get-BluetoothDevices"),
     clearBluetoothHistory: () => execute(clearCommand("BluetoothDevices")),

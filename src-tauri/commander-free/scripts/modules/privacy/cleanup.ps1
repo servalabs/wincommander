@@ -1854,8 +1854,9 @@ function Get-WlanProfiles {
     try {
         $snapshot = Get-WCWlanSnapshot
         Assert-WCWlanSnapshot $snapshot
-        $profiles = @($snapshot.Profiles | Where-Object { [int64]$_.Flags -eq 0 } | ForEach-Object {
-            $profile = @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId }
+        $allProfiles = @($snapshot.Profiles | ForEach-Object {
+            $flags = [int64]$_.Flags
+            $profile = @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId; flags = $flags; profileType = if ($flags -eq 0) { 'All users' } elseif ($flags -band 1) { 'Group policy' } elseif ($flags -band 2) { 'Current user' } else { 'Other' } }
             if ($IncludeSecrets) {
                 $profile.password = $null
                 $profile.passwordStatus = 'unavailable'
@@ -1866,8 +1867,10 @@ function Get-WlanProfiles {
             }
             $profile
         })
-        @{ profiles = $profiles; total = $profiles.Count; adapterCount = [int]$snapshot.InterfaceCount;
-           coverage = 'limited'; coverageNote = 'All-user saved profiles on available Wi-Fi adapters; private and policy profiles are excluded.' }
+        $profiles = @($allProfiles | Where-Object { $_.flags -eq 0 })
+        $additionalProfiles = @($allProfiles | Where-Object { $_.flags -ne 0 })
+        @{ profiles = $profiles; additionalProfiles = $additionalProfiles; total = $profiles.Count; adapterCount = [int]$snapshot.InterfaceCount;
+           coverage = 'limited'; coverageNote = 'The cleanup count includes all-user profiles on available Wi-Fi adapters. Current-user and policy profiles are displayed separately and are not removed by this cleanup.' }
     }
     catch {
         @{ error = $true; message = 'Wi-Fi profiles could not be inspected. Check the WLAN service and adapter.' }
@@ -3147,37 +3150,44 @@ function Get-WSLDataInfo {
     try {
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $registeredDistros = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $distrosWithDisk = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $seenVhdx = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path $packagesRoot -ErrorAction Stop) {
+            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                try {
                 $vhdx = Join-Path $_.FullName 'LocalState\ext4.vhdx'
-                if (Test-Path $vhdx -PathType Leaf -ErrorAction SilentlyContinue) {
-                    $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+                if (Test-Path $vhdx -PathType Leaf -ErrorAction Stop) {
+                    $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction Stop
                     if ($item -and $seenVhdx.Add($item.FullName)) {
                         $files += @{ name = "Store WSL: $($_.Name)\\LocalState\\ext4.vhdx"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                         $totalBytes += $item.Length
                     }
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         # Imported and Microsoft Store distributions use different locations.
         # The former is recorded in Lxss\<GUID>\BasePath, so only walking the
         # Store package folder made a real distribution look like a zero-size
         # registration in the cleanup card.
         $lxssRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
-        if (Test-Path $lxssRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $lxssRoot -ErrorAction SilentlyContinue | ForEach-Object {
-                $distro = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+        try {
+        if (Test-Path $lxssRoot -ErrorAction Stop) {
+            Get-ChildItem -Path $lxssRoot -ErrorAction Stop | ForEach-Object {
+                try {
+                $distro = Get-ItemProperty -Path $_.PSPath -ErrorAction Stop
                 $name = ([string]$distro.DistributionName).Trim()
                 $basePath = ([string]$distro.BasePath).Trim()
                 if ($basePath.StartsWith('\\?\')) { $basePath = $basePath.Substring(4) }
                 if (-not $basePath) { return }
                 $vhdx = Join-Path $basePath 'ext4.vhdx'
-                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction SilentlyContinue)) { return }
-                $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction Stop)) { return }
+                $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction Stop
                 if (-not $item) { return }
                 if ($name) {
                     $null = $registeredDistros.Add($name)
@@ -3188,15 +3198,20 @@ function Get-WSLDataInfo {
                     $files += @{ name = $label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                     $totalBytes += $item.Length
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
         if ($wsl) {
+            try {
             # `--list --quiet` reports imported distros as well as Store-backed
             # ones. They can live outside LocalAppData, so treating the VHDX
             # walk as the only source incorrectly reports a real WSL setup as
             # empty. This query is read-only and does not start a distro.
-            foreach ($distro in @(& $wsl.Source -l -q 2>$null)) {
+            $quietResult = @(& $wsl.Source -l -q 2>$null)
+            if ($LASTEXITCODE -ne 0) { $partial = $true }
+            foreach ($distro in $quietResult) {
                 # wsl.exe can emit UTF-16LE through the legacy PowerShell host;
                 # strip its NUL separators before comparing it to Lxss names.
                 $name = ([string]$distro).Replace([string][char]0, '').Trim()
@@ -3208,7 +3223,9 @@ function Get-WSLDataInfo {
             # in a non-interactive PowerShell host. Parse the verbose listing
             # as a read-only fallback so the card does not show a false zero.
             if ($registeredDistros.Count -eq 0) {
-                foreach ($line in @(& $wsl.Source -l -v 2>$null)) {
+                $verboseResult = @(& $wsl.Source -l -v 2>$null)
+                if ($LASTEXITCODE -ne 0) { $partial = $true }
+                foreach ($line in $verboseResult) {
                     $name = ([string]$line).Replace([string][char]0, '').Trim() -replace '^\*\s*', '' -replace '\s{2,}.*$', ''
                     if ($name -and $name -notmatch '^(NAME|There are no installed distributions)') {
                         if ($registeredDistros.Add($name) -and -not $distrosWithDisk.Contains($name)) {
@@ -3217,8 +3234,9 @@ function Get-WSLDataInfo {
                     }
                 }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+            } catch { $partial = $true }
+        } else { $partial = $true }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3438,7 +3456,7 @@ function Get-NetworkWizardHistoryInfo {
         catch [System.Management.Automation.ItemNotFoundException] { $exists = $false }
         if ($exists) {
             foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                $files += @{ name = "Network Connection Wizard value: $property"; sizeKB = 0; modified = '' }
+                $files += @{ name = "Network Connection Wizard value: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' }
             }
             Get-ChildItem -LiteralPath $networkWizard -Force -ErrorAction Stop | ForEach-Object {
                 $files += @{ name = "Network Connection Wizard subkey: $($_.PSChildName)"; sizeKB = 0; modified = '' }
