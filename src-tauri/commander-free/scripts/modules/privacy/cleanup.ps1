@@ -4038,15 +4038,20 @@ function Get-EditorHistoryInfo {
             @{ label = 'VS Code local history'; path = (Join-Path $env:APPDATA 'Code\\User\\History'); patterns = @('*') }
         )
         $jetBrainsRoot = Join-Path $env:APPDATA 'JetBrains'
-        if (Test-Path $jetBrainsRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $jetBrainsRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $discoveryIncomplete = $false
+        try {
+            try { $root = Get-Item -LiteralPath $jetBrainsRoot -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+            Get-ChildItem -LiteralPath $jetBrainsRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
                 $sources += @{ label = 'JetBrains recent projects'; path = (Join-Path $_.FullName 'options'); patterns = @('recentProjects.xml') }
                 $sources += @{ label = 'JetBrains local history'; path = (Join-Path $env:LOCALAPPDATA ("JetBrains\\{0}\\LocalHistory" -f $_.Name)); patterns = @('*') }
             }
-        }
-        $files = @(Get-CleanupArtifactFiles -Sources $sources)
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+            }
+        } catch { $discoveryIncomplete = $true }
+        $result = Get-CleanupArtifactInventory -Sources $sources -CoverageNote 'Checks selected VS Code and JetBrains history locations only.'
+        if ($discoveryIncomplete) { $result.partial = $true; $result.status = 'partial'; $result.message = 'Some editor history locations could not be checked.' }
+        $result
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4137,13 +4142,13 @@ function Get-PasswordManagerCachesInfo {
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Local Storage\\leveldb'); patterns = @('*') },
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Session Storage'); patterns = @('*') }
         )
-        $files = @(); $partial = $false
+        $files = [Collections.Generic.List[object]]::new(); $partial = $false
         foreach ($source in $sources) {
-            try { $files += @(Get-CleanupArtifactFiles -Sources @($source)) }
+            try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
             catch { $partial = $true }
         }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected 1Password, Bitwarden and LastPass cache locations only; other password managers and custom locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected password-manager cache locations could not be checked.' } else { $null } }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected 1Password, Bitwarden and LastPass cache locations only; other password managers and custom locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected password-manager cache locations could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4356,13 +4361,11 @@ function Get-GeolocationCacheInfo {
 
 function Get-VPNPhonebooksInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected user and system VPN phonebook and log locations only.' -Sources @(
             @{ label = 'User VPN'; path = (Join-Path $env:APPDATA 'Microsoft\\Network\\Connections\\Pbk'); patterns = @('rasphone.pbk','*.log','*.etl') },
             @{ label = 'User VPN'; path = (Join-Path $env:LOCALAPPDATA 'Microsoft\\Network\\Connections'); patterns = @('rasphone.pbk','*.log','*.etl') },
             @{ label = 'System VPN'; path = (Join-Path $env:ProgramData 'Microsoft\\Network\\Connections\\Pbk'); patterns = @('rasphone.pbk','*.log','*.etl') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
