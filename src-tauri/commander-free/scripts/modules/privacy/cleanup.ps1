@@ -1235,7 +1235,7 @@ function Get-FleetForensicProjection {
 
             'diagnostics_timeline' {
                 $result = Get-EventTranscriptInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read diagnostics-timeline summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read diagnostics-timeline summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Diagnostics timeline'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -4271,38 +4271,27 @@ function Get-BranchCacheInfo {
 function Get-EventTranscriptInfo {
     # Returns the Diagnostic Data Viewer's EventTranscript.db + its rotating
     # ESE transaction logs (*.jrs / *.rbs). System-wide (ProgramData), not per-user.
-    try {
-        $etDir = "$env:ProgramData\Microsoft\Diagnosis\EventTranscript"
-        $files = @()
-        if (Test-Path $etDir -ErrorAction SilentlyContinue) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $etDir 'EventTranscript.db') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $etDir '*.jrs') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $etDir '*.rbs') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'EventTranscript'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($src in @(
+        @{ label = 'EventTranscript'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\EventTranscript'); patterns = @('EventTranscript.db', '*.jrs', '*.rbs'); recursive = $false },
+        @{ label = 'ETLLogs'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\ETLLogs'); patterns = @('*.etl'); recursive = $true }
+    )) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.root -Force -ErrorAction Stop }
+            catch [Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer) { throw 'Diagnostics location is not a directory.' }
+            foreach ($pattern in $src.patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $src.root -Filter $pattern -Recurse:$src.recursive -File -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    }
+                } catch { $partial = $true }
             }
-        }
-        # Also cover the raw ETW trace logs (AutoLogger etc.) DiagTrack rotates
-        # under ETLLogs — same diagnostics pipeline as EventTranscript.db.
-        $etlDir = "$env:ProgramData\Microsoft\Diagnosis\ETLLogs"
-        if (Test-Path $etlDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $etlDir -Recurse -Filter '*.etl' -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'ETLLogs'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some diagnostics locations could not be checked.' } else { $null } }
 }
 
 function Get-ActivitiesTimelineInfo {

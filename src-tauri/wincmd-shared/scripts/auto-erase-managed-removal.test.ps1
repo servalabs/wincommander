@@ -34,6 +34,12 @@ $script:removed = @()
 $result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers 'S-1-5-18,S-1-5-21-1'
 if ($result.error -or @($script:removed).Count -ne 2 -or 'manual' -notin $script:removed) { throw 'Individual removal behavior changed.' }
 
+# A later failure must not hide the tasks that were already removed.
+$script:removed = @()
+function Unregister-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName,[switch]$Confirm) if ($TaskName -eq 'manual') { throw 'Synthetic failure' }; $script:removed += $TaskName }
+$result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers 'S-1-5-18,S-1-5-21-1'
+if (-not $result.error -or $result.status -ne 'partial' -or @($result.removed).Count -ne 1 -or $result.removed[0] -ne 'managed' -or @($result.removedOwnerSids).Count -ne 1 -or $result.message -notmatch '1 removed before the error') { throw 'Partial removals were not reported accurately.' }
+
 # Assert that the dedicated command cannot fall back to unqualified removal.
 function Remove-AutoEraseSchedule { [CmdletBinding()] param($CategoryId,[switch]$ManagedOnly) @{ categoryId=$CategoryId; managed=[bool]$ManagedOnly } }
 $result = Remove-ManagedAutoEraseSchedule -CategoryId dnsCache

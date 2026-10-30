@@ -47,6 +47,12 @@ function visibleText(value: unknown): string | null {
   return typeof value === "string" ? (value === "" ? "(empty)" : value) : null;
 }
 
+function visibleScalar(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return visibleText(value);
+}
+
 function activityEntry(section: unknown, entry: RecordObject): RecordObject {
   if (section !== "WordWheelQuery" || !Array.isArray(entry.value) ||
       !entry.value.every(value => Number.isInteger(value) && value >= 0 && value <= 255)) return entry;
@@ -172,12 +178,12 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       // A partial response can contain both grouped sections and individual
       // observations. Preserve the latter even when other groups have entries.
       if (!isObject(section) || !Array.isArray(section.entries)) {
-        const value = visibleText(section);
+        const value = visibleScalar(section);
         return [{ label: `Activity record ${sectionIndex + 1}`, facts: isObject(section) ? metadata(activityEntry(section.section, section), id) : value ? [`Value: ${value}`] : [] }];
       }
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
       const { name: sourceSection, count: _count, entries: _entries, ...sectionDetails } = section;
-      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []))] }));
+      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleScalar(entry) !== null ? [`Value: ${visibleScalar(entry)}`] : []))] }));
     });
   }
   if (id === "wlanProfiles" && (Array.isArray(input.profiles) || Array.isArray(input.additionalProfiles))) {
@@ -219,8 +225,8 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   const collections = ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems", "drives", "items", "paths"]
     .flatMap(key => Array.isArray(input[key]) && input[key].length ? [{ key, values: input[key] as unknown[] }] : []);
   if (collections.length) return collections.flatMap(({ key, values }) => values.map((value, index) => {
-    const text = visibleText(value);
-    const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text ? [`Value: ${text}`] : [];
+    const text = visibleScalar(value);
+    const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text !== null ? [`Value: ${text}`] : [];
     if (collections.length > 1) facts.unshift(`Dataset: ${key}`);
     return { label: `Record ${index + 1}`, facts };
   }));

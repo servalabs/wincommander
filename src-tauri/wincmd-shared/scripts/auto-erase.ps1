@@ -2777,6 +2777,8 @@ function Remove-MultiUserAutoEraseScheduleCore {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '', [switch]$ManagedOnly)
     Assert-AutoEraseAdmin
+    $removed = @()
+    $removedOwnerSids = @()
     try {
         $explicitTargets = $TargetUsers -and $TargetUsers.Trim() -ne ''
         $targets = @($TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -2786,8 +2788,6 @@ function Remove-MultiUserAutoEraseScheduleCore {
             if ([string]::IsNullOrWhiteSpace($sid)) { throw 'A selected Windows account could not be verified; no schedules were removed.' }
             $sid
         })
-        $removed = @()
-        $removedOwnerSids = @()
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or $identity.categoryId -ne $CategoryId) { continue }
@@ -2798,7 +2798,11 @@ function Remove-MultiUserAutoEraseScheduleCore {
             $removedOwnerSids += $identity.ownerSid
         }
         @{ status = 'disabled'; categoryId = $CategoryId; removed = $removed; removedOwnerSids = $removedOwnerSids }
-    } catch { @{ error = $true; message = "Failed to remove schedule: $($_.Exception.Message)" } }
+    } catch {
+        @{ error = $true; status = if ($removed.Count) { 'partial' } else { 'failed' }; categoryId = $CategoryId;
+           message = "Could not remove every selected schedule. $($removed.Count) removed before the error. Refresh schedule status. $($_.Exception.Message)";
+           removed = @($removed); removedOwnerSids = @($removedOwnerSids) }
+    }
 }
 
 function Remove-MultiUserAutoEraseSchedule {
@@ -2822,7 +2826,7 @@ function Remove-AutoEraseScheduleCore {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
         $owners = @($currentSid, 'S-1-5-18')
         $result = Remove-MultiUserAutoEraseScheduleCore -CategoryId $CategoryId -TargetUsers ($owners -join ',') -ManagedOnly:$ManagedOnly
-        if ($result.error) { throw $result.message }
+        if ($result.error) { return $result }
         # A disabled schedule must not leave a catch-up marker behind. Limit
         # cleanup to this caller's base task plus the system scope; explicitly
         # selected other-user schedules have their own remove command/state.

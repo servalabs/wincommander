@@ -15,6 +15,12 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("retains numeric and boolean observations in record arrays", () => {
+    const rows = getSafeCleanupPreview("execCache", { records: [0, false, 42, true] });
+    expect(rows.map(row => row.facts)).toEqual([["Value: 0"], ["Value: No"], ["Value: 42"], ["Value: Yes"]]);
+    const grouped = getSafeCleanupPreview("ntUserTraces", { sections: [{ name: "Other", entries: [0, false] }] });
+    expect(grouped.map(row => row.facts)).toEqual([["Section source: Other", "Value: 0"], ["Section source: Other", "Value: No"]]);
+  });
   test("keeps colons in plain returned records as values, not column headings", () => {
     const category = ALL_CATEGORIES.find(item => item.id === "execCache")!;
     const data = { records: ["Application: sample.exe", "Path: C:\\Example"], total: 2 };
