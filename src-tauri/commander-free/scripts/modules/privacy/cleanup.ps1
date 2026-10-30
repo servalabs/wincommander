@@ -3268,59 +3268,73 @@ function Get-DockerDesktopDataInfo {
 }
 
 function Get-VirtualMachineArtifactsInfo {
-    # This intentionally inventories only snapshot, log, and recent-item artefacts; it never starts or stops a VM.
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
-        if (Test-Path $vmwareRoot -ErrorAction SilentlyContinue) {
-            foreach ($pattern in @('*-0000*.vmdk','*.vmsn','vmware*.log')) {
-                Get-ChildItem -Path $vmwareRoot -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ name = "VMware: $($_.FullName.Substring($vmwareRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $_.Length
-                }
-            }
-        }
-        $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
-        if (Test-Path $virtualBoxRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $virtualBoxRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Snapshots' } | ForEach-Object {
-                foreach ($pattern in @('*.vdi','*.vbox-prev')) {
-                    Get-ChildItem -Path $_.FullName -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "VirtualBox snapshot: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    # Inventory each source independently so an inaccessible directory does not
+    # erase records already found or turn a partial scan into a false zero.
+    $files = [System.Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
+    $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
+    foreach ($source in @(
+        @{ root=$vmwareRoot; patterns=@('*-0000*.vmdk','*.vmsn','vmware*.log'); label='VMware' },
+        @{ root=$virtualBoxRoot; patterns=@('VBox.log','VBoxSVC.log'); label='VirtualBox log' }
+    )) {
+        try {
+            try { $root = Get-Item -LiteralPath $source.root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The VM inventory root is unavailable.' }
+            foreach ($pattern in $source.patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $source.root -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ name = "$($source.label): $($_.FullName.Substring($source.root.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                         $totalBytes += $_.Length
                     }
-                }
+                } catch { $partial = $true }
             }
-            foreach ($pattern in @('VBox.log','VBoxSVC.log')) {
-                Get-ChildItem -Path $virtualBoxRoot -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ name = "VirtualBox log: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $_.Length
-                }
-            }
-        }
-        foreach ($hostLog in @(
-            (Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'),
-            (Join-Path $env:ProgramData 'VMware\vmnetnat.log'),
-            (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml')
-        )) {
-            if (Test-Path $hostLog -PathType Leaf -ErrorAction SilentlyContinue) {
-                $item = Get-Item -LiteralPath $hostLog -Force -ErrorAction SilentlyContinue
-                if ($item) {
-                    $files += @{ name = "VM configuration/log: $($item.FullName)"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $item.Length
-                }
-            }
-        }
-        $vmwareMru = 'HKCU:\Software\VMware, Inc.\VMware Workstation'
-        if (Test-Path $vmwareMru -ErrorAction SilentlyContinue) {
-            $mruProperties = (Get-Item -Path $vmwareMru -ErrorAction SilentlyContinue).Property | Where-Object { $_ -match '(?i)mru|recent' }
-            foreach ($property in @($mruProperties)) {
-                $files += @{ name = "VMware MRU: $property"; sizeKB = 0; modified = '' }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    try {
+        try { $root = Get-Item -LiteralPath $virtualBoxRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The VirtualBox inventory root is unavailable.' }
+            Get-ChildItem -LiteralPath $virtualBoxRoot -Directory -Recurse -Force -ErrorAction Stop | Where-Object { $_.Name -eq 'Snapshots' } | ForEach-Object {
+                if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; return }
+                $snapshotPath = $_.FullName
+                foreach ($pattern in @('*.vdi','*.vbox-prev')) {
+                    try {
+                        Get-ChildItem -LiteralPath $snapshotPath -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ name = "VirtualBox snapshot: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                            $totalBytes += $_.Length
+                        }
+                    } catch { $partial = $true }
+                }
+            }
+        }
+    } catch { $partial = $true }
+    foreach ($hostLog in @(
+        (Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'),
+        (Join-Path $env:ProgramData 'VMware\vmnetnat.log'),
+        (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml')
+    )) {
+        try {
+            try { $item = Get-Item -LiteralPath $hostLog -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'A VM configuration or log is unavailable.' }
+            $files.Add(@{ name = "VM configuration/log: $($item.FullName)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+            $totalBytes += $item.Length
+        } catch { $partial = $true }
+    }
+    try {
+        try { $mru = Get-Item -LiteralPath 'HKCU:\Software\VMware, Inc.\VMware Workstation' -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $mru = $null }
+        if ($mru) {
+            foreach ($property in @($mru.Property | Where-Object { $_ -match '(?i)mru|recent' })) {
+                $files.Add(@{ name = "VMware MRU: $property"; sizeKB = 0; modified = '' })
+            }
+        }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some virtual-machine locations could not be checked.' } else { $null } }
 }
 
 function Assert-CleanupDeveloperCacheAncestors {
@@ -6155,7 +6169,7 @@ function Get-CleanupSummaryAllUsers {
                         default { $delegated = $false }
                     }
                 }
-                if ($delegated -and ($null -eq $r -or $r.error -eq $true -or $r.partial -eq $true -or $r.complete -eq $false)) {
+                if ($delegated -and ($null -eq $r -or $r.error -eq $true)) {
                     throw $(if ($r.message) { [string]$r.message } else { 'The category scan failed or was incomplete.' })
                 }
                 if (-not $delegated) {
@@ -6236,18 +6250,24 @@ function Get-CleanupSummaryAllUsers {
                     'crashDumps' {
                         # Match Get-CrashDumpList: CrashDumps + Minidump + WER ReportArchive + ReportQueue
                         $dirs = @(
-                            Join-Path $localApp 'CrashDumps',
-                            "$env:SystemRoot\Minidump",
-                            Join-Path $localApp 'Microsoft\Windows\WER\ReportArchive',
-                            Join-Path $localApp 'Microsoft\Windows\WER\ReportQueue'
+                            @{ label='CrashDumps'; path=(Join-Path $localApp 'CrashDumps') },
+                            @{ label='Minidump'; path="$env:SystemRoot\Minidump" },
+                            @{ label='WER ReportArchive'; path=(Join-Path $localApp 'Microsoft\Windows\WER\ReportArchive') },
+                            @{ label='WER ReportQueue'; path=(Join-Path $localApp 'Microsoft\Windows\WER\ReportQueue') }
                         )
-                        foreach ($d in $dirs) {
-                            if (Test-CleanupSummaryPath $d) {
-                                $f = Get-ChildItem $d -Recurse -File -Force -EA Stop
+                        $dumpRows = [Collections.Generic.List[object]]::new()
+                        foreach ($source in $dirs) {
+                            if (Test-CleanupSummaryPath $source.path) {
+                                $f = @(Get-ChildItem -LiteralPath $source.path -Recurse -File -Force -EA Stop)
                                 $count += $f.Count
-                                $items += $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                                foreach ($file in $f) {
+                                    if ($dumpRows.Count -ge $previewMax) { break }
+                                    $dumpRows.Add(@{ source=$source.label; name=$file.Name; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                }
                             }
                         }
+                        $records = @($dumpRows.ToArray())
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'walFiles' {
                         # Match per-category function: *.wal, *.db-wal, *.sqlite-wal, *.shm, *.db-shm
@@ -6289,7 +6309,8 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter 'WebCacheV*.dat' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter 'V01*.log' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'thumbnailDb' {
@@ -6299,27 +6320,32 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter 'thumbcache_*.db' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter 'iconcache_*.db' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'notificationDb' {
                         # Match Get-NotificationDatabaseInfo: wpndatabase.db + -wal + -shm
                         $p = Join-Path $localApp 'Microsoft\Windows\Notifications'
+                        $f = @()
                         foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
-                            $f = Join-Path $p $name
-                            if (Test-CleanupSummaryPath $f) {
-                                $count++
-                                $items += $name
-                            }
+                            $filePath = Join-Path $p $name
+                            if (Test-CleanupSummaryPath $filePath -PathType Leaf) { $f += Get-Item -LiteralPath $filePath -Force -EA Stop }
                         }
+                        $wpnidm = Join-Path $p 'wpnidm'
+                        if (Test-CleanupSummaryPath $wpnidm) { $f += @(Get-ChildItem -LiteralPath $wpnidm -Recurse -File -Force -EA Stop) }
+                        $count = @($f).Count
+                        $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'activitiesTimeline' {
                         # Match Get-ActivitiesTimelineInfo: ActivitiesCache.db + -wal/-shm sidecars
                         $p = Join-Path $localApp 'ConnectedDevicesPlatform'
                         if (Test-CleanupSummaryPath $p) {
-                            $f = Get-ChildItem -Path $p -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -Force -EA Stop
+                            $f = Get-ChildItem -Path $p -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -File -Force -EA Stop
                             $count = @($f).Count
-                            $items = @($f) | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @(@($f) | Select-Object -First $previewMax | ForEach-Object { @{ source='ConnectedDevicesPlatform'; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'rdpBitmapCache' {
@@ -6329,7 +6355,8 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter '*.bin' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter '*.bmc' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'embeddedWebCache' {
@@ -6548,6 +6575,19 @@ function Get-CleanupSummaryAllUsers {
                 catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
+            if ($delegated -and $r -and -not $scanError) {
+                if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
+                if ($r.partial -eq $true -or $r.complete -eq $false -or $r.status -eq 'partial' -or $r.coverage -eq 'partial' -or $r.accessDenied -eq $true) {
+                    $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
+                }
+                $facts = @{}
+                foreach ($key in $r.Keys) {
+                    if ($key -in @('error','message','status','partial','complete','coverage','accessDenied','total','count','sampleCount','previewLimit','truncated','scannedAt','scanTime')) { continue }
+                    $value = $r[$key]
+                    if ($value -is [string] -or $value -is [bool] -or $value -is [ValueType]) { $facts[$key] = $value }
+                }
+                if ($facts.Count) { $categoryRecord.scanFacts = $facts }
+            }
             if ($detailPage) {
                 $categoryRecord.records = $detailPage.records; $categoryRecord.items = @(); $categoryRecord.sampleCount = @($detailPage.records).Count
                 $categoryRecord.sourceTruncated = $categoryRecord.truncated
@@ -6566,7 +6606,7 @@ function Get-CleanupSummaryAllUsers {
 
         $knownTotal = [long]0
         foreach ($category in $categories) { if (-not $category.error) { $knownTotal += $category.count } }
-        $isComplete = @($categories | Where-Object { $_.error }).Count -eq 0
+        $isComplete = @($categories | Where-Object { $_.error -or $_.partial }).Count -eq 0
         $totalCount = if ($isComplete) { $knownTotal } else { -1 }
         $entry = @{
             username      = $username

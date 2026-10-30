@@ -17,6 +17,12 @@ describe('cleanup scan details', () => {
     ]);
   });
 
+  test('shows delegated scan facts and lets top-level values take precedence', () => {
+    expect(getCleanupScanFacts({ scanFacts: { path: 'C:\\example', checked: 1, status: 'old' }, status: 'complete' })).toEqual([
+      { label: 'Path', value: 'C:\\example' }, { label: 'Checked', value: '1' }, { label: 'Status', value: 'complete' },
+    ]);
+  });
+
   test('retains descriptive coverage while leaving status codes to the coverage indicator', () => {
     expect(getCleanupScanFacts({ coverage: 'Database file metadata only. Historical usage records are not decoded.' })).toEqual([
       { label: 'Coverage', value: 'Database file metadata only. Historical usage records are not decoded.' },

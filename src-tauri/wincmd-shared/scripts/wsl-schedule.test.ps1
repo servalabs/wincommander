@@ -26,6 +26,7 @@ $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
 $script:inventory = @([pscustomobject]@{ Name='ExampleLinux'; Disk='' }, [pscustomobject]@{ Name='ExampleImport'; Disk='' })
 function Get-WCScheduledWslInventory { return @($script:inventory) }
+function Get-WCScheduledWslProviderNames { return @($script:inventory | ForEach-Object { $_.Name }) }
 function Test-WCScheduledWslOrphans { return $false }
 function Remove-WCScheduledWslDistro($Name) { $script:inventory = @($script:inventory | Where-Object { $_.Name -ne $Name }) }
 Invoke-Expression $script:AutoEraseScripts['wslData']
@@ -71,5 +72,12 @@ $script:inventory = @()
 function Test-WCScheduledWslOrphans { return $true }
 Invoke-Expression $script:AutoEraseScripts['wslData']
 Assert-True ($script:AutoEraseFailed -gt 0) 'Unmanaged distribution disks must not count as a complete wipe.'
+
+$script:AutoEraseFailed = 0
+$script:inventory = @([pscustomobject]@{ Name='ExampleLinux'; Disk='' })
+$script:deleted = @()
+function Get-WCScheduledWslProviderNames { return @('ExampleLinux', 'UnregisteredElsewhere') }
+Invoke-Expression $script:AutoEraseScripts['wslData']
+Assert-True ($script:AutoEraseFailed -gt 0 -and $script:deleted.Count -eq 0) 'A mismatched provider inventory must fail before unregistering anything.'
 
 Write-Output 'WSL scheduled cleanup fixtures passed.'

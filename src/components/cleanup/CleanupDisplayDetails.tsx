@@ -131,7 +131,8 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
               const facts = getCleanupScanFacts(group.rawData, failed);
               return <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
               {facts.length ? <dl className="cleanup-readable-detail__facts">{facts.map((fact, factIndex) => <div key={`${fact.label}-${factIndex}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}
-              {group.count >= 0 && (getSafeCleanupPreview(category.id, group.rawData).length > 0 || group.items.length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={getSafeCleanupPreview(category.id, group.rawData).length ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : group.count < 0 ? <p>This account could not be checked.</p> : null}
+              {group.count < 0 ? <p>This account could not be checked completely.</p> : null}
+              {getSafeCleanupPreview(category.id, group.rawData).length > 0 || group.items.length > 0 ? <CleanupRecordPreview categoryId={category.id} rawData={getSafeCleanupPreview(category.id, group.rawData).length ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : null}
             </div>})}
           </section> : null}
         </div>

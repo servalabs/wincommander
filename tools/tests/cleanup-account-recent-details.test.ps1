@@ -15,9 +15,9 @@ function Get-CimInstance { param($ClassName, $ErrorAction) [pscustomobject]@{ Sp
 function Test-WCVisibleUserProfile { param($Name, $DisplayName, $Path) return $true }
 function Test-IsAdmin { return $true }
 function Get-LoggedInUsers { return @{ users=@($fixtureUser) } }
-function Get-Item { param([string]$LiteralPath, [switch]$Force, $ErrorAction) [pscustomobject]@{ FullName=$LiteralPath; PSIsContainer=$true } }
+function Get-Item { param([string]$LiteralPath, [switch]$Force, $ErrorAction) if ($LiteralPath -like '*wpndatabase.db*') { return [pscustomobject]@{ Name=[IO.Path]::GetFileName($LiteralPath); FullName=$LiteralPath; PSIsContainer=$false; Length=2048; LastWriteTime=[datetime]'2026-01-02' } }; [pscustomobject]@{ FullName=$LiteralPath; PSIsContainer=$true } }
 function Get-ChildItem {
-    param([Alias('Path')]$LiteralPath, [string[]]$Include, [switch]$File, [switch]$Recurse, [int]$Depth, [switch]$Force, [Alias('EA')]$ErrorAction)
+    param([Alias('Path')]$LiteralPath, [string[]]$Include, [switch]$File, [switch]$Recurse, [int]$Depth, [string]$Filter, [switch]$Force, [Alias('EA')]$ErrorAction)
     if (-not $File) { throw 'Expected file inventory.' }
     if ($Include) {
         if (-not $Recurse) { throw 'Expected recursive database inventory.' }
@@ -48,4 +48,12 @@ if ($row.name -ne 'fixture.db-wal' -or $row.path -notlike '*\nested\fixture.db-w
 $recall = Get-CleanupSummaryAllUsers -CategoryIds 'recallDb' -TargetUsers $fixtureUser
 $rows = @(@($recall.users)[0].categories[0].records)
 if ($rows.Count -ne 4 -or @($rows | Where-Object { $_.path -notlike '*\nested\fixture.db' -or $_.sizeKB -ne 2 -or -not $_.modified }).Count -or @($rows | Where-Object { $_.source -eq 'ActionCenter' -and $_.path -like '*\Microsoft\Windows\ActionCenter\*' }).Count -ne 1 -or @($rows | Where-Object { $_.source -eq 'Recall' -and $_.path -like '*\Microsoft\Windows\Recall\*' }).Count -ne 1) { throw 'Other-account Recall inventory or details differ from the current-user scanner.' }
-Write-Output 'Passed: other-account recent files, jump lists, WAL and Recall retain their returned details.'
+$crashes = Get-CleanupSummaryAllUsers -CategoryIds 'crashDumps' -TargetUsers $fixtureUser
+$rows = @(@($crashes.users)[0].categories[0].records)
+if ($rows.Count -ne 4 -or @($rows | Where-Object { -not $_.source -or $_.path -notlike '*\example.lnk' -or $_.sizeKB -ne 2 -or -not $_.modified }).Count) { throw 'Other-account crash dump records lost their source, path, size or date.' }
+foreach ($category in @('webCache','thumbnailDb','notificationDb','activitiesTimeline','rdpBitmapCache')) {
+    $summary = Get-CleanupSummaryAllUsers -CategoryIds $category -TargetUsers $fixtureUser
+    $rows = @(@($summary.users)[0].categories[0].records)
+    if (-not $rows.Count -or @($rows | Where-Object { -not $_.name -or -not $_.path -or $_.sizeKB -ne 2 -or -not $_.modified }).Count) { throw "Other-account $category records lost file details." }
+}
+Write-Output 'Passed: other-account cleanup records retain their returned file details.'

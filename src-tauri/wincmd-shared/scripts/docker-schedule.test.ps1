@@ -19,6 +19,8 @@ $script:images = @('sha256:' + ('b' * 64))
 $script:volumes = @('fixture-volume')
 $script:volumeKinds = @{}
 $script:remainders = 1
+$script:dockerLogPaths = @()
+function Erase-OneFile($Path) { $script:dockerLogPaths += $Path }
 function Invoke-WCDocker {
     param([string]$ConfigPath, [string[]]$Arguments, [bool]$Mutation)
     if ($Arguments[0] -eq 'info') {
@@ -57,6 +59,7 @@ function Get-WCDockerArtifactRemainders { return $script:remainders }
 
 $result = Invoke-WCDockerDesktopCleanup
 Assert-WCDockerTest ($result.removed -eq 3 -and $result.failed -gt 0) 'Docker resources may be removed, but a retained VHDX or log must make the result incomplete.'
+Assert-WCDockerTest ($script:dockerLogPaths.Count -eq 1 -and $script:dockerLogPaths[0] -eq (Join-Path $env:APPDATA 'Docker\log.txt')) 'Scheduled cleanup must attempt the same Docker log as manual cleanup.'
 Assert-WCDockerTest ($script:mutations.Count -eq 3 -and $script:mutations[0] -eq ('container rm --force ' + ('a' * 64)) -and $script:mutations[2] -eq 'volume rm fixture-volume') 'Only verified container and local volume identities may be removed.'
 Assert-WCDockerTest (@($script:mutations | Where-Object { $_ -match '--volumes|volume prune' }).Count -eq 0) 'Container removal and pruning must never implicitly remove volumes.'
 

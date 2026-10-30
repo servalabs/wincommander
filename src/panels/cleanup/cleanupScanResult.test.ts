@@ -34,14 +34,21 @@ describe("cleanup scan results", () => {
     });
   });
 
-  test("user summary retains only the fixed limited-coverage enum", () => {
+  test("retains partial account observations without accepting an incomplete count", () => {
+    const result = readCleanupUserSummary({ count: 2, partial: true, records: [{ name: 'Example' }], scanFacts: { path: 'C:\\example', checked: 1 } });
+    expect(result.count).toBe(-1);
+    expect(result.raw).toEqual({ records: [{ name: 'Example' }], scanFacts: { path: 'C:\\example', checked: 1 }, partial: true });
+    expect(result.error).toBeTruthy();
+  });
+
+  test("user summary retains reported coverage without treating an incomplete scan as empty", () => {
     expect(readCleanupUserSummary({ count: 0, status: 'scoped', coverage: 'limited', records: [], sampleCount: 0 })).toEqual({
       count: 0, items: [], raw: { records: [], coverage: 'limited', sampleCount: 0 },
     });
     const missingScoped = readCleanupUserSummary({ count: 0, status: 'scoped', coverage: 'limited' });
     expect(missingScoped.count).toBe(-1);
     expect(missingScoped.raw).toBeUndefined();
-    expect(readCleanupUserSummary({ count: 0, coverage: 'private arbitrary text', records: [] }).raw).toEqual({ records: [] });
+    expect(readCleanupUserSummary({ count: 0, coverage: 'Only command lines were checked.', records: [] }).raw).toEqual({ records: [], coverage: 'Only command lines were checked.' });
     const partial = readCleanupUserSummary({ count: 0, coverage: 'limited', records: [], partial: true, message: 'Incomplete.' });
     expect(partial.count).toBe(-1);
     expect(partial.raw).toBeUndefined();

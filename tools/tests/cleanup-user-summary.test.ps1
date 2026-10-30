@@ -5,6 +5,8 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $
 if ($errors.Count) { throw 'Cleanup source did not parse.' }
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CleanupSummaryAllUsers' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
+$definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'New-CleanupSummaryCategoryRecord' }, $true)
+. ([scriptblock]::Create($definition.Extent.Text))
 $script:mode='other'; $script:delegated='success'
 function Test-IsAdmin { $true }
 function Test-WCVisibleUserProfile { param($Name,$DisplayName,$Path) $true }
@@ -23,14 +25,14 @@ function Get-Item {
     [pscustomobject]@{ Name='Mock'; PSIsContainer=$true }
 }
 function Get-ChildItem {
-    [CmdletBinding()] param([Parameter(Position=0)][string]$Path,[switch]$File,[switch]$Force)
+    [CmdletBinding()] param([Parameter(Position=0)][Alias('LiteralPath')][string]$Path,[switch]$File,[switch]$Force)
     if ($script:mode -eq 'deniedEnumeration') { throw [UnauthorizedAccessException]::new('Denied enumeration') }
-    [pscustomobject]@{ Name='Mock1.lnk'; BaseName='Mock1' }
-    [pscustomobject]@{ Name='Mock2.lnk'; BaseName='Mock2' }
+    [pscustomobject]@{ Name='Mock1.lnk'; BaseName='Mock1'; Extension='.lnk'; FullName='C:\Mock1.lnk'; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
+    [pscustomobject]@{ Name='Mock2.lnk'; BaseName='Mock2'; Extension='.lnk'; FullName='C:\Mock2.lnk'; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
 }
 function Get-RecentFiles {
     if ($script:delegated -eq 'error') { return @{ error=$true; message='Mock reader failed' } }
-    if ($script:delegated -eq 'partial') { return @{ partial=$true; total=7; message='Mock reader incomplete'; entries=@(@{ name='Mock' }) } }
+    if ($script:delegated -eq 'partial') { return @{ partial=$true; total=7; coverage='Selected locations only'; sourcePath='C:\Fixture'; message='Mock reader incomplete'; entries=@(@{ name='Mock' }) } }
     @{ total=2; entries=@(@{ name='Mock1' },@{ name='Mock2' }) }
 }
 $mixed=Get-CleanupSummaryAllUsers -CategoryIds 'shellBags,recentFiles' -TargetUsers 'CleanupMock'
@@ -48,11 +50,13 @@ $script:mode='missingFiles'
 $empty=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles' -TargetUsers 'CleanupMock'
 if ($empty.users[0].categories[0].count -ne 0 -or $empty.users[0].categories[0].error -or $empty.users[0].total -ne 0) { throw 'Absent trace folder was not an explicit zero.' }
 $script:mode='current'
-foreach ($state in @('error','partial')) {
-    $script:delegated=$state
-    $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
-    if ($result.users[0].categories[0].count -ne -1 -or -not $result.users[0].categories[0].error) { throw "Delegated $state was reported as zero or complete." }
-}
+$script:delegated='error'
+$result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
+if ($result.users[0].categories[0].count -ne -1 -or -not $result.users[0].categories[0].error) { throw 'Delegated error was reported as zero or complete.' }
+$script:delegated='partial'
+$result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
+$category=$result.users[0].categories[0]
+if (-not $category.partial -or $category.status -ne 'partial' -or @($category.records).Count -ne 1 -or $result.users[0].complete -or $result.users[0].total -ne -1 -or $category.coverage -ne 'Selected locations only' -or $category.scanFacts.sourcePath -ne 'C:\Fixture') { throw 'Delegated partial scan lost records or was reported complete.' }
 $script:delegated='success'
 $success=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 if ($success.users[0].total -ne 2 -or -not $success.users[0].complete) { throw 'A successful current-user result changed.' }

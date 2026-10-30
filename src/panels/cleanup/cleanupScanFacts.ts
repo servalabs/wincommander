@@ -15,7 +15,9 @@ const labels: Record<string, string> = {
 
 export function getCleanupScanFacts(data: unknown, failed = false): CleanupScanFact[] {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
-  return Object.entries(data as Record<string, unknown>).flatMap(([key, value]) => {
+  const root = data as Record<string, unknown>;
+  const scanFacts = root.scanFacts && typeof root.scanFacts === 'object' && !Array.isArray(root.scanFacts) ? root.scanFacts as Record<string, unknown> : {};
+  return Object.entries({ ...scanFacts, ...root }).flatMap(([key, value]) => {
     if (structuralFields.has(key) || (failed && /^(error|message|errorMessage)$/i.test(key)) || value === null || value === undefined) return [];
     // Status codes are presented by the coverage indicator; descriptive
     // coverage text contains additional source information and must be kept.

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
+import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
 import { assembleCleanupRecordChunks, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
@@ -14,6 +15,15 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("shows observed account details and source facts even when the scan is incomplete", () => {
+    const result = readCleanupUserSummary({ count: 3, partial: true, records: [{ name: 'Observed file' }], scanFacts: { path: 'C:\\example' } });
+    const category = ALL_CATEGORIES.find(item => item.id === 'crashDumps')!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={-1} items={[]} groupedItems={[{ title: 'Account A', count: result.count, items: result.items, rawData: result.raw }]} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain('Observed file');
+    expect(html).toContain('C:\\example');
+    expect(html).toContain('could not be checked completely');
+    expect(html).toContain('Unavailable');
+  });
   test("keeps a captured Wi-Fi password when a later lookup cannot verify it", () => {
     const profile = { name: "Example", interfaceId: "adapter-1", password: "captured" };
     expect(wifiPasswordForProfile(profile, [{ name: "Example", interfaceId: "adapter-1", passwordStatus: "unavailable" }], false)).toBe("captured");

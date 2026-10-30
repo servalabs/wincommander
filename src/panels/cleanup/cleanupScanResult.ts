@@ -6,7 +6,7 @@ type ScanResponse = { success?: boolean; data?: unknown; error?: string };
 export function readCleanupUserSummary(data: {
   id?: unknown; count?: unknown; items?: unknown; records?: unknown; error?: boolean;
   partial?: boolean; complete?: boolean; status?: string; message?: string;
-  sampleCount?: unknown; previewLimit?: unknown; truncated?: unknown; coverage?: unknown;
+  sampleCount?: unknown; previewLimit?: unknown; truncated?: unknown; coverage?: unknown; scanFacts?: unknown;
 }): Pick<CardData, 'count' | 'items' | 'raw' | 'error'> {
   const records = Array.isArray(data.records) ? data.records : [];
   const grouped = data.id === 'ntUserTraces' && records.some(row => row && typeof row === 'object' && !Array.isArray(row) && Object.hasOwn(row, 'count'));
@@ -22,13 +22,25 @@ export function readCleanupUserSummary(data: {
     (typeof data.count === 'number' && data.count > 0 && records.length === 0 && !previewOmitted) ||
     (data.sampleCount !== undefined && (!Number.isSafeInteger(data.sampleCount) || (data.sampleCount as number) < 0 || (Array.isArray(data.records) && data.sampleCount !== data.records.length))) ||
     (data.previewLimit !== undefined && (!Number.isSafeInteger(data.previewLimit) || (data.previewLimit as number) < 0 || (Array.isArray(data.records) && data.records.length > (data.previewLimit as number))));
-  if (incomplete) return { count: -1, items: [], error: data.message || 'This user scan was incomplete.' };
+  const scanFacts = data.scanFacts && typeof data.scanFacts === 'object' && !Array.isArray(data.scanFacts)
+    ? Object.fromEntries(Object.entries(data.scanFacts).filter(([, value]) => typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))) : {};
+  if (incomplete) {
+    // Keep safely decoded observations from a partial scan while leaving its
+    // count unavailable, so these rows cannot authorize a cleanup.
+    const observed = records.filter(row => row && typeof row === 'object' && !Array.isArray(row));
+    const raw = observed.length || Object.keys(scanFacts).length ? {
+      records: observed, scanFacts, partial: true,
+      ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
+    } : undefined;
+    return { count: -1, items: [], error: data.message || 'This user scan was incomplete.', ...(raw ? { raw } : {}) };
+  }
   return {
     count: data.count as number,
     items: Array.isArray(data.items) ? data.items.filter((item): item is string => typeof item === 'string') : [],
     raw: {
       records: data.records,
-      ...(data.coverage === 'limited' ? { coverage: 'limited' } : {}),
+      ...(Object.keys(scanFacts).length ? { scanFacts } : {}),
+      ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
       ...(Number.isSafeInteger(data.sampleCount) && (data.sampleCount as number) >= 0 ? { sampleCount: data.sampleCount } : {}),
       ...(Number.isSafeInteger(data.previewLimit) && (data.previewLimit as number) >= 0 ? { previewLimit: data.previewLimit } : {}),
       ...(typeof data.truncated === 'boolean' ? { truncated: data.truncated } : {}),
