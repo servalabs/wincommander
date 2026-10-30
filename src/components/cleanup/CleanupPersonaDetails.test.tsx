@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, ClipboardImage, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, ClipboardImage, ClipboardItemDetails, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, readClipboardDetailChunk, parseClipboardDetailBytes, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -15,6 +15,23 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("loads bounded clipboard content without mixing items or snapshots", async () => {
+    const html = renderToStaticMarkup(<ClipboardItemDetails itemId="item-1" load={async () => ({ success: false })} />);
+    expect(html).toContain("Load details");
+    const bytes = new TextEncoder().encode(JSON.stringify({ id: "item-1", text: "多言語 \n content", storageItems: [{ name: "file", path: "C:\\Example", type: "File" }] }));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const encoded = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""));
+    const value = { status: "complete", detailBase64: encoded, offset: 0, totalBytes: bytes.length, nextOffset: null, snapshotHash: hash };
+    const chunk = readClipboardDetailChunk(value, 0)!;
+    expect(await parseClipboardDetailBytes(chunk.bytes, hash, "item-1")).toEqual({ id: "item-1", text: "多言語 \n content", storageItems: [{ name: "file", path: "C:\\Example", type: "File" }] });
+    expect(await parseClipboardDetailBytes(chunk.bytes, "0".repeat(64), "item-1")).toBeNull();
+    expect(await parseClipboardDetailBytes(chunk.bytes, hash, "item-2")).toBeNull();
+    expect(readClipboardDetailChunk(value, 0, "0".repeat(64))).toBeNull();
+    expect(readClipboardDetailChunk({ ...value, nextOffset: bytes.length }, 0)).toBeNull();
+    expect(readClipboardDetailChunk({ ...value, totalBytes: 64 * 1024 * 1024 + 1 }, 0)).toBeNull();
+    expect(readClipboardDetailChunk({ ...value, totalBytes: bytes.length + 1, nextOffset: bytes.length }, 0)).toBeNull();
+  });
   test("shows clipboard files and folders in separate columns without losing unknown fields", () => {
     const items = [{ name: "Example.txt", path: "C:\\Example\\Example.txt", type: "File" }, { name: "Folder", path: "C:\\Example\\Folder", type: "Folder" }];
     const html = renderToStaticMarkup(<ClipboardStorageDetails items={items} />);

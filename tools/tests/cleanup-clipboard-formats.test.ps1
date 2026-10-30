@@ -3,10 +3,33 @@ $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\module
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Could not parse cleanup module.' }
-foreach ($name in @('Convert-CleanupClipboardItemDetails', 'Convert-CleanupClipboardHistoryResult', 'Convert-CleanupClipboardImageStream', 'Get-ClipboardHistoryStatus')) {
+foreach ($name in @('Convert-CleanupClipboardItemDetails', 'Get-CleanupClipboardItemDetails', 'Convert-CleanupClipboardHistoryResult', 'Convert-CleanupClipboardCanonicalValue', 'Convert-CleanupClipboardDetailChunk', 'Convert-CleanupClipboardImageStream', 'Get-ClipboardHistoryStatus')) {
     $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
+$detailFixture = @{ id = 'fixture'; text = (([string][char]0x6587 + [char]0xd83d + [char]0xde42) * 100000); html = '<p>complete</p>'; storageItems = @(@{ name='file'; path='C:\fixture'; type='File' }) }
+$detailFirst = Convert-CleanupClipboardDetailChunk -Detail $detailFixture
+if ($detailFirst.status -ne 'complete' -or $detailFirst.nextOffset -ne 262144 -or $detailFirst.snapshotHash -notmatch '^[0-9a-f]{64}$') { throw 'Clipboard detail first chunk is invalid.' }
+$detailSecond = Convert-CleanupClipboardDetailChunk -Detail $detailFixture -Offset $detailFirst.nextOffset -ExpectedHash $detailFirst.snapshotHash
+if ($detailSecond.status -ne 'complete' -or $detailSecond.offset -ne 262144 -or $detailSecond.snapshotHash -ne $detailFirst.snapshotHash) { throw 'Clipboard detail continuation is invalid.' }
+$collected = [IO.MemoryStream]::new()
+try {
+    $part = $detailFirst
+    while ($true) {
+        $buffer = [Convert]::FromBase64String($part.detailBase64); $collected.Write($buffer, 0, $buffer.Length)
+        if ($null -eq $part.nextOffset) { break }
+        $part = Convert-CleanupClipboardDetailChunk -Detail $detailFixture -Offset $part.nextOffset -ExpectedHash $detailFirst.snapshotHash
+        if ($part.status -ne 'complete') { throw 'Clipboard detail chunk failed.' }
+    }
+    $decoded = [Text.Encoding]::UTF8.GetString($collected.ToArray()) | ConvertFrom-Json
+    if ($decoded.id -ne $detailFixture.id -or $decoded.text -cne $detailFixture.text -or $decoded.storageItems[0].path -ne 'C:\fixture') { throw 'Large Unicode clipboard detail did not round trip.' }
+} finally { $collected.Dispose() }
+$reordered = [ordered]@{ storageItems = @([ordered]@{ type='File'; path='C:\fixture'; name='file' }); html = '<p>complete</p>'; text = (([string][char]0x6587 + [char]0xd83d + [char]0xde42) * 100000); id = 'fixture' }
+$reorderedChunk = Convert-CleanupClipboardDetailChunk -Detail $reordered -Offset $detailFirst.nextOffset -ExpectedHash $detailFirst.snapshotHash
+if ($reorderedChunk.status -ne 'complete' -or $reorderedChunk.detailBase64 -ne $detailSecond.detailBase64) { throw 'Equivalent clipboard detail must produce deterministic chunks.' }
+$changedDetail = Convert-CleanupClipboardDetailChunk -Detail @{ id='fixture'; text='changed' } -Offset 262144 -ExpectedHash $detailFirst.snapshotHash
+if ($changedDetail.status -notin @('changed', 'unavailable') -or $changedDetail.ContainsKey('detailBase64')) { throw 'Changed detail must not be mixed.' }
+if ((Convert-CleanupClipboardDetailChunk -Detail $detailFixture -Offset 262144).status -ne 'unavailable') { throw 'Detail continuation must require snapshot hash.' }
 $item = [pscustomobject]@{ Id='fixture'; Timestamp='2026-01-01T00:00:00Z'; Content=[pscustomobject]@{ AvailableFormats=@('Text','HTML Format','Rich Text Format','Bitmap') } }
 $formats = @{ text='Text'; html='HTML Format'; rtf='Rich Text Format' }
 $details = Convert-CleanupClipboardItemDetails -Item $item -FormatNames $formats -ReadTextFormat { param($entry,$name) switch ($name) { 'text' { 'fixture text' } 'html' { '<p>fixture</p>' } 'rtf' { '{\rtf1 fixture}' } } }
@@ -45,6 +68,9 @@ $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
 } | Select-Object -First 1
 $linkTask = $asTask.MakeGenericMethod([Uri]).Invoke($null, @($package.GetView().GetWebLinkAsync()))
 if (-not $linkTask.Wait(2000) -or $linkTask.Result.AbsoluteUri -ne 'https://example.test/path') { throw 'WinRT link conversion failed.' }
+$syntheticItem = [pscustomobject]@{ Id='fixture-link'; Timestamp='2026-01-01T00:00:00Z'; Content=$package.GetView() }
+$syntheticDetail = Get-CleanupClipboardItemDetails -Item $syntheticItem -AsTask $asTask
+if ($syntheticDetail.id -ne 'fixture-link' -or $syntheticDetail.webLink -ne 'https://example.test/path') { throw 'WinRT item detail failed through per-item reader.' }
 $null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
 $null = [Windows.Storage.StorageFolder, Windows.Storage, ContentType=WindowsRuntime]
 $folderTask = $asTask.MakeGenericMethod([Windows.Storage.StorageFolder]).Invoke($null, @([Windows.Storage.StorageFolder]::GetFolderFromPathAsync($env:TEMP)))
@@ -78,5 +104,8 @@ $missingHash = Convert-CleanupClipboardImageStream -Stream ([IO.MemoryStream]::n
 if ($missingHash.status -ne 'unavailable') { throw 'Continuation must require the original snapshot hash.' }
 function Get-CleanupClipboardImage { param($ItemId, $Offset, $ExpectedHash) return @{ status='fixture'; id=$ItemId; offset=$Offset; hash=$ExpectedHash } }
 $route = Get-ClipboardHistoryStatus -ImageItemId 'fixture' -ImageOffset 262144 -ImageSnapshot ('a' * 64)
+function Get-CleanupClipboardDetail { param($ItemId, $Offset, $ExpectedHash) return @{ status='fixture'; id=$ItemId; offset=$Offset; hash=$ExpectedHash } }
+$detailRoute = Get-ClipboardHistoryStatus -DetailItemId 'fixture' -DetailOffset 262144 -DetailSnapshot ('b' * 64)
+if ($detailRoute.id -ne 'fixture' -or $detailRoute.offset -ne 262144 -or $detailRoute.hash -ne ('b' * 64)) { throw 'Detail requests did not route their item and snapshot.' }
 if ($route.status -ne 'fixture' -or $route.id -ne 'fixture' -or $route.offset -ne 262144 -or $route.hash -ne ('a' * 64)) { throw 'The existing clipboard command did not route the selected image request.' }
 Write-Output 'Passed: local clipboard formats and metadata-only inventory.'

@@ -29,6 +29,7 @@ function wifiProfiles(input: unknown): unknown[] {
 
 export function clipboardDetailRecord(item: RecordObject, structuredStorage = false): RecordObject {
   const details = { ...item };
+  delete details.detailAvailable;
   // A text preview is the same full text returned in `text`; do not show it
   // twice. Bitmap-only items have a dedicated image control in this view.
   if (typeof details.text === "string" && details.preview === details.text) delete details.preview;
@@ -99,6 +100,17 @@ export function readClipboardImageChunk(value: unknown, expectedOffset: number, 
   } catch { return null; }
 }
 
+export async function parseClipboardDetailBytes(bytes: Uint8Array<ArrayBuffer>, expectedHash: string, expectedId: string): Promise<RecordObject | null> {
+  try {
+    if (bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength) return null;
+    const digest = await crypto.subtle.digest("SHA-256", bytes.buffer);
+    const actual = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+    if (actual !== expectedHash) return null;
+    const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return isObject(parsed) && parsed.id === expectedId ? parsed : null;
+  } catch { return null; }
+}
+
 export function ClipboardImage({ itemId, load }: { itemId: string; load: (id: string, offset: number, hash: string) => Promise<{ success: boolean; data?: unknown; error?: string }> }) {
   const [image, setImage] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -134,6 +146,69 @@ export function ClipboardImage({ itemId, load }: { itemId: string; load: (id: st
     finally { if (active.current) setLoading(false); }
   }
   return <div>{image ? <img src={image} alt="Clipboard image" style={{ maxWidth: "100%", maxHeight: 240, objectFit: "contain" }} /> : <button type="button" disabled={loading} onClick={loadImage}>{loading ? "Loading image…" : "Load image"}</button>}{message ? <p role="status">{message}</p> : null}</div>;
+}
+
+// Clipboard content is requested one item at a time. Each response is small,
+// and the digest binds all parts to the same item content before it is shown.
+export function readClipboardDetailChunk(value: unknown, expectedOffset: number, expectedHash = "") {
+  if (!isObject(value) || value.status !== "complete" || typeof value.detailBase64 !== "string" ||
+      !value.detailBase64.length || value.detailBase64.length > 349528 || value.detailBase64.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.detailBase64) ||
+      !Number.isSafeInteger(expectedOffset) || expectedOffset < 0 || expectedOffset % (256 * 1024) !== 0 ||
+      !Number.isSafeInteger(value.offset) || value.offset !== expectedOffset || !Number.isSafeInteger(value.totalBytes) ||
+      (value.totalBytes as number) < 1 || (value.totalBytes as number) > 64 * 1024 * 1024 ||
+      typeof value.snapshotHash !== "string" || !/^[a-f0-9]{64}$/.test(value.snapshotHash) ||
+      (expectedHash && value.snapshotHash !== expectedHash)) return null;
+  try {
+    const decoded = atob(value.detailBase64);
+    if (btoa(decoded) !== value.detailBase64) return null;
+    const bytes = Uint8Array.from(decoded, character => character.charCodeAt(0));
+    const end = expectedOffset + bytes.length;
+    if (!bytes.length || bytes.length > 256 * 1024 || end > (value.totalBytes as number) ||
+        (end < (value.totalBytes as number) && bytes.length !== 256 * 1024) ||
+        (end === value.totalBytes ? value.nextOffset !== null : value.nextOffset !== end)) return null;
+    return { bytes, totalBytes: value.totalBytes as number, hash: value.snapshotHash, nextOffset: value.nextOffset as number | null };
+  } catch { return null; }
+}
+
+export function ClipboardItemDetails({ itemId, load }: { itemId: string; load: (id: string, offset: number, hash: string) => Promise<{ success: boolean; data?: unknown; error?: string }> }) {
+  const [details, setDetails] = useState<RecordObject | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  async function loadDetails() {
+    setLoading(true); setMessage(null);
+    try {
+      let offset = 0, hash = "", total = 0;
+      let bytes: Uint8Array<ArrayBuffer> | null = null;
+      while (true) {
+        const result = await load(itemId, offset, hash);
+        if (!active.current) return;
+        const chunk = result.success ? readClipboardDetailChunk(result.data, offset, hash) : null;
+        if (!chunk || (bytes && chunk.totalBytes !== total)) {
+          const status = isObject(result.data) ? result.data.status : undefined;
+          setMessage(status === "too-large" ? "This item is too large to display here." : status === "changed" ? "This clipboard item changed. Open the details again to refresh it." : "The clipboard item could not be verified or is no longer available.");
+          return;
+        }
+        if (!bytes) { total = chunk.totalBytes; hash = chunk.hash; bytes = new Uint8Array(total); }
+        bytes.set(chunk.bytes, offset);
+        if (chunk.nextOffset === null) break;
+        offset = chunk.nextOffset;
+      }
+      const parsed = await parseClipboardDetailBytes(bytes, hash, itemId);
+      if (!active.current) return;
+      if (!parsed) { setMessage("The clipboard item changed or could not be verified."); return; }
+      setDetails(parsed);
+    } catch { if (active.current) setMessage("The clipboard item could not be read."); }
+    finally { if (active.current) setLoading(false); }
+  }
+  const storage = details ? clipboardStorageItems(details) : null;
+  const facts = details ? metadata(clipboardDetailRecord(details, !!storage), "clipboardHistory") : [];
+  return <div>{details ? <><dl className="cleanup-readable-detail__facts">{facts.map((fact, index) => {
+    const separator = fact.indexOf(": ");
+    return <div key={index}><dt>{separator < 0 ? "Details" : fact.slice(0, separator)}</dt><dd style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{separator < 0 ? fact : fact.slice(separator + 2)}</dd></div>;
+  })}</dl>{storage ? <ClipboardStorageDetails items={storage} /> : null}</> : <button type="button" disabled={loading} onClick={loadDetails}>{loading ? "Loading details…" : "Load details"}</button>}{message ? <p role="status">{message}</p> : null}</div>;
 }
 
 function activityEntry(section: unknown, entry: RecordObject): RecordObject {
@@ -423,7 +498,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   backendRef.current = backend;
   const [secrets, setSecrets] = useState<Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null>(null);
   const [secretError, setSecretError] = useState<string | null>(null);
-  const [clipboardItems, setClipboardItems] = useState<Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount: number; storageItems?: unknown }> | null>(null);
+  const [clipboardItems, setClipboardItems] = useState<Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount?: number; storageItems?: unknown; detailAvailable?: boolean }> | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   const [loadingSecrets, setLoadingSecrets] = useState(false);
   const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
@@ -529,6 +604,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       labels.add(separator < 0 ? "Details" : fact.slice(0, separator));
     }
     if (categoryId === "wlanProfiles") labels.add("Password");
+    if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.detailAvailable === true)) labels.add("Clipboard content");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.formats?.includes("Bitmap"))) labels.add("Image");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => clipboardStorageItems(item))) labels.add("Files and folders");
     if (!labels.size) labels.add("Details");
@@ -572,6 +648,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         const storageItems = clipboardItem ? clipboardStorageItems(clipboardItem) : null;
         return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
           ? <ClipboardImage key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryImage(id, offset, hash)} />
+          : label === "Clipboard content" && clipboardItem?.id && clipboardItem.detailAvailable === true ? <ClipboardItemDetails key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryDetail(id, offset, hash)} />
           : label === "Files and folders" && storageItems ? <ClipboardStorageDetails items={storageItems} />
           : cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>

@@ -74,6 +74,29 @@ function Convert-CleanupClipboardItemDetails {
     return $details
 }
 
+function Get-CleanupClipboardItemDetails {
+    param($Item, $AsTask)
+            $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.StorageItemTypes, Windows.Storage, ContentType=WindowsRuntime]
+                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf; webLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::WebLink; applicationLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::ApplicationLink; storageItems = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::StorageItems }
+                $readText = {
+                    param($entry, $format)
+                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } 'webLink' { $entry.Content.GetWebLinkAsync() } 'applicationLink' { $entry.Content.GetApplicationLinkAsync() } 'storageItems' { $entry.Content.GetStorageItemsAsync() } }
+                    $resultType = if ($format -in @('webLink', 'applicationLink')) { [Uri] } elseif ($format -eq 'storageItems') { [System.Collections.Generic.IReadOnlyList[Windows.Storage.IStorageItem]] } else { [string] }
+                    $textTask = $AsTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
+                    if (-not $textTask.Wait(2000)) { throw 'Clipboard content timed out.' }
+                    if ($format -eq 'storageItems') {
+                        $entries = @($textTask.Result | ForEach-Object {
+                            @{ name = [string]$_.Name; path = [string]$_.Path; type = if ($_.IsOfType([Windows.Storage.StorageItemTypes]::File)) { 'File' } elseif ($_.IsOfType([Windows.Storage.StorageItemTypes]::Folder)) { 'Folder' } else { 'Unknown' } }
+                        })
+                        return ,$entries
+                    }
+                    return [string]$textTask.Result
+                }
+                return (Convert-CleanupClipboardItemDetails -Item $Item -FormatNames $formats -ReadTextFormat $readText)
+}
+
 function Get-CleanupClipboardHistory {
     param([bool]$IncludePreviews = $false)
     try {
@@ -90,33 +113,78 @@ function Get-CleanupClipboardHistory {
         if (-not $task.Wait(2000)) { return @{ status = 'unavailable'; items = @() } }
         $readPreview = $null
         if ($IncludePreviews) {
-            $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-            $null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
-            $null = [Windows.Storage.StorageItemTypes, Windows.Storage, ContentType=WindowsRuntime]
+            # The list is metadata only. Content is fetched per item in bounded
+            # chunks, preventing large history entries from exceeding IPC limits.
             $readPreview = {
                 param($item)
-                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf; webLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::WebLink; applicationLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::ApplicationLink; storageItems = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::StorageItems }
-                $readText = {
-                    param($entry, $format)
-                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } 'webLink' { $entry.Content.GetWebLinkAsync() } 'applicationLink' { $entry.Content.GetApplicationLinkAsync() } 'storageItems' { $entry.Content.GetStorageItemsAsync() } }
-                    $resultType = if ($format -in @('webLink', 'applicationLink')) { [Uri] } elseif ($format -eq 'storageItems') { [System.Collections.Generic.IReadOnlyList[Windows.Storage.IStorageItem]] } else { [string] }
-                    $textTask = $asTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
-                    if (-not $textTask.Wait(500)) { throw 'Clipboard content timed out.' }
-                    if ($format -eq 'storageItems') {
-                        $entries = @($textTask.Result | ForEach-Object {
-                            @{ name = [string]$_.Name; path = [string]$_.Path; type = if ($_.IsOfType([Windows.Storage.StorageItemTypes]::File)) { 'File' } elseif ($_.IsOfType([Windows.Storage.StorageItemTypes]::Folder)) { 'Folder' } else { 'Unknown' } }
-                        })
-                        return ,$entries
-                    }
-                    return [string]$textTask.Result
-                }
-                return (Convert-CleanupClipboardItemDetails -Item $item -FormatNames $formats -ReadTextFormat $readText)
+                $metadata = @{ type = 'item'; id = [string]$item.Id; timestamp = [string]$item.Timestamp; detailAvailable = $true }
+                try { $metadata.formats = @($item.Content.AvailableFormats | ForEach-Object { [string]$_ }) }
+                catch { $metadata.formats = @(); $metadata.metadataStatus = 'Clipboard formats could not be read.' }
+                $metadata
             }
         }
         return (Convert-CleanupClipboardHistoryResult -Result $task.Result -ReadPreview $readPreview)
     } catch {
         return @{ status = 'unavailable'; items = @() }
     }
+}
+
+# Encode one item's complete detail as UTF-8 JSON and return only a bounded
+# slice. The hash binds continuation requests to the same complete value.
+function Convert-CleanupClipboardCanonicalValue {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($Value.Keys | Sort-Object -CaseSensitive)) { $ordered[[string]$key] = Convert-CleanupClipboardCanonicalValue $Value[$key] }
+        return $ordered
+    }
+    if ($Value -is [array]) {
+        $items = @($Value | ForEach-Object { Convert-CleanupClipboardCanonicalValue $_ })
+        return ,$items
+    }
+    return $Value
+}
+
+function Convert-CleanupClipboardDetailChunk {
+    param($Detail, [long]$Offset = 0, [string]$ExpectedHash = '')
+    $chunkSize = 262144
+    if ($null -eq $Detail -or $Offset -lt 0 -or ($Offset % $chunkSize) -ne 0 -or ($Offset -gt 0 -and $ExpectedHash -notmatch '^[0-9a-f]{64}$') -or ($ExpectedHash -and $ExpectedHash -notmatch '^[0-9a-f]{64}$')) { return @{ status = 'unavailable' } }
+    try {
+        $canonical = Convert-CleanupClipboardCanonicalValue $Detail
+        $json = ConvertTo-Json -InputObject $canonical -Depth 32 -Compress -ErrorAction Stop
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        if ($bytes.LongLength -gt 67108864) { return @{ status = 'too-large' } }
+        if ($Offset -ge $bytes.LongLength) { return @{ status = 'unavailable' } }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+        if ($ExpectedHash -and $hash -ne $ExpectedHash) { return @{ status = 'changed' } }
+        $length = [int][Math]::Min($chunkSize, $bytes.LongLength - $Offset)
+        $slice = New-Object byte[] $length
+        [Array]::Copy($bytes, $Offset, $slice, 0, $length)
+        $next = $Offset + $length
+        return @{ status = 'complete'; detailBase64 = [Convert]::ToBase64String($slice); offset = $Offset; totalBytes = $bytes.LongLength; nextOffset = if ($next -lt $bytes.LongLength) { $next } else { $null }; snapshotHash = $hash }
+    } catch { return @{ status = 'unavailable' } }
+}
+
+function Get-CleanupClipboardDetail {
+    param([string]$ItemId, [long]$Offset = 0, [string]$ExpectedHash = '')
+    if ([string]::IsNullOrWhiteSpace($ItemId) -or $ItemId.Length -gt 256) { return @{ status = 'unavailable' } }
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $resultType = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable' } }
+        $task = $asTask.MakeGenericMethod($resultType).Invoke($null, @([Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()))
+        if (-not $task.Wait(2000) -or [string]$task.Result.Status -ne 'Success') { return @{ status = 'unavailable' } }
+        $matches = @($task.Result.Items | Where-Object { [string]$_.Id -ceq $ItemId })
+        if ($matches.Count -ne 1) { return @{ status = 'unavailable' } }
+        $detail = Get-CleanupClipboardItemDetails -Item $matches[0] -AsTask $asTask
+        return (Convert-CleanupClipboardDetailChunk -Detail $detail -Offset $Offset -ExpectedHash $ExpectedHash)
+    } catch { return @{ status = 'unavailable' } }
 }
 
 # Read one selected image at a time. A bounded response avoids placing every
@@ -192,8 +260,9 @@ function Get-CleanupClipboardImage {
 }
 
 function Get-ClipboardHistoryStatus {
-    param([bool]$IncludePreviews = $false, [string]$ImageItemId = '', [long]$ImageOffset = 0, [string]$ImageSnapshot = '')
+    param([bool]$IncludePreviews = $false, [string]$ImageItemId = '', [long]$ImageOffset = 0, [string]$ImageSnapshot = '', [string]$DetailItemId = '', [long]$DetailOffset = 0, [string]$DetailSnapshot = '')
     if ($PSBoundParameters.ContainsKey('ImageItemId')) { return (Get-CleanupClipboardImage -ItemId $ImageItemId -Offset $ImageOffset -ExpectedHash $ImageSnapshot) }
+    if ($PSBoundParameters.ContainsKey('DetailItemId')) { return (Get-CleanupClipboardDetail -ItemId $DetailItemId -Offset $DetailOffset -ExpectedHash $DetailSnapshot) }
     try {
         $cb    = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -EA SilentlyContinue
         # Also detect if an external policy (GPO/MDM we didn't set) is blocking things.

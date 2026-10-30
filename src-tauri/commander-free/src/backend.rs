@@ -5313,7 +5313,10 @@ pub(crate) async fn run_backend_script_with_timeout(
             let is_secret = kl.contains("password")
                 || kl.contains("keyfile")
                 || (command == "Get-ClipboardHistoryStatus"
-                    && matches!(kl.as_str(), "imageitemid" | "imagesnapshot"));
+                    && matches!(
+                        kl.as_str(),
+                        "imageitemid" | "imagesnapshot" | "detailitemid" | "detailsnapshot"
+                    ));
             (k.as_str(), if is_secret { "***" } else { v.as_str() })
         })
         .collect();
