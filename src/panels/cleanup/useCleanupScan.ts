@@ -15,6 +15,7 @@ import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticClean
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
 import { cleanupProfileKey, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
+import { createCleanupProfileReadGate } from "./cleanupProfileReadGate";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
@@ -332,6 +333,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [selectedUser, setSelectedUser] = useState<string>('');
     const [otherUserDataMap, setOtherUserDataMap] = useState<Record<string, CardData>>({});
     const [otherUserLoading, setOtherUserLoading] = useState(false);
+    const [otherUserClearing, setOtherUserClearing] = useState(false);
+    const profileReadGate = useRef(createCleanupProfileReadGate());
 
     // ── Combined "All Users" view (#7) ──────────────────────────────────
     // Sums every account's per-category counts into one grid; the detail
@@ -361,9 +364,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Scan one non-current user's scope-aware traces and project them onto the
     // card grid. One backend call returns every category for that user.
     const loadUserView = async (username: string, categoryIds?: string[]) => {
+        const ticket = profileReadGate.current.begin();
         setOtherUserLoading(true);
         try {
             const res = await getCleanupSummaryAllUsers(categoryIds ?? [], [username]);
+            if (!profileReadGate.current.isCurrent(ticket)) return false;
             if (res.success && res.data?.users?.length === 1 && !(res.data as { error?: boolean }).error &&
                 ((/^S-1-5-21-/i.test(username) && res.data.users[0].sid?.toLowerCase() === username.toLowerCase()) ||
                  (!/^S-1-5-21-/i.test(username) && res.data.users[0].username?.toLowerCase() === username.toLowerCase()))) {
@@ -400,20 +405,23 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 return false;
             }
         } catch (e) {
+            if (!profileReadGate.current.isCurrent(ticket)) return false;
             showError(`Failed to load traces for ${username}: ${e}`);
             setOtherUserDataMap({});
             return false;
         } finally {
-            setOtherUserLoading(false);
+            if (profileReadGate.current.isCurrent(ticket)) setOtherUserLoading(false);
         }
     };
 
     // Load EVERY account's scope-aware traces, kept per-user, so the grid can
     // sum them and the detail modal can break the total back down (#7).
     const loadAllUsersView = async (categoryId?: string) => {
+        const ticket = profileReadGate.current.begin();
         setOtherUserLoading(true);
         try {
             const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [], []);
+            if (!profileReadGate.current.isCurrent(ticket)) return false;
             if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
                 setAllUsersRaw(res.data.users.map(u => ({
                     username: u.sid || u.username,
@@ -435,11 +443,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 return false;
             }
         } catch (e) {
+            if (!profileReadGate.current.isCurrent(ticket)) return false;
             showError(`Failed to load combined user traces: ${e}`);
             setAllUsersRaw([]);
             return false;
         } finally {
-            setOtherUserLoading(false);
+            if (profileReadGate.current.isCurrent(ticket)) setOtherUserLoading(false);
         }
     };
 
@@ -447,6 +456,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // grid. Another user only changes selection; scans are started explicitly
     // from that user's card/rescan controls so they target that profile only.
     const handleSwitchUser = (username: string) => {
+        profileReadGate.current.begin();
+        setOtherUserLoading(false);
         setSelectedUser(username);
         if (username === ALL_USERS_KEY) {
             setAllUsersRaw([]);
@@ -1209,6 +1220,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // touched. `targets` undefined = all users.
     const runOtherUserClear = async (cat: CleanupCategory, targets: string[] | undefined, allowDefaultExcluded = false) => {
         if (isDefaultExcludedCleanup(cat.id) && !allowDefaultExcluded) return;
+        setOtherUserClearing(true);
         const prev = otherUserDataMap[cat.id] || { count: -1, items: [] };
         const setCard = (data: CardData) => {
             setOtherUserDataMap(p => ({ ...p, [cat.id]: data }));
@@ -1239,6 +1251,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         } catch (e) {
             showError(`Failed to clear ${cat.label}: ${e}`);
             setCard({ count: prev.count, items: prev.items ?? [], loading: false, clearing: false });
+        } finally {
+            setOtherUserClearing(false);
         }
     };
 
@@ -1285,6 +1299,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         selectedUser,
         otherUserDataMap,
         otherUserLoading,
+        otherUserClearing,
         allUsersRaw,
         combinedDataMap,
         isViewingAllUsers,

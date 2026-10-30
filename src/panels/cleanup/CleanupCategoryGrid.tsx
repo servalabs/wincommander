@@ -67,6 +67,7 @@ export default function CleanupCategoryGrid({
     otherUserDataMap,
     allUsersRaw,
     otherUserLoading,
+    otherUserClearing,
     combinedDataMap,
     isViewingAllUsers,
     isViewingCurrentUser,
@@ -187,7 +188,7 @@ export default function CleanupCategoryGrid({
     : isViewingCurrentUser
       ? cardDataMap
       : otherUserDataMap;
-  const userCardsLoading = !isViewingCurrentUser && otherUserLoading;
+  const userCardsLoading = !isViewingCurrentUser && (otherUserLoading || otherUserClearing);
   const userCats = orderedScanCategories.filter(
     (cat) =>
       cat.scopeAware &&
@@ -491,6 +492,7 @@ export default function CleanupCategoryGrid({
                             icon="people"
                             text="All users"
                             label="Combined"
+                            disabled={otherUserLoading || otherUserClearing}
                             active={accountSelectValue === ALL_USERS_KEY}
                             onClick={() => {
                               handleSwitchUser(ALL_USERS_KEY);
@@ -502,6 +504,7 @@ export default function CleanupCategoryGrid({
                           <MenuItem
                             key={cleanupProfileKey(u)}
                             icon={u.isCurrent ? "user" : "person"}
+                            disabled={otherUserLoading || otherUserClearing}
                             text={u.displayName ?? u.name}
                             label={u.isCurrent ? "You" : u.name}
                             active={accountSelectValue === cleanupProfileKey(u)}
@@ -528,6 +531,7 @@ export default function CleanupCategoryGrid({
                       disabled={
                         !canSwitchUsers ||
                         otherUserLoading ||
+                        otherUserClearing ||
                         availableUsers.length === 0
                       }
                       onClick={(e) => {
@@ -567,7 +571,7 @@ export default function CleanupCategoryGrid({
                     icon="refresh"
                     text="Rescan"
                     loading={otherUserLoading}
-                    disabled={otherUserLoading}
+                    disabled={otherUserLoading || otherUserClearing}
                     onClick={() =>
                       isViewingAllUsers
                         ? loadAllUsersView()
