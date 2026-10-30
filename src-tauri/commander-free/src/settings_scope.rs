@@ -441,6 +441,18 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {
+        path: "privacy.privacyShield.lookAwayNotificationsEnabled",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.multipleFacesNotificationsEnabled",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.phoneNotificationsEnabled",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
         path: "privacy.privacyShield.confidenceThreshold",
         scope: SettingsScope::User,
     },

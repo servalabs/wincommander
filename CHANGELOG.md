@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Privacy Shield now honors separate notification choices for look-away/no-face,
+  multiple faces and phone detection. Changing blur or detector timing while a
+  Fleet-managed session runs reapplies the local detector settings; device
+  status still requires a current native observation to confirm the result.
+
 - Hidden backend commands now rebuild Windows PowerShell's module search path,
   preventing inherited PowerShell 7 modules from breaking permission checks.
 
