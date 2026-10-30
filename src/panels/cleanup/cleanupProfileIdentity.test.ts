@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
+import { cleanupAccountScopeLabel, isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
 
 describe('cleanup account identity', () => {
   test('distinguishes an empty account list from failed or unavailable inventory', async () => {
@@ -24,6 +24,13 @@ describe('cleanup account identity', () => {
     expect(resolveCurrentCleanupProfile([{ name: 'Other', isCurrent: false }], '')).toBe('');
     expect(resolveCurrentCleanupProfile([{ name: 'Other', isCurrent: false }], 'Other')).toBe('');
     expect(resolveCurrentCleanupProfile([{ name: 'A', isCurrent: true }, { name: 'B', isCurrent: true }], 'A')).toBe('');
+  });
+  test('does not label the only unrelated profile as the current user', () => {
+    const current = resolveCurrentCleanupProfile([{ name: 'Other', isCurrent: false }], '');
+    expect(cleanupAccountScopeLabel(current, true, false)).toBe('Current user (profile not identified)');
+    expect(cleanupAccountScopeLabel('Other', false, false)).toBe('Other');
+    expect(cleanupAccountScopeLabel('Alice', true, false)).toBe('Alice (you)');
+    expect(cleanupAccountScopeLabel('', false, true)).toBe('All users');
   });
   test('supports a matching older response that omits profile flags', () => {
     expect(resolveCurrentCleanupProfile([{ name: 'Folder' }], 'folder')).toBe('Folder');

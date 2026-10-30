@@ -5848,9 +5848,11 @@ function Invoke-CleanupClearAllUsers {
     $categoryArr = $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
     if (@($categoryArr).Count -eq 0) { throw 'At least one cleanup category is required.' }
     Assert-CleanupCategoriesAllowed $categoryArr -AllowDefaultExcluded:($AllowDefaultExcluded -is [bool] -and $AllowDefaultExcluded)
-    $targetArr   = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
+    $hasTargetUsers = $TargetUsers -and $TargetUsers.Trim() -ne ''
+    $targetArr   = @(if ($hasTargetUsers) {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-    } else { @() }
+    })
+    if ($hasTargetUsers -and $targetArr.Count -eq 0) { throw 'No valid user profiles were specified; no cleanup was performed.' }
 
     # Filter to only scope-aware categories
     $scopeAwareIds = @(
@@ -5881,7 +5883,8 @@ function Invoke-CleanupClearAllUsers {
 
     # Enumerate target profiles — S-1-5-21-* SIDs only (real user accounts)
     $sysDrive    = $env:SystemDrive
-    $allProfiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+    try {
+    $allProfiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
         Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
         ForEach-Object {
             $leaf = Split-Path $_.LocalPath -Leaf
@@ -5890,19 +5893,29 @@ function Invoke-CleanupClearAllUsers {
             if (Test-WCVisibleUserProfile -Name $leaf -DisplayName $display -Path $_.LocalPath) {
                 [pscustomobject]@{ Name = $leaf; FullName = $_.LocalPath; SID = $_.SID }
             }
-        }
+        })
+    } catch { throw 'Windows user profiles could not be read; no cleanup was performed.' }
 
     # Privilege gate — clearing another user's traces requires loading their
     # offline NTUSER.DAT hive and writing under their profile, both of which
-    # need Administrator. A non-admin caller is constrained (by SID) to their
-    # OWN account so the operation degrades safely instead of erroring or
-    # touching accounts it has no right to.
+    # need Administrator. A non-admin caller may explicitly target only their
+    # own account; an all-users request is rejected rather than misreported.
     $isAdmin = Test-IsAdmin
-    $profiles = if (-not $isAdmin) {
-        $allProfiles | Where-Object { $_.SID -eq $mySid }
-    } elseif ($targetArr.Count -gt 0) {
-        $allProfiles | Where-Object { $targetArr -contains $_.Name }
-    } else { $allProfiles }
+    if (-not $isAdmin -and $targetArr.Count -eq 0) {
+        throw 'Administrator access is required to clean all user profiles; no cleanup was performed.'
+    }
+    $profiles = @($allProfiles | Where-Object {
+        ($isAdmin -or $_.SID -eq $mySid) -and ($targetArr.Count -eq 0 -or $targetArr -contains $_.Name)
+    })
+    if ($targetArr.Count -gt 0) {
+        foreach ($target in $targetArr) {
+            if (@($profiles | Where-Object { $_.Name -eq $target }).Count -ne 1) {
+                throw 'A selected user profile is unavailable, ambiguous or not authorized; no cleanup was performed.'
+            }
+        }
+    } elseif ($profiles.Count -eq 0) {
+        throw 'No supported user profiles were found; no cleanup was performed.'
+    }
 
     $loggedIn = (Get-LoggedInUsers).users
     $results  = @()

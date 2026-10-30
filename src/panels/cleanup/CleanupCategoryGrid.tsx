@@ -21,6 +21,7 @@ import {
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
 import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
+import { cleanupAccountScopeLabel } from "./cleanupProfileIdentity";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -538,7 +539,7 @@ export default function CleanupCategoryGrid({
                       <span>
                         {otherUserLoading
                           ? "Loading account..."
-                          : `${selectedDisplay}${isViewingCurrentUser ? " (you)" : ""}`}
+                          : cleanupAccountScopeLabel(selectedDisplay, isViewingCurrentUser, isViewingAllUsers)}
                       </span>
                       <Icon icon="chevron-down" size={13} />
                     </button>
@@ -554,7 +555,7 @@ export default function CleanupCategoryGrid({
                         : accountInventoryState === "error"
                           ? "Profiles unavailable"
                           : "No profiles found"
-                      : `${selectedDisplay || availableUsers[0]?.displayName || availableUsers[0]?.name || "Current user"} (you)`}
+                      : cleanupAccountScopeLabel(selectedDisplay, isViewingCurrentUser, isViewingAllUsers)}
                   </span>
                 </div>
               )}

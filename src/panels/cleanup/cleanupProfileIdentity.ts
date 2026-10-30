@@ -31,3 +31,11 @@ export function resolveCurrentCleanupProfile(profiles: Array<{ name: string; isC
   const matching = profiles.filter(profile => profile.name.toLocaleLowerCase() === currentUser.toLocaleLowerCase());
   return matching.length === 1 && matching[0].isCurrent !== false ? matching[0].name : '';
 }
+
+/** Label the active scope without guessing which listed profile is the user. */
+export function cleanupAccountScopeLabel(selectedDisplay: string, isCurrent: boolean, isAll: boolean): string {
+  if (isAll) return 'All users';
+  const display = selectedDisplay.trim();
+  if (isCurrent) return display ? `${display} (you)` : 'Current user (profile not identified)';
+  return display || 'Selected account unavailable';
+}
