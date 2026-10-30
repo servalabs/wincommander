@@ -30,7 +30,8 @@ function Invoke-WCDocker {
     if ($Mutation) {
         $script:mutations.Add(($Arguments -join ' '))
         if ($script:scenario -eq 'denied') { throw 'Synthetic permission denial' }
-        if ($Arguments[0] -eq 'container') { $script:containers = @() }
+        if ($script:scenario -eq 'partial-denial' -and $Arguments[0] -eq 'container' -and $Arguments[3] -eq ('a' * 64)) { throw 'Synthetic container denial' }
+        if ($Arguments[0] -eq 'container') { $script:containers = @($script:containers | Where-Object { $_ -cne $Arguments[3] }) }
         elseif ($Arguments[0] -eq 'system') { $script:images = @() }
         elseif ($Arguments[0] -eq 'volume' -and $script:scenario -ne 'retained') { $script:volumes = @($script:volumes | Where-Object { $_ -cne $Arguments[2] }) }
         return @()
@@ -59,6 +60,11 @@ Assert-WCDockerTest ($result.removed -eq 3 -and $result.failed -gt 0) 'Docker re
 Assert-WCDockerTest ($script:mutations.Count -eq 3 -and $script:mutations[0] -eq ('container rm --force ' + ('a' * 64)) -and $script:mutations[2] -eq 'volume rm fixture-volume') 'Only verified container and local volume identities may be removed.'
 Assert-WCDockerTest (@($script:mutations | Where-Object { $_ -match '--volumes|volume prune' }).Count -eq 0) 'Container removal and pruning must never implicitly remove volumes.'
 
+$script:scenario = 'partial-denial'; $script:identityReads = 0; $script:mutations.Clear()
+$script:containers = @(('a' * 64), ('c' * 64)); $script:images = @(); $script:volumes = @(); $script:remainders = 0
+$result = Invoke-WCDockerDesktopCleanup
+Assert-WCDockerTest ($result.failed -gt 0 -and $script:containers.Count -eq 1 -and $script:containers[0] -eq ('a' * 64)) 'A denied container must not prevent independent containers from being cleaned, and the run must remain incomplete.'
+
 $script:scenario = 'valid'; $script:identityReads = 0; $script:mutations.Clear(); $script:containers = @(); $script:images = @(); $script:remainders = 0
 $script:volumes = @('safe-volume', 'plugin-volume', 'nfs-volume', 'external-volume')
 $script:volumeKinds = @{ 'plugin-volume' = 'plugin'; 'nfs-volume' = 'remote-mount'; 'external-volume' = 'external-path' }
@@ -77,7 +83,7 @@ Assert-WCDockerTest ($result.failed -gt 0) 'Remaining Docker volumes must make t
 
 $script:scenario = 'valid'; $script:identityReads = 0; $script:mutations.Clear(); $script:volumes = @()
 $result = Invoke-WCDockerDesktopCleanup
-Assert-WCDockerTest ($result.failed -eq 0) 'Only a fully verified empty provider and artifact inventory may succeed.'
+Assert-WCDockerTest ($result.failed -gt 0) 'Even an empty default inventory must remain incomplete when a custom disk image cannot be ruled out.'
 
 $script:scenario = 'denied'; $script:identityReads = 0; $script:mutations.Clear(); $script:containers = @('a' * 64)
 $result = Invoke-WCDockerDesktopCleanup

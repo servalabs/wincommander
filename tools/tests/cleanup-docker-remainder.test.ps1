@@ -29,11 +29,15 @@ function Get-ChildItem {
     return @()
 }
 
+$Error.Clear()
 Assert-DockerRemainder ((Get-WCDockerArtifactRemainders) -eq 0) 'Missing Docker artifacts should be an empty inventory.'
+Assert-DockerRemainder ($Error.Count -eq 0) 'Expected missing paths must not leave errors that make the scheduled wrapper report a false failure.'
 $script:scenario = 'disk-and-log'
 Assert-DockerRemainder ((Get-WCDockerArtifactRemainders) -eq 2) 'Both a disk image and a log must be counted.'
 $script:scenario = 'disk-only'
+$Error.Clear()
 Assert-DockerRemainder ((Get-WCDockerArtifactRemainders) -eq 1) 'An existing disk must be counted when the log is absent.'
+Assert-DockerRemainder ($Error.Count -eq 0) 'Missing optional disk and log paths must not taint a completed cleanup.'
 $script:scenario = 'fixed-disks'
 Assert-DockerRemainder ((Get-WCDockerArtifactRemainders) -eq 2) 'Documented Hyper-V and VMM disks must be counted.'
 foreach ($scenario in @('denied-root','denied-log','denied-fixed','denied-contents','reparse-root','reparse-log','reparse-entry')) {

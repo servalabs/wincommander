@@ -378,7 +378,17 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 namespace WcCleanup {
-    public sealed class CredentialIdentity { public string Name; public uint Type; }
+    public sealed class CredentialIdentity { public string Name; public uint Type; public string UserName; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Credential {
+        public uint Flags, Type;
+        public IntPtr TargetName, Comment;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+        public uint CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public uint Persist, AttributeCount;
+        public IntPtr Attributes, TargetAlias, UserName;
+    }
     public static class Credentials {
         [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true, EntryPoint="CredEnumerateW")]
         private static extern bool Enumerate(string filter, uint flags, out uint count, out IntPtr credentials);
@@ -387,7 +397,7 @@ namespace WcCleanup {
         [DllImport("advapi32.dll")] private static extern void CredFree(IntPtr buffer);
         public static CredentialIdentity[] List() {
             uint count; IntPtr entries;
-            if (!Enumerate(null, 0, out count, out entries)) {
+            if (!Enumerate(null, 1, out count, out entries)) {
                 int error = Marshal.GetLastWin32Error();
                 if (error == 1168) return new CredentialIdentity[0];
                 throw new Win32Exception(error);
@@ -397,10 +407,12 @@ namespace WcCleanup {
                 for (int i = 0; i < count; i++) {
                     IntPtr entry = Marshal.ReadIntPtr(entries, checked(i * IntPtr.Size));
                     if (entry == IntPtr.Zero) throw new InvalidOperationException("Invalid credential entry.");
-                    uint type = unchecked((uint)Marshal.ReadInt32(entry, 4));
-                    string name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(entry, 8));
+                    Credential credential = (Credential)Marshal.PtrToStructure(entry, typeof(Credential));
+                    uint type = credential.Type;
+                    string name = Marshal.PtrToStringUni(credential.TargetName);
+                    string userName = Marshal.PtrToStringUni(credential.UserName);
                     if (String.IsNullOrEmpty(name) || type == 0) throw new InvalidOperationException("Invalid credential identity.");
-                    output.Add(new CredentialIdentity { Name = name, Type = type });
+                    output.Add(new CredentialIdentity { Name = name, Type = type, UserName = userName });
                 }
                 return output.ToArray();
             } finally { CredFree(entries); }
@@ -416,9 +428,19 @@ function Get-WCScheduledCredentials {
     Initialize-WCScheduledCredentials
     [WcCleanup.Credentials]::List()
 }
-function Remove-WCScheduledCredential($Name, $Type) {
+function Get-WCCredentialDeleteTarget($Name, $Type, $UserName) {
+    $target = [string]$Name
+    if ([string]::IsNullOrWhiteSpace($target)) { throw 'Invalid credential identity.' }
+    if ([uint32]$Type -eq 6) {
+        if ([string]::IsNullOrWhiteSpace([string]$UserName) -or $target.Contains('|') -or ([string]$UserName).Contains('|')) { throw 'Extended credential identity is ambiguous.' }
+        $target += '|' + [string]$UserName
+    }
+    return $target
+}
+function Remove-WCScheduledCredential($Name, $Type, $UserName) {
+    $target = Get-WCCredentialDeleteTarget $Name $Type $UserName
     Initialize-WCScheduledCredentials
-    [WcCleanup.Credentials]::Remove($Name, [uint32]$Type)
+    [WcCleanup.Credentials]::Remove($target, [uint32]$Type)
 }
 '@
 
@@ -640,7 +662,11 @@ function Invoke-WCVBoxSnapshotCleanup {
             $before = @(Get-WCVBoxSnapshots $machine)
             if ($before.Count -and $info.State -ne 'poweroff') { $failed++; continue }
             foreach ($snapshot in $before) {
-                try { Remove-WCVBoxSnapshot $machine $snapshot } catch { $failed++ }
+                try {
+                    $current = Get-WCVBoxMachineInfo $machine
+                    if ($current.State -ne 'poweroff' -or $current.Path -ine $info.Path -or -not (Test-WCVBoxMachineInScope $current.Path)) { throw 'The virtual machine changed state or identity.' }
+                    Remove-WCVBoxSnapshot $machine $snapshot
+                } catch { $failed++; break }
             }
             $after = @(Get-WCVBoxSnapshots $machine)
             foreach ($snapshot in $before) {
@@ -666,8 +692,8 @@ function Invoke-WCVmrun {
 
 function Get-WCVmwareMachines {
     $root = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
-    if (-not (Test-Path -LiteralPath $root -PathType Container -ErrorAction Stop)) { return @() }
-    return @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.vmx' -Force -ErrorAction Stop | ForEach-Object { $_.FullName })
+    if (-not (Get-WCVmPathIfPresent -Path $root -Directory $true)) { return @() }
+    return @(Get-AutoEraseFiles -Path $root -Filter '*.vmx' -Recurse | ForEach-Object { $_.FullName })
 }
 
 function Test-WCVmwareMachineInScope {
@@ -719,7 +745,14 @@ function Invoke-WCVmwareSnapshotCleanup {
                 }
             }
             foreach ($snapshot in $before) {
-                try { $null = Invoke-WCVmrun -Arguments @('deleteSnapshot', $machine, $snapshot) } catch { $failed++ }
+                try {
+                    $runningNow = @((Get-WCVmrunInventory -Arguments @('list') -Header 'Total running VMs') | ForEach-Object {
+                        if (-not [IO.Path]::IsPathRooted($_)) { throw 'VMware returned an invalid running machine identity.' }
+                        [IO.Path]::GetFullPath($_)
+                    })
+                    if (@($runningNow | Where-Object { $_ -ieq $canonicalMachine }).Count) { throw 'The virtual machine is running.' }
+                    $null = Invoke-WCVmrun -Arguments @('deleteSnapshot', $machine, $snapshot)
+                } catch { $failed++; break }
             }
             $after = @(Get-WCVmrunInventory -Arguments @('listSnapshots', $machine) -Header 'Total snapshots')
             foreach ($snapshot in $before) {
@@ -935,7 +968,7 @@ function Get-WCDockerArtifactRemainders {
     $root = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
     $rootItem = $null
     try { $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
-    catch [System.Management.Automation.ItemNotFoundException] { }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0) }
     if ($rootItem) {
         if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
         foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop)) {
@@ -949,7 +982,7 @@ function Get-WCDockerArtifactRemainders {
     )) {
         $diskItem = $null
         try { $diskItem = Get-Item -LiteralPath $fixedDisk -Force -ErrorAction Stop }
-        catch [System.Management.Automation.ItemNotFoundException] { }
+        catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0) }
         if ($diskItem) {
             if ($diskItem.PSIsContainer -or ($diskItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
             $count++
@@ -958,7 +991,7 @@ function Get-WCDockerArtifactRemainders {
     $log = Join-Path $env:APPDATA 'Docker\log.txt'
     $logItem = $null
     try { $logItem = Get-Item -LiteralPath $log -Force -ErrorAction Stop }
-    catch [System.Management.Automation.ItemNotFoundException] { }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0) }
     if ($logItem) {
         if ($logItem.PSIsContainer -or ($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker log inventory is unavailable.' }
         $count++
@@ -1002,17 +1035,25 @@ function Invoke-WCDockerDesktopCleanup {
         $identity = Get-WCDockerDesktopIdentity $config
         $before = Get-WCDockerResources $config $identity
         $volumes = Get-WCDockerLocalVolumes $config $identity $before.volumes
-        foreach ($id in $before.containers) { $null = Invoke-WCCheckedDocker $config $identity @('container', 'rm', '--force', $id) $true }
-        $null = Invoke-WCCheckedDocker $config $identity @('system', 'prune', '--all', '--force') $true
+        foreach ($id in $before.containers) {
+            try { $null = Invoke-WCCheckedDocker $config $identity @('container', 'rm', '--force', $id) $true }
+            catch { $result.failed++; if ($script:WCDockerMutationTimedOut) { throw } }
+        }
+        try { $null = Invoke-WCCheckedDocker $config $identity @('system', 'prune', '--all', '--force') $true }
+        catch { $result.failed++; if ($script:WCDockerMutationTimedOut) { throw } }
         foreach ($name in $volumes.eligible) {
-            $verified = Get-WCDockerLocalVolumes $config $identity @($name)
-            if ($verified.eligible.Count -ne 1) { $result.failed++; continue }
-            $null = Invoke-WCCheckedDocker $config $identity @('volume', 'rm', $name) $true
+            try {
+                $verified = Get-WCDockerLocalVolumes $config $identity @($name)
+                if ($verified.eligible.Count -ne 1) { $result.failed++; continue }
+                $null = Invoke-WCCheckedDocker $config $identity @('volume', 'rm', $name) $true
+            } catch { $result.failed++; if ($script:WCDockerMutationTimedOut) { throw } }
         }
         if ($volumes.excluded) { $result.failed++ }
         $after = Get-WCDockerResources $config $identity
         $result.removed = [Math]::Max(0, $before.containers.Count - $after.containers.Count) + [Math]::Max(0, $before.images.Count - $after.images.Count) + [Math]::Max(0, $before.volumes.Count - $after.volumes.Count)
         if ($after.containers.Count -or $after.images.Count -or $after.volumes.Count -or (Get-WCDockerBuildCacheCount $config $identity) -gt 0 -or (Get-WCDockerArtifactRemainders) -gt 0) { $result.failed++ }
+        # The supported CLI cannot verify whether a custom disk image remains.
+        $result.failed++
     } catch { $result.failed++ }
     finally {
         if (-not $script:WCDockerMutationTimedOut) {
@@ -1067,12 +1108,12 @@ try {
 try {
     $before = @(Get-WCScheduledCredentials)
     foreach ($credential in $before) {
-        try { Remove-WCScheduledCredential $credential.Name $credential.Type }
+        try { Remove-WCScheduledCredential $credential.Name $credential.Type $credential.UserName }
         catch { $script:AutoEraseFailed++ }
     }
     $after = @(Get-WCScheduledCredentials)
     foreach ($credential in $before) {
-        $stillPresent = @($after | Where-Object { $_.Name -eq $credential.Name -and $_.Type -eq $credential.Type }).Count -gt 0
+        $stillPresent = @($after | Where-Object { $_.Name -eq $credential.Name -and $_.Type -eq $credential.Type -and ($_.Type -ne 6 -or $_.UserName -eq $credential.UserName) }).Count -gt 0
         if (-not $stillPresent) { $script:AutoEraseRemoved++ }
     }
     if ($after.Count -gt 0) { $script:AutoEraseFailed++ }
@@ -2387,11 +2428,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v12 (manual opt-in)'
+            'System Maintenance scheduled cleanup v13 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v12 (managed)'
+            'System Maintenance scheduled cleanup v13 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v12'
+            'System Maintenance scheduled cleanup v13'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2627,7 +2668,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2783,7 +2824,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2791,7 +2832,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v12(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v13(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
@@ -2818,9 +2859,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 12
+                $revision = 13
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v12 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v12 (managed)' } else { 'System Maintenance scheduled cleanup v12' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v13 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v13 (managed)' } else { 'System Maintenance scheduled cleanup v13' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

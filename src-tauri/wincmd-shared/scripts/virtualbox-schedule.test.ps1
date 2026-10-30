@@ -31,6 +31,7 @@ $snap2 = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 $script:snapshots = @{ $vm1 = @($snap1, $snap2); $vm2 = @($snap1); $vm3 = @($snap1) }
 $script:deletions = [Collections.Generic.List[string]]::new()
 $script:scenario = 'normal'
+$script:vm1InfoReads = 0
 
 function Invoke-WCVBox {
     param([string[]]$Arguments)
@@ -40,6 +41,8 @@ function Invoke-WCVBox {
     }
     if ($Arguments[0] -eq 'showvminfo') {
         $id = $Arguments[1]
+        if ($id -eq $vm1) { $script:vm1InfoReads++ }
+        if ($id -eq $vm1 -and $script:scenario -eq 'started' -and $script:vm1InfoReads -gt 1) { return @('CfgFile="C:\test\inside.vbox"', 'VMState="running"') }
         if ($id -eq $vm1) { return @('CfgFile="C:\test\inside.vbox"', 'VMState="poweroff"') }
         if ($id -eq $vm2) { return @('CfgFile="C:\test\outside.vbox"', 'VMState="poweroff"') }
         return @('CfgFile="C:\test\inside-running.vbox"', 'VMState="running"')
@@ -76,14 +79,52 @@ $script:scenario = 'retained'; $script:snapshots[$vm1] = @($snap1); $script:dele
 $result = Invoke-WCVBoxSnapshotCleanup
 Assert-WCVmTest ($result.failed -gt 0 -and $result.removed -eq 0) 'A provider that leaves a snapshot present must report failure.'
 
+$script:scenario = 'started'; $script:vm1InfoReads = 0; $script:snapshots[$vm1] = @($snap1); $script:deletions.Clear()
+$result = Invoke-WCVBoxSnapshotCleanup
+Assert-WCVmTest ($result.failed -gt 0 -and $script:deletions.Count -eq 0) 'A VirtualBox machine that starts after inventory must not have snapshots deleted.'
+
+$savedVmPathCheck = ${function:Get-WCVmPathIfPresent}
+$savedFileInventory = ${function:Get-AutoEraseFiles}
+try {
+    $script:vmInventoryMode = 'normal'
+    function Get-WCVmPathIfPresent {
+        param($Path, $Directory)
+        if ($script:vmInventoryMode -eq 'missing') { return $null }
+        if ($script:vmInventoryMode -eq 'denied') { throw 'Synthetic VMware root denial.' }
+        if ($script:vmInventoryMode -eq 'reparse') { throw 'Synthetic redirected VMware root.' }
+        return [pscustomobject]@{ PSIsContainer = $true }
+    }
+    function Get-AutoEraseFiles {
+        param($Path, $Filter, [switch]$Recurse)
+        if ($Filter -ne '*.vmx' -or -not $Recurse) { throw 'VMware discovery must use the verified recursive inventory.' }
+        return @([pscustomobject]@{ FullName = 'C:\fixture\one.vmx' }, [pscustomobject]@{ FullName = 'C:\fixture\nested\two.vmx' })
+    }
+    Assert-WCVmTest (@(Get-WCVmwareMachines).Count -eq 2) 'VMware inventory must include verified nested machine files.'
+    $script:vmInventoryMode = 'missing'
+    Assert-WCVmTest (@(Get-WCVmwareMachines).Count -eq 0) 'An absent VMware root must be an empty inventory.'
+    foreach ($mode in @('denied', 'reparse')) {
+        $script:vmInventoryMode = $mode; $failed = $false
+        try { $null = Get-WCVmwareMachines } catch { $failed = $true }
+        Assert-WCVmTest $failed 'An inaccessible or redirected VMware root must not be reported empty.'
+    }
+} finally {
+    Set-Item Function:\Get-WCVmPathIfPresent -Value $savedVmPathCheck
+    Set-Item Function:\Get-AutoEraseFiles -Value $savedFileInventory
+}
+
 function Get-WCVmwareMachines { return @('C:\fixture\powered-off.vmx', 'C:\fixture\running.vmx') }
 function Test-WCVmwareMachineInScope($ConfigPath) { return $true }
 $script:vmwareSnapshots = @{ 'C:\fixture\powered-off.vmx' = @('snapshot A', 'snapshot B'); 'C:\fixture\running.vmx' = @('running-snapshot') }
 $script:vmwareDeletes = [Collections.Generic.List[string]]::new()
 $script:vmwareScenario = 'normal'
+$script:vmwareListReads = 0
 function Invoke-WCVmrun {
     param([string[]]$Arguments)
-    if ($Arguments[0] -eq 'list') { return @('Total running VMs: 1', 'C:\fixture\running.vmx') }
+    if ($Arguments[0] -eq 'list') {
+        $script:vmwareListReads++
+        if ($script:vmwareScenario -eq 'started' -and $script:vmwareListReads -gt 1) { return @('Total running VMs: 2', 'C:\fixture\running.vmx', 'C:\fixture\powered-off.vmx') }
+        return @('Total running VMs: 1', 'C:\fixture\running.vmx')
+    }
     if ($Arguments[0] -eq 'listSnapshots') {
         if ($script:vmwareScenario -eq 'malformed') { return @('Total snapshots: 2', 'one') }
         $snapshots = @($script:vmwareSnapshots[$Arguments[1]])
@@ -108,6 +149,9 @@ Assert-WCVmTest ($result.failed -gt 0 -and $result.removed -eq 0) 'VMware readba
 $script:vmwareScenario = 'normal'; $script:vmwareSnapshots['C:\fixture\powered-off.vmx'] = @('same', 'same'); $script:vmwareDeletes.Clear()
 $result = Invoke-WCVmwareSnapshotCleanup
 Assert-WCVmTest ($result.failed -gt 0 -and $script:vmwareDeletes.Count -eq 0) 'Ambiguous VMware snapshot names must not be deleted.'
+$script:vmwareScenario = 'started'; $script:vmwareListReads = 0; $script:vmwareSnapshots['C:\fixture\powered-off.vmx'] = @('snapshot'); $script:vmwareDeletes.Clear()
+$result = Invoke-WCVmwareSnapshotCleanup
+Assert-WCVmTest ($result.failed -gt 0 -and $script:vmwareDeletes.Count -eq 0) 'A VMware machine that starts after inventory must not have snapshots deleted.'
 
 function Get-Item {
     param($LiteralPath, [switch]$Force, $ErrorAction)
