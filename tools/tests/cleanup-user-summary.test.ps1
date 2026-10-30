@@ -72,7 +72,7 @@ if ($result.users[0].categories[0].count -ne -1 -or -not $result.users[0].catego
 $script:delegated='partial'
 $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 $category=$result.users[0].categories[0]
-if (-not $category.partial -or $category.status -ne 'partial' -or @($category.records).Count -ne 1 -or $result.users[0].complete -or $result.users[0].total -ne -1 -or $category.coverage -ne 'Selected locations only' -or $category.scanFacts.sourcePath -ne 'C:\Fixture') { throw 'Delegated partial scan lost records or was reported complete.' }
+if (-not $category.partial -or $category.status -ne 'partial' -or @($category.records).Count -ne 1 -or $result.users[0].complete -or $result.users[0].total -ne -1 -or $category.coverage -ne 'Selected locations only' -or $category.scanFacts.sourcePath -ne 'C:\Fixture' -or $category.message -ne 'Mock reader incomplete') { throw 'Delegated partial scan lost records or its explanation, or was reported complete.' }
 $script:delegated='lateError'
 $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 $category=$result.users[0].categories[0]

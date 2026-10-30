@@ -3787,11 +3787,12 @@ function Get-InactiveUserProtectionMetadataInfo {
     try {
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $currentSid = ''
         $currentProfile = [Environment]::GetFolderPath('UserProfile')
         try { $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
         if (-not $currentSid -and -not $currentProfile) { throw 'Current profile identity unavailable; inactive profile scan skipped.' }
-        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
             Where-Object {
                 -not $_.Special -and -not $_.Loaded -and $_.SID -match '^S-1-5-21-' -and
                 $_.SID -ne $currentSid -and $_.LocalPath -and
@@ -3799,14 +3800,19 @@ function Get-InactiveUserProtectionMetadataInfo {
             })
         foreach ($profile in $profiles) {
             $protectRoot = Join-Path $profile.LocalPath "AppData\Roaming\Microsoft\Protect\$($profile.SID)"
-            if (-not (Test-Path $protectRoot -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $protectRoot -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $relative = $_.FullName.Substring($protectRoot.Length).TrimStart('\\')
-                $files += @{ name = "Inactive user DPAPI metadata: $($profile.SID)\\$relative"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                $totalBytes += $_.Length
-            }
+            try {
+                try { $root = Get-Item -LiteralPath $protectRoot -Force -ErrorAction Stop }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
+                if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Protection metadata location is unavailable.' }
+                Get-ChildItem -LiteralPath $protectRoot -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; return }
+                    $relative = $_.FullName.Substring($protectRoot.Length).TrimStart('\\')
+                    $files += @{ name = "Inactive user DPAPI metadata: $($profile.SID)\\$relative"; path = $_.FullName; userSid = [string]$profile.SID; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $totalBytes += $_.Length
+                }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected protection metadata for inactive profiles only.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some inactive user protection metadata could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -7264,6 +7270,7 @@ function Get-CleanupSummaryAllUsers {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
                 if ($r.partial -eq $true -or $r.complete -eq $false -or $r.status -eq 'partial' -or $r.coverage -eq 'partial' -or $r.accessDenied -eq $true) {
                     $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
+                    if ($r.message -is [string] -and $r.message.Trim()) { $categoryRecord.message = $r.message }
                 }
                 $facts = @{}
                 foreach ($key in $r.Keys) {
