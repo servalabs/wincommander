@@ -4,6 +4,7 @@ export const STARTUP_PROTECTION_OPERATIONS = [
   "decoy-monitor",
   "ransomware-monitor",
   "remote-access-monitor",
+  "glasses-monitor",
   "usb-security",
   "wifi-guard",
   "auth-anomaly-monitor",

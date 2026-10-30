@@ -605,6 +605,8 @@ export interface PrivacySettings {
    *  sessions (AnyDesk / TeamViewer / RustDesk / VNC / RDP / Quick Assist).
    *  Paid. Off by default. */
   remoteAccessMonitor: RemoteAccessMonitorSettings;
+  /** Free background BLE scan for camera-capable smart glasses. Off by default. */
+  glassesMonitor?: GlassesMonitorSettings;
   /** Paid Security-log sign-in anomaly monitor. */
   authAnomalyMonitor?: AuthAnomalyMonitorSettings;
   /** USB security monitor arm preferences. Parameters/allow-lists are stored
@@ -927,6 +929,11 @@ export interface RansomwareMonitorSettings {
 /** #4: remote-access monitor persistence layer. Runtime authority lives
  *  in the Pro module's TOOL_CATALOGUE + RUNNING; this is the disk side the
  *  global hook reconciles into Pro on every settings change. */
+export interface GlassesMonitorSettings {
+  /** Master ON/OFF. Null = backend default (off). */
+  enabled: boolean | null;
+}
+
 export interface RemoteAccessMonitorSettings {
   /** Master ON/OFF. Null = backend default (off). */
   enabled: boolean | null;

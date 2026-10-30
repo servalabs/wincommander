@@ -48,6 +48,12 @@ the backend and private component before execution.
   visibility. Times reflect periodic observation, not a complete Windows history.
   Manual Pro block/allow actions appear with their Windows verification result.
 - Local clipboard-risk warnings and user-controlled clear/snooze behavior.
+- Optional background Bluetooth LE scan that warns when camera-capable smart
+  glasses (Ray-Ban/Oakley Meta, Snap Spectacles, Vuzix and similar) are likely
+  within roughly 10 m. It matches public Bluetooth vendor identifiers, so other
+  devices from the same vendors can trigger it and switched-off glasses are not
+  seen. A warning is not evidence of recording. Device addresses and names are
+  not stored; it needs a working Bluetooth radio.
 - Monitor Operations Center: one content-free view of Free and Pro monitor
   coverage, armed state, recent-event counts, cadence, stale/degraded health,
   unavailable services, and entitlement-locked capabilities.

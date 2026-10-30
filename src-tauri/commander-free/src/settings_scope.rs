@@ -541,6 +541,10 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::Machine,
     },
     SystemStateScopeRule {
+        path: "privacy.glassesMonitor.enabled",
+        scope: SettingsScope::Machine,
+    },
+    SystemStateScopeRule {
         path: "privacy.authAnomalyMonitor.enabled",
         scope: SettingsScope::Machine,
     },

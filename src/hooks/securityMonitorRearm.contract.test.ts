@@ -73,6 +73,7 @@ describe("security monitor startup contracts", () => {
       "decoy-monitor",
       "ransomware-monitor",
       "remote-access-monitor",
+      "glasses-monitor",
       "usb-security",
       "wifi-guard",
       "auth-anomaly-monitor",
@@ -85,6 +86,7 @@ describe("security monitor startup contracts", () => {
     expect(source("src/hooks/useRansomwareMonitor.ts")).toContain('onStartupRearm?.("ransomware-monitor", true)');
     expect(source("src/hooks/useDecoyMonitor.ts")).toContain('onStartupRearm?.("decoy-monitor", true)');
     expect(source("src/hooks/useRemoteAccessMonitor.ts")).toContain('onStartupRearm?.("remote-access-monitor", true)');
+    expect(source("src/hooks/useGlassesMonitor.ts")).toContain('onStartupRearm?.("glasses-monitor", true)');
     expect(source("src/hooks/useWifiGuardMonitor.ts")).toContain('onStartupRearm?.("wifi-guard", true)');
     expect(source("src/hooks/useAuthAnomalyMonitor.ts")).toContain('onStartupRearm?.("auth-anomaly-monitor", true)');
   });

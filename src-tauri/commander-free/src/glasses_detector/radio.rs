@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! WinRT advertisement watcher feeding one bounded scan.
+//! WinRT advertisement watcher shared by the bounded scan and the monitor.
 
 use super::tally::{Observation, Tally};
 use super::ScanSummary;
@@ -45,6 +45,13 @@ fn bluetooth_error_text(e: BluetoothError) -> String {
     }
 }
 
+pub(super) fn is_radio_unavailable(reason: &str) -> bool {
+    matches!(
+        reason,
+        "radio_not_available" | "disabled_by_policy" | "disabled_by_user" | "aborted"
+    )
+}
+
 fn observation(
     args: &BluetoothLEAdvertisementReceivedEventArgs,
     device: u64,
@@ -77,6 +84,104 @@ fn observation(
     })
 }
 
+/// A running advertisement watcher; stopped on drop.
+pub(super) struct Watcher {
+    inner: BluetoothLEAdvertisementWatcher,
+    we_stopped: Arc<AtomicBool>,
+    stop_reason: Arc<Mutex<Option<String>>>,
+}
+
+impl Watcher {
+    pub(super) fn start(
+        active: bool,
+        on_observation: impl Fn(Observation) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        let inner =
+            BluetoothLEAdvertisementWatcher::new().map_err(|e| format!("watcher_create: {e}"))?;
+        let mode = if active {
+            BluetoothLEScanningMode::Active
+        } else {
+            BluetoothLEScanningMode::Passive
+        };
+        inner
+            .SetScanningMode(mode)
+            .map_err(|e| format!("scanning_mode: {e}"))?;
+
+        // A fresh salt per watcher keeps device counts from linking across runs.
+        let salt = std::collections::hash_map::RandomState::new();
+        let started = Instant::now();
+        inner
+            .Received(
+                &TypedEventHandler::new(
+                    move |_,
+                          args: windows::core::Ref<
+                        '_,
+                        BluetoothLEAdvertisementReceivedEventArgs,
+                    >| {
+                        if let Some(args) = args.as_ref() {
+                            let device = salt.hash_one(args.BluetoothAddress()?);
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            if let Ok(obs) = observation(args, device, elapsed_ms) {
+                                on_observation(obs);
+                            }
+                        }
+                        Ok(())
+                    },
+                ),
+            )
+            .map_err(|e| format!("received_handler: {e}"))?;
+
+        let we_stopped = Arc::new(AtomicBool::new(false));
+        let stop_reason = Arc::new(Mutex::new(None::<String>));
+        let (flag, reason) = (Arc::clone(&we_stopped), Arc::clone(&stop_reason));
+        let _ =
+            inner.Stopped(&TypedEventHandler::new(
+                move |_,
+                      args: windows::core::Ref<
+                    '_,
+                    BluetoothLEAdvertisementWatcherStoppedEventArgs,
+                >| {
+                    if !flag.load(Ordering::SeqCst) {
+                        let text = args
+                            .as_ref()
+                            .and_then(|a| a.Error().ok())
+                            .map(bluetooth_error_text)
+                            .unwrap_or_else(|| "stopped".into());
+                        if let Ok(mut r) = reason.lock() {
+                            *r = Some(text);
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+        inner.Start().map_err(|e| format!("start: {e}"))?;
+        Ok(Self {
+            inner,
+            we_stopped,
+            stop_reason,
+        })
+    }
+
+    /// Why Windows stopped the watcher on its own, if it did.
+    pub(super) fn stop_reason(&self) -> Option<String> {
+        if let Some(reason) = self.stop_reason.lock().ok().and_then(|r| r.clone()) {
+            return Some(reason);
+        }
+        matches!(
+            self.inner.Status(),
+            Ok(BluetoothLEAdvertisementWatcherStatus::Aborted)
+        )
+        .then(|| "aborted".into())
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.we_stopped.store(true, Ordering::SeqCst);
+        let _ = self.inner.Stop();
+    }
+}
+
 pub(super) fn scan(
     seconds: u64,
     near_rssi: i16,
@@ -85,99 +190,33 @@ pub(super) fn scan(
 ) -> ScanSummary {
     let mode = if active { "active" } else { "passive" };
     let tally = Arc::new(Mutex::new(Tally::new(near_rssi, include_payload)));
-    let start_failed = |reason: String| {
-        Tally::new(near_rssi, include_payload).finish("start_failed", Some(reason), seconds, mode)
-    };
-    let watcher = match BluetoothLEAdvertisementWatcher::new() {
-        Ok(w) => w,
-        Err(e) => return start_failed(format!("watcher_create: {e}")),
-    };
-    let scanning_mode = if active {
-        BluetoothLEScanningMode::Active
-    } else {
-        BluetoothLEScanningMode::Passive
-    };
-    if let Err(e) = watcher.SetScanningMode(scanning_mode) {
-        return start_failed(format!("scanning_mode: {e}"));
-    }
-
-    // A fresh salt per scan keeps device counts from linking across scans.
-    let salt = std::collections::hash_map::RandomState::new();
-    let started = Instant::now();
     let sink = Arc::clone(&tally);
-    let received = watcher.Received(&TypedEventHandler::new(
-        move |_, args: windows::core::Ref<'_, BluetoothLEAdvertisementReceivedEventArgs>| {
-            if let Some(args) = args.as_ref() {
-                let device = salt.hash_one(args.BluetoothAddress()?);
-                let elapsed_ms = started.elapsed().as_millis() as u64;
-                if let Ok(obs) = observation(args, device, elapsed_ms) {
-                    if let Ok(mut t) = sink.lock() {
-                        t.observe(&obs);
-                    }
-                }
-            }
-            Ok(())
-        },
-    ));
-    if let Err(e) = received {
-        return start_failed(format!("received_handler: {e}"));
-    }
+    let watcher = match Watcher::start(active, move |obs| {
+        if let Ok(mut t) = sink.lock() {
+            t.observe(&obs);
+        }
+    }) {
+        Ok(w) => w,
+        Err(reason) => {
+            return Tally::new(near_rssi, include_payload).finish(
+                "start_failed",
+                Some(reason),
+                seconds,
+                mode,
+            )
+        }
+    };
 
-    let we_stopped = Arc::new(AtomicBool::new(false));
-    let stopped_early = Arc::new(Mutex::new(None::<String>));
-    let (flag, reason) = (Arc::clone(&we_stopped), Arc::clone(&stopped_early));
-    let _ = watcher.Stopped(&TypedEventHandler::new(
-        move |_, args: windows::core::Ref<'_, BluetoothLEAdvertisementWatcherStoppedEventArgs>| {
-            if !flag.load(Ordering::SeqCst) {
-                let text = args
-                    .as_ref()
-                    .and_then(|a| a.Error().ok())
-                    .map(bluetooth_error_text)
-                    .unwrap_or_else(|| "stopped".into());
-                if let Ok(mut r) = reason.lock() {
-                    *r = Some(text);
-                }
-            }
-            Ok(())
-        },
-    ));
-
-    if let Err(e) = watcher.Start() {
-        return start_failed(format!("start: {e}"));
-    }
-    let deadline = started + Duration::from_secs(seconds);
-    while Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while Instant::now() < deadline && watcher.stop_reason().is_none() {
         std::thread::sleep(Duration::from_millis(250));
-        let aborted = matches!(
-            watcher.Status(),
-            Ok(BluetoothLEAdvertisementWatcherStatus::Aborted)
-        );
-        if aborted || stopped_early.lock().map(|r| r.is_some()).unwrap_or(false) {
-            break;
-        }
     }
-    we_stopped.store(true, Ordering::SeqCst);
-    let _ = watcher.Stop();
-
-    let early = stopped_early.lock().ok().and_then(|r| r.clone());
-    let (status, reason) = match early {
-        Some(r)
-            if r == "radio_not_available"
-                || r == "disabled_by_policy"
-                || r == "disabled_by_user" =>
-        {
-            ("radio_unavailable", Some(r))
-        }
+    let (status, reason) = match watcher.stop_reason() {
+        Some(r) if is_radio_unavailable(&r) => ("radio_unavailable", Some(r)),
         Some(r) => ("stopped_early", Some(r)),
-        None if matches!(
-            watcher.Status(),
-            Ok(BluetoothLEAdvertisementWatcherStatus::Aborted)
-        ) =>
-        {
-            ("radio_unavailable", Some("aborted".into()))
-        }
         None => ("completed", None),
     };
+    drop(watcher);
     // The handler may still hold a clone briefly; take the tally by value.
     let tally = std::mem::replace(
         &mut *tally.lock().unwrap_or_else(|p| p.into_inner()),

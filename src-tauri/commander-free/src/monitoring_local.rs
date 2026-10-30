@@ -106,6 +106,27 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         },
     ));
 
+    let glasses = crate::glasses_detector::monitor::glasses_monitor_status().await;
+    let glasses_issue_code = glasses
+        .as_ref()
+        .ok()
+        .filter(|s| s.running && matches!(s.radio, "radio_unavailable" | "error"))
+        .map(|s| s.radio);
+    rows.push(local_row(
+        "smart-glasses",
+        "Smart-glasses detector",
+        "physical",
+        false,
+        false,
+        None,
+        &["ble-advertisements", "vendor-rules", "recent-alerts"],
+        bool_status(glasses.as_ref().map(|s| s.running).map_err(Clone::clone)),
+        glasses.as_ref().ok().map(|s| s.recent_count as u64),
+        None,
+        glasses_issue_code.is_some(),
+        glasses_issue_code,
+    ));
+
     let usb_status = crate::usb_guard::usb_monitor_status();
     let usb_active = usb_status
         .as_ref()

@@ -121,6 +121,8 @@ pub(crate) fn classify(
     out
 }
 
+mod alerts;
+pub(crate) mod monitor;
 #[cfg(windows)]
 mod radio;
 mod tally;

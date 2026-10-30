@@ -19,6 +19,7 @@ import PasteMonitorSection from "./PasteMonitorSection";
 import DeceptionTripwiresSection from "./DeceptionTripwiresSection";
 import RansomwareMonitorSection from "./RansomwareMonitorSection";
 import RemoteAccessMonitorSection from "./RemoteAccessMonitorSection";
+import GlassesMonitorSection from "./GlassesMonitorSection";
 import AuthAnomalySection from "./AuthAnomalySection";
 import ArgusDlpSection from "./ArgusDlpSection";
 import ArgusTamperSection from "./ArgusTamperSection";
@@ -149,6 +150,10 @@ export default function PrivacyPanel() {
     const remoteAccessTools = appSettings?.ideal?.privacy?.remoteAccessMonitor?.tools ?? null;
     const patchRemoteAccess = (patch: { enabled?: boolean; tools?: Record<string, boolean> }) =>
         patchAppSettings({ ideal: { privacy: { remoteAccessMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
+
+    const glassesEnabled = appSettings?.ideal?.privacy?.glassesMonitor?.enabled === true;
+    const patchGlasses = (patch: { enabled: boolean }) =>
+        patchAppSettings({ ideal: { privacy: { glassesMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;
     const authAnomalyEnabled = authAnomaly?.enabled ?? false;
@@ -392,6 +397,9 @@ export default function PrivacyPanel() {
                                                     fleetReportingLocked={authAnomalyReportLocked}
                                                     onPatch={patchAuthAnomaly}
                                                 />
+                                            </div>
+                                            <div className="privacy-monitor-cell">
+                                                <GlassesMonitorSection enabled={glassesEnabled} onPatch={patchGlasses} />
                                             </div>
                                             <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>

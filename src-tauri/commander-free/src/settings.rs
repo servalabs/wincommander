@@ -1118,6 +1118,9 @@ pub struct PrivacySettings {
     /// #4: remote-access monitor — active incoming-session detector. Paid.
     #[serde(default)]
     pub remote_access_monitor: RemoteAccessMonitorSettings,
+    /// Smart-glasses BLE monitor. Free; runtime lives in glasses_detector.
+    #[serde(default)]
+    pub glasses_monitor: GlassesMonitorSettings,
     /// Access & Session Monitor policy. Runtime authority lives in the Pro
     /// sidecar; this persists its bounded detector and reporting preferences.
     #[serde(default)]
@@ -1198,6 +1201,13 @@ pub struct RansomwareMonitorSettings {
 pub struct RemoteAccessMonitorSettings {
     pub enabled: Option<bool>,
     pub tools: Option<std::collections::HashMap<String, bool>>,
+}
+
+/// Background BLE scan for camera-capable smart glasses. Off by default.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GlassesMonitorSettings {
+    pub enabled: Option<bool>,
 }
 
 /// Security-log access anomaly policy. `None` uses the conservative Pro

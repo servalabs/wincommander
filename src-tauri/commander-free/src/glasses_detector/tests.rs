@@ -124,3 +124,63 @@ fn live_glasses_scan() {
     println!("{}", serde_json::to_string_pretty(&summary).unwrap());
     assert_ne!(summary.status, "start_failed", "{:?}", summary.stop_reason);
 }
+
+mod alert_gate {
+    use super::super::alerts::{AlertGate, ALERT_COOLDOWN_MS};
+    use super::obs;
+
+    fn at(gate: &mut AlertGate, device: u64, rssi: i16, ids: &[u16], now_ms: u64) -> bool {
+        gate.observe(&obs(device, rssi, ids), now_ms, || "t".into())
+            .is_some()
+    }
+
+    #[test]
+    fn single_sighting_never_alerts() {
+        let mut gate = AlertGate::default();
+        assert!(!at(&mut gate, 1, -60, &[0x0D53], 0));
+    }
+
+    #[test]
+    fn second_near_sighting_within_window_alerts_once_per_cooldown() {
+        let mut gate = AlertGate::default();
+        assert!(!at(&mut gate, 1, -60, &[0x0D53], 0));
+        assert!(at(&mut gate, 1, -61, &[0x0D53], 2_000));
+        assert!(
+            !at(&mut gate, 1, -61, &[0x0D53], 4_000),
+            "cooldown suppresses repeats"
+        );
+        assert!(
+            !at(&mut gate, 2, -55, &[0x0D53], 5_000),
+            "same vendor shares the cooldown"
+        );
+        assert!(!at(&mut gate, 1, -60, &[0x0D53], ALERT_COOLDOWN_MS + 2_000));
+        assert!(at(&mut gate, 1, -60, &[0x0D53], ALERT_COOLDOWN_MS + 3_000));
+    }
+
+    #[test]
+    fn sightings_must_be_within_ten_seconds_of_each_other() {
+        let mut gate = AlertGate::default();
+        assert!(!at(&mut gate, 1, -60, &[0x0D53], 0));
+        assert!(!at(&mut gate, 1, -60, &[0x0D53], 60_000));
+        assert!(at(&mut gate, 1, -60, &[0x0D53], 61_000));
+    }
+
+    #[test]
+    fn far_low_confidence_and_unrelated_adverts_never_alert() {
+        let mut gate = AlertGate::default();
+        for t in [0, 1_000, 2_000] {
+            assert!(!at(&mut gate, 1, -90, &[0x0D53], t), "too far");
+            assert!(!at(&mut gate, 2, -50, &[0x05D6], t), "chip vendor only");
+            assert!(!at(&mut gate, 3, -50, &[0x004C], t), "unrelated vendor");
+        }
+    }
+
+    #[test]
+    fn vendors_have_independent_cooldowns() {
+        let mut gate = AlertGate::default();
+        at(&mut gate, 1, -60, &[0x0D53], 0);
+        assert!(at(&mut gate, 1, -60, &[0x0D53], 1_000));
+        at(&mut gate, 2, -60, &[0x03C2], 1_500);
+        assert!(at(&mut gate, 2, -60, &[0x03C2], 2_500));
+    }
+}

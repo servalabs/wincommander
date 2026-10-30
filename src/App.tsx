@@ -54,6 +54,7 @@ import useRansomwareMonitor, {
   DEFAULT_RANSOMWARE_ACTION,
 } from "./hooks/useRansomwareMonitor";
 import useRemoteAccessMonitor from "./hooks/useRemoteAccessMonitor";
+import useGlassesMonitor from "./hooks/useGlassesMonitor";
 import usePortGuardMonitor from "./hooks/usePortGuardMonitor";
 import useWifiGuardMonitor, {
   DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
@@ -655,6 +656,7 @@ function AppContent({ splashDone, onSplashComplete }: {
       ...(hasPaid && privacy?.decoyMonitor?.enabled === true ? ["decoy-monitor" as const] : []),
       ...(privacy?.ransomwareMonitor?.enabled === true ? ["ransomware-monitor" as const] : []),
       ...(hasPaid && privacy?.remoteAccessMonitor?.enabled === true ? ["remote-access-monitor" as const] : []),
+      ...(privacy?.glassesMonitor?.enabled === true ? ["glasses-monitor" as const] : []),
       ...(usb && (usb.monitorEnabled === true || paidUsbEnabled) ? ["usb-security" as const] : []),
       ...(hasPaid && appSettings.ideal?.network?.wifiGuard?.enabled === true ? ["wifi-guard" as const] : []),
       ...(hasPaid && privacy?.authAnomalyMonitor?.enabled === true ? ["auth-anomaly-monitor" as const] : []),
@@ -746,6 +748,10 @@ function AppContent({ splashDone, onSplashComplete }: {
     remoteAccessTools,
     hasPaid && remoteAccessEnabled ? reportStartupProtectionRearm : undefined,
   );
+
+  // Free smart-glasses BLE monitor — Rust owns the watcher and alerts.
+  const glassesEnabled = appSettings?.ideal?.privacy?.glassesMonitor?.enabled === true;
+  useGlassesMonitor(glassesEnabled, glassesEnabled ? reportStartupProtectionRearm : undefined);
 
   // Free owns only the basic attach timeline. Pro owns HID timing intelligence
   // and automatic isolation. Reconcile them separately so a Free user keeps

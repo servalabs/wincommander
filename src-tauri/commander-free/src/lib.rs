@@ -2877,6 +2877,11 @@ pub fn run() {
             bluetooth_control::bluetooth_control_set,
             // ── Smart-glasses BLE proximity scan (free, read-only) ──
             glasses_detector::glasses_detector_scan,
+            glasses_detector::monitor::start_glasses_monitor,
+            glasses_detector::monitor::stop_glasses_monitor,
+            glasses_detector::monitor::glasses_monitor_status,
+            glasses_detector::monitor::get_glasses_monitor_recent,
+            glasses_detector::monitor::clear_glasses_monitor_recent,
             // ── VPN-drop kill switch (free, tunnel watchdog) ──
             vpn_kill_switch::vpn_kill_switch_arm,
             vpn_kill_switch::vpn_kill_switch_status,

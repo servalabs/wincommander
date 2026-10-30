@@ -7763,6 +7763,16 @@
       ]
     },
     {
+      "id": "tauri:clear_glasses_monitor_recent",
+      "name": "clear_glasses_monitor_recent",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/GlassesMonitorSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:clear_license_cache",
       "name": "clear_license_cache",
       "transport": "tauri",
@@ -9001,6 +9011,16 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:get_glasses_monitor_recent",
+      "name": "get_glasses_monitor_recent",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/GlassesMonitorSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:get_investigator_install_status",
       "name": "get_investigator_install_status",
       "transport": "tauri",
@@ -9651,6 +9671,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "tauri:glasses_monitor_status",
+      "name": "glasses_monitor_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/GlassesMonitorSection.tsx"
+      ]
     },
     {
       "id": "tauri:hide_all_server_apps",
@@ -11304,6 +11334,14 @@
       ]
     },
     {
+      "id": "tauri:start_glasses_monitor",
+      "name": "start_glasses_monitor",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:start_lockdown_words",
       "name": "start_lockdown_words",
       "transport": "tauri",
@@ -11504,6 +11542,14 @@
       "frontendReferences": [
         "src/panels/privacy/FileWatchTriggerSection.tsx"
       ]
+    },
+    {
+      "id": "tauri:stop_glasses_monitor",
+      "name": "stop_glasses_monitor",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
     },
     {
       "id": "tauri:stop_lockdown_words",
