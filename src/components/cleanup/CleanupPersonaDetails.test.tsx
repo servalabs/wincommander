@@ -228,6 +228,16 @@ describe("System Cleanup persona details", () => {
     expect(html).toContain("disabled");
   });
 
+  test("offers more details for a selected account with an empty incomplete preview", () => {
+    const preview = readCleanupUserSummary({ count: 2, partial: true, records: [], sampleCount: 0, previewLimit: 0, truncated: true });
+    const history = ALL_CATEGORIES.find(category => category.id === "psHistory")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="simple" count={preview.count} items={preview.items}
+      rawData={preview.raw} error={preview.error} accountLabel="Other user" accountName="other-folder"
+      clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Load more account details");
+    expect(html).toContain("disabled");
+  });
+
   test("accepts expanded records only from the requested account and card", () => {
     const category = { id: "psHistory", count: 2, items: ["one", "two"], records: [{ command: "one" }, { command: "two" }], sampleCount: 2, previewLimit: 50000, truncated: false, snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: null, totalRows: 2 };
     const data = { users: [{ username: "folder-name", categories: [category] }] };

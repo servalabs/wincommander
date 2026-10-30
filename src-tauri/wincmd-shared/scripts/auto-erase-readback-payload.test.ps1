@@ -13,7 +13,10 @@ try {
         TaskPath = $script:SystemMaintenanceTaskPath; TaskName = $taskName; State = 'Ready'
         Principal = [pscustomobject]@{ UserId = $sid; LogonType = 'S4U'; RunLevel = 'Highest' }
         Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = "-NoProfile -File `"$path`"" })
-        Triggers = @([pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M' } })
+        Triggers = @(
+            [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M' }; Enabled = $true; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskTimeTrigger' } },
+            [pscustomobject]@{ Enabled = $true; UserId = $sid; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' } }
+        )
         Description = 'System Maintenance scheduled cleanup v20'
     }
     function Get-ScheduledTask { [CmdletBinding()] param() $script:fixtureTask }
@@ -32,6 +35,18 @@ try {
     $script:fixtureTask.Actions[0].Arguments = $argument
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $script:fixtureTask.Triggers[0].Enabled = $false
+    $disabledTime = Get-AutoEraseSchedules
+    if ($disabledTime.error -or $disabledTime.schedules[0].payloadVerified) { throw 'A disabled repeating trigger must not be verified.' }
+    $script:fixtureTask.Triggers[0].Enabled = $true
+    $script:fixtureTask.Triggers[1].Enabled = $false
+    $disabledLogon = Get-AutoEraseSchedules
+    if ($disabledLogon.error -or $disabledLogon.schedules[0].payloadVerified) { throw 'A disabled catch-up trigger must not be verified.' }
+    $script:fixtureTask.Triggers[1].Enabled = $true
+    $script:fixtureTask.Triggers[1].UserId = 'S-1-5-18'
+    $wrongLogonOwner = Get-AutoEraseSchedules
+    if ($wrongLogonOwner.error -or $wrongLogonOwner.schedules[0].payloadVerified) { throw 'A catch-up trigger for another account must not be verified.' }
+    $script:fixtureTask.Triggers[1].UserId = $sid
     $script:fixtureTask.Principal.LogonType = 'Interactive'
     $wrongLogon = Get-AutoEraseSchedules
     if ($wrongLogon.error -or $wrongLogon.schedules[0].payloadVerified) { throw 'An incompatible Scheduler logon type must not be verified.' }

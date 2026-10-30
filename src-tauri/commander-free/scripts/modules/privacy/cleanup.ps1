@@ -4500,30 +4500,46 @@ function Get-ReliabilityHistoryInfo {
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
+function Get-CleanupExplorerSearchInventory {
+    param([string]$RegistryRoot, [int]$PreviewLimit = [int]::MaxValue)
+    $files = [Collections.Generic.List[object]]::new()
+    $count = 0
+    $partial = $false
+    foreach ($source in @(
+        @{ label='WordWheelQuery'; path="$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery" },
+        @{ label='TypedPaths'; path="$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths" }
+    )) {
+        try {
+            try { $item = Get-Item -LiteralPath $source.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            foreach ($name in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $value = $item.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    $type = [string]$item.GetValueKind($name)
+                    $count++
+                    if ($files.Count -lt $PreviewLimit) {
+                        $record = @{ source=$source.label; name=$name; key=$name; path=$source.path; value=$value; valueType=$type; sizeKB=0; modified='' }
+                        if ($source.label -eq 'WordWheelQuery' -and $name -match '^\d+$' -and $value -is [byte[]] -and $value.Length % 2 -eq 0) {
+                            try {
+                                $text = [System.Text.UnicodeEncoding]::new($false, $false, $true).GetString($value).TrimEnd([char]0)
+                                if ($text -and $text -notmatch '[\x00-\x08\x0b\x0c\x0e-\x1f]') { $record.text = $text }
+                            } catch { }
+                        }
+                        $files.Add($record)
+                    }
+                } catch { $partial = $true }
+            }
+        } catch { $partial = $true }
+    }
+    @{ files=@($files.ToArray()); total=$count; totalSizeMB=0; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some Explorer search history could not be checked.' } else { $null } }
+}
+
 function Get-ExplorerSearchHistoryInfo {
     # Returns Explorer search-box + address-bar typed-path history entries.
     # WordWheelQuery is present on all supported Windows versions; its
     # TypedPaths sibling can be absent depending on build — guarded
     # independently so a missing one doesn't blank out the other.
-    try {
-        $roots = @(
-            @{ label = 'WordWheelQuery'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery' },
-            @{ label = 'TypedPaths';     path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths' }
-        )
-        $files = @()
-        foreach ($root in $roots) {
-            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
-                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupExplorerSearchInventory -RegistryRoot 'HKCU:'
 }
 
 function Get-SearchPersonalizationInfo {
@@ -6578,20 +6594,11 @@ function Get-CleanupSummaryAllUsers {
                     }
                     'explorerSearchHistory' {
                         if ($hiveAvailable) {
-                            # Match Get-ExplorerSearchHistoryInfo: WordWheelQuery + TypedPaths values
-                            foreach ($k in @(
-                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery",
-                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths"
-                            )) {
-                                if (Test-CleanupSummaryPath $k) {
-                                    $p2 = Get-ItemProperty -Path $k -EA Stop
-                                    if ($p2) {
-                                        $vals = @($p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') })
-                                        $count += $vals.Count
-                                        $items += $vals | Select-Object -First $previewMax | ForEach-Object { $_.Name }
-                                    }
-                                }
-                            }
+                            $history = Get-CleanupExplorerSearchInventory -RegistryRoot $hiveRoot -PreviewLimit $previewMax
+                            $count = $history.total
+                            $records = @($history.files)
+                            $items = @($records | ForEach-Object { $_.name })
+                            $categoryPartial = [bool]$history.partial
                         } else { $items = @("[registry unavailable]") }
                     }
                 }

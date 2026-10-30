@@ -2883,7 +2883,7 @@ function Get-AutoEraseSchedules {
             $payloadVerified = $false
             try {
                 $exactInterval = $repetition -and [Xml.XmlConvert]::ToTimeSpan($repetition) -eq [TimeSpan]::FromMinutes($minutes)
-                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes))
+                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity))
             } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
@@ -2992,6 +2992,20 @@ function Test-AutoEraseRunnablePayload {
     $tokens = $null; $parseErrors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseInput($body, [ref]$tokens, [ref]$parseErrors)
     return @($parseErrors).Count -eq 0
+}
+
+# A task can remain Ready even when its time or catch-up trigger has been
+# disabled in Task Scheduler. Verify both triggers are still enabled.
+function Test-AutoEraseTriggerReadback {
+    param($Task, $Identity)
+    $isSystem = $Identity.ownerSid -eq 'S-1-5-18'
+    $timeTriggers = @($Task.Triggers | Where-Object { $_.Repetition.Interval })
+    $catchUpClass = if ($isSystem) { 'MSFT_TaskBootTrigger' } else { 'MSFT_TaskLogonTrigger' }
+    $catchUp = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq $catchUpClass })
+    if ($timeTriggers.Count -ne 1 -or $timeTriggers[0].CimClass.CimClassName -ne 'MSFT_TaskTimeTrigger' -or
+        $timeTriggers[0].Enabled -ne $true -or $catchUp.Count -ne 1 -or $catchUp[0].Enabled -ne $true) { return $false }
+    if (-not $isSystem -and (-not $catchUp[0].UserId -or (Resolve-AutoEraseSid ([string]$catchUp[0].UserId)) -ne $Identity.ownerSid)) { return $false }
+    return $true
 }
 
 # Copy task XML instead of recreating schedules: dates, disabled state, selected
