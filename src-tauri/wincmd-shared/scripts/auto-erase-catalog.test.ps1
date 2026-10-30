@@ -7,9 +7,17 @@ $manualOnlyOutput = & bun -e "import { MANUAL_ONLY_SCHEDULE_IDS } from './src/pa
 if ($LASTEXITCODE -ne 0) { throw 'Could not read the manual-only scheduling policy.' }
 $frontendManualOnly = @($manualOnlyOutput | ConvertFrom-Json)
 if (@(Compare-Object ($frontendManualOnly | Sort-Object) ($script:AutoEraseManualOnlyCategories | Sort-Object)).Count) { throw 'Frontend/backend manual-only schedule policies differ.' }
+$protectedOutput = & bun -e "import { DEFAULT_BULK_CLEAR_EXCLUDES } from './src/panels/cleanup/cleanupManualPolicy.ts'; console.log(JSON.stringify(DEFAULT_BULK_CLEAR_EXCLUDES))"
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the default-excluded scheduling policy.' }
+$frontendProtected = [string[]]($protectedOutput | ConvertFrom-Json)
+if ($frontendProtected.Count -ne 10 -or @(Compare-Object ($frontendProtected | Sort-Object) ($script:AutoEraseProtectedCategories | Sort-Object)).Count) { throw 'Frontend/backend default-excluded schedule policies differ.' }
 $catalogIds = @($catalog | ForEach-Object id)
 $support = Get-AutoEraseSupportedCategories
 $manual = @($support.schedulableCategories)
+foreach ($id in $frontendProtected) {
+    $card = @($catalog | Where-Object id -eq $id)
+    if ($card.Count -ne 1 -or -not $card[0].schedulable -or $id -notin $manual -or -not $script:AutoEraseScripts.ContainsKey($id)) { throw "Default-excluded card cannot be individually scheduled: $id" }
+}
 $unsupported = @($support.unsupportedCategories | ForEach-Object categoryId)
 if ($catalog.Count -ne 80) { throw 'Expected all 80 scan-and-clear catalog entries.' }
 $classified = @($manual) + @($unsupported)
