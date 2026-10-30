@@ -30,7 +30,7 @@ function Get-Item {
     return [pscustomobject]@{ Name = 'fixture-category' }
 }
 function Get-ChildItem {
-    param($Path, $ErrorAction, $Include, [switch]$Recurse, [int]$Depth, [switch]$Force)
+    param($Path, $ErrorAction, $Include, [switch]$Recurse, [int]$Depth, [switch]$Force, [switch]$File)
     if ($script:coverageFixture) {
         if ($script:deniedContents) { throw [System.UnauthorizedAccessException]::new('Synthetic access denied') }
         for ($index = 0; $index -lt $script:fixtureCount; $index++) {
@@ -154,16 +154,16 @@ try {
         $script:fixtureCount = $fixtureCount
         $wal = Get-SQLiteWALList
         $recall = Get-RecallDatabaseInfo
-        $expectedPartial = $fixtureCount -ge 100
-        Assert-Count $wal.partial $expectedPartial "WAL limit state for $fixtureCount files per root"
-        Assert-Count $recall.partial $expectedPartial "Recall limit state for $fixtureCount files per source"
-        Assert-Count $wal.truncated $expectedPartial 'WAL truncation flag'
-        Assert-Count $recall.truncated $expectedPartial 'Recall truncation flag'
+        Assert-Count $wal.partial $false "WAL scan state for $fixtureCount files per root"
+        Assert-Count $recall.partial $false "Recall scan state for $fixtureCount files per source"
+        Assert-Count $wal.truncated $false 'WAL truncation flag'
+        Assert-Count $recall.truncated $false 'Recall truncation flag'
         Assert-Count $wal.coverage 'limited' 'WAL coverage classification'
         Assert-Count $recall.coverage 'limited' 'Recall coverage classification'
         if ($wal.coverageNote -notmatch 'depth 5') { throw 'WAL depth boundary was not reported' }
-        Assert-Count $wal.total (2 * [math]::Min($fixtureCount, 100)) 'WAL listed count'
-        Assert-Count $recall.total (4 * [math]::Min($fixtureCount, 100)) 'Recall listed count'
+        Assert-Count $wal.total (2 * $fixtureCount) 'WAL listed count'
+        Assert-Count $recall.total (4 * $fixtureCount) 'Recall listed count'
+        if ($fixtureCount -and (@($wal.files | Where-Object { -not $_.path }).Count -or @($recall.databases | Where-Object { -not $_.path }).Count)) { throw 'A returned database record omitted its location.' }
     }
     $script:deniedRoot = $true
     Assert-Count (Get-SQLiteWALList).error $true 'Denied WAL root is an error'

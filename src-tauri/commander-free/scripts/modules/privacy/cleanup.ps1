@@ -2977,35 +2977,31 @@ function Get-CrashDumpList {
 }
 
 function Get-SQLiteWALList {
-    # Returns all .wal/.shm files found in LOCALAPPDATA / APPDATA (max 100)
+    # Returns all .wal/.shm files found in the stated app-data scope.
     # Uses -Depth 5 to avoid extremely deep recursive scans that can time out
     try {
-        $found = @()
-        $limitReached = $false
+        $found = [Collections.Generic.List[object]]::new()
         $roots = @($env:LOCALAPPDATA, $env:APPDATA)
         foreach ($root in $roots) {
             try { $null = Get-Item -LiteralPath $root -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { continue }
-            $rootCount = 0
-            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -Force -ErrorAction Stop |
-                Select-Object -First 100 |
+            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -File -Force -ErrorAction Stop |
                 ForEach-Object {
-                    $rootCount++
-                    $found += @{
+                    $found.Add(@{
                         name     = $_.Name
+                        path     = $_.FullName
                         sizeKB   = [math]::Round($_.Length/1KB,1)
                         dir      = Split-Path $_.FullName -Parent | Split-Path -Leaf
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
+                    })
                 }
-            if ($rootCount -ge 100) { $limitReached = $true }
         }
         @{
-            files = $found; total = $found.Count
+            files = @($found.ToArray()); total = $found.Count
             totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
-            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5, with at most 100 matching files per root.'
-            partial = $limitReached; truncated = $limitReached
-            message = if ($limitReached) { 'A per-root limit was reached; additional matching files may exist.' } else { 'This count covers the stated depth-limited scope.' }
+            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5.'
+            partial = $false; truncated = $false
+            message = 'This count covers the stated depth-limited scope.'
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -3014,8 +3010,7 @@ function Get-SQLiteWALList {
 function Get-RecallDatabaseInfo {
     # Returns Recall/Timeline/notification DB file listing
     try {
-        $dbs = @()
-        $limitReached = $false
+        $dbs = [Collections.Generic.List[object]]::new()
         $sources = @(
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\CoreAIPlatform.00" },
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\Microsoft\Windows\Recall" },
@@ -3025,26 +3020,23 @@ function Get-RecallDatabaseInfo {
         foreach ($src in $sources) {
             try { $null = Get-Item -LiteralPath $src.path -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { continue }
-            $sourceCount = 0
-            Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -Force -ErrorAction Stop |
-                Select-Object -First 100 |
+            Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -File -Force -ErrorAction Stop |
                 ForEach-Object {
-                    $sourceCount++
-                    $dbs += @{
+                    $dbs.Add(@{
                         source   = $src.label
                         name     = $_.Name
+                        path     = $_.FullName
                         sizeKB   = [math]::Round($_.Length/1KB,1)
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
+                    })
                 }
-            if ($sourceCount -ge 100) { $limitReached = $true }
         }
         @{
-            databases = $dbs; total = $dbs.Count
+            databases = @($dbs.ToArray()); total = $dbs.Count
             totalSizeMB = [math]::Round(($dbs | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
-            coverage = 'limited'; coverageNote = 'Scans four specified Recall, Timeline and notification locations, with at most 100 matching files per location.'
-            partial = $limitReached; truncated = $limitReached
-            message = if ($limitReached) { 'A per-location limit was reached; additional matching files may exist.' } else { 'This count covers the stated locations only.' }
+            coverage = 'limited'; coverageNote = 'Scans four specified Recall, Timeline and notification locations.'
+            partial = $false; truncated = $false
+            message = 'This count covers the stated locations only.'
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -3291,52 +3283,76 @@ function Get-VirtualMachineArtifactsInfo {
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
-function Get-DeveloperCachesInfo {
+function Assert-CleanupDeveloperCacheAncestors {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Base)
+    $basePath = [IO.Path]::GetFullPath($Base).TrimEnd('\')
+    $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if (-not $fullPath.StartsWith($basePath + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Developer cache path is outside its selected profile.' }
+    $parent = [IO.Path]::GetDirectoryName($fullPath)
+    while ($parent -and $parent.Length -ge $basePath.Length) {
+        $item = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer cache path contains an unsupported reparse point.' }
+        if ($parent -ieq $basePath) { return }
+        $parent = [IO.Path]::GetDirectoryName($parent)
+    }
+    throw 'Developer cache path could not be verified.'
+}
+
+function Get-CleanupDeveloperCachesInfo {
+    param([string]$AppDataPath, [string]$LocalAppDataPath, [string]$UserProfilePath, [int]$previewLimit)
     # Configuration files are surfaced by presence only; token contents are never read or returned.
     # A developer cache can contain millions of files. Keep complete count/size
     # aggregation while returning only a fixed preview so the IPC payload and
     # trace-detail dialog cannot allocate one UI row per file.
     try {
-        $previewLimit = 200
         $files = [System.Collections.Generic.List[object]]::new()
         $total = [int64]0
         $totalBytes = [int64]0
         $cacheDirs = @(
-            @{ label = 'npm cache'; path = (Join-Path $env:APPDATA 'npm-cache') },
-            @{ label = 'npm cache'; path = (Join-Path $env:LOCALAPPDATA 'npm-cache') },
-            @{ label = 'pip cache'; path = (Join-Path $env:LOCALAPPDATA 'pip\Cache') },
-            @{ label = 'cargo registry cache'; path = (Join-Path $env:USERPROFILE '.cargo\registry\cache') },
-            @{ label = 'cargo registry source'; path = (Join-Path $env:USERPROFILE '.cargo\registry\src') }
+            @{ label = 'npm cache'; path = (Join-Path $AppDataPath 'npm-cache'); base = $AppDataPath },
+            @{ label = 'npm cache'; path = (Join-Path $LocalAppDataPath 'npm-cache'); base = $LocalAppDataPath },
+            @{ label = 'pip cache'; path = (Join-Path $LocalAppDataPath 'pip\Cache'); base = $LocalAppDataPath },
+            @{ label = 'cargo registry cache'; path = (Join-Path $UserProfilePath '.cargo\registry\cache'); base = $UserProfilePath },
+            @{ label = 'cargo registry source'; path = (Join-Path $UserProfilePath '.cargo\registry\src'); base = $UserProfilePath }
         )
         foreach ($cache in $cacheDirs) {
-            if (-not (Test-Path $cache.path -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $cache.path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $root = Get-Item -LiteralPath $cache.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer cache root is not a regular directory.' }
+            Assert-CleanupDeveloperCacheAncestors -Path $cache.path -Base $cache.base
+            Get-ChildItem -LiteralPath $cache.path -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Developer cache inventory contains a reparse point.' }
+                if ($_.PSIsContainer) { return }
                 $total++
                 if ($files.Count -lt $previewLimit) {
-                    [void]$files.Add(@{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    [void]$files.Add(@{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 }
                 $totalBytes += $_.Length
             }
         }
         foreach ($config in @(
-            @{ label = 'npm token configuration present'; path = (Join-Path $env:USERPROFILE '.npmrc') },
-            @{ label = 'cargo configuration present'; path = (Join-Path $env:USERPROFILE '.cargo\config.toml') },
-            @{ label = 'cargo credentials present'; path = (Join-Path $env:USERPROFILE '.cargo\credentials.toml') }
+            @{ label = 'npm token configuration present'; path = (Join-Path $UserProfilePath '.npmrc') },
+            @{ label = 'cargo configuration present'; path = (Join-Path $UserProfilePath '.cargo\config.toml') },
+            @{ label = 'cargo credentials present'; path = (Join-Path $UserProfilePath '.cargo\credentials.toml') }
         )) {
-            if (Test-Path $config.path -PathType Leaf -ErrorAction SilentlyContinue) {
-                $item = Get-Item -LiteralPath $config.path -Force -ErrorAction SilentlyContinue
-                if ($item) {
-                    $total++
-                    if ($files.Count -lt $previewLimit) {
-                        [void]$files.Add(@{ name = $config.label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
-                    }
-                    $totalBytes += $item.Length
-                }
+            try { $item = Get-Item -LiteralPath $config.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer configuration path is not a regular file.' }
+            Assert-CleanupDeveloperCacheAncestors -Path $config.path -Base $UserProfilePath
+            $total++
+            if ($files.Count -lt $previewLimit) {
+                [void]$files.Add(@{ name = $config.label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
+            $totalBytes += $item.Length
         }
         @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = 200; truncated = $false } }
+    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = $previewLimit; truncated = $false } }
+}
+
+function Get-DeveloperCachesInfo {
+    $previewLimit = 200
+    Get-CleanupDeveloperCachesInfo -AppDataPath $env:APPDATA -LocalAppDataPath $env:LOCALAPPDATA -UserProfilePath $env:USERPROFILE -previewLimit $previewLimit
 }
 
 function Get-CredentialManagerInfo {
@@ -3774,17 +3790,17 @@ function Get-OfficeTempFilesInfo {
             (Join-Path $env:USERPROFILE 'Downloads')
         )
         foreach ($root in $roots) {
-            if (-not (Test-Path $root -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            if (-not (Test-Path $root -ErrorAction Stop)) { continue }
+            Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object {
+                $files += @{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $_.Length
             }
         }
         $tempRoot = $env:TEMP
-        if (Test-Path $tempRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending | Select-Object -First 500 | ForEach-Object {
-                    $files += @{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        if (Test-Path $tempRoot -ErrorAction Stop) {
+            Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop |
+                Sort-Object LastWriteTime -Descending | ForEach-Object {
+                    $files += @{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                     $totalBytes += $_.Length
                 }
         }
@@ -5725,8 +5741,8 @@ function ConvertTo-CleanupCanonicalJson {
 }
 
 function Get-CleanupSummaryPage {
-    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot)
-    if ($Offset -lt 0 -or ($Offset -gt 0 -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ExpectedSnapshot)) {
+    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot, [int]$ChunkOffset = 0)
+    if ($Offset -lt 0 -or $ChunkOffset -lt 0 -or (($Offset -gt 0 -or $ChunkOffset -gt 0) -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ChunkOffset -eq 0 -and $ExpectedSnapshot)) {
         throw 'The account detail page request is invalid.'
     }
     Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
@@ -5749,7 +5765,7 @@ function Get-CleanupSummaryPage {
         $snapshot = 'sha256:' + [BitConverter]::ToString($sha.Hash).Replace('-', '').ToLowerInvariant()
     } finally { $sha.Dispose() }
     if ($ExpectedSnapshot -and $ExpectedSnapshot -cne $snapshot) { throw 'Account details changed while loading. Rescan before trying again.' }
-    if ($Offset -gt $Records.Count) { throw 'The account detail page offset is invalid.' }
+    if ($Offset -gt $Records.Count -or ($ChunkOffset -gt 0 -and $Offset -ge $Records.Count)) { throw 'The account detail page offset is invalid.' }
     $pageSize = 5000
     $pageBudget = 8MB - 1024
     $pageBytes = 0
@@ -5758,9 +5774,18 @@ function Get-CleanupSummaryPage {
         $json = ConvertTo-Json -InputObject $Records[$index] -Depth 30 -Compress
         $rowBytes = [Text.Encoding]::UTF8.GetByteCount($json) + 1
         if ($rowBytes -gt $pageBudget) {
-            if ($pageRows.Count -eq 0) { throw 'One account detail record exceeds the size limit.' }
+            if ($pageRows.Count -eq 0) {
+                $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+                if ($ChunkOffset -ge $bytes.Length) { throw 'The account detail chunk offset is invalid.' }
+                $chunkLength = [Math]::Min(3145728, $bytes.Length - $ChunkOffset)
+                $chunk = [Convert]::ToBase64String($bytes, $ChunkOffset, $chunkLength)
+                $nextChunk = $ChunkOffset + $chunkLength
+                $nextRecord = $Offset + 1
+                return @{ records=@(); snapshotHash=$snapshot; nextOffset=if ($nextRecord -lt $Records.Count) { $nextRecord } else { $null }; totalRows=$Records.Count; recordChunk=@{ offset=$ChunkOffset; totalBytes=$bytes.Length; data=$chunk; nextByteOffset=if ($nextChunk -lt $bytes.Length) { $nextChunk } else { $null } } }
+            }
             break
         }
+        if ($ChunkOffset -gt 0) { throw 'The account detail chunk request is invalid.' }
         if ($pageBytes + $rowBytes -gt $pageBudget) { break }
         $pageRows.Add($Records[$index])
         $pageBytes += $rowBytes
@@ -5811,7 +5836,8 @@ function Get-CleanupSummaryAllUsers {
         [string]$TargetUsers = '',
         [bool]$FullDetail = $false,
         [int]$DetailOffset = 0,
-        [string]$SnapshotHash = ''
+        [string]$SnapshotHash = '',
+        [int]$DetailChunkOffset = 0
     )
 
     function Test-CleanupSummaryPath {
@@ -5825,20 +5851,20 @@ function Get-CleanupSummaryAllUsers {
     $allCats = @('rdpHistory','recentFiles','jumpLists','psHistory','browserFootprints',
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
-                 'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory')
+                 'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $allCats }
     } else { $allCats }
 
     if (@($requestedCats).Count -eq 0) { return @{ error = $true; status = 'error'; message = 'No supported per-user cleanup categories were requested.'; users = @(); userCount = 0 } }
 
-    $targetArr = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
+    $targetArr = @(if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-    } else { @() }
+    })
     if ($FullDetail -and ($requestedCats.Count -ne 1 -or $targetArr.Count -ne 1)) {
         return @{ error = $true; status = 'error'; message = 'Full details require exactly one category and one user.'; users = @(); userCount = 0 }
     }
-    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or ($DetailOffset -gt 0 -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $SnapshotHash)) {
+    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $DetailChunkOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or $DetailChunkOffset -lt 0 -or (($DetailOffset -gt 0 -or $DetailChunkOffset -gt 0) -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $DetailChunkOffset -eq 0 -and $SnapshotHash)) {
         return @{ error = $true; status = 'error'; message = 'The account detail page request is invalid.'; users = @(); userCount = 0 }
     }
 
@@ -5945,7 +5971,16 @@ function Get-CleanupSummaryAllUsers {
                 # main cleanup panel uses — counts will always be identical.
                 # For other users fall through to the file-system + offline-hive path.
                 $delegated = $false
-                if ($isCurrentUser) {
+                if ($cat -eq 'developerCaches') {
+                    $profileApp = if ($isCurrentUser) { $env:APPDATA } else { $appData }
+                    $profileLocal = if ($isCurrentUser) { $env:LOCALAPPDATA } else { $localApp }
+                    $profileRoot = if ($isCurrentUser) { $env:USERPROFILE } else { $prof.FullName }
+                    $r = Get-CleanupDeveloperCachesInfo -AppDataPath $profileApp -LocalAppDataPath $profileLocal -UserProfilePath $profileRoot -previewLimit $previewMax
+                    $delegated = $true
+                    $count = if ($r.total) { [int]$r.total } else { 0 }
+                    $records = @($r.files)
+                    $items = @($r.files | ForEach-Object { $_.name })
+                } elseif ($isCurrentUser) {
                     $delegated = $true
                     switch ($cat) {
                         'recentFiles' {
@@ -6437,14 +6472,16 @@ function Get-CleanupSummaryAllUsers {
             }
             $detailPage = $null
             if ($FullDetail -and -not $scanError) {
-                try { $detailPage = Get-CleanupSummaryPage -Records @($records) -Count $count -Category $cat -ProfileSid $prof.SID -Offset $DetailOffset -ExpectedSnapshot $SnapshotHash }
+                try { $detailPage = Get-CleanupSummaryPage -Records @($records) -Count $count -Category $cat -ProfileSid $prof.SID -Offset $DetailOffset -ExpectedSnapshot $SnapshotHash -ChunkOffset $DetailChunkOffset }
                 catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
             if ($detailPage) {
                 $categoryRecord.records = $detailPage.records; $categoryRecord.items = @(); $categoryRecord.sampleCount = @($detailPage.records).Count
-                $categoryRecord.truncated = $categoryRecord.truncated -or ($null -ne $detailPage.nextOffset)
+                $categoryRecord.sourceTruncated = $categoryRecord.truncated
+                $categoryRecord.truncated = $categoryRecord.truncated -or ($null -ne $detailPage.nextOffset) -or ($null -ne $detailPage.recordChunk)
                 $categoryRecord.snapshotHash = $detailPage.snapshotHash; $categoryRecord.nextOffset = $detailPage.nextOffset; $categoryRecord.totalRows = $detailPage.totalRows
+                if ($detailPage.recordChunk) { $categoryRecord.recordChunk = $detailPage.recordChunk }
             }
             $categories += $categoryRecord
         }

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -14,6 +14,34 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("reassembles a large record without breaking Unicode across chunk boundaries", () => {
+    const record = { command: `${"a".repeat(8 * 1024 * 1024)}🧪世界` };
+    const bytes = new TextEncoder().encode(JSON.stringify(record));
+    const encode = (value: Uint8Array) => {
+      let binary = "";
+      for (let index = 0; index < value.length; index += 32768) binary += String.fromCharCode(...value.subarray(index, index + 32768));
+      return btoa(binary);
+    };
+    const boundaries = [0, bytes.length - 7, bytes.length - 4, bytes.length];
+    const encoded = [0, 3 * 1024 * 1024, 6 * 1024 * 1024, boundaries[1], boundaries[2], boundaries[3]];
+    const decoded = encoded.slice(0, -1).map((offset, index) => {
+      const next = encoded[index + 1];
+      return decodeCleanupRecordChunk({ offset, totalBytes: bytes.length, data: encode(bytes.subarray(offset, next)), nextByteOffset: next === bytes.length ? null : next }, offset)!;
+    });
+    expect(assembleCleanupRecordChunks(decoded, bytes.length)).toEqual(record);
+    expect(assembleCleanupRecordChunks(decoded.slice(1), bytes.length)).toBeNull();
+    expect(decodeCleanupRecordChunk({ offset: 0, totalBytes: 4, data: "YQ==", nextByteOffset: 2 }, 0)).toBeNull();
+  });
+
+  test("accepts a chunk only for the requested account and unchanged snapshot", () => {
+    const hash = `sha256:${"a".repeat(64)}`;
+    const chunk = { offset: 0, totalBytes: 2, data: "e30=", nextByteOffset: null };
+    const response = { users: [{ username: "Alice", categories: [{ id: "psHistory", count: 1, items: [], records: [], sampleCount: 0, previewLimit: 20, truncated: true, sourceTruncated: false, snapshotHash: hash, nextOffset: null, totalRows: 1, recordChunk: chunk }] }] };
+    expect(readExpandedCleanupSummary(response, "Alice", "psHistory")?.chunkBytes).toEqual(new Uint8Array([123, 125]));
+    expect(readExpandedCleanupSummary(response, "Bob", "psHistory")).toBeNull();
+    expect(readExpandedCleanupSummary(response, "Alice", "psHistory", 0, `sha256:${"b".repeat(64)}`)).toBeNull();
+    expect(readExpandedCleanupSummary(response, "Alice", "psHistory", 0, hash, 1)).toBeNull();
+  });
   test("follows the existing persona, independently of interface density", () => {
     expect(cleanupModeForPersona("casual")).toBe("simple");
     expect(cleanupModeForPersona("secure")).toBe("advanced");
@@ -57,11 +85,15 @@ describe("System Cleanup persona details", () => {
 
   test("shows browser artifact profile paths from each installed profile", () => {
     const rows = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Google Chrome", artifacts: [
-      { name: "History", profilePath: "C:\\Browser\\Profile 1" },
-      { name: "Cookies", profilePath: "C:\\Browser\\Profile 2" },
+      { name: "History", profilePath: "C:\\Browser\\Profile 1", customDetail: "first-only" },
+      { name: "Cookies", profilePath: "C:\\Browser\\Profile 2", customDetail: "second-only" },
     ] }] });
     expect(rows[0].facts.join(" ")).toContain("Profile 1");
-    expect(rows[0].facts.join(" ")).toContain("Profile 2");
+    expect(rows[0].facts.join(" ")).not.toContain("Profile 2");
+    expect(rows[0].facts.join(" ")).toContain("first-only");
+    expect(rows[0].facts.join(" ")).not.toContain("second-only");
+    expect(rows[1].facts.join(" ")).toContain("Profile 2");
+    expect(rows[1].facts.join(" ")).toContain("second-only");
   });
 
   test("shows the activity record returned by the scan", () => {

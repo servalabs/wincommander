@@ -1644,7 +1644,7 @@ export function useBackend() {
       }>("Get-FleetAccessUsers"),
     // Scan cleanup traces for users. The UI views one user at a time, so it
     // passes a single targetUsers entry; omit it to scan every account.
-    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[], fullDetail = false, detailOffset = 0, snapshotHash = "") =>
+    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[], fullDetail = false, detailOffset = 0, snapshotHash = "", detailChunkOffset = 0) =>
       execute<{
         status: string;
         error?: boolean;
@@ -1668,9 +1668,11 @@ export function useBackend() {
             sampleCount?: number;
             previewLimit?: number;
             truncated?: boolean;
+            sourceTruncated?: boolean;
             snapshotHash?: string;
             nextOffset?: number | null;
             totalRows?: number;
+            recordChunk?: { offset: number; totalBytes: number; data: string; nextByteOffset: number | null };
             status?: string;
             message?: string;
             error?: boolean;
@@ -1680,7 +1682,8 @@ export function useBackend() {
         ...(categoryIds && categoryIds.length > 0 ? { CategoryIds: categoryIds.join(',') } : {}),
         ...(targetUsers && targetUsers.length > 0 ? { TargetUsers: targetUsers.join(',') } : {}),
         ...(fullDetail ? { FullDetail: true } : {}),
-        ...(fullDetail && detailOffset > 0 ? { DetailOffset: detailOffset, SnapshotHash: snapshotHash } : {}),
+        ...(fullDetail && (detailOffset > 0 || detailChunkOffset > 0) ? { DetailOffset: detailOffset, SnapshotHash: snapshotHash } : {}),
+        ...(fullDetail && detailChunkOffset > 0 ? { DetailChunkOffset: detailChunkOffset } : {}),
       }),
     getLoggedInUsers: () =>
       execute<{ users: string[] }>("Get-LoggedInUsers"),

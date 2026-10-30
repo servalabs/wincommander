@@ -166,14 +166,17 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return browsers.filter(isObject).flatMap((browser, index) => {
       const name = typeof browser.browser === "string" ? browserNames[browser.browser.trim().toLowerCase()] : undefined;
       const size = sizeLabel(browser.totalSizeKB);
-      const artifacts = Array.isArray(browser.artifacts) ? browser.artifacts.filter(isObject).flatMap((artifact) => {
-        const label = typeof artifact.name === "string" ? artifactNames[artifact.name.trim().toLowerCase()] ?? visibleText(artifact.name) : undefined;
-        if (!label) return [];
+      const { artifacts: browserArtifacts, ...browserDetails } = browser;
+      const artifacts = Array.isArray(browserArtifacts) ? browserArtifacts.filter(isObject).flatMap((artifact) => {
+        const label = (typeof artifact.name === "string" ? artifactNames[artifact.name.trim().toLowerCase()] ?? visibleText(artifact.name) : undefined) ?? "Unnamed artifact";
         const artifactSize = sizeLabel(artifact.sizeKB);
         const profilePath = visibleText(artifact.profilePath);
-        return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : []), `Artifact: ${label}`, ...(profilePath ? [`Profile: ${profilePath}`] : []), ...(artifactSize ? [`Artifact size: ${artifactSize}`] : [])] }];
+        const rawName = artifact.name;
+        const artifactDetails = { ...artifact };
+        delete artifactDetails.name; delete artifactDetails.profilePath; delete artifactDetails.sizeKB;
+        return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : []), `Artifact: ${label}`, ...(typeof rawName === "string" && rawName !== label ? [`Artifact source: ${rawName}`] : []), ...(profilePath ? [`Profile: ${profilePath}`] : []), ...(artifactSize ? [`Artifact size: ${artifactSize}`] : []), ...metadata(artifactDetails, id)] }];
       }) : [];
-      return artifacts.length ? artifacts : [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : [])] }];
+      return artifacts.length ? artifacts : [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : [])] }];
     });
   }
   // Multiple scan collections can contain independent records. Keep each
@@ -193,7 +196,34 @@ export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: 
   return !accountLabel && (categoryId === "wlanProfiles" || categoryId === "clipboardHistory");
 }
 
-export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "") {
+type CleanupRecordChunk = { offset: number; totalBytes: number; data: string; nextByteOffset: number | null };
+
+export function decodeCleanupRecordChunk(chunk: CleanupRecordChunk, expectedOffset: number): Uint8Array | null {
+  if (!chunk || !Number.isSafeInteger(chunk.offset) || chunk.offset !== expectedOffset || !Number.isSafeInteger(chunk.totalBytes) || chunk.totalBytes <= expectedOffset ||
+      typeof chunk.data !== "string" || chunk.data.length > 4194304 || !/^[A-Za-z0-9+/]*={0,2}$/.test(chunk.data)) return null;
+  try {
+    const binary = atob(chunk.data);
+    if (!binary.length || binary.length > 3145728 || btoa(binary) !== chunk.data) return null;
+    const end = expectedOffset + binary.length;
+    if (end > chunk.totalBytes || (chunk.nextByteOffset === null ? end !== chunk.totalBytes : chunk.nextByteOffset !== end || end >= chunk.totalBytes)) return null;
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  } catch { return null; }
+}
+
+export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: number): RecordObject | null {
+  if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0 || parts.reduce((sum, part) => sum + part.length, 0) !== totalBytes) return null;
+  try {
+    const bytes = new Uint8Array(totalBytes);
+    let position = 0;
+    for (const part of parts) { bytes.set(part, position); position += part.length; }
+    const record: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return isObject(record) ? record : null;
+  } catch { return null; }
+}
+
+export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
   const users = data?.users;
   const user = Array.isArray(users) && users.length === 1 ? users[0] : undefined;
   const matching = user && typeof user.username === "string" && user.username.toLocaleLowerCase() === accountName.toLocaleLowerCase() && Array.isArray(user.categories)
@@ -201,11 +231,15 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
   if (data?.error || matching.length !== 1) return null;
   const category = matching[0];
   const pageCount = Array.isArray(category.records) ? category.records.length : -1;
+  const chunkBytes = category.recordChunk ? decodeCleanupRecordChunk(category.recordChunk, chunkOffset) : null;
+  const recordCount = category.recordChunk ? 1 : pageCount;
   if (typeof category.snapshotHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(category.snapshotHash) || (expectedHash && category.snapshotHash !== expectedHash) ||
-      !Number.isSafeInteger(category.totalRows) || (category.totalRows as number) < 0 || pageCount < 0 || pageCount > 5000 || offset + pageCount > (category.totalRows as number) ||
-      (category.nextOffset === null ? offset + pageCount !== category.totalRows : !Number.isSafeInteger(category.nextOffset) || category.nextOffset !== offset + pageCount || (category.nextOffset as number) >= (category.totalRows as number) || pageCount === 0)) return null;
+      !Number.isSafeInteger(category.totalRows) || (category.totalRows as number) < 0 || pageCount < 0 || pageCount > 5000 ||
+      (category.recordChunk ? pageCount !== 0 || !chunkBytes || typeof category.sourceTruncated !== "boolean" : chunkOffset !== 0) ||
+      offset + recordCount > (category.totalRows as number) ||
+      (category.nextOffset === null ? offset + recordCount !== category.totalRows : !Number.isSafeInteger(category.nextOffset) || category.nextOffset !== offset + recordCount || (category.nextOffset as number) >= (category.totalRows as number) || recordCount === 0)) return null;
   const summary = readCleanupUserSummary(category);
-  return summary.count >= 0 && summary.raw ? { ...summary, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number } : null;
+  return summary.count >= 0 && summary.raw ? { ...summary, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated } : null;
 }
 
 export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {
@@ -272,10 +306,32 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       const offset = nextPage?.offset ?? 0;
       const result = await backendRef.current.getCleanupSummaryAllUsers([categoryId], [accountName], true, offset, nextPage?.hash ?? "");
       if (request !== requestVersion.current) return;
-      const summary = result.success ? readExpandedCleanupSummary(result.data, accountName, categoryId, offset, nextPage?.hash ?? "") : null;
+      let summary = result.success ? readExpandedCleanupSummary(result.data, accountName, categoryId, offset, nextPage?.hash ?? "") : null;
       if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows))) {
         setExpandedNotice(result.error || result.data?.message || "Account details changed or could not be verified. Close and reopen to rescan.");
         return;
+      }
+      if (summary.recordChunk && summary.chunkBytes) {
+        const first = summary;
+        const firstChunk = summary.recordChunk;
+        const parts = [summary.chunkBytes];
+        let byteOffset = firstChunk.nextByteOffset;
+        while (byteOffset !== null) {
+          setExpandedNotice(`Loading a large record: ${byteOffset} of ${firstChunk.totalBytes} bytes.`);
+          const continuation = await backendRef.current.getCleanupSummaryAllUsers([categoryId], [accountName], true, offset, first.snapshotHash, byteOffset);
+          if (request !== requestVersion.current) return;
+          const next = continuation.success ? readExpandedCleanupSummary(continuation.data, accountName, categoryId, offset, first.snapshotHash, byteOffset) : null;
+          if (!next?.recordChunk || !next.chunkBytes || next.recordChunk.totalBytes !== firstChunk.totalBytes ||
+              next.nextOffset !== first.nextOffset || next.totalRows !== first.totalRows || next.count !== first.count || next.sourceTruncated !== first.sourceTruncated) {
+            setExpandedNotice("Account details changed or the large record could not be verified. Close and reopen to rescan.");
+            return;
+          }
+          parts.push(next.chunkBytes);
+          byteOffset = next.recordChunk.nextByteOffset;
+        }
+        const record = assembleCleanupRecordChunks(parts, firstChunk.totalBytes);
+        if (!record || !isObject(first.raw)) throw new Error("Invalid account detail record.");
+        summary = { ...first, raw: { ...first.raw, records: [record], sampleCount: 1, truncated: first.sourceTruncated || first.nextOffset !== null } };
       }
       const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
       if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }

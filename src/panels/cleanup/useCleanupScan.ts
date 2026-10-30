@@ -158,7 +158,7 @@ export const MULTI_USER_CLEANUP_IDS = new Set<string>([
     'browserFootprints', 'shellBags', 'execCache', 'netDrives',
     'ntUserTraces', 'notepadState', 'walFiles', 'crashDumps', 'recallDb',
     'webCache', 'thumbnailDb', 'notificationDb', 'activitiesTimeline',
-    'rdpBitmapCache',
+    'rdpBitmapCache', 'developerCaches',
 ]);
 const HIDDEN_PROFILE_NAMES = new Set([
     "default",

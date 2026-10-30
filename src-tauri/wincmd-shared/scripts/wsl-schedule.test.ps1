@@ -3,6 +3,24 @@ $ErrorActionPreference = 'Stop'
 function Assert-True($Condition, $Message) { if (-not $Condition) { throw $Message } }
 Assert-True ($script:ScheduledWslFunctions.Contains('WaitForExit(300000)') -and $script:ScheduledWslFunctions.Contains('$process.Kill()')) 'WSL provider timeout must be bounded and fail.'
 
+# Denied registry, package or disk access must never be mistaken for absence.
+. ([scriptblock]::Create($script:ScheduledWslFunctions))
+$script:probeMode = 'denied'
+function Get-Item {
+    param([string]$LiteralPath, [switch]$Force, $ErrorAction)
+    if ($script:probeMode -eq 'denied') { throw [UnauthorizedAccessException]::new('Synthetic access denial.') }
+    throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic missing item.')
+}
+foreach ($probe in @({ Get-WCScheduledWslInventory }, { Test-WCScheduledWslOrphans }, { Test-WCScheduledWslDisk -Path 'C:\synthetic\ext4.vhdx' })) {
+    $threw = $false
+    try { & $probe | Out-Null } catch [UnauthorizedAccessException] { $threw = $true }
+    Assert-True $threw 'Denied WSL inventory or disk access was treated as empty.'
+}
+$script:probeMode = 'missing'
+Assert-True (@(Get-WCScheduledWslInventory).Count -eq 0) 'A missing WSL registry root should be empty.'
+Assert-True (-not (Test-WCScheduledWslOrphans)) 'A missing package root should be empty.'
+Assert-True (-not (Test-WCScheduledWslDisk -Path 'C:\synthetic\ext4.vhdx')) 'A missing WSL disk should be absent.'
+
 # The task payload is exercised with a disposable in-memory inventory only.
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
@@ -12,6 +30,13 @@ function Test-WCScheduledWslOrphans { return $false }
 function Remove-WCScheduledWslDistro($Name) { $script:inventory = @($script:inventory | Where-Object { $_.Name -ne $Name }) }
 Invoke-Expression $script:AutoEraseScripts['wslData']
 Assert-True ($script:AutoEraseRemoved -eq 2 -and $script:AutoEraseFailed -eq 0) 'Registered distributions must be unregistered and verified.'
+
+$script:AutoEraseRemoved = 0
+$script:AutoEraseFailed = 0
+$script:probeMode = 'denied'
+$script:inventory = @([pscustomobject]@{ Name='ExampleLinux'; Disk='C:\synthetic\ext4.vhdx' })
+Invoke-Expression $script:AutoEraseScripts['wslData']
+Assert-True ($script:AutoEraseRemoved -eq 0 -and $script:AutoEraseFailed -gt 0) 'A distribution with inaccessible disk readback was falsely marked removed.'
 
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
