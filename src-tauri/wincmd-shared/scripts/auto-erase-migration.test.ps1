@@ -274,4 +274,11 @@ $script:task.TaskName = 'ProtectedSyntheticTask'; $script:registrations = 0
 $result = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($result.error -or $script:disabled.Count -ne 1 -or $script:registrations -or $result.disabledProtected.Count -ne 1) { throw 'Protected legacy task was not disabled without rewriting its payload.' }
 if ($script:locks.Count -ne 36 -or @($script:locks | Where-Object { $_ -eq 'dnsCache' }).Count -ne 17 -or @($script:locks | Where-Object { $_ -eq 'browserFootprints' }).Count -ne 19) { throw 'Migration did not acquire the category lock.' }
+# The UI alias must select the canonical persisted clipboard task for upgrade.
+$script:task.Category = 'clipboard'; $script:task.State = 'Disabled'; $script:task.TaskName = 'SM-U-08-12345678'
+$script:task.Description = 'System Maintenance scheduled cleanup v4 (managed)'
+$script:originalXml = $script:registeredXml -replace 'v21 \(manual opt-in\)', 'v4 (managed)'
+$script:registeredXml = ''; $script:registrations = 0
+$clipboardUpgrade = Invoke-AutoEraseMigration -CategoryId 'clipboardHistory'
+if ($clipboardUpgrade.error -or $script:registrations -ne 1 -or @($clipboardUpgrade.migrated) -notcontains 'clipboard') { throw 'Clipboard alias did not select the canonical task for migration.' }
 Write-Output 'Passed: legacy upgrades, missing payload repair, access denial and protected schedules.'

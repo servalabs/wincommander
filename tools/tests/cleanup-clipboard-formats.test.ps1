@@ -22,12 +22,37 @@ if ($bitmapDetails.type -ne 'image' -or $bitmapDetails.ContainsKey('preview')) {
 $unknownItem = [pscustomobject]@{ Id='unknown'; Timestamp=''; Content=[pscustomobject]@{ AvailableFormats=@('CustomFormat') } }
 $unknown = Convert-CleanupClipboardItemDetails -Item $unknownItem -FormatNames $formats -ReadTextFormat { throw 'Unexpected text read.' }
 if (-not $unknown.contentStatus -or $unknown.ContainsKey('preview')) { throw 'Unsupported formats must be reported as unavailable.' }
+$linkItem = [pscustomobject]@{ Id='links'; Timestamp=''; Content=[pscustomobject]@{ AvailableFormats=@('WebLink','ApplicationLink') } }
+$linkFormats = @{ webLink='WebLink'; applicationLink='ApplicationLink' }
+$links = Convert-CleanupClipboardItemDetails -Item $linkItem -FormatNames $linkFormats -ReadTextFormat { param($entry,$name) if ($name -eq 'webLink') { 'https://example.test/path' } else { 'app-example:document/1' } }
+if ($links.type -ne 'link' -or $links.webLink -ne 'https://example.test/path' -or $links.applicationLink -ne 'app-example:document/1' -or $links.contentStatus) { throw 'Available clipboard links were not retained.' }
+$partlyUnavailable = Convert-CleanupClipboardItemDetails -Item $linkItem -FormatNames $linkFormats -ReadTextFormat { param($entry,$name) if ($name -eq 'applicationLink') { throw 'fixture' }; 'https://example.test/path' }
+if ($partlyUnavailable.webLink -ne 'https://example.test/path' -or $partlyUnavailable.unavailableFormats -notcontains 'ApplicationLink') { throw 'An unavailable link must not discard another available link.' }
+$filesItem = [pscustomobject]@{ Id='files'; Timestamp=''; Content=[pscustomobject]@{ AvailableFormats=@('StorageItems') } }
+$fileDetails = Convert-CleanupClipboardItemDetails -Item $filesItem -FormatNames @{ storageItems='StorageItems' } -ReadTextFormat { return ,@(@{ name='example.txt'; path='C:\Example\example.txt'; type='File' }, @{ name='Folder'; path='C:\Example\Folder'; type='Folder' }) }
+if ($fileDetails.type -ne 'files' -or $fileDetails.storageItems.Count -ne 2 -or $fileDetails.storageItems[0].path -ne 'C:\Example\example.txt' -or $fileDetails.storageItems[1].type -ne 'Folder') { throw 'Available storage items were not retained.' }
 $minimal = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status='Success'; Items=@($item) })
 if ($minimal.items[0].ContainsKey('formats') -or $minimal.items[0].ContainsKey('text')) { throw 'Non-preview inventory must not include clipboard content.' }
 $png = [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aG8AAAAASUVORK5CYII=')
 $image = Convert-CleanupClipboardImageStream -Stream ([IO.MemoryStream]::new($png))
 if ($image.status -ne 'complete' -or $image.imageMime -ne 'image/png' -or $image.imageBase64 -ne [Convert]::ToBase64String($png)) { throw 'A supported image did not round trip.' }
 Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+$null = [Windows.ApplicationModel.DataTransfer.DataPackage, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+$package = New-Object Windows.ApplicationModel.DataTransfer.DataPackage
+$package.SetWebLink([Uri]::new('https://example.test/path'))
+$asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+} | Select-Object -First 1
+$linkTask = $asTask.MakeGenericMethod([Uri]).Invoke($null, @($package.GetView().GetWebLinkAsync()))
+if (-not $linkTask.Wait(2000) -or $linkTask.Result.AbsoluteUri -ne 'https://example.test/path') { throw 'WinRT link conversion failed.' }
+$null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Storage.StorageFolder, Windows.Storage, ContentType=WindowsRuntime]
+$folderTask = $asTask.MakeGenericMethod([Windows.Storage.StorageFolder]).Invoke($null, @([Windows.Storage.StorageFolder]::GetFolderFromPathAsync($env:TEMP)))
+if (-not $folderTask.Wait(2000)) { throw 'WinRT folder lookup timed out.' }
+$storagePackage = New-Object Windows.ApplicationModel.DataTransfer.DataPackage
+$storagePackage.SetStorageItems([Windows.Storage.IStorageItem[]]@($folderTask.Result))
+$storageTask = $asTask.MakeGenericMethod([System.Collections.Generic.IReadOnlyList[Windows.Storage.IStorageItem]]).Invoke($null, @($storagePackage.GetView().GetStorageItemsAsync()))
+if (-not $storageTask.Wait(2000) -or $storageTask.Result.Count -ne 1 -or $storageTask.Result[0].Path -ne $env:TEMP) { throw 'WinRT storage item conversion failed.' }
 $winrtStream = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime]::new()
 $writeStream = [IO.WindowsRuntimeStreamExtensions]::AsStream($winrtStream)
 try {

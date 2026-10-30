@@ -2806,6 +2806,7 @@ function Set-MultiUserAutoEraseSchedule {
 function Remove-MultiUserAutoEraseScheduleCore {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '', [switch]$ManagedOnly)
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
     Assert-AutoEraseAdmin
     $removed = @()
     $removedOwnerSids = @()
@@ -2856,6 +2857,7 @@ function Get-AutoEraseRemovedScopeKeys {
 function Remove-AutoEraseScheduleCore {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string]$CategoryId, [switch]$ManagedOnly)
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
     Assert-AutoEraseAdmin
     try {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -3221,6 +3223,7 @@ function Test-AutoEraseSettingsReadback {
 function Invoke-AutoEraseMigrationCore {
     [CmdletBinding()]
     param([string]$CategoryId = '', [string]$OwnerSid = '')
+    if ($CategoryId -eq 'clipboardHistory') { $CategoryId = 'clipboard' }
     Assert-AutoEraseAdmin
     $tasks = @(Get-ScheduledTask -ErrorAction Stop)
     try { Assert-AutoEraseKnownOwners -Tasks $tasks -CategoryId $CategoryId }

@@ -7,18 +7,35 @@ type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
 const isObject = (value: unknown): value is RecordObject => value !== null && typeof value === "object" && !Array.isArray(value);
 
+type ClipboardStorageItem = { name: string; path: string; type: string };
+function clipboardStorageItems(item: RecordObject): ClipboardStorageItem[] | null {
+  const values = item.storageItems;
+  if (!Array.isArray(values) || values.length === 0 || values.some(value =>
+    !isObject(value) || typeof value.name !== "string" || typeof value.path !== "string" || typeof value.type !== "string" ||
+    Object.keys(value).some(key => !["name", "path", "type"].includes(key)))) return null;
+  return values as ClipboardStorageItem[];
+}
+
+export function ClipboardStorageDetails({ items }: { items: ClipboardStorageItem[] }) {
+  return <table aria-label="Clipboard files and folders"><thead><tr><th scope="col">Name</th><th scope="col">Location</th><th scope="col">Type</th></tr></thead>
+    <tbody>{items.map((item, index) => <tr key={index}><td>{item.name || "(empty)"}</td><td>{item.path || "(empty)"}</td><td>{item.type || "(empty)"}</td></tr>)}</tbody></table>;
+}
+
 function wifiProfiles(input: unknown): unknown[] {
   if (!isObject(input)) return [];
   const clearable = Array.isArray(input.profiles) ? input.profiles : Array.isArray(input.records) ? input.records : [];
   return [...clearable, ...(Array.isArray(input.additionalProfiles) ? input.additionalProfiles : [])];
 }
 
-export function clipboardDetailRecord(item: RecordObject): RecordObject {
+export function clipboardDetailRecord(item: RecordObject, structuredStorage = false): RecordObject {
   const details = { ...item };
   // A text preview is the same full text returned in `text`; do not show it
   // twice. Bitmap-only items have a dedicated image control in this view.
   if (typeof details.text === "string" && details.preview === details.text) delete details.preview;
   if (Array.isArray(details.formats) && details.formats.includes("Bitmap") && details.preview === "[Content requires another viewer]") delete details.preview;
+  // Storage items have their own compact table; unknown shapes remain in the
+  // generic detail output so new provider fields are not silently lost.
+  if (structuredStorage && clipboardStorageItems(details)) delete details.storageItems;
   return details;
 }
 
@@ -406,7 +423,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   backendRef.current = backend;
   const [secrets, setSecrets] = useState<Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null>(null);
   const [secretError, setSecretError] = useState<string | null>(null);
-  const [clipboardItems, setClipboardItems] = useState<Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount: number }> | null>(null);
+  const [clipboardItems, setClipboardItems] = useState<Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount: number; storageItems?: unknown }> | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   const [loadingSecrets, setLoadingSecrets] = useState(false);
   const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
@@ -496,7 +513,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const shownData = expandedRaw ?? rawData;
   const all = useMemo(() => clipboardItems ? clipboardItems.map((item, index) => ({
     label: `Clipboard item ${index + 1}`,
-    facts: metadata(clipboardDetailRecord(item), categoryId),
+    facts: metadata(clipboardDetailRecord(item, true), categoryId),
   })) : getSafeCleanupPreview(categoryId, shownData), [categoryId, shownData, clipboardItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -513,10 +530,14 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     }
     if (categoryId === "wlanProfiles") labels.add("Password");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.formats?.includes("Bitmap"))) labels.add("Image");
+    if (categoryId === "clipboardHistory" && clipboardItems?.some(item => clipboardStorageItems(item))) labels.add("Files and folders");
     if (!labels.size) labels.add("Details");
     return [...labels];
   }, [all, categoryId, clipboardItems]);
-  if (!all.length && !clipboardItems && !(isObject(shownData) && shownData.truncated === true && accountName)) return null;
+  // A failed detail refresh is meaningful even if the earlier scan supplied
+  // no preview rows. Keep its explanation visible instead of returning an
+  // empty panel that looks like a successful empty result.
+  if (!all.length && !clipboardItems && !clipboardNotice && !(isObject(shownData) && shownData.truncated === true && accountName)) return null;
   const pageSize = mode === "simple" ? 5 : 10;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
   const rows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
@@ -548,12 +569,14 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           if (categoryId !== "wlanProfiles" || label !== "Password" || !cells.has(label)) cells.set(label, [...(cells.get(label) ?? []), value]);
         }
         const clipboardItem = categoryId === "clipboardHistory" ? clipboardItems?.[row.number - 1] : undefined;
+        const storageItems = clipboardItem ? clipboardStorageItems(clipboardItem) : null;
         return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
           ? <ClipboardImage key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryImage(id, offset, hash)} />
+          : label === "Files and folders" && storageItems ? <ClipboardStorageDetails items={storageItems} />
           : cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>
     </table></div>
-    {!rows.length ? <p role="status">{clipboardItems && all.length === 0 && !query.trim() ? "No clipboard items were returned by the latest check." : "No items match this filter."}</p> : null}
+    {!rows.length ? <p role="status">{categoryId === "clipboardHistory" && !clipboardItems && clipboardNotice && !query.trim() ? "Clipboard details could not be retrieved." : clipboardItems && all.length === 0 && !query.trim() ? "No clipboard items were returned by the latest check." : "No items match this filter."}</p> : null}
     {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Detail pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} items</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
   </section>;
 }

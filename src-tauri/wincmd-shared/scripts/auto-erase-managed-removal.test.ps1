@@ -34,6 +34,13 @@ $script:removed = @()
 $result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers 'S-1-5-18,S-1-5-21-1'
 if ($result.error -or @($script:removed).Count -ne 2 -or 'manual' -notin $script:removed) { throw 'Individual removal behavior changed.' }
 
+# Creation accepts the UI alias and writes the canonical clipboard category.
+# Removal must resolve the same alias rather than silently leaving the task.
+$script:tasks += [pscustomobject]@{ TaskPath='\SystemMaintenance\'; TaskName='clipboard-task'; Category='clipboard'; Owner='S-1-5-21-1'; Description='System Maintenance scheduled cleanup v6' }
+$script:removed = @()
+$result = Remove-MultiUserAutoEraseSchedule -CategoryId clipboardHistory -TargetUsers 'S-1-5-21-1'
+if ($result.error -or $result.categoryId -ne 'clipboard' -or @($script:removed).Count -ne 1 -or $script:removed[0] -ne 'clipboard-task') { throw 'Clipboard alias did not remove the canonical schedule.' }
+
 # A later failure must not hide the tasks that were already removed.
 $script:removed = @()
 function Unregister-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName,[switch]$Confirm) if ($TaskName -eq 'manual') { throw 'Synthetic failure' }; $script:removed += $TaskName }

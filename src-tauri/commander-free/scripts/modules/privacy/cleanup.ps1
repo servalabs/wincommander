@@ -50,13 +50,14 @@ function Convert-CleanupClipboardItemDetails {
     $formats = @($Item.Content.AvailableFormats | ForEach-Object { [string]$_ })
     $details = @{ type = 'item'; formats = $formats; id = [string]$Item.Id; timestamp = [string]$Item.Timestamp; charCount = 0 }
     $unavailable = [Collections.Generic.List[string]]::new()
-    foreach ($name in @('text', 'html', 'rtf')) {
+    foreach ($name in @('text', 'html', 'rtf', 'webLink', 'applicationLink', 'storageItems')) {
         $format = [string]$FormatNames[$name]
         if (-not $format -or $format -notin $formats) { continue }
         try {
             $value = & $ReadTextFormat $Item $name
             if ($null -eq $value) { throw 'Clipboard content unavailable.' }
-            $details[$name] = [string]$value
+            if ($name -eq 'storageItems') { $details[$name] = @($value) }
+            else { $details[$name] = [string]$value }
             if ($name -eq 'text') { $details.type = 'text'; $details.preview = [string]$value; $details.charCount = ([string]$value).Length }
         } catch { $unavailable.Add($format) }
     }
@@ -66,6 +67,8 @@ function Convert-CleanupClipboardItemDetails {
     if (-not $details.ContainsKey('preview')) {
         if ($details.ContainsKey('html') -or $details.ContainsKey('rtf')) { $details.type = 'rich text' }
         elseif ($formats -contains 'Bitmap') { $details.type = 'image' }
+        elseif ($details.ContainsKey('webLink') -or $details.ContainsKey('applicationLink')) { $details.type = 'link' }
+        elseif ($details.ContainsKey('storageItems')) { $details.type = 'files' }
         else { $details.contentStatus = 'Content unavailable for the available formats.' }
     }
     return $details
@@ -88,14 +91,23 @@ function Get-CleanupClipboardHistory {
         $readPreview = $null
         if ($IncludePreviews) {
             $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.StorageItemTypes, Windows.Storage, ContentType=WindowsRuntime]
             $readPreview = {
                 param($item)
-                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf }
+                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf; webLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::WebLink; applicationLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::ApplicationLink; storageItems = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::StorageItems }
                 $readText = {
                     param($entry, $format)
-                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } }
-                    $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($operation))
+                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } 'webLink' { $entry.Content.GetWebLinkAsync() } 'applicationLink' { $entry.Content.GetApplicationLinkAsync() } 'storageItems' { $entry.Content.GetStorageItemsAsync() } }
+                    $resultType = if ($format -in @('webLink', 'applicationLink')) { [Uri] } elseif ($format -eq 'storageItems') { [System.Collections.Generic.IReadOnlyList[Windows.Storage.IStorageItem]] } else { [string] }
+                    $textTask = $asTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
                     if (-not $textTask.Wait(500)) { throw 'Clipboard content timed out.' }
+                    if ($format -eq 'storageItems') {
+                        $entries = @($textTask.Result | ForEach-Object {
+                            @{ name = [string]$_.Name; path = [string]$_.Path; type = if ($_.IsOfType([Windows.Storage.StorageItemTypes]::File)) { 'File' } elseif ($_.IsOfType([Windows.Storage.StorageItemTypes]::Folder)) { 'Folder' } else { 'Unknown' } }
+                        })
+                        return ,$entries
+                    }
                     return [string]$textTask.Result
                 }
                 return (Convert-CleanupClipboardItemDetails -Item $item -FormatNames $formats -ReadTextFormat $readText)

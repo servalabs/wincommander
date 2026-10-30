@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, ClipboardImage, clipboardDetailRecord, readClipboardImageChunk, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, ClipboardImage, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -15,6 +15,19 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("shows clipboard files and folders in separate columns without losing unknown fields", () => {
+    const items = [{ name: "Example.txt", path: "C:\\Example\\Example.txt", type: "File" }, { name: "Folder", path: "C:\\Example\\Folder", type: "Folder" }];
+    const html = renderToStaticMarkup(<ClipboardStorageDetails items={items} />);
+    expect(html).toContain('<th scope="col">Name</th>');
+    expect(html).toContain('<th scope="col">Location</th>');
+    expect(html).toContain('<th scope="col">Type</th>');
+    expect(html).toContain("C:\\Example\\Example.txt");
+    expect(html).toContain("C:\\Example\\Folder");
+    expect(clipboardDetailRecord({ storageItems: items }, true).storageItems).toBeUndefined();
+    const extra = [{ ...items[0], size: 42 }];
+    expect(clipboardDetailRecord({ storageItems: extra }, true).storageItems).toEqual(extra);
+    expect(getSafeCleanupPreview("clipboardHistory", { historyItems: [{ storageItems: items }] })[0].facts.join(" ")).toContain("Example.txt");
+  });
   test("does not repeat clipboard text or claim an image needs another viewer", () => {
     const text = clipboardDetailRecord({ text: "example text", preview: "example text", formats: ["Text"] });
     expect(text.text).toBe("example text");
