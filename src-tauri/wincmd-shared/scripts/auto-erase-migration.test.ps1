@@ -30,8 +30,9 @@ function Enable-ScheduledTask { throw 'An originally disabled task must stay dis
 function Unregister-ScheduledTask { throw 'A same-name payload migration must not remove the task.' }
 function ConvertTo-AutoEraseTaskArgument {
     param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$PayloadRevision,$AllowDefaultExcluded)
-    if ($PayloadRevision -ne 6 -or $IntervalMinutes -ne 37 -or $ExecutionScope -ne 'user-TestUser') { throw 'Migration changed schedule or user context.' }
-    '-NoProfile -File "mock-revision6.ps1"'
+    if ($PayloadRevision -ne 7 -or $IntervalMinutes -ne 37 -or $ExecutionScope -ne 'user-TestUser') { throw 'Migration changed schedule or user context.' }
+    if ($CategoryId -eq 'browserFootprints' -and -not $AllowDefaultExcluded) { throw 'Migration lost explicit per-card authorization.' }
+    '-NoProfile -File "mock-revision7.ps1"'
 }
 $script:disabled = @(); $script:registrations = 0; $script:registeredXml = ''
 $script:task = [pscustomobject]@{
@@ -56,8 +57,15 @@ if ($result.error -or $script:registrations -ne 1 -or $result.migrated.Count -ne
 foreach ($section in @('Triggers','Principals','Settings')) {
     if ($before.Task.$section.OuterXml -ne $after.Task.$section.OuterXml) { throw "Migration changed $section" }
 }
-if ($after.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v6 (managed)') { throw 'Managed ownership was lost.' }
-$script:task.Description = 'System Maintenance scheduled cleanup v6 (managed)'
+if ($after.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v7 (managed)') { throw 'Managed ownership was lost.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v5 (managed)'
+$script:originalXml = $script:originalXml -replace 'v4 \(managed\)', 'v5 (managed)'
+$script:registeredXml = ''; $script:registrations = 0
+$upgradedV5 = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
+if ($upgradedV5.error -or $script:registrations -ne 1 -or $upgradedV5.migrated.Count -ne 1) { throw 'Existing v5 managed schedule must receive the updated cleanup payload.' }
+[xml]$upgradedV5Xml = $script:registeredXml
+if ($upgradedV5Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v7 (managed)' -or $upgradedV5Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV5Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV5Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v5 migration lost managed ownership, schedule, owner or disabled state.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v7 (managed)'
 $script:task | Add-Member -NotePropertyName Settings -NotePropertyValue ([pscustomobject]@{ Hidden=$true }) -Force
 $script:originalXml = $script:registeredXml -replace '</Settings>', '<Hidden>true</Hidden></Settings>'
 $script:registeredXml = ''; $script:registrations = 0
@@ -65,9 +73,24 @@ $visible = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
 if ($visible.error -or $script:registrations -ne 1) { throw 'An owned hidden task could not be made visible.' }
 [xml]$visibleXml = $script:registeredXml
 if ($visibleXml.Task.Settings.Hidden -ne 'false' -or $visibleXml.Task.Settings.Enabled -ne 'false' -or $visibleXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $visibleXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'Visibility migration changed schedule, identity or enabled state.' }
+$script:task.Category = 'browserFootprints'; $script:task.State = 'Disabled'
+$script:task.TaskName = 'SM-U-09-12345678'; $script:task.Description = 'System Maintenance scheduled cleanup v6 (manual opt-in)'
+$script:task.Settings.Hidden = $false
+$script:task.Actions[0].Arguments = '-File "C:\ProgramData\WinCommander\auto-erase\scripts\browserFootprints.user-TestUser.ps1"'
+$script:originalXml = $script:originalXml -replace 'v4 \(managed\)', 'v6 (manual opt-in)' -replace '<Hidden>true</Hidden>', '<Hidden>false</Hidden>'
+$script:registeredXml = ''; $script:registrations = 0
+$upgraded = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
+if ($upgraded.error -or $script:registrations -ne 1 -or $upgraded.migrated.Count -ne 1) { throw 'Existing v6 manual schedule must receive the updated cleanup payload.' }
+[xml]$upgradedXml = $script:registeredXml
+if ($upgradedXml.Task.RegistrationInfo.Description -notmatch '\(manual opt-in\)$' -or $upgradedXml.Task.Settings.Enabled -ne 'false' -or $upgradedXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v6 migration lost consent, schedule, owner or disabled state.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v7 (manual opt-in)'
+$script:registrations = 0
+$unchanged = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
+if ($unchanged.error -or $script:registrations -or $unchanged.migrated.Count) { throw 'A current, visible schedule must not be rewritten.' }
 $script:task.Category = 'browserFootprints'; $script:task.State = 'Ready'
+$script:task.Description = 'System Maintenance scheduled cleanup v5 (managed)'
 $script:task.TaskName = 'ProtectedSyntheticTask'; $script:registrations = 0
 $result = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($result.error -or $script:disabled.Count -ne 1 -or $script:registrations -or $result.disabledProtected.Count -ne 1) { throw 'Protected legacy task was not disabled without rewriting its payload.' }
-if ($script:locks.Count -ne 3 -or $script:locks[0] -ne 'dnsCache' -or $script:locks[1] -ne 'dnsCache' -or $script:locks[2] -ne 'browserFootprints') { throw 'Migration did not acquire the category lock.' }
-Write-Output 'Passed: v4 payload upgrade preserves interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'
+if ($script:locks.Count -ne 6 -or @($script:locks | Where-Object { $_ -eq 'dnsCache' }).Count -ne 3 -or @($script:locks | Where-Object { $_ -eq 'browserFootprints' }).Count -ne 3) { throw 'Migration did not acquire the category lock.' }
+Write-Output 'Passed: v4, v5 and v6 payload upgrades preserve consent, interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'

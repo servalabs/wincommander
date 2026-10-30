@@ -1,6 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $env:USERNAME = 'TestUser'
 . (Join-Path $PSScriptRoot 'auto-erase.ps1')
+foreach ($revision in @(4,5,6,7)) {
+    if (-not (Test-AutoEraseManagedTask ([pscustomobject]@{ Description="System Maintenance scheduled cleanup v$revision (managed)" }))) { throw "Managed ownership was not recognized for v$revision." }
+}
+if (Test-AutoEraseManagedTask ([pscustomobject]@{ Description='System Maintenance scheduled cleanup v7 (manual opt-in)' })) { throw 'An individual v7 schedule was treated as Auto-set managed.' }
 $script:registered = @(); $script:existing = $false
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
@@ -31,7 +35,7 @@ foreach ($id in $eligible) {
 }
 foreach ($id in @('notepadState','developerCaches','sshState','passwordManagerCaches')) {
     $result = Set-IndividualAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -AllowDefaultExcluded
-    if ($result.error -or -not $script:approval -or $script:registered[-1].description -ne 'System Maintenance scheduled cleanup v6 (manual opt-in)') { throw "Explicit manual authorization was lost for $id" }
+    if ($result.error -or -not $script:approval -or $script:registered[-1].description -ne 'System Maintenance scheduled cleanup v7 (manual opt-in)') { throw "Explicit manual authorization was lost for $id" }
     $multi = Set-MultiUserAutoEraseSchedule -CategoryId $id -IntervalMinutes 60 -TargetUsers 'TestUser' -AllowDefaultExcluded
     if ($multi.results[0].error -or -not $script:approval -or $multi.total -ne 1) { throw "Selected-user authorization was lost for $id" }
 }

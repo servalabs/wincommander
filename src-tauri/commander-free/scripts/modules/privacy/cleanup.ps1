@@ -5726,21 +5726,46 @@ function ConvertTo-CleanupCanonicalJson {
 
 function Get-CleanupSummaryPage {
     param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot)
-    if ($Offset -lt 0 -or $Offset -gt 50000 -or ($Offset -gt 0 -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ExpectedSnapshot)) {
+    if ($Offset -lt 0 -or ($Offset -gt 0 -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ExpectedSnapshot)) {
         throw 'The account detail page request is invalid.'
     }
     Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
     $script:CleanupJsonSerializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-    $script:CleanupJsonSerializer.MaxJsonLength = 32MB
-    $canonical = ConvertTo-CleanupCanonicalJson @{ category=$Category; sid=$ProfileSid; count=$Count; records=@($Records) }
-    $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
-    if ($bytes.Length -gt 32MB) { throw 'The account detail snapshot exceeds the size limit.' }
+    $script:CleanupJsonSerializer.MaxJsonLength = [int]::MaxValue
     $sha = [Security.Cryptography.SHA256]::Create()
-    try { $snapshot = 'sha256:' + [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    try {
+        # Length-framed records preserve identity and order without constructing
+        # a second serialized copy of the whole account snapshot in memory.
+        $hashText = {
+            param([string]$Text)
+            $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+            $length = [BitConverter]::GetBytes([int64]$bytes.Length)
+            $null = $sha.TransformBlock($length, 0, $length.Length, $length, 0)
+            if ($bytes.Length) { $null = $sha.TransformBlock($bytes, 0, $bytes.Length, $bytes, 0) }
+        }
+        & $hashText (ConvertTo-CleanupCanonicalJson @{ version=2; category=$Category; sid=$ProfileSid; count=$Count; rows=$Records.Count })
+        foreach ($record in $Records) { & $hashText (ConvertTo-CleanupCanonicalJson $record) }
+        $null = $sha.TransformFinalBlock([byte[]]@(), 0, 0)
+        $snapshot = 'sha256:' + [BitConverter]::ToString($sha.Hash).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
     if ($ExpectedSnapshot -and $ExpectedSnapshot -cne $snapshot) { throw 'Account details changed while loading. Rescan before trying again.' }
     if ($Offset -gt $Records.Count) { throw 'The account detail page offset is invalid.' }
     $pageSize = 5000
-    $page = @($Records | Select-Object -Skip $Offset -First $pageSize)
+    $pageBudget = 8MB - 1024
+    $pageBytes = 0
+    $pageRows = [Collections.Generic.List[object]]::new()
+    for ($index = $Offset; $index -lt $Records.Count -and $pageRows.Count -lt $pageSize; $index++) {
+        $json = ConvertTo-Json -InputObject $Records[$index] -Depth 30 -Compress
+        $rowBytes = [Text.Encoding]::UTF8.GetByteCount($json) + 1
+        if ($rowBytes -gt $pageBudget) {
+            if ($pageRows.Count -eq 0) { throw 'One account detail record exceeds the size limit.' }
+            break
+        }
+        if ($pageBytes + $rowBytes -gt $pageBudget) { break }
+        $pageRows.Add($Records[$index])
+        $pageBytes += $rowBytes
+    }
+    $page = @($pageRows.ToArray())
     while (-not (Test-CleanupSummaryDetailSize -Records $page -Items @())) {
         if ($page.Count -le 1) { throw 'One account detail record exceeds the size limit.' }
         $pageSize = [Math]::Max(1, [int][Math]::Floor($page.Count / 2))
@@ -5813,7 +5838,7 @@ function Get-CleanupSummaryAllUsers {
     if ($FullDetail -and ($requestedCats.Count -ne 1 -or $targetArr.Count -ne 1)) {
         return @{ error = $true; status = 'error'; message = 'Full details require exactly one category and one user.'; users = @(); userCount = 0 }
     }
-    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or $DetailOffset -gt 50000 -or ($DetailOffset -gt 0 -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $SnapshotHash)) {
+    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or ($DetailOffset -gt 0 -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $SnapshotHash)) {
         return @{ error = $true; status = 'error'; message = 'The account detail page request is invalid.'; users = @(); userCount = 0 }
     }
 
@@ -5909,7 +5934,7 @@ function Get-CleanupSummaryAllUsers {
 
         # The card grid only shows the first few items, but detail dialogs need
         # enough rows to audit common high-count traces without hiding records.
-        $previewMax = if ($FullDetail) { 50000 } else { 500 }
+        $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
             $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null
@@ -6087,15 +6112,25 @@ function Get-CleanupSummaryAllUsers {
                     }
                     'notepadState' {
                         $packageRoot = Join-Path $localApp 'Packages'
-                        $pkg = if (Test-CleanupSummaryPath $packageRoot) { Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -EA Stop | Select-Object -First 1 } else { $null }
-                        if ($pkg) {
+                        $packages = @()
+                        if (Test-CleanupSummaryPath $packageRoot) {
+                            $rootItem = Get-Item -LiteralPath $packageRoot -Force -ErrorAction Stop
+                            if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad package coverage is unavailable.' }
+                            $packages = @(Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -EA Stop)
+                        }
+                        $files = @()
+                        foreach ($pkg in $packages) {
+                            if ($pkg.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A Notepad package path is a reparse point.' }
                             $tab = Join-Path $pkg.FullName 'LocalState\TabState'
                             if (Test-CleanupSummaryPath $tab) {
-                                $files = Get-ChildItem $tab -File -Force -EA Stop
-                                $count = $files.Count
-                                $items = $files | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                                $tabItem = Get-Item -LiteralPath $tab -Force -ErrorAction Stop
+                                if (-not $tabItem.PSIsContainer -or ($tabItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad tab-state coverage is unavailable.' }
+                                $files += @(Get-ChildItem -LiteralPath $tab -File -Recurse -Force -ErrorAction Stop)
                             }
                         }
+                        $count = $files.Count
+                        $records = @($files | Select-Object -First $previewMax | ForEach-Object { @{ name = $_.Name; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('o') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'crashDumps' {
                         # Match Get-CrashDumpList: CrashDumps + Minidump + WER ReportArchive + ReportQueue

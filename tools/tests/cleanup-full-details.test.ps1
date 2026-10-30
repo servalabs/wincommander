@@ -54,4 +54,12 @@ if (-not $limited.truncated) { throw 'A capped source snapshot must stay truncat
 $records[0].command = 'changed'
 try { $null = Get-CleanupSummaryPage -Records $records -Count 10050 -Category 'psHistory' -ProfileSid 'S-1-5-21-1' -Offset 1000 -ExpectedSnapshot $first.snapshotHash; throw 'Changed snapshot was accepted.' }
 catch { if ($_.Exception.Message -notmatch 'changed while loading') { throw } }
+$largeRecords = @(0..50000)
+$largeFirst = Get-CleanupSummaryPage -Records $largeRecords -Count 50001 -Category 'psHistory' -ProfileSid 'S-1-5-21-1' -Offset 0 -ExpectedSnapshot ''
+$largeLast = Get-CleanupSummaryPage -Records $largeRecords -Count 50001 -Category 'psHistory' -ProfileSid 'S-1-5-21-1' -Offset 50000 -ExpectedSnapshot $largeFirst.snapshotHash
+if ($largeLast.records.Count -ne 1 -or $largeLast.records[0] -ne 50000 -or $null -ne $largeLast.nextOffset) { throw 'Records beyond the old 50,000-row limit were not returned.' }
+$largeText = 'x' * 900000
+$largeSnapshot = @(1..40 | ForEach-Object { @{ id=$_; value=$largeText } })
+$largePage = Get-CleanupSummaryPage -Records $largeSnapshot -Count 40 -Category 'psHistory' -ProfileSid 'S-1-5-21-1' -Offset 0 -ExpectedSnapshot ''
+if ($largePage.records.Count -lt 1 -or $largePage.records.Count -ge 40 -or $null -eq $largePage.nextOffset) { throw 'A snapshot larger than 32 MiB did not yield a bounded page.' }
 Write-Output 'Passed: full details reject multi-user and multi-category requests before reading profiles.'
