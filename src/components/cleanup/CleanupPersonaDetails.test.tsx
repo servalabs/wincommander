@@ -42,6 +42,20 @@ describe("System Cleanup persona details", () => {
     expect(readExpandedCleanupSummary(response, "Alice", "psHistory", 0, `sha256:${"b".repeat(64)}`)).toBeNull();
     expect(readExpandedCleanupSummary(response, "Alice", "psHistory", 0, hash, 1)).toBeNull();
   });
+  test("accepts a page of grouped user activity without requiring it to contain every group", () => {
+    const hash = `sha256:${"a".repeat(64)}`;
+    const page = { users: [{ username: "Alice", categories: [{ id: "ntUserTraces", count: 3, items: [], records: [{ name: "TypedPaths", count: 1, entries: [{ value: "C:\\Example" }] }], sampleCount: 1, previewLimit: 5000, truncated: true, snapshotHash: hash, nextOffset: null, totalRows: 2 }] }] };
+    expect(readExpandedCleanupSummary(page, "Alice", "ntUserTraces", 1, hash)?.count).toBe(3);
+    const first = { records: [{ name: "RunMRU", count: 2 }], truncated: true, expectedActivityCount: 3 };
+    const last = { records: [{ name: "TypedPaths", count: 1 }], truncated: false, expectedActivityCount: 3 };
+    expect(mergeExpandedCleanupPage(first, last, 1)?.records).toHaveLength(2);
+    expect(mergeExpandedCleanupPage(first, { ...last, expectedActivityCount: 4 }, 1)).toBeNull();
+    expect(mergeExpandedCleanupPage(first, { ...last, records: [{ count: -1 }] }, 1)).toBeNull();
+    const flat = { users: [{ username: "Alice", categories: [{ id: "ntUserTraces", count: 3, items: [], records: [{ entry: "TypedPaths: C:\\Example" }], sampleCount: 1, previewLimit: 5000, truncated: true, snapshotHash: hash, nextOffset: null, totalRows: 2 }] }] };
+    expect(readExpandedCleanupSummary(flat, "Alice", "ntUserTraces", 1, hash)?.count).toBe(3);
+    const malformed = { ...flat, users: [{ ...flat.users[0], categories: [{ ...flat.users[0].categories[0], records: [null] as unknown as Array<Record<string, unknown>> }] }] };
+    expect(readExpandedCleanupSummary(malformed, "Alice", "ntUserTraces", 1, hash)).toBeNull();
+  });
   test("follows the existing persona, independently of interface density", () => {
     expect(cleanupModeForPersona("casual")).toBe("simple");
     expect(cleanupModeForPersona("secure")).toBe("advanced");

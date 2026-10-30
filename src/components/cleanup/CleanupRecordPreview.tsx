@@ -238,14 +238,30 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
       (category.recordChunk ? pageCount !== 0 || !chunkBytes || typeof category.sourceTruncated !== "boolean" : chunkOffset !== 0) ||
       offset + recordCount > (category.totalRows as number) ||
       (category.nextOffset === null ? offset + recordCount !== category.totalRows : !Number.isSafeInteger(category.nextOffset) || category.nextOffset !== offset + recordCount || (category.nextOffset as number) >= (category.totalRows as number) || recordCount === 0)) return null;
-  const summary = readCleanupUserSummary(category);
-  return summary.count >= 0 && summary.raw ? { ...summary, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated } : null;
+  // A page may contain only some activity sections. Their combined count must
+  // be checked against the scan total after the final page is assembled.
+  let pageCategory = category;
+  const groupedActivity = categoryId === "ntUserTraces" && !!category.records?.some(row => isObject(row) && Object.hasOwn(row, "count"));
+  if (groupedActivity) {
+    if (!Number.isSafeInteger(category.count) || category.count < 0 || !category.records?.every(row => isObject(row) && Number.isSafeInteger(row.count) && (row.count as number) >= 0)) return null;
+    const pageTotal = category.records.reduce((sum, row) => sum + (row.count as number), 0);
+    if (!Number.isSafeInteger(pageTotal) || pageTotal > category.count) return null;
+    pageCategory = { ...category, count: pageTotal };
+  }
+  const summary = readCleanupUserSummary(pageCategory);
+  if (summary.count < 0 || !summary.raw) return null;
+  return { ...summary, count: category.count, raw: groupedActivity ? { ...summary.raw, expectedActivityCount: category.count } : summary.raw, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
 }
 
 export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {
   const previous = isObject(previousRaw) && Array.isArray(previousRaw.records) ? previousRaw.records : [];
   if (!isObject(currentRaw) || !Array.isArray(currentRaw.records) || previous.length !== offset) return null;
   const records = [...previous, ...currentRaw.records];
+  if (currentRaw.truncated === false && Number.isSafeInteger(currentRaw.expectedActivityCount)) {
+    if (!records.every(row => isObject(row) && Number.isSafeInteger(row.count) && (row.count as number) >= 0)) return null;
+    const total = records.reduce((sum, row) => sum + (row.count as number), 0);
+    if (!Number.isSafeInteger(total) || total !== currentRaw.expectedActivityCount) return null;
+  }
   return { ...currentRaw, records, sampleCount: records.length };
 }
 
@@ -331,7 +347,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         }
         const record = assembleCleanupRecordChunks(parts, firstChunk.totalBytes);
         if (!record || !isObject(first.raw)) throw new Error("Invalid account detail record.");
-        summary = { ...first, raw: { ...first.raw, records: [record], sampleCount: 1, truncated: first.sourceTruncated || first.nextOffset !== null } };
+        summary = { ...first, raw: { ...first.raw, records: [record], sampleCount: 1, truncated: first.sourceTruncated || first.nextOffset !== null, ...(categoryId === "ntUserTraces" && Object.hasOwn(record, "count") ? { expectedActivityCount: first.count } : {}) } };
       }
       const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
       if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }

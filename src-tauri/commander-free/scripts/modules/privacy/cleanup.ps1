@@ -2755,15 +2755,20 @@ function Get-RecycleBinInfo {
         $items = @()
         $totalSizeKB = 0.0
         $sidNameCache = @{}
+        $partial = $false
 
         $drives = [System.IO.DriveInfo]::GetDrives() |
             Where-Object { $_.DriveType -in @('Fixed','Removable') -and $_.IsReady }
         foreach ($drv in $drives) {
             $binRoot = Join-Path $drv.RootDirectory.FullName '$Recycle.Bin'
-            if (-not (Test-Path -LiteralPath $binRoot -ErrorAction SilentlyContinue)) { continue }
-
-            $sidDirs = Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction SilentlyContinue
+            try {
+                $rootItem = Get-Item -LiteralPath $binRoot -Force -ErrorAction Stop
+                if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recycle Bin root unavailable.' }
+                $sidDirs = @(Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction Stop)
+            } catch [System.Management.Automation.ItemNotFoundException] { continue }
+            catch { $partial = $true; continue }
             foreach ($sidDir in $sidDirs) {
+                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; continue }
                 $sid = $sidDir.Name
                 if (-not $sidNameCache.ContainsKey($sid)) {
                     $resolved = $sid
@@ -2775,27 +2780,31 @@ function Get-RecycleBinInfo {
                 }
                 $account = $sidNameCache[$sid]
 
-                $iFiles = Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -Force -ErrorAction SilentlyContinue
+                try { $iFiles = @(Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -File -Force -ErrorAction Stop) }
+                catch { $partial = $true; continue }
                 foreach ($iFile in $iFiles) {
                     try {
+                        if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw 'Recycle Bin metadata unavailable.' }
                         $bytes = [System.IO.File]::ReadAllBytes($iFile.FullName)
-                        if ($bytes.Length -lt 24) { continue }
+                        if ($bytes.Length -lt 24) { throw 'Recycle Bin metadata is incomplete.' }
                         $version   = [System.BitConverter]::ToInt64($bytes, 0)
+                        if ($version -notin @(1, 2)) { throw 'Recycle Bin metadata has an unknown format.' }
                         $sizeBytes = [System.BitConverter]::ToInt64($bytes, 8)
+                        if ($sizeBytes -lt 0) { throw 'Recycle Bin metadata has an invalid size.' }
                         $ft        = [System.BitConverter]::ToInt64($bytes, 16)
-                        $deleted   = ''
-                        try { $deleted = [System.DateTime]::FromFileTime($ft).ToString('yyyy-MM-dd HH:mm:ss') } catch {}
+                        $deleted   = [System.DateTime]::FromFileTime($ft).ToString('yyyy-MM-dd HH:mm:ss')
 
                         $origPath = ''
-                        if ($version -eq 2 -and $bytes.Length -ge 28) {
+                        if ($version -eq 2) {
+                            if ($bytes.Length -lt 28) { throw 'Recycle Bin path metadata is incomplete.' }
                             # Win10+: int32 path length (wchars incl. NUL) at 24, UTF-16 path at 28
                             $pathChars = [System.BitConverter]::ToInt32($bytes, 24)
                             $byteLen   = [Math]::Max(0, ($pathChars - 1) * 2)
-                            if ($bytes.Length -ge (28 + $byteLen)) {
-                                $origPath = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteLen)
-                            }
+                            if ($pathChars -lt 1 -or $bytes.Length -lt (28 + $byteLen)) { throw 'Recycle Bin path metadata is incomplete.' }
+                            $origPath = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteLen)
                         } else {
                             # Legacy: fixed 520-byte (260 wchar) UTF-16 path at offset 24
+                            if ($bytes.Length -lt 544) { throw 'Recycle Bin path metadata is incomplete.' }
                             $avail = [Math]::Min(520, $bytes.Length - 24)
                             if ($avail -gt 0) {
                                 $raw = [System.Text.Encoding]::Unicode.GetString($bytes, 24, $avail)
@@ -2815,7 +2824,7 @@ function Get-RecycleBinInfo {
                             sid          = $sid
                             drive        = $drv.Name
                         }
-                    } catch {}
+                    } catch { $partial = $true }
                 }
             }
         }
@@ -2824,6 +2833,9 @@ function Get-RecycleBinInfo {
             items       = $items
             total       = $items.Count
             totalSizeKB = [Math]::Round($totalSizeKB, 1)
+            partial     = $partial
+            status      = if ($partial) { 'partial' } else { 'complete' }
+            message     = if ($partial) { 'Some Recycle Bin records could not be read.' } else { $null }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -2837,8 +2849,10 @@ function Get-NTUserTraces {
         # RunMRU
         $runMruPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
         $runMru = @()
-        if (Test-Path $runMruPath) {
-            $props = Get-ItemProperty $runMruPath -ErrorAction SilentlyContinue
+        $runMruExists = $true
+        try { $null = Get-Item -Path $runMruPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $runMruExists = $false }
+        if ($runMruExists) {
+            $props = Get-ItemProperty -Path $runMruPath -ErrorAction Stop
             $order = $props.MRUList
             if ($props) {
                 $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^(PS|MRUList)' } | ForEach-Object {
@@ -2851,8 +2865,10 @@ function Get-NTUserTraces {
         # TypedPaths
         $tpPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths'
         $typedPaths = @()
-        if (Test-Path $tpPath) {
-            Get-ItemProperty $tpPath | ForEach-Object {
+        $typedPathsExist = $true
+        try { $null = Get-Item -Path $tpPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $typedPathsExist = $false }
+        if ($typedPathsExist) {
+            Get-ItemProperty -Path $tpPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $typedPaths += @{ key = $_.Name; value = $_.Value }
                 }
@@ -2863,8 +2879,10 @@ function Get-NTUserTraces {
         # TypedURLs (IE/Edge legacy)
         $tuPath = 'HKCU:\Software\Microsoft\Internet Explorer\TypedURLs'
         $typedURLs = @()
-        if (Test-Path $tuPath) {
-            Get-ItemProperty $tuPath | ForEach-Object {
+        $typedUrlsExist = $true
+        try { $null = Get-Item -Path $tuPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $typedUrlsExist = $false }
+        if ($typedUrlsExist) {
+            Get-ItemProperty -Path $tuPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $typedURLs += @{ key = $_.Name; value = $_.Value }
                 }
@@ -2875,8 +2893,10 @@ function Get-NTUserTraces {
         # WordWheelQuery (Start/Explorer search MRU)
         $wwqPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery'
         $wwq = @()
-        if (Test-Path $wwqPath) {
-            Get-ItemProperty $wwqPath | ForEach-Object {
+        $searchHistoryExists = $true
+        try { $null = Get-Item -Path $wwqPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $searchHistoryExists = $false }
+        if ($searchHistoryExists) {
+            Get-ItemProperty -Path $wwqPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $wwq += @{ key = $_.Name; value = $_.Value }
                 }

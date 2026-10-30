@@ -30,9 +30,9 @@ function Enable-ScheduledTask { throw 'An originally disabled task must stay dis
 function Unregister-ScheduledTask { throw 'A same-name payload migration must not remove the task.' }
 function ConvertTo-AutoEraseTaskArgument {
     param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$PayloadRevision,$AllowDefaultExcluded)
-    if ($PayloadRevision -ne 9 -or $IntervalMinutes -ne 37 -or $ExecutionScope -ne 'user-TestUser') { throw 'Migration changed schedule or user context.' }
+    if ($PayloadRevision -ne 10 -or $IntervalMinutes -ne 37 -or $ExecutionScope -ne 'user-TestUser') { throw 'Migration changed schedule or user context.' }
     if ($CategoryId -eq 'browserFootprints' -and -not $AllowDefaultExcluded) { throw 'Migration lost explicit per-card authorization.' }
-    '-NoProfile -File "mock-revision9.ps1"'
+    '-NoProfile -File "mock-revision10.ps1"'
 }
 $script:disabled = @(); $script:registrations = 0; $script:registeredXml = ''
 $script:task = [pscustomobject]@{
@@ -57,29 +57,36 @@ if ($result.error -or $script:registrations -ne 1 -or $result.migrated.Count -ne
 foreach ($section in @('Triggers','Principals','Settings')) {
     if ($before.Task.$section.OuterXml -ne $after.Task.$section.OuterXml) { throw "Migration changed $section" }
 }
-if ($after.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (managed)') { throw 'Managed ownership was lost.' }
+if ($after.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (managed)') { throw 'Managed ownership was lost.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v5 (managed)'
 $script:originalXml = $script:originalXml -replace 'v4 \(managed\)', 'v5 (managed)'
 $script:registeredXml = ''; $script:registrations = 0
 $upgradedV5 = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
 if ($upgradedV5.error -or $script:registrations -ne 1 -or $upgradedV5.migrated.Count -ne 1) { throw 'Existing v5 managed schedule must receive the updated cleanup payload.' }
 [xml]$upgradedV5Xml = $script:registeredXml
-if ($upgradedV5Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (managed)' -or $upgradedV5Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV5Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV5Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v5 migration lost managed ownership, schedule, owner or disabled state.' }
+if ($upgradedV5Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (managed)' -or $upgradedV5Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV5Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV5Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v5 migration lost managed ownership, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v7 (managed)'
-$script:originalXml = $script:registeredXml -replace 'v9 \(managed\)', 'v7 (managed)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(managed\)', 'v7 (managed)'
 $script:registeredXml = ''; $script:registrations = 0
 $upgradedV7 = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
 if ($upgradedV7.error -or $script:registrations -ne 1 -or $upgradedV7.migrated.Count -ne 1) { throw 'Existing v7 managed schedule must receive the updated cleanup payload.' }
 [xml]$upgradedV7Xml = $script:registeredXml
-if ($upgradedV7Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (managed)' -or $upgradedV7Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV7Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV7Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v7 migration lost managed ownership, schedule, owner or disabled state.' }
+if ($upgradedV7Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (managed)' -or $upgradedV7Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV7Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV7Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v7 migration lost managed ownership, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v8 (managed)'
-$script:originalXml = $script:registeredXml -replace 'v9 \(managed\)', 'v8 (managed)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(managed\)', 'v8 (managed)'
 $script:registeredXml = ''; $script:registrations = 0
 $upgradedV8 = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
 if ($upgradedV8.error -or $script:registrations -ne 1 -or $upgradedV8.migrated.Count -ne 1) { throw 'Existing v8 managed schedule must receive the updated cleanup payload.' }
 [xml]$upgradedV8Xml = $script:registeredXml
-if ($upgradedV8Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (managed)' -or $upgradedV8Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV8Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV8Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v8 migration lost managed ownership, schedule, owner or disabled state.' }
+if ($upgradedV8Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (managed)' -or $upgradedV8Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV8Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV8Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v8 migration lost managed ownership, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v9 (managed)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(managed\)', 'v9 (managed)'
+$script:registeredXml = ''; $script:registrations = 0
+$upgradedV9 = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
+if ($upgradedV9.error -or $script:registrations -ne 1 -or $upgradedV9.migrated.Count -ne 1) { throw 'Existing v9 managed schedule must receive the updated cleanup payload.' }
+[xml]$upgradedV9Xml = $script:registeredXml
+if ($upgradedV9Xml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (managed)' -or $upgradedV9Xml.Task.Settings.Enabled -ne 'false' -or $upgradedV9Xml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV9Xml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v9 migration lost managed ownership, schedule, owner or disabled state.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v10 (managed)'
 $script:task | Add-Member -NotePropertyName Settings -NotePropertyValue ([pscustomobject]@{ Hidden=$true }) -Force
 $script:originalXml = $script:registeredXml -replace '</Settings>', '<Hidden>true</Hidden></Settings>'
 $script:registeredXml = ''; $script:registrations = 0
@@ -98,20 +105,27 @@ if ($upgraded.error -or $script:registrations -ne 1 -or $upgraded.migrated.Count
 [xml]$upgradedXml = $script:registeredXml
 if ($upgradedXml.Task.RegistrationInfo.Description -notmatch '\(manual opt-in\)$' -or $upgradedXml.Task.Settings.Enabled -ne 'false' -or $upgradedXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v6 migration lost consent, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v7 (manual opt-in)'
-$script:originalXml = $script:registeredXml -replace 'v9 \(manual opt-in\)', 'v7 (manual opt-in)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(manual opt-in\)', 'v7 (manual opt-in)'
 $script:registeredXml = ''; $script:registrations = 0
 $upgradedV7Manual = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($upgradedV7Manual.error -or $script:registrations -ne 1 -or $upgradedV7Manual.migrated.Count -ne 1) { throw 'Existing v7 manual schedule must receive the updated cleanup payload.' }
 [xml]$upgradedV7ManualXml = $script:registeredXml
-if ($upgradedV7ManualXml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (manual opt-in)' -or $upgradedV7ManualXml.Task.Settings.Enabled -ne 'false' -or $upgradedV7ManualXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV7ManualXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v7 migration lost consent, schedule, owner or disabled state.' }
+if ($upgradedV7ManualXml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (manual opt-in)' -or $upgradedV7ManualXml.Task.Settings.Enabled -ne 'false' -or $upgradedV7ManualXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV7ManualXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v7 migration lost consent, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v8 (manual opt-in)'
-$script:originalXml = $script:registeredXml -replace 'v9 \(manual opt-in\)', 'v8 (manual opt-in)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(manual opt-in\)', 'v8 (manual opt-in)'
 $script:registeredXml = ''; $script:registrations = 0
 $upgradedV8Manual = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($upgradedV8Manual.error -or $script:registrations -ne 1 -or $upgradedV8Manual.migrated.Count -ne 1) { throw 'Existing v8 manual schedule must receive the updated cleanup payload.' }
 [xml]$upgradedV8ManualXml = $script:registeredXml
-if ($upgradedV8ManualXml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v9 (manual opt-in)' -or $upgradedV8ManualXml.Task.Settings.Enabled -ne 'false' -or $upgradedV8ManualXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV8ManualXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v8 migration lost consent, schedule, owner or disabled state.' }
+if ($upgradedV8ManualXml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (manual opt-in)' -or $upgradedV8ManualXml.Task.Settings.Enabled -ne 'false' -or $upgradedV8ManualXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV8ManualXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v8 migration lost consent, schedule, owner or disabled state.' }
 $script:task.Description = 'System Maintenance scheduled cleanup v9 (manual opt-in)'
+$script:originalXml = $script:registeredXml -replace 'v10 \(manual opt-in\)', 'v9 (manual opt-in)'
+$script:registeredXml = ''; $script:registrations = 0
+$upgradedV9Manual = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
+if ($upgradedV9Manual.error -or $script:registrations -ne 1 -or $upgradedV9Manual.migrated.Count -ne 1) { throw 'Existing v9 manual schedule must receive the updated cleanup payload.' }
+[xml]$upgradedV9ManualXml = $script:registeredXml
+if ($upgradedV9ManualXml.Task.RegistrationInfo.Description -ne 'System Maintenance scheduled cleanup v10 (manual opt-in)' -or $upgradedV9ManualXml.Task.Settings.Enabled -ne 'false' -or $upgradedV9ManualXml.Task.Triggers.OuterXml -ne $before.Task.Triggers.OuterXml -or $upgradedV9ManualXml.Task.Principals.OuterXml -ne $before.Task.Principals.OuterXml) { throw 'The v9 migration lost consent, schedule, owner or disabled state.' }
+$script:task.Description = 'System Maintenance scheduled cleanup v10 (manual opt-in)'
 $script:registrations = 0
 $unchanged = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($unchanged.error -or $script:registrations -or $unchanged.migrated.Count) { throw 'A current, visible schedule must not be rewritten.' }
@@ -120,5 +134,5 @@ $script:task.Description = 'System Maintenance scheduled cleanup v5 (managed)'
 $script:task.TaskName = 'ProtectedSyntheticTask'; $script:registrations = 0
 $result = Invoke-AutoEraseMigration -CategoryId 'browserFootprints'
 if ($result.error -or $script:disabled.Count -ne 1 -or $script:registrations -or $result.disabledProtected.Count -ne 1) { throw 'Protected legacy task was not disabled without rewriting its payload.' }
-if ($script:locks.Count -ne 10 -or @($script:locks | Where-Object { $_ -eq 'dnsCache' }).Count -ne 5 -or @($script:locks | Where-Object { $_ -eq 'browserFootprints' }).Count -ne 5) { throw 'Migration did not acquire the category lock.' }
-Write-Output 'Passed: v4 through v8 payload upgrades preserve consent, interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'
+if ($script:locks.Count -ne 12 -or @($script:locks | Where-Object { $_ -eq 'dnsCache' }).Count -ne 6 -or @($script:locks | Where-Object { $_ -eq 'browserFootprints' }).Count -ne 6) { throw 'Migration did not acquire the category lock.' }
+Write-Output 'Passed: v4 through v9 payload upgrades preserve consent, interval, triggers, principal and disabled settings; protected legacy task disabled in mocks.'

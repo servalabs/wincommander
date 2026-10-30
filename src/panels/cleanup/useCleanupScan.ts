@@ -9,6 +9,7 @@ import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSetti
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { createCleanupScheduleReadGate } from "./cleanupScheduleReadGate";
+import { createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
 import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope } from "./cleanupScheduleReadback";
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
@@ -522,12 +523,28 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
-    const migrationStarted = useRef(false);
+    const migrationGate = useRef(createCleanupScheduleMigrationGate());
     const scheduleReadGate = useRef(createCleanupScheduleReadGate());
+    const visibleScheduleState = entitlementsReady && schedulesEnabled && migrationEnabled && !migrationGate.current.isCompleted() && scheduleState === "verified"
+        ? "checking" : scheduleState;
 
     const refreshSchedules = async () => {
         const ticket = scheduleReadGate.current.begin();
         setScheduleState("checking");
+        if (entitlementsReady && schedulesEnabled && migrationEnabled) {
+            const migrated = await migrationGate.current.ensure(async () => {
+                const result = await invokeAutoEraseMigration();
+                if (!isVerifiedCleanupMigration(result)) return false;
+                invalidateDiskCleanupScheduleStatus();
+                return true;
+            });
+            if (!scheduleReadGate.current.isCurrent(ticket)) return null;
+            if (!migrated) {
+                setScheduleState("unavailable");
+                showError("Scheduled cleanup upgrade could not be verified. Retry schedule status.");
+                return null;
+            }
+        }
         let res;
         try { res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true); }
         catch { if (scheduleReadGate.current.isCurrent(ticket)) setScheduleState("unavailable"); return null; }
@@ -577,23 +594,18 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     }, [auxiliaryStateEnabled]);
 
     useEffect(() => {
-        if (!entitlementsReady || !schedulesEnabled || !migrationEnabled || migrationStarted.current) return;
-        migrationStarted.current = true;
+        if (!entitlementsReady || !schedulesEnabled || !migrationEnabled) return;
         // KT: migration mutates scheduled tasks and is paid. Running it before
         // entitlement and Pro-install resolution could asynchronously cover
         // an open scheduler with LicenseGate or the Pro installer.
-        void (async () => {
-            try { await invokeAutoEraseMigration(); } catch {}
-            invalidateDiskCleanupScheduleStatus();
-            await refreshSchedules();
-        })();
+        void refreshSchedules();
         // Stable refs from useBackend's useMemo — safe to omit from deps.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [entitlementsReady, schedulesEnabled, migrationEnabled]);
 
     const handleSetSchedule = async (categoryId: string, minutes: number, runAsSystem: boolean) => {
         const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
-        if (!category?.schedulable || !schedulesEnabled || scheduleState !== "verified") return false;
+        if (!category?.schedulable || !schedulesEnabled || visibleScheduleState !== "verified") return false;
         const allowDefaultExcluded = isDefaultExcludedCleanup(categoryId);
         if (!await requestCleanupManualAuthorization(category, 'schedule', requestConfirm, minutes)) return false;
         setScheduleBusyId(categoryId);
@@ -948,7 +960,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (!schedulesEnabled || scheduleState !== "verified") {
+        if (!schedulesEnabled || visibleScheduleState !== "verified") {
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;
         }
@@ -1303,9 +1315,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         schedulesById,
         disabledSchedulesById,
         scheduleRecordsById,
-        scheduleState,
+        scheduleState: visibleScheduleState,
         refreshSchedules,
-        hasScheduledWipes: scheduleState === "verified" && autoSetScheduleIds.size > 0,
+        hasScheduledWipes: visibleScheduleState === "verified" && autoSetScheduleIds.size > 0,
         scheduleBusyId,
         autoSetSchedulesBusy,
         handleSetSchedule,
