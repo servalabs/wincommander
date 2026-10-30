@@ -36,27 +36,28 @@ try {
         for ($i = 0; $i -lt 201; $i++) { [pscustomobject]@{ FullName = "$LiteralPath\file-$i"; Attributes=if ($i -eq 0 -and $script:reparseFile) { [IO.FileAttributes]::ReparsePoint } else { [IO.FileAttributes]::Normal }; Length = 1024; LastWriteTime = [datetime]'2026-01-01' } }
     }
     $result = Get-DeveloperCachesInfo
-    if ($result.error -or $result.total -ne 201 -or $result.files.Count -ne 200 -or -not $result.truncated) { throw 'Cache count or preview coverage is incorrect.' }
+    if ($result.error -or $result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 201 -or $result.files.Count -ne 200 -or -not $result.truncated) { throw 'Cache count or preview coverage is incorrect.' }
     if (@($result.files | Where-Object { -not $_.path }).Count) { throw 'A returned cache record omitted its location.' }
     $full = Get-CleanupDeveloperCachesInfo -AppDataPath $env:APPDATA -LocalAppDataPath $env:LOCALAPPDATA -UserProfilePath $env:USERPROFILE -previewLimit ([int]::MaxValue)
     if ($full.error -or $full.total -ne 201 -or $full.files.Count -ne 201 -or $full.truncated) { throw 'Full cache detail did not include records beyond the normal preview.' }
     $script:deny = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'A denied cache inventory must not be reported complete.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'A denied cache inventory must not be reported complete.' }
     $script:deny = $false; $script:allMissing = $true
     $empty = Get-DeveloperCachesInfo
-    if ($empty.error -or $empty.total -ne 0) { throw 'Absent cache and configuration paths should produce an empty scan.' }
+    if ($empty.error -or $empty.partial -or $empty.coverage -ne 'limited' -or $empty.total -ne 0) { throw 'Absent cache and configuration paths should produce a limited empty scan.' }
     $script:allMissing = $false; $script:denyRoot = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'An inaccessible cache root must not be treated as absent.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'An inaccessible cache root must not be treated as absent.' }
     $script:denyRoot = $false; $script:reparseRoot = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'A reparse-point cache root must not be followed.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'A reparse-point cache root must not be followed.' }
     $script:reparseRoot = $false; $script:reparseFile = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'A reparse-point cache entry must not be reported as an ordinary file.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'A reparse-point cache entry must not be reported as an ordinary file.' }
     $script:reparseFile = $false; $script:reparseAncestor = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'A reparse-point cache ancestor must not be followed.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'A reparse-point cache ancestor must not be followed.' }
     $script:reparseAncestor = $false; $script:denyConfig = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'An inaccessible config must not be treated as absent.' }
+    $partial = Get-DeveloperCachesInfo
+    if (-not $partial.partial -or $partial.total -ne 201 -or @($partial.files).Count -ne 200 -or -not $partial.truncated) { throw 'A denied configuration must retain earlier cache observations and stay incomplete.' }
     $script:denyConfig = $false; $script:reparseConfig = $true
-    if (-not (Get-DeveloperCachesInfo).error) { throw 'A reparse-point config must not be followed.' }
+    if (-not (Get-DeveloperCachesInfo).partial) { throw 'A reparse-point config must not be followed.' }
     $script:reparseConfig = $false; $script:includeConfig = $true
     $withConfig = Get-CleanupDeveloperCachesInfo -AppDataPath $env:APPDATA -LocalAppDataPath $env:LOCALAPPDATA -UserProfilePath $env:USERPROFILE -previewLimit ([int]::MaxValue)
     if ($withConfig.error -or $withConfig.total -ne 202 -or @($withConfig.files | Where-Object { $_.path -eq 'C:\Fixture\User\.npmrc' }).Count -ne 1) { throw 'An existing regular configuration must be reported by presence.' }

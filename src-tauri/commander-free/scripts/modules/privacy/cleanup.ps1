@@ -3676,6 +3676,7 @@ function Get-CleanupDeveloperCachesInfo {
         $files = [System.Collections.Generic.List[object]]::new()
         $total = [int64]0
         $totalBytes = [int64]0
+        $partial = $false
         $cacheDirs = @(
             @{ label = 'npm cache'; path = (Join-Path $AppDataPath 'npm-cache'); base = $AppDataPath },
             @{ label = 'npm cache'; path = (Join-Path $LocalAppDataPath 'npm-cache'); base = $LocalAppDataPath },
@@ -3684,6 +3685,7 @@ function Get-CleanupDeveloperCachesInfo {
             @{ label = 'cargo registry source'; path = (Join-Path $UserProfilePath '.cargo\registry\src'); base = $UserProfilePath }
         )
         foreach ($cache in $cacheDirs) {
+          try {
             try { $root = Get-Item -LiteralPath $cache.path -Force -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { continue }
             if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer cache root is not a regular directory.' }
@@ -3697,12 +3699,14 @@ function Get-CleanupDeveloperCachesInfo {
                 }
                 $totalBytes += $_.Length
             }
+          } catch { $partial = $true }
         }
         foreach ($config in @(
             @{ label = 'npm token configuration present'; path = (Join-Path $UserProfilePath '.npmrc') },
             @{ label = 'cargo configuration present'; path = (Join-Path $UserProfilePath '.cargo\config.toml') },
             @{ label = 'cargo credentials present'; path = (Join-Path $UserProfilePath '.cargo\credentials.toml') }
         )) {
+          try {
             try { $item = Get-Item -LiteralPath $config.path -Force -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { continue }
             if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer configuration path is not a regular file.' }
@@ -3712,8 +3716,9 @@ function Get-CleanupDeveloperCachesInfo {
                 [void]$files.Add(@{ name = $config.label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
             $totalBytes += $item.Length
+          } catch { $partial = $true }
         }
-        @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count) }
+        @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count); coverage = 'limited'; coverageNote = 'Checks selected npm, pip and Cargo cache and configuration locations only; other tools and custom paths are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected developer cache locations could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = $previewLimit; truncated = $false } }
 }
