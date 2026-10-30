@@ -49,9 +49,10 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const groupedLimited = groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const limitedScope = hasLimitedCleanupCoverage(category.id, raw) || groupedLimited ? (category.id === "walFiles"
-    ? "Checks two app-data locations, up to five folder levels deep and 100 matches per location."
-    : category.id === "recallDb" ? "Checks four specified activity-data locations, up to 100 matches per location."
-      : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
+    ? "Checks two app-data locations, up to five folder levels deep."
+    : category.id === "recallDb" ? "Checks four specified activity-data locations."
+      : category.id === "dockerDesktopData" ? "Checks default Docker disk and log locations; custom disk locations are not included."
+        : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
   const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : "Not reported";
   const receipt = cleanupVerificationText(verification);
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;

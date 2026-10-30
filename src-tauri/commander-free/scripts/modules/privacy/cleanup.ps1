@@ -199,7 +199,7 @@ function Get-PSHistory {
         catch [System.Management.Automation.ItemNotFoundException] { }
         $commands = @()
         if ($null -ne $historyFile) {
-            $commands = @(Get-Content -LiteralPath $historyPath -ErrorAction Stop | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+            $commands = @(Get-Content -LiteralPath $historyPath -ErrorAction Stop | Where-Object { $_ -is [string] -and $_.Trim() -ne '' })
         }
         $entries = [Collections.Generic.List[object]]::new()
         for ($index = $commands.Count - 1; $index -ge 0; $index--) {
@@ -2718,16 +2718,17 @@ function Get-AmcacheEntries {
                 $null = Get-Item -Path $cat.path -ErrorAction Stop
                 $children = @(Get-ChildItem -Path $cat.path -ErrorAction Stop)
                 $count = ($children | Measure-Object).Count
-                $sample = $children | Select-Object -First 3 | ForEach-Object {
+                $sample = $children | ForEach-Object {
                     $child = $_
                     $props = Get-ItemProperty $child.PSPath -ErrorAction Stop
                     $name = @($props.Name, $props.ProductName, $props.BinFileVersion) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
                     $path = @($props.LowerCaseLongPath, $props.LongPathHash) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
-                    @{
-                        id   = $child.PSChildName
-                        name = if ($name) { $name } else { '' }
-                        path = if ($path) { $path } else { '' }
+                    $entry = @{ id = $child.PSChildName; name = if ($name) { $name } else { '' }; path = if ($path) { $path } else { '' } }
+                    foreach ($pair in @(@('productName','ProductName'), @('binaryVersion','BinFileVersion'), @('longPath','LowerCaseLongPath'), @('longPathHash','LongPathHash'))) {
+                        $value = $props.($pair[1])
+                        if ($value -is [string] -and $value.Trim()) { $entry[$pair[0]] = $value }
                     }
+                    $entry
                 }
             } catch [System.Management.Automation.ItemNotFoundException] {
                 # This registry category is absent on this Windows build.
@@ -3203,26 +3204,45 @@ function Get-WSLDataInfo {
 }
 
 function Get-DockerDesktopDataInfo {
-    # Docker Desktop stores both WSL distributions below LocalAppData and its desktop log in AppData.
+    # Docker documents these default paths; customized disk locations require separate verification.
     try {
         $files = @()
         $totalBytes = [int64]0
         $dockerWsl = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
-        if (Test-Path $dockerWsl -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $dockerWsl -Recurse -File -Filter '*.vhdx' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Docker WSL: $($_.FullName.Substring($dockerWsl.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                $totalBytes += $_.Length
-            }
-        }
-        $dockerLog = Join-Path $env:APPDATA 'Docker\log.txt'
-        if (Test-Path $dockerLog -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $dockerLog -Force -ErrorAction SilentlyContinue
-            if ($item) {
-                $files += @{ name = 'Docker: log.txt'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        $root = $null
+        try { $root = Get-Item -LiteralPath $dockerWsl -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($root) {
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker WSL disk inventory is unavailable.' }
+            foreach ($item in @(Get-ChildItem -LiteralPath $dockerWsl -Recurse -Force -ErrorAction Stop)) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Docker WSL disk inventory contains a reparse point.' }
+                if ($item.PSIsContainer -or $item.Name -notlike '*.vhdx') { continue }
+                $files += @{ name = "Docker WSL: $($item.Name)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $item.Length
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        foreach ($disk in @(
+            @{ name = 'Docker Hyper-V disk'; path = (Join-Path $env:ProgramData 'DockerDesktop\vm-data\DockerDesktop.vhdx') },
+            @{ name = 'Docker VMM disk'; path = (Join-Path $env:LOCALAPPDATA 'Docker\vm-data\DockerDesktop.vhdx') }
+        )) {
+            $item = $null
+            try { $item = Get-Item -LiteralPath $disk.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { }
+            if (-not $item) { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
+            $files += @{ name = $disk.name; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $totalBytes += $item.Length
+        }
+        $dockerLog = Join-Path $env:APPDATA 'Docker\log.txt'
+        $item = $null
+        try { $item = Get-Item -LiteralPath $dockerLog -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($item) {
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker log inventory is unavailable.' }
+            $files += @{ name = 'Docker: log.txt'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $totalBytes += $item.Length
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks documented default Docker disk and log locations. Customized disk locations are not included.' }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3782,7 +3802,7 @@ function Get-AdobeRecentInfo {
 
 function Get-OfficeTempFilesInfo {
     try {
-        $files = @()
+        $files = [Collections.Generic.List[object]]::new()
         $totalBytes = [int64]0
         $roots = @(
             (Join-Path $env:USERPROFILE 'Documents'),
@@ -3790,21 +3810,27 @@ function Get-OfficeTempFilesInfo {
             (Join-Path $env:USERPROFILE 'Downloads')
         )
         foreach ($root in $roots) {
-            if (-not (Test-Path $root -ErrorAction Stop)) { continue }
+            try { $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
             Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object {
-                $files += @{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files.Add(@{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
         }
         $tempRoot = $env:TEMP
-        if (Test-Path $tempRoot -ErrorAction Stop) {
+        $tempItem = $null
+        try { $tempItem = Get-Item -LiteralPath $tempRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($tempItem) {
+            if (-not $tempItem.PSIsContainer -or ($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
             Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop |
                 Sort-Object LastWriteTime -Descending | ForEach-Object {
-                    $files += @{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $files.Add(@{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                     $totalBytes += $_.Length
                 }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -5461,19 +5487,22 @@ function Invoke-CleanupClearForUser {
                 }
                 'officeTempFiles' {
                     $roots = @((Join-Path $docs ''), (Join-Path $UserProfilePath 'Desktop'), (Join-Path $UserProfilePath 'Downloads'))
-                    $targets = @()
-                    foreach ($root in $roots) {
-                        if (Test-Path $root -ErrorAction SilentlyContinue) {
-                            $targets += @(Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+                    $tempRoot = Join-Path $localApp 'Temp'
+                    $readTargets = {
+                        foreach ($root in @($roots) + @($tempRoot)) {
+                            try { $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+                            catch [System.Management.Automation.ItemNotFoundException] { continue }
+                            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
+                            if ($root -eq $tempRoot) {
+                                Get-ChildItem -LiteralPath $root -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop | ForEach-Object { $_.FullName }
+                            } else {
+                                Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object { $_.FullName }
+                            }
                         }
                     }
-                    $tempRoot = Join-Path $localApp 'Temp'
-                    if (Test-Path $tempRoot -ErrorAction SilentlyContinue) {
-                        $targets += @(Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction SilentlyContinue |
-                            Sort-Object LastWriteTime -Descending | Select-Object -First 500 | ForEach-Object { $_.FullName })
-                    }
+                    $targets = @(& $readTargets)
                     foreach ($target in $targets) { Erase-OneFile $target }
-                    $leftover = @($targets | Where-Object { Test-Path $_ -PathType Leaf -ErrorAction SilentlyContinue }).Count
+                    $leftover = @(& $readTargets).Count
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
                 }
                 'vpnPhonebooks' {
@@ -5705,7 +5734,7 @@ function Invoke-CleanupClearAllUsers {
 
 function Convert-CleanupSummaryHistory {
     param([string[]]$Lines, [int]$PreviewMax)
-    $nonEmpty = @($Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    $nonEmpty = @($Lines | Where-Object { $_ -is [string] -and $_.Trim() -ne '' })
     $items = [Collections.Generic.List[string]]::new(); $records = [Collections.Generic.List[object]]::new()
     $start = [Math]::Max(0, $nonEmpty.Count - $PreviewMax)
     for ($index = $nonEmpty.Count - 1; $index -ge $start; $index--) {

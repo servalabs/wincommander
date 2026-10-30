@@ -7,8 +7,8 @@ $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.L
 if (-not $definition) { throw 'PowerShell history reader is missing.' }
 . ([scriptblock]::Create($definition.Extent.Text))
 function Get-Item { param($LiteralPath, $ErrorAction) return @{ exists = $true } }
-function Get-Content { param($LiteralPath, $ErrorAction) 1..650 | ForEach-Object { "synthetic-command-$_" } }
+function Get-Content { param($LiteralPath, $ErrorAction) 1..650 | ForEach-Object { if ($_ -eq 1) { '  synthetic-command-1  ' } else { "synthetic-command-$_" } } }
 $result = Get-PSHistory
 if ($result.error -or $result.total -ne 650 -or $result.entries.Count -ne 650 -or $result.truncated) { throw 'The full history was not returned.' }
-if ($result.entries[0].command -ne 'synthetic-command-650' -or $result.entries[649].command -ne 'synthetic-command-1') { throw 'History order or record contents were not preserved.' }
+if ($result.entries[0].command -ne 'synthetic-command-650' -or $result.entries[649].command -ne '  synthetic-command-1  ') { throw 'History order or record contents were not preserved.' }
 Write-Output 'Passed: the local PowerShell history reader returns more than 300 records in order.'

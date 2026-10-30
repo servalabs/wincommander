@@ -531,7 +531,7 @@ function Invoke-WCProviderProcess {
 
 function Assert-WCProviderIdle {
     param([Parameter(Mandatory)][string]$Name)
-    if (@(Get-Process -Name $Name -ErrorAction SilentlyContinue).Count) { throw 'The VM provider is busy; a previous operation may still be running.' }
+    if (@(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -ieq $Name }).Count) { throw 'The VM provider is busy; a previous operation may still be running.' }
 }
 
 function Invoke-WCVBox {
@@ -716,46 +716,123 @@ function Invoke-WCVmwareSnapshotCleanup {
     return @{ removed = $removed; failed = $failed }
 }
 
+function Get-WCVmPathIfPresent {
+    param([Parameter(Mandatory)][string]$Path, [bool]$Directory)
+    try { $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return $null }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or [bool]$item.PSIsContainer -ne $Directory) {
+        throw 'A virtual-machine artifact path could not be safely verified.'
+    }
+    return $item
+}
+
+function Remove-WCVmwareRecentHistory {
+    $path = 'HKCU:\Software\VMware, Inc.\VMware Workstation'
+    try { $key = Get-Item -LiteralPath $path -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return @{ removed=0; failed=0 } }
+    $names = @($key.Property | Where-Object { $_ -match '(?i)mru|recent' })
+    $failed = 0
+    foreach ($name in $names) {
+        try { Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop }
+        catch { $failed++ }
+    }
+    $remaining = @((Get-Item -LiteralPath $path -ErrorAction Stop).Property | Where-Object { $_ -match '(?i)mru|recent' })
+    $removed = @($names | Where-Object { $_ -notin $remaining }).Count
+    if ($remaining.Count) { $failed++ }
+    return @{ removed=$removed; failed=$failed }
+}
+
+function Assert-WCVmUserArtifactPath {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Root)
+    $profile = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $file = [IO.Path]::GetFullPath($Path)
+    if (-not $rootPath.StartsWith($profile + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        -not $file.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'A virtual-machine log is outside the selected profile.' }
+    $cursor = $file
+    while ($cursor.Length -ge $profile.Length) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A virtual-machine log path contains a reparse point.' }
+        if ($cursor -ieq $profile) { return }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+        if (-not $cursor) { throw 'A virtual-machine log path could not be verified.' }
+    }
+    throw 'A virtual-machine log path could not be verified.'
+}
+
+function Get-WCVmUserLogFiles {
+    $sources = @(
+        @{ root=(Join-Path $env:USERPROFILE 'Documents\Virtual Machines'); patterns=@('vmware*.log') },
+        @{ root=(Join-Path $env:USERPROFILE 'VirtualBox VMs'); patterns=@('VBox.log','VBoxSVC.log') }
+    )
+    foreach ($source in $sources) {
+        if (-not (Get-WCVmPathIfPresent -Path $source.root -Directory $true)) { continue }
+        foreach ($pattern in $source.patterns) {
+            foreach ($file in @(Get-AutoEraseFiles -Path $source.root -Filter $pattern -Recurse)) {
+                Assert-WCVmUserArtifactPath -Path $file.FullName -Root $source.root
+                $file.FullName
+            }
+        }
+    }
+}
+
+function Invoke-WCVmUserLogCleanup {
+    $targets = @(Get-WCVmUserLogFiles)
+    if (-not $targets.Count) { return }
+    $busyNames = @('VirtualBoxVM','VBoxHeadless','VBoxSVC','VBoxManage','vmware-vmx','vmrun')
+    if (@(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -in $busyNames }).Count) { throw 'A virtual-machine provider is active; its logs were left unchanged.' }
+    foreach ($path in $targets) { Erase-OneFile $path | Out-Null }
+    if (@(Get-WCVmUserLogFiles).Count) { throw 'Virtual-machine logs remain after cleanup.' }
+}
+
 function Get-WCVirtualMachineArtifactRemainders {
     $count = 0
     $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
-    if (Test-Path -LiteralPath $vmwareRoot -PathType Container -ErrorAction Stop) {
+    if (Get-WCVmPathIfPresent -Path $vmwareRoot -Directory $true) {
         foreach ($pattern in @('*-0000*.vmdk', '*.vmsn', 'vmware*.log')) {
-            $count += @(Get-ChildItem -LiteralPath $vmwareRoot -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+            $count += @(Get-AutoEraseFiles -Path $vmwareRoot -Filter $pattern -Recurse).Count
         }
     }
     $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
-    if (Test-Path -LiteralPath $virtualBoxRoot -PathType Container -ErrorAction Stop) {
-        foreach ($dir in @(Get-ChildItem -LiteralPath $virtualBoxRoot -Directory -Recurse -Force -ErrorAction Stop | Where-Object { $_.Name -eq 'Snapshots' })) {
+    if (Get-WCVmPathIfPresent -Path $virtualBoxRoot -Directory $true) {
+        foreach ($dir in @(Get-AutoEraseDirectories -Path $virtualBoxRoot -Recurse | Where-Object { $_.Name -eq 'Snapshots' })) {
             foreach ($pattern in @('*.vdi', '*.vbox-prev')) {
-                $count += @(Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+                $count += @(Get-AutoEraseFiles -Path $dir.FullName -Filter $pattern -Recurse).Count
             }
         }
         foreach ($pattern in @('VBox.log', 'VBoxSVC.log')) {
-            $count += @(Get-ChildItem -LiteralPath $virtualBoxRoot -Recurse -File -Filter $pattern -Force -ErrorAction Stop).Count
+            $count += @(Get-AutoEraseFiles -Path $virtualBoxRoot -Filter $pattern -Recurse).Count
         }
     }
     foreach ($path in @((Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'), (Join-Path $env:ProgramData 'VMware\vmnetnat.log'), (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml'))) {
-        if (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop) { $count++ }
+        if (Get-WCVmPathIfPresent -Path $path -Directory $false) { $count++ }
     }
     $mru = 'HKCU:\Software\VMware, Inc.\VMware Workstation'
-    if (Test-Path -LiteralPath $mru -ErrorAction Stop) {
-        $count += @((Get-Item -LiteralPath $mru -ErrorAction Stop).Property | Where-Object { $_ -match '(?i)mru|recent' }).Count
-    }
+    try { $key = Get-Item -LiteralPath $mru -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); $key = $null }
+    if ($key) { $count += @($key.Property | Where-Object { $_ -match '(?i)mru|recent' }).Count }
     return $count
 }
 
 function Invoke-WCVirtualMachineArtifactCleanup {
     $result = @{ removed = 0; failed = 0 }
     $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
-    if (Test-Path -LiteralPath $virtualBoxRoot -PathType Container) {
-        $snapshotResult = Invoke-WCVBoxSnapshotCleanup
-        $result.removed += [int]$snapshotResult.removed
-        $result.failed += [int]$snapshotResult.failed
-    }
+    try {
+        if (Get-WCVmPathIfPresent -Path $virtualBoxRoot -Directory $true) {
+            $snapshotResult = Invoke-WCVBoxSnapshotCleanup
+            $result.removed += [int]$snapshotResult.removed
+            $result.failed += [int]$snapshotResult.failed
+        }
+    } catch { $result.failed++ }
     $vmwareResult = Invoke-WCVmwareSnapshotCleanup
     $result.removed += [int]$vmwareResult.removed
     $result.failed += [int]$vmwareResult.failed
+    try {
+        $recentResult = Remove-WCVmwareRecentHistory
+        $result.removed += [int]$recentResult.removed
+        $result.failed += [int]$recentResult.failed
+    } catch { $result.failed++ }
+    try { Invoke-WCVmUserLogCleanup } catch { $result.failed++ }
     try { if ((Get-WCVirtualMachineArtifactRemainders) -gt 0) { $result.failed++ } }
     catch { $result.failed++ }
     return $result
@@ -786,7 +863,7 @@ function Invoke-WCDocker {
     $programFiles = [Environment]::GetFolderPath('ProgramFiles')
     $exe = Join-Path $programFiles 'Docker\Docker\resources\bin\docker.exe'
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf -ErrorAction Stop)) { throw 'Docker Desktop CLI is unavailable.' }
-    if (@(Get-Process -Name 'docker' -ErrorAction SilentlyContinue).Count) { throw 'A Docker CLI operation is already running.' }
+    if (@(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -ieq 'docker' }).Count) { throw 'A Docker CLI operation is already running.' }
     $start = New-WCDockerStartInfo -Executable $exe -ConfigPath $ConfigPath -Arguments $Arguments -Mutation $Mutation
     $process = [Diagnostics.Process]::Start($start)
     if (-not $process) { throw 'Docker Desktop CLI could not start.' }
@@ -841,11 +918,36 @@ function Get-WCDockerResources {
 function Get-WCDockerArtifactRemainders {
     $count = 0
     $root = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
-    if (Test-Path -LiteralPath $root -PathType Container -ErrorAction Stop) {
-        $count += @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.vhdx' -Force -ErrorAction Stop).Count
+    $rootItem = $null
+    try { $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { }
+    if ($rootItem) {
+        if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
+        foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop)) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Docker disk inventory contains a reparse point.' }
+            if (-not $item.PSIsContainer -and $item.Name -like '*.vhdx') { $count++ }
+        }
+    }
+    foreach ($fixedDisk in @(
+        (Join-Path $env:ProgramData 'DockerDesktop\vm-data\DockerDesktop.vhdx'),
+        (Join-Path $env:LOCALAPPDATA 'Docker\vm-data\DockerDesktop.vhdx')
+    )) {
+        $diskItem = $null
+        try { $diskItem = Get-Item -LiteralPath $fixedDisk -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($diskItem) {
+            if ($diskItem.PSIsContainer -or ($diskItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
+            $count++
+        }
     }
     $log = Join-Path $env:APPDATA 'Docker\log.txt'
-    if (Test-Path -LiteralPath $log -PathType Leaf -ErrorAction Stop) { $count++ }
+    $logItem = $null
+    try { $logItem = Get-Item -LiteralPath $log -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { }
+    if ($logItem) {
+        if ($logItem.PSIsContainer -or ($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker log inventory is unavailable.' }
+        $count++
+    }
     return $count
 }
 
@@ -2260,11 +2362,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v8 (manual opt-in)'
+            'System Maintenance scheduled cleanup v9 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v8 (managed)'
+            'System Maintenance scheduled cleanup v9 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v8'
+            'System Maintenance scheduled cleanup v9'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2500,7 +2602,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v[45678] \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v[456789] \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2634,7 +2736,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v[678] \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v[6789] \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2642,7 +2744,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v8(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v9(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             $makeVisible = $task.Settings -and $task.Settings.Hidden -eq $true
@@ -2668,9 +2770,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 8
+                $revision = 9
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v8 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v8 (managed)' } else { 'System Maintenance scheduled cleanup v8' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v9 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v9 (managed)' } else { 'System Maintenance scheduled cleanup v9' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

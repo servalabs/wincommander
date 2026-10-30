@@ -10,10 +10,14 @@ try { $null = Invoke-WCProviderProcess -FilePath $powershell -Arguments @('-NoPr
 catch { $timedOut = $_.Exception.Message -match 'did not finish in time' }
 $clock.Stop()
 Assert-WCVmTest ($timedOut -and $clock.Elapsed.TotalSeconds -lt 15) 'Read-only provider calls must fail within their timeout.'
-function Get-Process { param($Name, $ErrorAction) return [pscustomobject]@{ Name = $Name } }
+$script:vmProcessNames = @('SyntheticProvider')
+function Get-Process { param($Name, $ErrorAction) return @($script:vmProcessNames | ForEach-Object { [pscustomobject]@{ ProcessName = $_ } }) }
 $busy = $false
 try { Assert-WCProviderIdle -Name 'SyntheticProvider' } catch { $busy = $true }
 Assert-WCVmTest $busy 'A previous provider operation must prevent a conflicting retry.'
+$Error.Clear()
+Assert-WCProviderIdle -Name 'AbsentProvider'
+Assert-WCVmTest ($Error.Count -eq 0) 'An absent idle provider must not leave a suppressed error that marks cleanup incomplete.'
 $lines = @('Unexpected localized inventory output')
 function Invoke-WCVBox { param([string[]]$Arguments) return $lines }
 $unknown = $false
@@ -105,9 +109,48 @@ $script:vmwareScenario = 'normal'; $script:vmwareSnapshots['C:\fixture\powered-o
 $result = Invoke-WCVmwareSnapshotCleanup
 Assert-WCVmTest ($result.failed -gt 0 -and $script:vmwareDeletes.Count -eq 0) 'Ambiguous VMware snapshot names must not be deleted.'
 
-function Test-Path { param($LiteralPath, $PathType) return $true }
+function Get-Item {
+    param($LiteralPath, [switch]$Force, $ErrorAction)
+    if ($script:vmItemMode -eq 'missing') { throw [Management.Automation.ItemNotFoundException]::new('Synthetic absent path.') }
+    if ($script:vmItemMode -eq 'denied') { throw [UnauthorizedAccessException]::new('Synthetic access denial.') }
+    if ($LiteralPath -like 'HKCU:*') { return [pscustomobject]@{ Property = @($script:vmRecentNames) } }
+    if ($script:vmItemMode -eq 'reparse') { return [pscustomobject]@{ PSIsContainer=$true; Attributes=[IO.FileAttributes]::ReparsePoint } }
+    return [pscustomobject]@{ PSIsContainer=$true; Attributes=[IO.FileAttributes]::Directory }
+}
+function Remove-ItemProperty {
+    param($LiteralPath, $Name, $ErrorAction)
+    if ($script:vmRemoveDenied) { throw [UnauthorizedAccessException]::new('Synthetic registry denial.') }
+    $script:vmRecentNames = @($script:vmRecentNames | Where-Object { $_ -ne $Name })
+}
+$script:vmItemMode = 'missing'
+Assert-WCVmTest ($null -eq (Get-WCVmPathIfPresent -Path 'C:\fixture\missing' -Directory $true)) 'Missing VM paths should be absent.'
+$script:vmItemMode = 'denied'; $denied = $false
+try { $null = Get-WCVmPathIfPresent -Path 'C:\fixture\denied' -Directory $true } catch { $denied = $true }
+Assert-WCVmTest $denied 'Denied VM paths must not be treated as absent.'
+$script:vmItemMode = 'reparse'; $reparse = $false
+try { $null = Get-WCVmPathIfPresent -Path 'C:\fixture\reparse' -Directory $true } catch { $reparse = $true }
+Assert-WCVmTest $reparse 'Reparse VM paths must not be treated as verified.'
+$script:vmItemMode = 'normal'; $script:vmRemoveDenied = $false; $script:vmRecentNames = @('mru1', 'recentPath', 'KeepSetting')
+$recent = Remove-WCVmwareRecentHistory
+Assert-WCVmTest ($recent.removed -eq 2 -and $recent.failed -eq 0 -and @($script:vmRecentNames).Count -eq 1 -and $script:vmRecentNames[0] -eq 'KeepSetting') 'Only VMware recent-history properties should be removed and verified.'
+$script:vmRemoveDenied = $true; $script:vmRecentNames = @('mru1')
+$recent = Remove-WCVmwareRecentHistory
+Assert-WCVmTest ($recent.failed -gt 0 -and $recent.removed -eq 0) 'Registry access denial must remain incomplete.'
+
+$script:vmLogs = @('C:\fixture\vmware.log')
+function Get-WCVmUserLogFiles { return @($script:vmLogs) }
+function Erase-OneFile { param($Path) $script:vmLogs = @($script:vmLogs | Where-Object { $_ -ne $Path }); $script:AutoEraseRemoved++; return $true }
+$script:vmProcessNames = @('vmware-vmx'); $logBlocked = $false; $script:AutoEraseRemoved = 0
+try { Invoke-WCVmUserLogCleanup } catch { $logBlocked = $true }
+Assert-WCVmTest ($logBlocked -and $script:vmLogs.Count -eq 1 -and $script:AutoEraseRemoved -eq 0) 'A running VM must keep its logs untouched.'
+$script:vmProcessNames = @()
+Invoke-WCVmUserLogCleanup
+Assert-WCVmTest ($script:vmLogs.Count -eq 0 -and $script:AutoEraseRemoved -eq 1) 'Stopped-machine user logs must be erased and verified.'
+
+function Get-WCVmPathIfPresent { param($Path, $Directory) return [pscustomobject]@{} }
 function Invoke-WCVBoxSnapshotCleanup { return @{ removed = 2; failed = 0 } }
 function Invoke-WCVmwareSnapshotCleanup { return @{ removed = 0; failed = 0 } }
+function Remove-WCVmwareRecentHistory { return @{ removed = 0; failed = 0 } }
 function Get-WCVirtualMachineArtifactRemainders { return 3 }
 $result = Invoke-WCVirtualMachineArtifactCleanup
 Assert-WCVmTest ($result.removed -eq 2 -and $result.failed -gt 0) 'Remaining unmanaged artifacts must prevent a complete result.'

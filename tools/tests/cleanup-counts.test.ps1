@@ -38,7 +38,7 @@ function Get-ChildItem {
         }
         return
     }
-    $count = if ($Path -match 'InventoryApplicationFile$') { 1 } else { 2 }
+    $count = if ($script:amcacheFixtureCount) { $script:amcacheFixtureCount } elseif ($Path -match 'InventoryApplicationFile$') { 1 } else { 2 }
     foreach ($index in 1..$count) { [pscustomobject]@{ PSChildName = "fixture-$index"; PSPath = "fixture-$index" } }
 }
 function Get-ItemProperty {
@@ -72,7 +72,7 @@ foreach ($category in @('walFiles', 'recallDb')) {
 $record = New-CleanupSummaryCategoryRecord -Category 'recentFiles' -Count 0 -items @() -records @() -ScanError $null -previewMax 500
 Assert-Count $record.status 'complete' 'Unrestricted category status remains complete'
 if ($record.ContainsKey('coverage')) { throw 'Unexpected coverage flag for unrestricted category' }
-$longCommand = 'example-command ' + ('x' * 120)
+$longCommand = '  example-command ' + ('x' * 120) + '  '
 $history = Convert-CleanupSummaryHistory -Lines @('first', $longCommand, 'last') -PreviewMax 2
 Assert-Count $history.count 3 'Other-user command count'
 Assert-Count $history.records[1].command $longCommand 'Other-user command remains complete'
@@ -103,6 +103,13 @@ try {
     Assert-Count $amcache.entries[0]['count'] 2 'Application category'
     Assert-Count $amcache.entries[1]['count'] 1 'Application files category'
     Assert-Count $amcache.entries[0]['sample'][0]['name'] 'Synthetic App' 'Application sample name'
+    Assert-Count $amcache.entries[0]['sample'][0]['productName'] 'Synthetic App' 'Application product name'
+    Assert-Count $amcache.entries[0]['sample'][0]['longPath'] 'C:\fixture\app.exe' 'Application long path'
+    $script:amcacheFixtureCount = 6
+    $amcache = Get-AmcacheEntries
+    Assert-Count @($amcache.entries[0]['sample']).Count 6 'Every application record is returned'
+    Assert-Count @($amcache.entries[1]['sample']).Count 6 'Every application file record is returned'
+    $script:amcacheFixtureCount = 0
     Assert-Count $amcache.entries[0]['sample'][0]['path'] 'C:\fixture\app.exe' 'Application sample path'
     Assert-Count $user.sections[0]['count'] 2 'RunMRU section'
     Assert-Count $user.sections[1]['count'] 1 'TypedPaths section'
