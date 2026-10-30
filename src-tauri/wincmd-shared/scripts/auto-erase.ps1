@@ -2967,6 +2967,12 @@ function Test-AutoEraseCurrentPayload {
 function Test-AutoEraseRunnablePayload {
     param($Task, $Identity, [int]$IntervalMinutes)
     if (-not (Test-AutoEraseCurrentPayload -Task $Task -Identity $Identity)) { return $false }
+    # A task can be edited in Scheduler after registration. The correct script
+    # cannot perform user-session cleanup when run under an incompatible logon
+    # mode, and user tasks require the requested highest privilege level.
+    $isSystem = $Identity.ownerSid -eq 'S-1-5-18'
+    $expectedLogon = if ($isSystem) { 'ServiceAccount' } elseif ($Identity.categoryId -in @('credentialManager', 'wslData', 'virtualMachineArtifacts', 'dockerDesktopData')) { 'Interactive' } else { 'S4U' }
+    if ([string]$Task.Principal.LogonType -ne $expectedLogon -or (-not $isSystem -and [string]$Task.Principal.RunLevel -ne 'Highest')) { return $false }
     $argument = [string](@($Task.Actions)[0].Arguments)
     if ($argument -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
     $body = Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction Stop

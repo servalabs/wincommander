@@ -11,7 +11,7 @@ try {
     $taskName = Get-AutoEraseTaskName 'dnsCache' $sid
     $script:fixtureTask = [pscustomobject]@{
         TaskPath = $script:SystemMaintenanceTaskPath; TaskName = $taskName; State = 'Ready'
-        Principal = [pscustomobject]@{ UserId = $sid }
+        Principal = [pscustomobject]@{ UserId = $sid; LogonType = 'S4U'; RunLevel = 'Highest' }
         Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = "-NoProfile -File `"$path`"" })
         Triggers = @([pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M' } })
         Description = 'System Maintenance scheduled cleanup v20'
@@ -32,6 +32,14 @@ try {
     $script:fixtureTask.Actions[0].Arguments = $argument
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $script:fixtureTask.Principal.LogonType = 'Interactive'
+    $wrongLogon = Get-AutoEraseSchedules
+    if ($wrongLogon.error -or $wrongLogon.schedules[0].payloadVerified) { throw 'An incompatible Scheduler logon type must not be verified.' }
+    $script:fixtureTask.Principal.LogonType = 'S4U'
+    $script:fixtureTask.Principal.RunLevel = 'Limited'
+    $wrongLevel = Get-AutoEraseSchedules
+    if ($wrongLevel.error -or $wrongLevel.schedules[0].payloadVerified) { throw 'A user task with insufficient privilege must not be verified.' }
+    $script:fixtureTask.Principal.RunLevel = 'Highest'
     $script:fixtureTask.Triggers[0].Repetition.Interval = 'PT30M'
     $changedInterval = Get-AutoEraseSchedules
     if ($changedInterval.error -or $changedInterval.schedules[0].payloadVerified) { throw 'A Scheduler interval that differs from the payload cadence must not be verified.' }
@@ -48,6 +56,12 @@ try {
     [IO.File]::WriteAllText($generatedPath, $generated + "`nif (`$true) {`n")
     $invalid = Get-AutoEraseSchedules
     if ($invalid.error -or $invalid.schedules[0].payloadVerified) { throw 'A script with a syntax error must not be verified.' }
+    $interactiveArgs = ConvertTo-AutoEraseTaskArgument -CategoryId 'wslData' -IntervalMinutes 60 -Script $script:AutoEraseScripts['wslData'] -ExecutionScope 'user-fixture' -FirstDueUtc ([DateTime]::UtcNow.AddHours(1).ToString('o')) -AllowDefaultExcluded $true
+    $interactiveTask = [pscustomobject]@{ Principal = [pscustomobject]@{ LogonType = 'Interactive'; RunLevel = 'Highest' }; Actions = @([pscustomobject]@{ Arguments = $interactiveArgs }) }
+    $interactiveIdentity = @{ categoryId = 'wslData'; ownerSid = $sid }
+    if (-not (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60)) { throw 'An interactive WSL task must be verifiable.' }
+    $interactiveTask.Principal.LogonType = 'S4U'
+    if (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60) { throw 'A WSL task without an interactive session must not be verified.' }
 } finally {
     $env:ProgramData = $oldProgramData
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

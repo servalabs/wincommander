@@ -139,8 +139,8 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled && !payloadUnverified ? "true" : "false"}
-        aria-label={payloadUnverified ? `${categoryLabel} scheduled wipe script or interval not verified` : isDisabled ? `${categoryLabel} scheduled wipe is disabled` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
-        title={payloadUnverified ? "Task exists, but its cleanup script or wipe interval could not be verified · Pro required to change" : isDisabled ? "Scheduled wipe is disabled · Pro required to change" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
+        aria-label={payloadUnverified ? `${categoryLabel} scheduled wipe script or task settings not verified` : isDisabled ? `${categoryLabel} scheduled wipe is disabled` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
+        title={payloadUnverified ? "Task exists, but its cleanup script or Windows task settings could not be verified · Pro required to change" : isDisabled ? "Scheduled wipe is disabled · Pro required to change" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
         onClick={event => {
           event.preventDefault();
           event.stopPropagation();
@@ -187,9 +187,9 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled && !payloadUnverified ? "true" : "false"}
-        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : payloadUnverified ? `Manage ${categoryLabel} scheduled wipe; script or interval not verified` : isDisabled ? `Manage disabled ${categoryLabel} scheduled wipe` : isScheduled ? `${onSetSchedule ? "Change" : "Manage"} ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
+        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : payloadUnverified ? `Manage ${categoryLabel} scheduled wipe; script or task settings not verified` : isDisabled ? `Manage disabled ${categoryLabel} scheduled wipe` : isScheduled ? `${onSetSchedule ? "Change" : "Manage"} ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
         disabled={scheduleState === "checking" || scheduleBusy}
-        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : payloadUnverified ? "Task exists, but its cleanup script or wipe interval could not be verified. Remove and recreate this schedule." : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
+        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : payloadUnverified ? "Task exists, but its cleanup script or Windows task settings could not be verified. Remove and recreate this schedule." : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={isOpen ? surfaceId : undefined}
@@ -230,7 +230,7 @@ export default function CleanupScheduleControl({
           onClick={event => event.stopPropagation()}
         >
           <Menu>
-            <MenuDivider title={payloadUnverified ? "Task exists; script or interval not verified" : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
+            <MenuDivider title={payloadUnverified ? "Task exists; script or task settings not verified" : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
             {onSetSchedule && PRESET_INTERVALS.filter(preset => preset.minutes >= minInterval).map(preset => (
               <MenuItem
                 key={preset.minutes}

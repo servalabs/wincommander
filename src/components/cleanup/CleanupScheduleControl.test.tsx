@@ -20,8 +20,8 @@ describe("individual cleanup schedule controls", () => {
 
   test("offers removal while warning that an existing task payload is unverified", () => {
     const markup = renderToStaticMarkup(<CleanupScheduleControl categoryLabel="Wi-Fi Profiles" minInterval={60} scheduleMinutes={60} schedulePayloadVerified={false} onClearSchedule={() => true} />);
-    expect(markup).toContain("cleanup script or wipe interval could not be verified");
-    expect(markup).toContain("Manage Wi-Fi Profiles scheduled wipe; script or interval not verified");
+    expect(markup).toContain("cleanup script or Windows task settings could not be verified");
+    expect(markup).toContain("Manage Wi-Fi Profiles scheduled wipe; script or task settings not verified");
   });
 
   test("does not show a schedule control from a clear callback alone", () => {

@@ -4390,6 +4390,34 @@ function Get-AppLaunchHistoryInfo {
     catch { @{ error = $true; message = "Failed to read app launch history: $($_.Exception.Message)" } }
 }
 
+function Get-CleanupOfficeMruInventory {
+    param([string]$RegistryRoot, [int]$PreviewLimit = [int]::MaxValue)
+    $files = [Collections.Generic.List[object]]::new()
+    $count = 0
+    $partial = $false
+    foreach ($suffix in @('*\*\File MRU', '*\*\Place MRU', '*\*\Security\Trusted Documents\TrustRecords')) {
+        $pattern = "$RegistryRoot\Software\Microsoft\Office\$suffix"
+        try {
+            Get-Item -Path $pattern -ErrorAction Stop | ForEach-Object {
+                $key = $_
+                try {
+                    $keyLeaf = Split-Path $key.Name -Leaf
+                    $appLeaf = Split-Path (Split-Path $key.Name -Parent) -Leaf
+                    $props = Get-ItemProperty -Path $key.PSPath -ErrorAction Stop
+                    foreach ($property in @($props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') })) {
+                        $count++
+                        if ($files.Count -lt $PreviewLimit) {
+                            $files.Add(@{ source = "$appLeaf\$keyLeaf"; name = (Split-Path $property.Name -Leaf); key = $property.Name; path = $key.PSPath; value = $property.Value; sizeKB = 0; modified = '' })
+                        }
+                    }
+                } catch { $partial = $true }
+            }
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { $partial = $true }
+    }
+    @{ files = @($files.ToArray()); total = $count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Office history locations could not be checked.' } else { $null } }
+}
+
 function Get-OfficeMruInfo {
     # Returns individual entries from Office's File MRU, Place MRU, and
     # Trusted Documents TrustRecords keys. Office version varies 14.0-16.0
@@ -4402,33 +4430,7 @@ function Get-OfficeMruInfo {
     # document's path, so Split-Path -Leaf yields the filename; for File/Place
     # MRU the value name is already a plain label ("Item 1") and Split-Path
     # is a harmless no-op.
-    try {
-        $patterns = @(
-            'HKCU:\Software\Microsoft\Office\*\*\File MRU',
-            'HKCU:\Software\Microsoft\Office\*\*\Place MRU',
-            'HKCU:\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords'
-        )
-        $files = @()
-        foreach ($pattern in $patterns) {
-            Get-Item -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
-                $keyLeaf = Split-Path $_.Name -Leaf
-                $appLeaf = Split-Path (Split-Path $_.Name -Parent) -Leaf
-                $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{
-                            source   = "$appLeaf\$keyLeaf"
-                            name     = (Split-Path $_.Name -Leaf)
-                            sizeKB   = 0
-                            modified = ''
-                        }
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupOfficeMruInventory -RegistryRoot 'HKCU:'
 }
 
 function Get-EmbeddedWebCacheInfo {
@@ -6567,26 +6569,11 @@ function Get-CleanupSummaryAllUsers {
                     }
                     'officeMru' {
                         if ($hiveAvailable) {
-                            # Match Get-OfficeMruInfo: File MRU / Place MRU / TrustRecords values, version+app wildcarded
-                            $officePatterns = @(
-                                "$hiveRoot\Software\Microsoft\Office\*\*\File MRU",
-                                "$hiveRoot\Software\Microsoft\Office\*\*\Place MRU",
-                                "$hiveRoot\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords"
-                            )
-                            foreach ($pattern in $officePatterns) {
-                                $keys = @()
-                                try { $keys = @(Get-Item -Path $pattern -EA Stop) }
-                                catch [System.Management.Automation.ItemNotFoundException] { }
-                                $keys | ForEach-Object {
-                                    $p2 = Get-ItemProperty -Path $_.PSPath -EA Stop
-                                    if ($p2) {
-                                        $p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                                            $count++
-                                            $items += (Split-Path $_.Name -Leaf)
-                                        }
-                                    }
-                                }
-                            }
+                            $office = Get-CleanupOfficeMruInventory -RegistryRoot $hiveRoot -PreviewLimit $previewMax
+                            $count = $office.total
+                            $records = @($office.files)
+                            $items = @($records | ForEach-Object { $_.name })
+                            $categoryPartial = [bool]$office.partial
                         } else { $items = @("[registry unavailable]") }
                     }
                     'explorerSearchHistory' {

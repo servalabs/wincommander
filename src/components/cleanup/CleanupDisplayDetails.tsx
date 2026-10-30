@@ -63,7 +63,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" || (scheduleRecord && scheduleRecord.payloadVerified !== true) ? "Not verified" :
     scheduleDisabled ? "Disabled" : scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable ? "; new schedules unavailable" : ""}` :
       category.schedulable ? "Off" : "Not available for this card";
-  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script or wipe interval could not be verified. Remove and recreate the schedule.`
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script or Windows task settings could not be verified. Remove and recreate the schedule.`
     : scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
     : scheduleState === "verified" && scheduleMinutes
     ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable ? ". New schedules are unavailable for this cleanup." : "."}`
