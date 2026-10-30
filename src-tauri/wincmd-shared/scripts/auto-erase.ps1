@@ -94,7 +94,11 @@ function Erase-OneFile($p) {
     $g = [Guid]::NewGuid().ToString()
     $par = Split-Path $p
     $renamed = $false
-    try { Rename-Item -LiteralPath $p -NewName $g -Force -ErrorAction Stop; $renamed = $true } catch {}
+    # Renaming is optional: if it fails, remove the already-overwritten
+    # original. Do not let the handled rename error make that successful
+    # fallback look like an incomplete scheduled run.
+    try { Rename-Item -LiteralPath $p -NewName $g -Force -ErrorAction Stop; $renamed = $true }
+    catch { if ($Error.Count -gt 0) { $Error.RemoveAt(0) } }
     $target = if ($renamed) { Join-Path $par $g } else { $p }
     Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
     try { $null = Get-Item -LiteralPath $target -Force -ErrorAction Stop }
