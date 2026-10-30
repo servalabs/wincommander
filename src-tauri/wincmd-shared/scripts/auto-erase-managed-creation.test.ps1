@@ -15,6 +15,7 @@ function Set-AutoEraseScheduleCore {
     [CmdletBinding()] param($CategoryId,$IntervalMinutes,$RunAsSystem,$TargetUser,[switch]$PreserveExisting,[switch]$ManagedByAutoSet,[switch]$AllowDefaultExcluded)
     if ($script:expectManaged -and (-not $PreserveExisting -or -not $ManagedByAutoSet)) { throw 'Managed creation did not force safety flags.' }
     $script:writes++
+    $script:lastTarget = $TargetUser
     if ($TargetUser -eq 'OtherUser') { return @{ error=$true; message='Synthetic failure' } }
     @{ status='enabled'; categoryId=$CategoryId }
 }
@@ -52,7 +53,13 @@ $script:profileMode = 'failed'
 function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName)
     if ($script:profileMode -eq 'failed') { throw 'Synthetic profile access failure' }
-    if ($script:profileMode -eq 'present') { [pscustomobject]@{ Special=$false; SID='S-1-5-21-2'; LocalPath="$env:SystemDrive\Users\SyntheticUser" } }
+    if ($script:profileMode -in @('present', 'unresolved')) { [pscustomobject]@{ Special=$false; SID='S-1-5-21-2'; LocalPath="$env:SystemDrive\Users\SyntheticUser" } }
+}
+function Resolve-AutoEraseProfileAccount {
+    param([string]$Sid)
+    if ($script:profileMode -eq 'unresolved') { throw 'Synthetic unresolved account' }
+    if ($Sid -ne 'S-1-5-21-2') { throw 'Wrong profile SID' }
+    'SYNTHETIC\RenamedAccount'
 }
 $before = $script:writes
 $failedDiscovery = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
@@ -62,7 +69,11 @@ $noProfiles = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinut
 if (-not $noProfiles.error -or $noProfiles.status -ne 'failed' -or $noProfiles.total -ne 0 -or $script:writes -ne $before) { throw 'Empty profile enumeration was reported as successful or created a task.' }
 $script:profileMode = 'present'
 $oneProfile = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
-if ($oneProfile.error -or $oneProfile.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'A discovered profile did not receive its individual schedule.' }
+if ($oneProfile.error -or $oneProfile.total -ne 1 -or $script:writes -ne ($before + 1) -or $script:lastTarget -ne 'SYNTHETIC\RenamedAccount') { throw 'The discovered profile did not use its SID-resolved account.' }
+$script:profileMode = 'unresolved'
+$before = $script:writes
+$unknownAccount = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if (-not $unknownAccount.error -or $unknownAccount.total -ne 0 -or $script:writes -ne $before) { throw 'An unresolved profile account was accepted.' }
 $script:profileMode = 'failed'
 $before = $script:writes
 $system = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -RunAsSystem $true

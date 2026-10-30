@@ -2287,6 +2287,17 @@ function Resolve-AutoEraseSid {
     ([Security.Principal.NTAccount]::new($Account)).Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
+# Profile directory names can differ from the sign-in name (renamed accounts,
+# domain suffixes, or pre-existing folders). Resolve the profile's SID instead
+# of guessing an account from its folder name.
+function Resolve-AutoEraseProfileAccount {
+    param([string]$Sid)
+    if ($Sid -notmatch '^S-1-5-21-(?:\d+-)+\d+$') { throw 'Invalid Windows profile SID.' }
+    $account = ([Security.Principal.SecurityIdentifier]::new($Sid)).Translate([Security.Principal.NTAccount]).Value
+    if (-not $account -or (Resolve-AutoEraseSid $account) -ne $Sid) { throw 'The Windows profile account could not be verified.' }
+    return $account
+}
+
 # Scheduler names are intentionally compact and live in one owned folder.
 # The mapping is documented in wincommander-pro/docs/engineering/SCHEDULED-TASK-MAP.md.
 $script:SystemMaintenanceTaskPath = '\System Maintenance\'
@@ -2696,11 +2707,11 @@ function Set-MultiUserAutoEraseSchedule {
     if (-not $RunAsSystem -and $targetArr.Count -eq 0) {
         $sysDrive = $env:SystemDrive
         try {
-            $targetArr = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
-                Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
-                ForEach-Object { Split-Path $_.LocalPath -Leaf })
+            $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+                Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" })
+            $targetArr = @($profiles | ForEach-Object { Resolve-AutoEraseProfileAccount ([string]$_.SID) } | Select-Object -Unique)
         } catch {
-            return @{ error = $true; status = 'failed'; message = 'Windows user profiles could not be enumerated; no schedules were created.'; results = @(); total = 0 }
+            return @{ error = $true; status = 'failed'; message = 'Windows user profiles or their accounts could not be verified; no schedules were created.'; results = @(); total = 0 }
         }
         if ($targetArr.Count -eq 0) {
             return @{ error = $true; status = 'failed'; message = 'No supported Windows user profiles were found; no schedules were created.'; results = @(); total = 0 }

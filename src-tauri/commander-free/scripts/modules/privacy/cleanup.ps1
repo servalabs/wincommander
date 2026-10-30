@@ -1333,8 +1333,8 @@ function Get-FleetForensicProjection {
             'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
-            'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
-            'reliability_history' { $result = Get-ReliabilityHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read reliability-history summaries.') }; return (& $metadataProjection 'reliability_history' 'Reliability history' $result 'Reliability metadata') }
+            'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
+            'reliability_history' { $result = Get-ReliabilityHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete reliability-history summaries.') }; return (& $metadataProjection 'reliability_history' 'Reliability history' $result 'Reliability metadata') }
             'explorer_search_history' { $result = Get-ExplorerSearchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Explorer-search-history summaries.') }; return (& $metadataProjection 'explorer_search_history' 'Explorer search metadata' $result 'Explorer search metadata') }
             'search_personalization' { $result = Get-SearchPersonalizationInfo; if ($result.error) { return (& $empty 'System Cleanup could not read search-personalisation summaries.') }; return (& $metadataProjection 'search_personalization' 'Search personalisation' $result 'Search personalisation metadata') }
 
@@ -4505,45 +4505,30 @@ function Get-EmbeddedWebCacheInfo {
     @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); coverage='limited'; coverageNote='Checks application data to depth 4 for WebView folders.'; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some WebView cache locations could not be checked.' } else { $null } }
 }
 
-function Get-P2PUpdateCacheInfo {
-    # Returns Delivery Optimization's peer-to-peer Windows Update cache files (DoSvc).
+function Get-CleanupRecursiveFileInventory {
+    param([string]$Root, [string]$Source)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $doDir = "$env:SystemRoot\SoftwareDistribution\DeliveryOptimization"
-        $files = @()
-        if (Test-Path $doDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $doDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'DeliveryOptimization'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+        try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
+        if ($rootItem) {
+            if (-not $rootItem.PSIsContainer) { throw 'Inventory location is not a directory.' }
+            Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source=$Source; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some locations could not be checked.' } else { $null } }
+}
+
+function Get-P2PUpdateCacheInfo {
+    Get-CleanupRecursiveFileInventory -Root (Join-Path $env:SystemRoot 'SoftwareDistribution\DeliveryOptimization') -Source 'DeliveryOptimization'
 }
 
 function Get-ReliabilityHistoryInfo {
-    # Returns Reliability Monitor's cached scoring data (RAC StateData). Not
-    # present on all machines/builds — guarded like the other Phase E viewers.
-    try {
-        $racDir = "$env:ProgramData\Microsoft\RAC\StateData"
-        $files = @()
-        if (Test-Path $racDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $racDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'RAC'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupRecursiveFileInventory -Root (Join-Path $env:ProgramData 'Microsoft\RAC\StateData') -Source 'RAC'
 }
 
 function Get-CleanupExplorerSearchInventory {
