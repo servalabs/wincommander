@@ -340,6 +340,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [otherUserLoading, setOtherUserLoading] = useState(false);
     const [otherUserClearing, setOtherUserClearing] = useState(false);
     const profileReadGate = useRef(createCleanupProfileReadGate());
+    const scheduleMutationBusy = useRef(false);
+    const otherUserClearBusy = useRef(false);
 
     // ── Combined "All Users" view (#7) ──────────────────────────────────
     // Sums every account's per-category counts into one grid; the detail
@@ -461,6 +463,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // grid. Another user only changes selection; scans are started explicitly
     // from that user's card/rescan controls so they target that profile only.
     const handleSwitchUser = (username: string) => {
+        if (scheduleMutationBusy.current || otherUserClearBusy.current || otherUserLoading) return;
         profileReadGate.current.begin();
         setOtherUserLoading(false);
         setSelectedUser(username);
@@ -515,7 +518,6 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [scheduleState, setScheduleState] = useState<"checking" | "verified" | "unavailable">("checking");
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
-    const scheduleMutationBusy = useRef(false);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const [migrationIncomplete, setMigrationIncomplete] = useState(false);
     const migrationGate = useRef(createCleanupScheduleMigrationGate());
@@ -606,7 +608,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const handleSetSchedule = async (categoryId: string, minutes: number, runAsSystem: boolean) => {
         const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
         const ownerSid = !isViewingCurrentUser && category?.scopeAware && !runAsSystem ? selectedOwnerSid : null;
-        if (scheduleMutationBusy.current || autoSetSchedulesBusy || !category?.schedulable || !schedulesEnabled || visibleScheduleState !== "verified" ||
+        if (scheduleMutationBusy.current || otherUserClearBusy.current || autoSetSchedulesBusy || !category?.schedulable || !schedulesEnabled || visibleScheduleState !== "verified" ||
             (!isViewingCurrentUser && category.scopeAware && (!ownerSid || otherScheduleState !== 'verified'))) return false;
         const allowDefaultExcluded = isDefaultExcludedCleanup(categoryId);
         scheduleMutationBusy.current = true;
@@ -642,7 +644,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const handleClearSchedule = async (categoryId: string) => {
         const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
         const ownerSid = !isViewingCurrentUser && category?.scopeAware && !category.schedulerRunAsSystem ? selectedOwnerSid : null;
-        if (scheduleMutationBusy.current || autoSetSchedulesBusy || !category || (!isViewingCurrentUser && category.scopeAware && (!ownerSid || otherScheduleState !== 'verified'))) return false;
+        if (scheduleMutationBusy.current || otherUserClearBusy.current || autoSetSchedulesBusy || !category || (!isViewingCurrentUser && category.scopeAware && (!ownerSid || otherScheduleState !== 'verified'))) return false;
         scheduleMutationBusy.current = true;
         setScheduleBusyId(categoryId);
         try {
@@ -974,7 +976,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (scheduleMutationBusy.current || !canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete, autoSetScheduleIds.size > 0)) {
+        if (scheduleMutationBusy.current || otherUserClearBusy.current || !canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete, autoSetScheduleIds.size > 0)) {
             if (migrationIncomplete) showError("Resolve the scheduled cleanup upgrade before using Auto-set.");
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;
@@ -1252,7 +1254,6 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // touched. `targets` undefined = all users.
     const runOtherUserClear = async (cat: CleanupCategory, targets: string[] | undefined, allowDefaultExcluded = false) => {
         if (isDefaultExcludedCleanup(cat.id) && !allowDefaultExcluded) return;
-        setOtherUserClearing(true);
         const prev = otherUserDataMap[cat.id] || { count: -1, items: [] };
         const setCard = (data: CardData) => {
             setOtherUserDataMap(p => ({ ...p, [cat.id]: data }));
@@ -1283,33 +1284,45 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         } catch (e) {
             showError(`Failed to clear ${cat.label}: ${e}`);
             setCard({ count: prev.count, items: prev.items ?? [], loading: false, clearing: false });
-        } finally {
-            setOtherUserClearing(false);
         }
     };
 
     // "Clear for {selected user}" in the sub-section.
     const handleOtherUserClear = async (cat: CleanupCategory) => {
-        if (!selectedUser || !MULTI_USER_CLEANUP_IDS.has(cat.id)) return;
-        const accepted = await requestConfirm({
-            title: `Clear ${cat.label}?`,
-            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward. This cannot be undone.`,
-            confirmLabel: "Clear profile",
-        });
-        if (!accepted) return;
-        await runOtherUserClear(cat, [selectedUser], isDefaultExcludedCleanup(cat.id));
+        if (!selectedUser || !MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
+        otherUserClearBusy.current = true;
+        setOtherUserClearing(true);
+        try {
+            const accepted = await requestConfirm({
+                title: `Clear ${cat.label}?`,
+                description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward. This cannot be undone.`,
+                confirmLabel: "Clear profile",
+            });
+            if (!accepted || selectedUserRef.current !== selectedUser) return;
+            await runOtherUserClear(cat, [selectedUser], isDefaultExcludedCleanup(cat.id));
+        } finally {
+            otherUserClearBusy.current = false;
+            setOtherUserClearing(false);
+        }
     };
 
     // "Clear for all users" in the sub-section (admin-only, scopeAware-only).
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
-        if (!MULTI_USER_CLEANUP_IDS.has(cat.id)) return;
-        const accepted = await requestConfirm({
-            title: `Clear ${cat.label} for all users?`,
-            description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all user profiles the backend can access? The ${availableUsers.length} detected profiles shown here may not include every account; this action may affect profiles beyond the list. This cannot be undone.`,
-            confirmLabel: "Clear all users",
-        });
-        if (!accepted) return;
-        await runOtherUserClear(cat, undefined, isDefaultExcludedCleanup(cat.id));
+        if (!MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
+        otherUserClearBusy.current = true;
+        setOtherUserClearing(true);
+        try {
+            const accepted = await requestConfirm({
+                title: `Clear ${cat.label} for all users?`,
+                description: `${isDefaultExcludedCleanup(cat.id) ? getCleanupManualWarning(cat) + " This card is excluded from bulk cleanup by default. " : ""}Clear ${cat.label} for all user profiles the backend can access? The ${availableUsers.length} detected profiles shown here may not include every account; this action may affect profiles beyond the list. This cannot be undone.`,
+                confirmLabel: "Clear all users",
+            });
+            if (!accepted) return;
+            await runOtherUserClear(cat, undefined, isDefaultExcludedCleanup(cat.id));
+        } finally {
+            otherUserClearBusy.current = false;
+            setOtherUserClearing(false);
+        }
     };
 
     return {

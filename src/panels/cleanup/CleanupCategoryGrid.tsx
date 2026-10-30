@@ -600,6 +600,7 @@ export default function CleanupCategoryGrid({
                     minimal
                     icon="cross"
                     text="Back to you"
+                    disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                     onClick={() => handleSwitchUser(currentUser)}
                     style={{ fontSize: 10 }}
                   />

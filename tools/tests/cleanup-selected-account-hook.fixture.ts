@@ -31,6 +31,8 @@ const calls: unknown[][] = [];
 let approved = false;
 let requestedConfirmation = '';
 let responseOwner = other;
+let confirmationWaiter: Promise<boolean> | null = null;
+let mutationWaiter: Promise<void> | null = null;
 const backend = {
   getUserProfiles: async () => ({ success: true, data: { profiles: [
     { name: 'Self', sid: current, path: 'C:\\Users\\Self', isCurrent: true },
@@ -45,6 +47,7 @@ const backend = {
   },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
     calls.push(['set', ...args]);
+    if (mutationWaiter) await mutationWaiter;
     rows = [{ categoryId: 'browserFootprints', state: 'Ready', enabled: true, scope: 'other-user', targetUser: 'MACHINE\\Other', ownerSid: responseOwner, intervalMinutes: 60, payloadVerified: true, managedByAutoSet: false, legacy: false }];
     return { success: true, data: { status: 'ok', total: 1, results: [{ status: 'enabled', intervalMinutes: 60 }] } };
   },
@@ -56,7 +59,7 @@ const backend = {
 };
 mock.module('../../src/hooks/useBackend', () => ({ default: () => backend }));
 mock.module('../../src/hooks/queries/useSettingsQuery', () => ({ useSettingsQuery: () => ({}), usePatchSettings: () => ({ mutate() {} }) }));
-mock.module('../../src/components/shared/AppConfirmDialog', () => ({ useAppConfirm: () => async (options: { description: string }) => { requestedConfirmation = options.description; return approved; } }));
+mock.module('../../src/components/shared/AppConfirmDialog', () => ({ useAppConfirm: () => async (options: { description: string }) => { requestedConfirmation = options.description; return confirmationWaiter ?? approved; } }));
 mock.module('../../src/utils/toast', () => ({ showSuccess() {}, showError() {} }));
 mock.module('../../src/panels/maintenance/diskCleanupScheduleState', () => ({ invalidateDiskCleanupScheduleStatus() {}, loadDiskCleanupSchedules: (load: () => unknown) => load() }));
 
@@ -123,11 +126,45 @@ await hook.handleOtherUserClear({ id: 'credentialManager' } as never);
 await hook.handleCardClearAllUsers({ id: 'credentialManager' } as never);
 expect(calls).toHaveLength(0);
 
+let releaseConfirmation!: (value: boolean) => void;
+confirmationWaiter = new Promise(resolve => { releaseConfirmation = resolve; });
+const pendingSchedule = hook.handleSetSchedule('browserFootprints', 60, false);
+hook = render();
+hook.handleSwitchUser(current);
+hook = render();
+expect(hook.selectedUser).toBe(other);
+releaseConfirmation(false);
+expect(await pendingSchedule).toBe(false);
+confirmationWaiter = null;
+hook = render();
+
+confirmationWaiter = new Promise(resolve => { releaseConfirmation = resolve; });
+const pendingClear = hook.handleOtherUserClear({ id: 'browserFootprints', label: 'Browser' } as never);
+hook = render();
+hook.handleSwitchUser(current);
+hook = render();
+expect(hook.selectedUser).toBe(other);
+releaseConfirmation(false);
+await pendingClear;
+confirmationWaiter = null;
+hook = render();
+expect(calls).toHaveLength(0);
+
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);
 expect(requestedConfirmation).toContain(other);
 expect(calls).toHaveLength(0);
 approved = true;
-expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(true);
+let releaseMutation!: () => void;
+mutationWaiter = new Promise(resolve => { releaseMutation = resolve; });
+const scheduledMutation = hook.handleSetSchedule('browserFootprints', 60, false);
+await new Promise(resolve => setTimeout(resolve, 0));
+hook = render();
+hook.handleSwitchUser(current);
+hook = render();
+expect(hook.selectedUser).toBe(other);
+releaseMutation();
+expect(await scheduledMutation).toBe(true);
+mutationWaiter = null;
 expect(calls).toEqual([['set', 'browserFootprints', 60, [other], false, true]]);
 hook = render();
 expect(hook.otherScheduleSnapshot?.records.browserFootprints?.ownerSid).toBe(other);
