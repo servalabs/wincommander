@@ -498,21 +498,36 @@ export function readExpandedCleanupSummary(data: { error?: boolean; users?: Arra
   // A page may contain only some activity sections. Their combined count must
   // be checked against the scan total after the final page is assembled.
   let pageCategory = category;
-  const groupedActivity = categoryId === "ntUserTraces" && !!category.records?.some(row => isObject(row) && Object.hasOwn(row, "count"));
+  const partial = category.partial === true || category.complete === false || category.status === "partial";
+  let groupedActivity = categoryId === "ntUserTraces" && !!category.records?.some(row => isObject(row) && Object.hasOwn(row, "count"));
+  let incompleteGroups = false;
   if (groupedActivity) {
-    if (!Number.isSafeInteger(category.count) || category.count < 0 || !category.records?.every(row => isObject(row) && Number.isSafeInteger(row.count) && (row.count as number) >= 0)) return null;
-    const pageTotal = category.records.reduce((sum, row) => sum + (row.count as number), 0);
-    if (!Number.isSafeInteger(pageTotal) || pageTotal > category.count) return null;
-    pageCategory = { ...category, count: pageTotal };
+    const validGroups = Number.isSafeInteger(category.count) && category.count >= 0 && category.records?.every(row => isObject(row) && Number.isSafeInteger(row.count) && (row.count as number) >= 0);
+    if (!validGroups) {
+      // Preserve observations from an incomplete source even when it mixed
+      // malformed rows with groups. Do not treat them as a verified total.
+      if (!partial) return null;
+      groupedActivity = false;
+      incompleteGroups = true;
+    } else {
+      const pageTotal = category.records!.reduce((sum, row) => sum + (row.count as number), 0);
+      if (!Number.isSafeInteger(pageTotal) || pageTotal > category.count) return null;
+      pageCategory = { ...category, count: pageTotal };
+    }
   }
   // A partial source can still return snapshot-verified pages of observations.
   // Validate the page structure independently without accepting its total as a
   // complete scan; the outer card remains failed and cannot authorize Clear.
-  const partial = category.partial === true || category.complete === false || category.status === "partial";
   if (category.error || (category.status && ["error", "failed", "unknown", "unavailable"].includes(category.status))) return null;
-  const summary = readCleanupUserSummary(partial ? { ...pageCategory, partial: false, complete: true, status: "scoped" } : pageCategory);
+  // Validate page metadata without dropping malformed observations. A
+  // partial source may contain scalar or array rows; those are display-only
+  // and must never make its scan count eligible for Clear.
+  const validationCategory = partial && Array.isArray(pageCategory.records)
+    ? { ...pageCategory, records: pageCategory.records.map(row => !incompleteGroups && isObject(row) ? row : { value: row }) }
+    : pageCategory;
+  const summary = readCleanupUserSummary(partial ? { ...validationCategory, partial: false, complete: true, status: "scoped" } : validationCategory);
   if (summary.count < 0 || !summary.raw) return null;
-  return { ...summary, count: category.count, partial, raw: { ...summary.raw, ...(partial ? { partial: true } : {}), ...(groupedActivity ? { expectedActivityCount: category.count } : {}) }, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
+  return { ...summary, count: category.count, partial, raw: { ...summary.raw, ...(partial ? { records: pageCategory.records, partial: true } : {}), ...(groupedActivity ? { expectedActivityCount: category.count } : {}) }, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number, recordChunk: category.recordChunk, chunkBytes, sourceTruncated: category.sourceTruncated };
 }
 
 export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {

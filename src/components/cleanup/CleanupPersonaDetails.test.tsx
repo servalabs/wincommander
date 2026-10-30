@@ -349,6 +349,28 @@ describe("System Cleanup persona details", () => {
     expect(readExpandedCleanupSummary({ users: [{ username: "other-folder", categories: [{ ...category, error: true }] }] }, "other-folder", "psHistory")).toBeNull();
   });
 
+  test("expanded partial pages retain unusual observations without weakening account or snapshot binding", () => {
+    const sid = "S-1-5-21-1-2-3-1001";
+    const hash = `sha256:${"a".repeat(64)}`;
+    const records = [{ name: "one" }, "unparsed", [1, 2], null];
+    const category = { id: "dockerDesktopData", count: 4, items: [], records: records as unknown as Record<string, unknown>[], sampleCount: 4, previewLimit: 5000, truncated: false, partial: true, status: "partial", snapshotHash: hash, nextOffset: null, totalRows: 4 };
+    const data = { users: [{ username: "Other", sid, categories: [category] }] };
+    const page = readExpandedCleanupSummary(data, sid, category.id);
+    expect(page?.partial).toBe(true);
+    expect(page?.raw.records).toEqual(records);
+    expect(readExpandedCleanupSummary(data, "S-1-5-21-1-2-3-1002", category.id)).toBeNull();
+    expect(readExpandedCleanupSummary(data, sid, category.id, 0, `sha256:${"b".repeat(64)}`)).toBeNull();
+    expect(readExpandedCleanupSummary(data, sid, "wslData")).toBeNull();
+    expect(readExpandedCleanupSummary({ users: [{ ...data.users[0], categories: [{ ...category, partial: false, status: "complete" }] }] }, sid, category.id)).toBeNull();
+    const merged = mergeExpandedCleanupPage(null, page!.raw, 0)!;
+    expect(merged.records).toEqual(records);
+    expect(merged.partial).toBe(true);
+    const activity = { ...category, id: "ntUserTraces", records: [{ count: 1, entries: [{ value: "found" }] }, "unparsed"] as unknown as Record<string, unknown>[], count: 2, sampleCount: 2, totalRows: 2 };
+    const activityPage = readExpandedCleanupSummary({ users: [{ ...data.users[0], categories: [activity] }] }, sid, activity.id);
+    expect(activityPage?.raw.records).toEqual(activity.records);
+    expect(activityPage?.partial).toBe(true);
+  });
+
   test("offers more account details when an incomplete preview has no rows", () => {
     const preview = readCleanupUserSummary({ count: 2, partial: true, records: [], sampleCount: 0, previewLimit: 0, truncated: true });
     expect(preview.count).toBe(-1);
