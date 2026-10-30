@@ -93,7 +93,8 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
         </div>
         <div className="cleanup-readable-detail__body">
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
-          {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
+          {summary.state === "partial" ? <p>{error?.trim() || "Some sources were not checked. The result is incomplete."}</p> : null}
+          {summary.state === "error" && error?.trim() ? <p>{error}</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
           {!groupedItems?.length && scanFacts.length ? <section aria-label="Scan details"><h3>Scan details</h3><dl className="cleanup-readable-detail__facts">{scanFacts.map((fact, index) => <div key={`${fact.label}-${index}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl></section> : null}

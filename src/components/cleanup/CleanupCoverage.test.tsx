@@ -20,8 +20,22 @@ describe("cleanup coverage presentation", () => {
     expect(card).not.toContain("Scan failed");
     const details = renderToStaticMarkup(<CleanupDisplayDetails category={cache} mode="advanced" count={result.count} items={[]} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(details).toContain("Scan incomplete");
+    expect(details).toContain("Only selected locations were checked.");
     expect(details).toContain("Selected locations only");
     expect(details).not.toContain("No items found");
+  });
+  test("shows the selected-account scan's specific coverage explanation", () => {
+    for (const [id, message] of [
+      ["wslData", "Disks and provider-managed data were not inspected."],
+      ["dockerDesktopData", "Custom locations and other engines were not inspected."],
+      ["credentialManager", "Credential entries and names were not inspected."],
+    ]) {
+      const card = ALL_CATEGORIES.find(item => item.id === id)!;
+      const result = readCleanupUserSummary({ id, count: 0, records: [], partial: true, status: "partial", message });
+      const html = renderToStaticMarkup(<CleanupDisplayDetails category={card} mode="advanced" count={result.count} items={[]} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+      expect(html).toContain(message);
+      expect(html).toContain("Scan incomplete");
+    }
   });
   test("a zero in a limited scope is not presented as a clean device", () => {
     const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={0} preview={[]} rawData={limited} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
