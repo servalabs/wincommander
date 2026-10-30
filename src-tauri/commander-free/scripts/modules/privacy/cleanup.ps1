@@ -4055,28 +4055,45 @@ function Get-NetBIOSCacheInfo {
 }
 
 function Get-GeolocationCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $lfSvc = 'C:\ProgramData\Microsoft\Windows\LfSvc'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $lfSvc = 'C:\ProgramData\Microsoft\Windows\LfSvc'
-        if (Test-Path $lfSvc -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $lfSvc -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Geolocation cache: $($_.FullName.Substring($lfSvc.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        try { $root = Get-Item -LiteralPath $lfSvc -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Location cache is not a directory.' }
+            Get-ChildItem -LiteralPath $lfSvc -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ name = "Geolocation cache: $($_.FullName.Substring($lfSvc.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
         }
-        $locationConsent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
-        if (Test-Path $locationConsent -ErrorAction SilentlyContinue) {
-            (Get-Item -Path $locationConsent -ErrorAction SilentlyContinue).Property | Where-Object { $_ -notmatch '^PS' } | ForEach-Object {
-                $files += @{ name = "Location consent metadata: $_"; sizeKB = 0; modified = '' }
+    } catch { $partial = $true }
+    $locationConsent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
+    try {
+        try { $root = Get-Item -LiteralPath $locationConsent -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            foreach ($name in @($root.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $files.Add(@{ name = "Location consent metadata: $name"; path = $locationConsent; value = $root.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$root.GetValueKind($name); sizeKB = 0; modified = '' })
+                } catch { $partial = $true }
             }
-            Get-ChildItem -Path $locationConsent -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Location consent usage metadata: $($_.PSChildName)"; sizeKB = 0; modified = '' }
-            }
+            try {
+                Get-ChildItem -LiteralPath $locationConsent -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                    $key = $_
+                    $values = @{}
+                    foreach ($name in @($key.Property | Where-Object { $_ -notmatch '^PS' })) {
+                        try { $values[$name] = @{ value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); type = [string]$key.GetValueKind($name) } }
+                        catch { $partial = $true }
+                    }
+                    $files.Add(@{ name = "Location consent usage metadata: $($key.PSChildName)"; path = $key.PSPath; values = $values; sizeKB = 0; modified = '' })
+                }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some geolocation sources could not be checked.' } else { $null } }
 }
 
 function Get-VPNPhonebooksInfo {

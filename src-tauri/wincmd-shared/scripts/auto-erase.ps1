@@ -2566,7 +2566,7 @@ function Set-AutoEraseScheduleCore {
             $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
             [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
             [string]$saved.Principal.LogonType -ne $expectedLogonType -or (-not $RunAsSystem -and [string]$saved.Principal.RunLevel -ne 'Highest') -or
-            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not (Test-AutoEraseSettingsReadback $saved) -or -not $catchUpMatches -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
+            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not (Test-AutoEraseSettingsReadback $saved) -or -not (Test-AutoEraseTriggerReadback -Task $saved -Identity $savedIdentity) -or -not $catchUpMatches -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
             [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
             throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
         }
@@ -3008,6 +3008,16 @@ function Test-AutoEraseTriggerReadback {
     $catchUp = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq $catchUpClass })
     if ($timeTriggers.Count -ne 1 -or $timeTriggers[0].CimClass.CimClassName -ne 'MSFT_TaskTimeTrigger' -or
         $timeTriggers[0].Enabled -ne $true -or $catchUp.Count -ne 1 -or $catchUp[0].Enabled -ne $true) { return $false }
+    # WinCommander registers a 9999-day repetition without an end boundary.
+    # A Scheduler edit can otherwise leave the task Ready while its recurring
+    # trigger stops after a short duration (or at an explicit end date).
+    if (-not [string]::IsNullOrWhiteSpace([string]$timeTriggers[0].EndBoundary) -or
+        -not [string]::IsNullOrWhiteSpace([string]$catchUp[0].EndBoundary)) { return $false }
+    $duration = [string]$timeTriggers[0].Repetition.Duration
+    if (-not [string]::IsNullOrWhiteSpace($duration)) {
+        try { if ([Xml.XmlConvert]::ToTimeSpan($duration) -lt [TimeSpan]::FromDays(9999)) { return $false } }
+        catch { return $false }
+    }
     if (-not $isSystem -and (-not $catchUp[0].UserId -or (Resolve-AutoEraseSid ([string]$catchUp[0].UserId)) -ne $Identity.ownerSid)) { return $false }
     return $true
 }

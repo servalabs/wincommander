@@ -15,8 +15,8 @@ try {
         Settings = [pscustomobject]@{ DisallowStartIfOnBatteries = $false; StopIfGoingOnBatteries = $false; RunOnlyIfIdle = $false; RunOnlyIfNetworkAvailable = $false; StartWhenAvailable = $true }
         Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = "-NoProfile -File `"$path`"" })
         Triggers = @(
-            [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M' }; Enabled = $true; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskTimeTrigger' } },
-            [pscustomobject]@{ Enabled = $true; UserId = $sid; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' } }
+            [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M'; Duration = 'P9999D' }; EndBoundary = ''; Enabled = $true; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskTimeTrigger' } },
+            [pscustomobject]@{ Enabled = $true; UserId = $sid; EndBoundary = ''; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' } }
         )
         Description = 'System Maintenance scheduled cleanup v20'
     }
@@ -56,6 +56,17 @@ try {
     $disabledTime = Get-AutoEraseSchedules
     if ($disabledTime.error -or $disabledTime.schedules[0].payloadVerified) { throw 'A disabled repeating trigger must not be verified.' }
     $script:fixtureTask.Triggers[0].Enabled = $true
+    $script:fixtureTask.Triggers[0].Repetition.Duration = 'PT1H'
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A repeating trigger with a short duration must not be verified.' }
+    $script:fixtureTask.Triggers[0].Repetition.Duration = 'not-a-duration'
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'An invalid repetition duration must not be verified.' }
+    $script:fixtureTask.Triggers[0].Repetition.Duration = 'P9999D'
+    $script:fixtureTask.Triggers[0].EndBoundary = '2030-01-01T00:00:00'
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A repeating trigger with an end boundary must not be verified.' }
+    $script:fixtureTask.Triggers[0].EndBoundary = ''
+    $script:fixtureTask.Triggers[1].EndBoundary = '2030-01-01T00:00:00'
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A catch-up trigger with an end boundary must not be verified.' }
+    $script:fixtureTask.Triggers[1].EndBoundary = ''
     $script:fixtureTask.Triggers[1].Enabled = $false
     $disabledLogon = Get-AutoEraseSchedules
     if ($disabledLogon.error -or $disabledLogon.schedules[0].payloadVerified) { throw 'A disabled catch-up trigger must not be verified.' }
