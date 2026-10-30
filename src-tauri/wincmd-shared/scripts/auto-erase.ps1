@@ -407,6 +407,35 @@ function Remove-WCScheduledCredential($Name, $Type) {
 }
 '@
 
+$script:ScheduledSshFunctions = @'
+function Invoke-WCSshProcess {
+    param([Parameter(Mandatory)][string]$Executable, [Parameter(Mandatory)][string]$Arguments, [int]$TimeoutMilliseconds = 30000)
+    if ($TimeoutMilliseconds -lt 1) { throw 'Invalid SSH process timeout.' }
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Executable; $start.Arguments = $Arguments
+    $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($start)
+    if (-not $process) { throw 'SSH agent tool could not start.' }
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            try { $process.Kill() } catch { }
+            throw 'SSH agent tool timed out.'
+        }
+        $stdout.Wait(); $stderr.Wait()
+        return $process.ExitCode
+    } finally { $process.Dispose() }
+}
+function Invoke-WCSshAdd {
+    param([Parameter(Mandatory)][ValidateSet('-D','-l')][string]$Option)
+    $path = Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh-add.exe'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)) { throw 'Windows OpenSSH agent tooling is unavailable.' }
+    Invoke-WCSshProcess -Executable $path -Arguments $Option
+}
+'@
+. ([scriptblock]::Create($script:ScheduledSshFunctions))
+
 $script:ScheduledWslFunctions = @'
 function Get-WCScheduledWslInventory {
     $root = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
@@ -1240,14 +1269,14 @@ foreach (`$drv in `$drives) {
     }
 }
 "@
-    'notepadState'      = @"
-Get-ChildItem -Path "`$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
-    `$tabState = Join-Path `$_.FullName 'LocalState\TabState'
-    if (Test-Path `$tabState) {
-        Get-ChildItem -Path `$tabState -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-    }
+    'notepadState'      = @'
+$packages = @(Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') -Filter 'Microsoft.WindowsNotepad_*')
+foreach ($package in $packages) {
+    $tabState = Join-Path $package.FullName 'LocalState\TabState'
+    Erase-FileSet @(Get-AutoEraseFiles -Path $tabState -Recurse)
+    if (@(Get-AutoEraseFiles -Path $tabState -Recurse).Count) { throw 'Notepad tab-state cleanup is incomplete.' }
 }
-"@
+'@
     'pcaDatabase'       = @"
 Get-AutoEraseFiles -Path "`$env:SystemRoot\appcompat\pca" | ForEach-Object { Erase-OneFile `$_.FullName }
 "@
@@ -1575,8 +1604,15 @@ foreach ($root in @(
     (Join-Path $env:APPDATA 'npm-cache'), (Join-Path $env:LOCALAPPDATA 'npm-cache'),
     (Join-Path $env:LOCALAPPDATA 'pip\Cache'), (Join-Path $env:USERPROFILE '.cargo\registry\cache'),
     (Join-Path $env:USERPROFILE '.cargo\registry\src')
-)) { Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse) }
-foreach ($relative in @('.npmrc','.cargo\config.toml','.cargo\credentials.toml')) { Erase-OneFile (Join-Path $env:USERPROFILE $relative) | Out-Null }
+)) {
+    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Developer cache cleanup is incomplete.' }
+}
+foreach ($relative in @('.npmrc','.cargo\config.toml','.cargo\credentials.toml')) {
+    $target = Join-Path $env:USERPROFILE $relative
+    Erase-OneFile $target | Out-Null
+    if (Test-Path -LiteralPath $target -ErrorAction Stop) { throw 'Developer configuration cleanup is incomplete.' }
+}
 '@
     'networkWizardHistory' = "Erase-RegistryTree 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Network\Network Connection Wizard'"
     'werHistory' = @'
@@ -1628,17 +1664,26 @@ Get-AutoEraseDirectories -Path (Join-Path $env:APPDATA 'JetBrains') | ForEach-Ob
 }
 '@
     'sshState' = @'
-$sshAdd = Get-Command ssh-add.exe -ErrorAction Stop
-$null = & $sshAdd.Source -D 2>&1
-if ($LASTEXITCODE -ne 0) { throw 'SSH agent identities could not be removed.' }
-$null = & $sshAdd.Source -l 2>&1
-if ($LASTEXITCODE -ne 1) { throw 'SSH agent cleanup could not be verified.' }
-Erase-OneFile (Join-Path $env:USERPROFILE '.ssh\known_hosts') | Out-Null
+try {
+    if ((Invoke-WCSshAdd -Option '-D') -ne 0) { throw 'SSH agent identities could not be removed.' }
+    if ((Invoke-WCSshAdd -Option '-l') -ne 1) { throw 'SSH agent cleanup could not be verified.' }
+} catch { $script:AutoEraseFailed++ }
+try {
+    $knownHosts = Join-Path $env:USERPROFILE '.ssh\known_hosts'
+    Erase-OneFile $knownHosts | Out-Null
+    if (Test-Path -LiteralPath $knownHosts -ErrorAction Stop) { throw 'SSH known-host cleanup is incomplete.' }
+} catch { $script:AutoEraseFailed++ }
 '@
     'passwordManagerCaches' = @'
-foreach ($relative in @('1Password\Cache','1Password\Local Storage\leveldb')) { Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:LOCALAPPDATA $relative) -Recurse) }
+foreach ($relative in @('1Password\Cache','1Password\Local Storage\leveldb')) {
+    $root = Join-Path $env:LOCALAPPDATA $relative
+    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
+}
 foreach ($relative in @('Bitwarden\Cache','Bitwarden\Local Storage\leveldb','Bitwarden\Session Storage','LastPass\Cache','LastPass\Local Storage\leveldb','LastPass\Session Storage')) {
-    Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:APPDATA $relative) -Recurse)
+    $root = Join-Path $env:APPDATA $relative
+    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
 }
 '@
     'adobeRecent' = @'
@@ -1936,6 +1981,7 @@ __AUTO_ERASE_BODY__
     $resultFunction = "function New-AutoEraseResult {`n" + ${function:New-AutoEraseResult}.ToString() + "`n}"
     $categoryFunctions = switch ($CategoryId) {
         'credentialManager' { $script:ScheduledCredentialFunctions }
+        'sshState' { $script:ScheduledSshFunctions }
         'wslData' { $script:ScheduledWslFunctions }
         'virtualMachineArtifacts' { $script:ScheduledVmFunctions }
         'dockerDesktopData' { $script:ScheduledDockerFunctions }
@@ -2458,6 +2504,47 @@ function ConvertTo-AutoEraseTimestamp {
     return $Value.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Get-AutoEraseRecordedOutcome {
+    param($Task, $Identity, [string]$CurrentSid, [int]$IntervalMinutes)
+    try {
+        if ($Identity.ownerSid -notin @($CurrentSid, 'S-1-5-18') -or $IntervalMinutes -lt 1) { return $null }
+        if ($Task.TaskPath -ne $script:SystemMaintenanceTaskPath -or $Task.TaskName -ne $Identity.taskName) { return $null }
+        $arguments = [string]@($Task.Actions)[0].Arguments
+        if ($arguments -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $null }
+        $scriptPath = [IO.Path]::GetFullPath($Matches[1])
+        $scriptsRoot = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'WinCommander\auto-erase\scripts'))
+        if ([IO.Path]::GetDirectoryName($scriptPath) -ine $scriptsRoot) { return $null }
+        $scriptItem = Get-Item -LiteralPath $scriptPath -Force -ErrorAction Stop
+        if ($scriptItem.PSIsContainer -or ($scriptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $scriptItem.Length -gt 1048576) { return $null }
+        $payload = [IO.File]::ReadAllText($scriptPath)
+        $categoryPattern = '(?m)^\$categoryId = ''' + [regex]::Escape([string]$Identity.categoryId) + '''\r?$'
+        if ($payload -notmatch $categoryPattern -or $payload -notmatch '(?m)^\$scopeKey = ''([A-Za-z0-9._-]{1,80})''\r?$') { return $null }
+        $scopeKey = $Matches[1]
+        if ($Identity.ownerSid -eq 'S-1-5-18') {
+            if ($scopeKey -ne 'system') { return $null }
+            $root = Join-Path $env:ProgramData 'WinCommander\auto-erase\state'
+        } else {
+            if (-not $scopeKey.StartsWith('user-', [StringComparison]::Ordinal)) { return $null }
+            $root = Join-Path $env:LOCALAPPDATA 'WinCommander\auto-erase'
+        }
+        $expected = '^' + [regex]::Escape([string]$Identity.categoryId + '.' + $scopeKey) + '(?:\.r\d+)?\.ps1$'
+        if ([IO.Path]::GetFileName($scriptPath) -notmatch $expected) { return $null }
+        $path = Join-Path $root ("$($Identity.categoryId).$scopeKey.result.json")
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 16384) { return $null }
+        $result = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+        if ($result.success -isnot [bool] -or $result.intervalMinutes -isnot [int] -or $result.intervalMinutes -ne $IntervalMinutes) { return $null }
+        foreach ($key in @('removed', 'deferred', 'failed')) {
+            if ($result.$key -isnot [int] -or $result.$key -lt 0) { return $null }
+        }
+        if ($result.success -ne ($result.failed -eq 0 -and $result.deferred -eq 0)) { return $null }
+        $attempt = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParseExact([string]$result.attemptedUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$attempt)) { return $null }
+        if ($attempt.UtcDateTime -lt $scriptItem.LastWriteTimeUtc -or $attempt.UtcDateTime -gt [DateTime]::UtcNow.AddMinutes(5)) { return $null }
+        return @{ attemptedUtc = $attempt.ToUniversalTime().ToString('o'); success = $result.success; removed = $result.removed; deferred = $result.deferred; failed = $result.failed }
+    } catch { return $null }
+}
+
 function Get-AutoEraseSchedules {
     try {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -2482,6 +2569,7 @@ function Get-AutoEraseSchedules {
                 lastRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.LastRunTime } else { $null }
                 nextRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
+                cleanupOutcome   = Get-AutoEraseRecordedOutcome $t $identity $currentSid $minutes
             }
         }
         @{ schedules = $rows; total = $rows.Count }

@@ -347,6 +347,7 @@ export default function SystemCleanupPanel() {
                     excludedFromBulk={scan.clearAllExcludes.has(otherDetail.catId)}
                     scopeLabel={selectedDisplay || "Selected Windows user"}
                     accountLabel={selectedDisplay || "Selected Windows user"}
+                    accountName={scan.selectedUser}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
                     onClear={!isInvestigator && canSwitchUsers
@@ -371,6 +372,7 @@ export default function SystemCleanupPanel() {
                         const userData = u.categories[combinedDetail.catId];
                         return {
                             title: u.displayName || u.username,
+                            username: u.username,
                             count: userData?.count ?? -1,
                             items: userData?.items ?? [],
                             rawData: userData?.raw,

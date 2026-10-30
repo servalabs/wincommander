@@ -201,15 +201,14 @@ function Get-PSHistory {
         if ($null -ne $historyFile) {
             $commands = @(Get-Content -LiteralPath $historyPath -ErrorAction Stop | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
         }
-        $entries = @()
-        $first = [math]::Max(0, $commands.Count - 300)
-        for ($index = $commands.Count - 1; $index -ge $first; $index--) {
-            $entries += @{ id = $index; command = $commands[$index] }
+        $entries = [Collections.Generic.List[object]]::new()
+        for ($index = $commands.Count - 1; $index -ge 0; $index--) {
+            $entries.Add(@{ id = $index; command = $commands[$index] })
         }
         @{
-            entries = $entries; total = $commands.Count; fileTotal = $commands.Count
-            sampleCount = $entries.Count; previewLimit = 300; countUnit = 'command lines'
-            coverage = 'Total non-empty command lines. Details show up to 300 newest lines; multi-line commands can span several lines.'
+            entries = @($entries.ToArray()); total = $commands.Count; fileTotal = $commands.Count
+            sampleCount = $entries.Count; previewLimit = $entries.Count; truncated = $false; countUnit = 'command lines'
+            coverage = 'Total non-empty command lines; multi-line commands can span several lines.'
         }
     }
     catch {
@@ -2255,7 +2254,42 @@ function Get-CleanupChromiumProfiles {
     })
 }
 
-function Get-BrowserFootprints {
+function Get-CleanupSummaryBrowserInventory {
+    param([Parameter(Mandatory)][string]$ProfilePath)
+    if (-not $script:BrowserMap) { throw 'Browser inventory is unavailable.' }
+    $targetLocal = Join-Path $ProfilePath 'AppData\Local'
+    $targetRoaming = Join-Path $ProfilePath 'AppData\Roaming'
+    $roots = @(
+        @{ source = $env:LOCALAPPDATA; target = $targetLocal },
+        @{ source = $env:APPDATA; target = $targetRoaming },
+        @{ source = $env:USERPROFILE; target = $ProfilePath }
+    ) | Where-Object { $_.source } | Sort-Object { $_.source.Length } -Descending
+    $mapPath = {
+        param([string]$Path)
+        foreach ($root in $roots) {
+            $prefix = ([string]$root.source).TrimEnd('\')
+            if ($Path -ieq $prefix) { return [string]$root.target }
+            if ($Path.StartsWith($prefix + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                return (Join-Path $root.target $Path.Substring($prefix.Length + 1))
+            }
+        }
+        return $Path
+    }
+    foreach ($browser in $script:BrowserMap) {
+        $dataDir = & $mapPath ([string]$browser.UserDataDir)
+        if (-not $dataDir) { continue }
+        foreach ($exe in @($browser.ExePaths)) {
+            $path = & $mapPath ([string]$exe)
+            if ($path -and (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)) {
+                @{ Name = $browser.Name; Engine = $browser.Engine; UserDataDir = $dataDir }
+                break
+            }
+        }
+    }
+}
+
+function Get-CleanupBrowserFootprints {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Browsers)
     # Uses Get-InstalledBrowsers from the security module (loaded as additional dependency)
     try {
         $chromiumArtifacts = @('History','Cookies','Login Data','Top Sites','Favicons','Web Data','Visited Links','Shortcuts','Cache','Code Cache','IndexedDB','Local Storage','Session Storage','Network','Download Metadata')
@@ -2275,7 +2309,7 @@ function Get-BrowserFootprints {
             return $sz
         }
 
-        $installed = Get-InstalledBrowsers
+        $installed = @($Browsers)
         $browsers  = @()
 
         foreach ($b in $installed) {
@@ -2357,6 +2391,10 @@ function Get-BrowserFootprints {
     catch {
         @{ error = $true; message = "Failed to get browser footprints: $($_.Exception.Message)" }
     }
+}
+
+function Get-BrowserFootprints {
+    Get-CleanupBrowserFootprints -Browsers @(Get-InstalledBrowsers)
 }
 
 function Clear-BrowserFootprints {
@@ -2853,26 +2891,32 @@ function Get-NTUserTraces {
 }
 
 function Get-NotepadStateFiles {
-    # Returns Notepad tab state file listing with sizes
     try {
         $files = @()
-        $notepadPkg = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsNotepad_*' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-        $packageFound = $notepadPkg -ne $null
-        if ($notepadPkg) {
-            $tabDir = Join-Path $notepadPkg.FullName 'LocalState\TabState'
-            if (Test-Path $tabDir) {
-                Get-ChildItem -Path $tabDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $packageRoot = Join-Path $env:LOCALAPPDATA 'Packages'
+        $packages = @()
+        try {
+            $rootItem = Get-Item -LiteralPath $packageRoot -Force -ErrorAction Stop
+            if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad package coverage is unavailable.' }
+            $packages = @(Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -ErrorAction Stop)
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        foreach ($package in $packages) {
+            if ($package.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Notepad package coverage is unavailable.' }
+            $tabDir = Join-Path $package.FullName 'LocalState\TabState'
+            try {
+                $tabItem = Get-Item -LiteralPath $tabDir -Force -ErrorAction Stop
+                if (-not $tabItem.PSIsContainer -or ($tabItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad tab-state coverage is unavailable.' }
+                Get-ChildItem -LiteralPath $tabDir -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
                     $files += @{
                         name    = $_.Name
+                        path    = $_.FullName
                         sizeKB  = [math]::Round($_.Length / 1KB, 1)
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                     }
                 }
-            }
+            } catch [System.Management.Automation.ItemNotFoundException] { }
         }
-        # Also check legacy Notepad recent (non-packaged)
-        $legacyPath = "$env:APPDATA\Microsoft\Windows\Recent"
-        @{ files = $files; total = $files.Count; packageFound = $packageFound; totalSizeKB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum, 1) }
+        @{ files = $files; total = $files.Count; packageFound = ($packages.Count -gt 0); totalSizeKB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum, 1) }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -3633,19 +3677,20 @@ function Get-GitActivityInfo {
 function Get-SSHStateInfo {
     try {
         $files = @()
+        $agentVerified = $true
         $knownHosts = Join-Path $env:USERPROFILE '.ssh\\known_hosts'
         if (Test-Path $knownHosts -PathType Leaf -ErrorAction SilentlyContinue) {
             $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction SilentlyContinue
             if ($item) { $files += @{ name = 'SSH known_hosts'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } }
         }
-        $sshAdd = Get-Command ssh-add.exe -ErrorAction SilentlyContinue
-        if (-not $sshAdd) { throw 'SSH agent state could not be checked: ssh-add is unavailable.' }
-        $null = & $sshAdd.Source -l 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $files += @{ name = 'SSH agent identities loaded'; sizeKB = 0; modified = '' }
-        } elseif ($LASTEXITCODE -ne 1) { throw 'SSH agent state could not be checked.' }
+        try {
+            $agentStatus = Invoke-WCSshAdd -Option '-l'
+            if ($agentStatus -eq 0) {
+                $files += @{ name = 'SSH agent identities loaded'; sizeKB = 0; modified = '' }
+            } elseif ($agentStatus -ne 1) { $agentVerified = $false }
+        } catch { $agentVerified = $false }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $agentVerified); status = if ($agentVerified) { 'complete' } else { 'partial' }; message = if ($agentVerified) { $null } else { 'SSH agent state could not be checked.' } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -5339,11 +5384,14 @@ function Invoke-CleanupClearForUser {
                     $knownHosts = Join-Path $UserProfilePath '.ssh\\known_hosts'
                     Erase-OneFile $knownHosts
                     $currentProfile = [Environment]::GetFolderPath('UserProfile')
+                    $agentVerified = $false
                     if ($currentProfile -and ($UserProfilePath.TrimEnd('\\') -eq $currentProfile.TrimEnd('\\'))) {
-                        $sshAdd = Get-Command ssh-add.exe -ErrorAction SilentlyContinue
-                        if ($sshAdd) { & $sshAdd.Source -D 2>$null | Out-Null }
+                        try {
+                            if ((Invoke-WCSshAdd -Option '-D') -ne 0) { throw 'SSH agent identities could not be removed.' }
+                            $agentVerified = (Invoke-WCSshAdd -Option '-l') -eq 1
+                        } catch { $agentVerified = $false }
                     }
-                    $catResults[$cat] = if (Test-Path $knownHosts -PathType Leaf -ErrorAction SilentlyContinue) { 'failed' } else { 'cleaned' }
+                    $catResults[$cat] = if ($agentVerified -and -not (Test-Path -LiteralPath $knownHosts -PathType Leaf -ErrorAction Stop)) { 'cleaned' } else { 'failed' }
                 }
                 'remoteAccessLogs' {
                     $targets = @(Get-CleanupTargetFiles @(
@@ -5639,19 +5687,89 @@ function Invoke-CleanupClearAllUsers {
 # Invoke-WithUserHive for offline users (requires admin).
 # ============================================================================
 
+function Convert-CleanupSummaryHistory {
+    param([string[]]$Lines, [int]$PreviewMax)
+    $nonEmpty = @($Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    $items = [Collections.Generic.List[string]]::new(); $records = [Collections.Generic.List[object]]::new()
+    $start = [Math]::Max(0, $nonEmpty.Count - $PreviewMax)
+    for ($index = $nonEmpty.Count - 1; $index -ge $start; $index--) {
+        $items.Add($nonEmpty[$index])
+        $records.Add(@{ id = $index; command = $nonEmpty[$index] })
+    }
+    return @{ count = $nonEmpty.Count; items = @($items.ToArray()); records = @($records.ToArray()) }
+}
+
+function Test-CleanupSummaryDetailSize {
+    param($Records, $Items)
+    $json = ConvertTo-Json -InputObject @{ records = @($Records); items = @($Items) } -Depth 30 -Compress
+    return [Text.Encoding]::UTF8.GetByteCount($json) -le 8MB
+}
+
+function ConvertTo-CleanupCanonicalJson {
+    param($Value)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [System.Collections.IDictionary] -or $Value.GetType().FullName -eq 'System.Management.Automation.PSCustomObject') {
+        [string[]]$keys = @(if ($Value -is [System.Collections.IDictionary]) { $Value.Keys | ForEach-Object { [string]$_ } } else { $Value.PSObject.Properties.Name })
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        $parts = foreach ($key in $keys) {
+            $child = if ($Value -is [System.Collections.IDictionary]) { $Value[$key] } else { $Value.PSObject.Properties[$key].Value }
+            $script:CleanupJsonSerializer.Serialize($key) + ':' + (ConvertTo-CleanupCanonicalJson $child)
+        }
+        return '{' + ($parts -join ',') + '}'
+    }
+    if ($Value -is [System.Collections.IList] -or $Value -is [array]) {
+        $parts = foreach ($item in $Value) { ConvertTo-CleanupCanonicalJson $item }
+        return '[' + ($parts -join ',') + ']'
+    }
+    return $script:CleanupJsonSerializer.Serialize($Value)
+}
+
+function Get-CleanupSummaryPage {
+    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot)
+    if ($Offset -lt 0 -or $Offset -gt 50000 -or ($Offset -gt 0 -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ExpectedSnapshot)) {
+        throw 'The account detail page request is invalid.'
+    }
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+    $script:CleanupJsonSerializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    $script:CleanupJsonSerializer.MaxJsonLength = 32MB
+    $canonical = ConvertTo-CleanupCanonicalJson @{ category=$Category; sid=$ProfileSid; count=$Count; records=@($Records) }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($canonical)
+    if ($bytes.Length -gt 32MB) { throw 'The account detail snapshot exceeds the size limit.' }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $snapshot = 'sha256:' + [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    if ($ExpectedSnapshot -and $ExpectedSnapshot -cne $snapshot) { throw 'Account details changed while loading. Rescan before trying again.' }
+    if ($Offset -gt $Records.Count) { throw 'The account detail page offset is invalid.' }
+    $pageSize = 5000
+    $page = @($Records | Select-Object -Skip $Offset -First $pageSize)
+    while (-not (Test-CleanupSummaryDetailSize -Records $page -Items @())) {
+        if ($page.Count -le 1) { throw 'One account detail record exceeds the size limit.' }
+        $pageSize = [Math]::Max(1, [int][Math]::Floor($page.Count / 2))
+        $page = @($Records | Select-Object -Skip $Offset -First $pageSize)
+    }
+    $next = $Offset + $page.Count
+    return @{ records=$page; snapshotHash=$snapshot; nextOffset=if ($next -lt $Records.Count) { $next } else { $null }; totalRows=$Records.Count }
+}
+
 function New-CleanupSummaryCategoryRecord {
     param([string]$Category, [int]$Count, $items, $records, [string]$ScanError, [int]$previewMax)
     # Both delegated current-user scans and direct other-user scans are scoped
     # for these categories, even when they find no entries in that scope.
     $limited = $Category -in @('walFiles', 'recallDb')
+    $returned = @($records | Select-Object -First $previewMax)
+    $visibleCount = $returned.Count
+    if ($Category -eq 'ntUserTraces' -and $returned.Count -and @($returned | Where-Object { $null -eq $_.entries }).Count -eq 0) {
+        $visibleCount = 0
+        foreach ($section in $returned) { $visibleCount += @($section.entries).Count }
+    }
     $record = @{
         id = $Category; count = $Count
         items = @($items | Select-Object -First $previewMax)
-        records = @($records | Select-Object -First $previewMax)
+        records = $returned
         status = if ($ScanError) { 'error' } elseif ($limited) { 'scoped' } else { 'complete' }
         error = [bool]$ScanError; message = $ScanError
-        sampleCount = @($records | Select-Object -First $previewMax).Count
+        sampleCount = $returned.Count
         previewLimit = $previewMax
+        truncated = (-not $ScanError -and $Count -gt $visibleCount)
     }
     if ($limited) { $record.coverage = 'limited' }
     return $record
@@ -5665,7 +5783,10 @@ function Get-CleanupSummaryAllUsers {
         # Comma-separated list of usernames to scan; empty = every account.
         # The UI scans one user at a time (the user switcher), so it normally
         # passes a single name here to avoid the cost of loading every hive.
-        [string]$TargetUsers = ''
+        [string]$TargetUsers = '',
+        [bool]$FullDetail = $false,
+        [int]$DetailOffset = 0,
+        [string]$SnapshotHash = ''
     )
 
     function Test-CleanupSummaryPath {
@@ -5689,6 +5810,12 @@ function Get-CleanupSummaryAllUsers {
     $targetArr = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
     } else { @() }
+    if ($FullDetail -and ($requestedCats.Count -ne 1 -or $targetArr.Count -ne 1)) {
+        return @{ error = $true; status = 'error'; message = 'Full details require exactly one category and one user.'; users = @(); userCount = 0 }
+    }
+    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or $DetailOffset -gt 50000 -or ($DetailOffset -gt 0 -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $SnapshotHash)) {
+        return @{ error = $true; status = 'error'; message = 'The account detail page request is invalid.'; users = @(); userCount = 0 }
+    }
 
     # Current account identified by SID (stable across renames), not name.
     $mySid = ''
@@ -5716,6 +5843,9 @@ function Get-CleanupSummaryAllUsers {
         $allProfiles = $allProfiles | Where-Object { $_.SID -eq $mySid }
     } elseif ($targetArr.Count -gt 0) {
         $allProfiles = $allProfiles | Where-Object { $targetArr -contains $_.Name }
+    }
+    if ($FullDetail -and (@($allProfiles).Count -ne 1 -or @($allProfiles)[0].Name -ne $targetArr[0])) {
+        return @{ error = $true; status = 'error'; message = 'The selected user profile is unavailable or not authorized.'; users = @(); userCount = 0 }
     }
 
     $loggedIn = (Get-LoggedInUsers).users
@@ -5779,7 +5909,7 @@ function Get-CleanupSummaryAllUsers {
 
         # The card grid only shows the first few items, but detail dialogs need
         # enough rows to audit common high-count traces without hiding records.
-        $previewMax = 500
+        $previewMax = if ($FullDetail) { 50000 } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
             $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null
@@ -5933,15 +6063,10 @@ function Get-CleanupSummaryAllUsers {
                     'psHistory' {
                         $p = Join-Path $appData 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
                         if (Test-CleanupSummaryPath $p) {
-                            # Match Get-PSHistory exactly: filter empty lines, return last 300.
+                            # Keep the original command text for the selected user's bounded preview.
                             $lines = [System.IO.File]::ReadAllLines($p)
-                            $nonEmpty = @($lines | Where-Object { $_.Trim() -ne '' })
-                            $count = $nonEmpty.Count
-                            $start = [Math]::Max(0, $nonEmpty.Count - $previewMax)
-                            $items = if ($nonEmpty.Count -gt 0) {
-                                $nonEmpty[$start..($nonEmpty.Count - 1)] |
-                                    ForEach-Object { $_.Substring(0, [Math]::Min($_.Length, 80)) }
-                            } else { @() }
+                            $history = Convert-CleanupSummaryHistory -Lines $lines -PreviewMax $previewMax
+                            $count = $history.count; $items = $history.items; $records = $history.records
                         }
                     }
                     'jumpLists' {
@@ -5953,44 +6078,12 @@ function Get-CleanupSummaryAllUsers {
                         $items = @($f1 + $f2) | Select-Object -First $previewMax | ForEach-Object { $_.BaseName }
                     }
                     'browserFootprints' {
-                        # Count actual artifact files per browser — not just "browser installed".
-                        # Matches Get-BrowserFootprints per-category function behaviour.
-                        $artifactNames = @('History','Cookies','Login Data','Top Sites','Favicons',
-                                           'Web Data','Visited Links','Shortcuts','Download Metadata')
-                        $chromiumRoots = @(
-                            @{n='Chrome'; p=Join-Path $localApp 'Google\Chrome\User Data'},
-                            @{n='Edge';   p=Join-Path $localApp 'Microsoft\Edge\User Data'},
-                            @{n='Brave';  p=Join-Path $localApp 'BraveSoftware\Brave-Browser\User Data'},
-                            @{n='Opera';  p=Join-Path $appData  'Opera Software\Opera Stable'},
-                            @{n='Vivaldi';p=Join-Path $localApp 'Vivaldi\User Data'}
-                        )
-                        foreach ($r in $chromiumRoots) {
-                            if (-not (Test-CleanupSummaryPath $r.p)) { continue }
-                            # Walk all profile directories (Default + Profile 1, 2, …)
-                            $profileDirs = @(Get-ChildItem $r.p -Directory -Force -EA Stop |
-                                Where-Object { $_.Name -eq 'Default' -or $_.Name -match '^Profile \d+$' })
-                            foreach ($pd in $profileDirs) {
-                                foreach ($a in $artifactNames) {
-                                    $f = Join-Path $pd.FullName $a
-                                    if (Test-CleanupSummaryPath $f -PathType Leaf) {
-                                        $count++
-                                        $items += "$($r.n): $a"
-                                    }
-                                }
-                            }
-                        }
-                        # Firefox — count places.sqlite (history+bookmarks) and cookies.sqlite per profile
-                        $ffRoot = Join-Path $appData 'Mozilla\Firefox\Profiles'
-                        if (Test-CleanupSummaryPath $ffRoot) {
-                            Get-ChildItem $ffRoot -Directory -Force -EA Stop | ForEach-Object {
-                                foreach ($db in @('places.sqlite','cookies.sqlite','formhistory.sqlite','logins.json')) {
-                                    if (Test-CleanupSummaryPath (Join-Path $_.FullName $db)) {
-                                        $count++
-                                        $items += "Firefox: $db"
-                                    }
-                                }
-                            }
-                        }
+                        $inventory = @(Get-CleanupSummaryBrowserInventory -ProfilePath $prof.FullName)
+                        $r = Get-CleanupBrowserFootprints -Browsers $inventory
+                        if ($r.error -or $r.partial -or $r.complete -eq $false) { throw 'The browser scan failed or was incomplete.' }
+                        $count = [int]$r.totalBrowsers
+                        $records = @($r.browsers | Select-Object -First $previewMax)
+                        $items = @($records | ForEach-Object { "$($_.browser): $($_.totalSizeKB) KB" })
                     }
                     'notepadState' {
                         $packageRoot = Join-Path $localApp 'Packages'
@@ -6307,7 +6400,18 @@ function Get-CleanupSummaryAllUsers {
                     [pscustomobject]@{ entry = [string]$_ }
                 })
             }
-            $categories += (New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax)
+            $detailPage = $null
+            if ($FullDetail -and -not $scanError) {
+                try { $detailPage = Get-CleanupSummaryPage -Records @($records) -Count $count -Category $cat -ProfileSid $prof.SID -Offset $DetailOffset -ExpectedSnapshot $SnapshotHash }
+                catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
+            }
+            $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
+            if ($detailPage) {
+                $categoryRecord.records = $detailPage.records; $categoryRecord.items = @(); $categoryRecord.sampleCount = @($detailPage.records).Count
+                $categoryRecord.truncated = $categoryRecord.truncated -or ($null -ne $detailPage.nextOffset)
+                $categoryRecord.snapshotHash = $detailPage.snapshotHash; $categoryRecord.nextOffset = $detailPage.nextOffset; $categoryRecord.totalRows = $detailPage.totalRows
+            }
+            $categories += $categoryRecord
         }
 
         # Unload hive if we loaded it

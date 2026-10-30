@@ -6,7 +6,7 @@ $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Could not parse cleanup.ps1' }
-foreach ($name in @('Get-AmcacheEntries', 'Get-NTUserTraces', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'New-CleanupSummaryCategoryRecord')) {
+foreach ($name in @('Get-AmcacheEntries', 'Get-NTUserTraces', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
     $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $function) { throw "Missing function $name" }
     . ([scriptblock]::Create($function.Extent.Text))
@@ -72,6 +72,16 @@ foreach ($category in @('walFiles', 'recallDb')) {
 $record = New-CleanupSummaryCategoryRecord -Category 'recentFiles' -Count 0 -items @() -records @() -ScanError $null -previewMax 500
 Assert-Count $record.status 'complete' 'Unrestricted category status remains complete'
 if ($record.ContainsKey('coverage')) { throw 'Unexpected coverage flag for unrestricted category' }
+$longCommand = 'example-command ' + ('x' * 120)
+$history = Convert-CleanupSummaryHistory -Lines @('first', $longCommand, 'last') -PreviewMax 2
+Assert-Count $history.count 3 'Other-user command count'
+Assert-Count $history.records[1].command $longCommand 'Other-user command remains complete'
+$record = New-CleanupSummaryCategoryRecord -Category 'psHistory' -Count $history.count -items $history.items -records $history.records -ScanError $null -previewMax 2
+Assert-Count $record.truncated $true 'Bounded other-user preview reports truncation'
+$group = New-CleanupSummaryCategoryRecord -Category 'ntUserTraces' -Count 2 -items @() -records @(@{ name='RunMRU'; count=2; entries=@(@{value='one'}, @{value='two'}) }) -ScanError $null -previewMax 500
+Assert-Count $group.truncated $false 'Complete grouped activity does not report truncation'
+Assert-Count (Test-CleanupSummaryDetailSize -Records @(@{ command = 'small' }) -Items @('small')) $true 'Small detail response passes size bound'
+Assert-Count (Test-CleanupSummaryDetailSize -Records @(@{ command = ('x' * 8388608) }) -Items @()) $false 'Oversized detail response is rejected'
 
 $oldSystemRoot = $env:SystemRoot
 $oldLocalAppData = $env:LOCALAPPDATA

@@ -13,6 +13,12 @@ const developerCaches = DEEP_DFIR_CATEGORIES.find(category => category.id === "d
 const clipboard = STANDARD_CATEGORIES.find(category => category.id === "clipboardHistory")!;
 
 describe("cleanup scan results", () => {
+  test("keeps all returned command history records beyond the old 300-row limit", () => {
+    const entries = Array.from({ length: 650 }, (_, id) => ({ id, command: `command-${id}` }));
+    const result = readCleanupScanResult(history, { success: true, data: { total: 650, entries, sampleCount: 650, previewLimit: 650, truncated: false } });
+    expect(result.count).toBe(650);
+    expect((result.raw as { entries: unknown[] }).entries).toHaveLength(650);
+  });
   test("Wi-Fi profiles show returned names and limited scope", () => {
     const wifi = STANDARD_CATEGORIES.find(category => category.id === "wlanProfiles")!;
     const empty = readCleanupScanResult(wifi, { success: true, data: { profiles: [], total: 0, coverage: "limited" } });

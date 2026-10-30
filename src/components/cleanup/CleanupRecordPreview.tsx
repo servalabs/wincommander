@@ -1,6 +1,7 @@
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../../hooks/useBackend";
+import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 
 type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
@@ -192,7 +193,29 @@ export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: 
   return !accountLabel && (categoryId === "wlanProfiles" || categoryId === "clipboardHistory");
 }
 
-export default function CleanupRecordPreview({ categoryId, rawData, mode, accountLabel }: { categoryId: string; rawData: unknown; mode: CleanupDisplayMode; accountLabel?: string }) {
+export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; message?: string; error?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "") {
+  const users = data?.users;
+  const user = Array.isArray(users) && users.length === 1 ? users[0] : undefined;
+  const matching = user && typeof user.username === "string" && user.username.toLocaleLowerCase() === accountName.toLocaleLowerCase() && Array.isArray(user.categories)
+    ? user.categories.filter(category => category.id === categoryId) : [];
+  if (data?.error || matching.length !== 1) return null;
+  const category = matching[0];
+  const pageCount = Array.isArray(category.records) ? category.records.length : -1;
+  if (typeof category.snapshotHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(category.snapshotHash) || (expectedHash && category.snapshotHash !== expectedHash) ||
+      !Number.isSafeInteger(category.totalRows) || (category.totalRows as number) < 0 || pageCount < 0 || pageCount > 5000 || offset + pageCount > (category.totalRows as number) ||
+      (category.nextOffset === null ? offset + pageCount !== category.totalRows : !Number.isSafeInteger(category.nextOffset) || category.nextOffset !== offset + pageCount || (category.nextOffset as number) >= (category.totalRows as number) || pageCount === 0)) return null;
+  const summary = readCleanupUserSummary(category);
+  return summary.count >= 0 && summary.raw ? { ...summary, snapshotHash: category.snapshotHash, nextOffset: category.nextOffset, totalRows: category.totalRows as number } : null;
+}
+
+export function mergeExpandedCleanupPage(previousRaw: unknown, currentRaw: unknown, offset: number): RecordObject | null {
+  const previous = isObject(previousRaw) && Array.isArray(previousRaw.records) ? previousRaw.records : [];
+  if (!isObject(currentRaw) || !Array.isArray(currentRaw.records) || previous.length !== offset) return null;
+  const records = [...previous, ...currentRaw.records];
+  return { ...currentRaw, records, sampleCount: records.length };
+}
+
+export default function CleanupRecordPreview({ categoryId, rawData, mode, accountLabel, accountName }: { categoryId: string; rawData: unknown; mode: CleanupDisplayMode; accountLabel?: string; accountName?: string }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [sortDescending, setSortDescending] = useState(false);
@@ -204,6 +227,11 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const [clipboardItems, setClipboardItems] = useState<Array<{ type: string; preview: string; charCount: number }> | null>(null);
   const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   const [loadingSecrets, setLoadingSecrets] = useState(false);
+  const [expandedRaw, setExpandedRaw] = useState<unknown>(null);
+  const [expandedNotice, setExpandedNotice] = useState<string | null>(null);
+  const [loadingExpanded, setLoadingExpanded] = useState(false);
+  const [nextPage, setNextPage] = useState<{ offset: number; hash: string; totalRows: number; count: number } | null>(null);
+  const requestVersion = useRef(0);
   useEffect(() => {
     let active = true;
     setSecrets(null);
@@ -211,6 +239,10 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     setClipboardNotice(null);
     setSecretError(null);
     setLoadingSecrets(false);
+    setExpandedRaw(null);
+    setExpandedNotice(null);
+    setLoadingExpanded(false);
+    setNextPage(null);
     if (categoryId === "wlanProfiles" && shouldLoadCurrentUserDetails(categoryId, accountLabel)) {
       setLoadingSecrets(true);
       void backendRef.current.getWlanProfileSecrets().then(result => {
@@ -229,12 +261,39 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         } else setClipboardNotice(result.error || "Clipboard details could not be retrieved.");
       }).catch(() => { if (active) setClipboardNotice("Clipboard details could not be retrieved."); });
     }
-    return () => { active = false; };
-  }, [categoryId, rawData, accountLabel]);
+    return () => { active = false; requestVersion.current += 1; };
+  }, [categoryId, rawData, accountLabel, accountName]);
+  const loadFullDetails = async () => {
+    if (!accountName) return;
+    const request = ++requestVersion.current;
+    setLoadingExpanded(true);
+    setExpandedNotice(null);
+    try {
+      const offset = nextPage?.offset ?? 0;
+      const result = await backendRef.current.getCleanupSummaryAllUsers([categoryId], [accountName], true, offset, nextPage?.hash ?? "");
+      if (request !== requestVersion.current) return;
+      const summary = result.success ? readExpandedCleanupSummary(result.data, accountName, categoryId, offset, nextPage?.hash ?? "") : null;
+      if (!summary || (nextPage && (summary.count !== nextPage.count || summary.totalRows !== nextPage.totalRows))) {
+        setExpandedNotice(result.error || result.data?.message || "Account details changed or could not be verified. Close and reopen to rescan.");
+        return;
+      }
+      const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
+      if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }
+      setExpandedRaw(merged);
+      setNextPage(typeof summary.nextOffset === "number" ? { offset: summary.nextOffset, hash: summary.snapshotHash, totalRows: summary.totalRows, count: summary.count } : null);
+      setExpandedNotice(`Refreshed account scan: ${summary.count} items reported.`);
+      if (offset === 0) setPage(0);
+    } catch {
+      if (request === requestVersion.current) setExpandedNotice("Full details could not be read.");
+    } finally {
+      if (request === requestVersion.current) setLoadingExpanded(false);
+    }
+  };
+  const shownData = expandedRaw ?? rawData;
   const all = useMemo(() => clipboardItems ? clipboardItems.map((item, index) => ({
     label: `Clipboard item ${index + 1}`,
     facts: metadata(item, categoryId),
-  })) : getSafeCleanupPreview(categoryId, rawData), [categoryId, rawData, clipboardItems]);
+  })) : getSafeCleanupPreview(categoryId, shownData), [categoryId, shownData, clipboardItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return all.map((row, index) => ({ ...row, number: index + 1 }))
@@ -252,7 +311,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     if (!labels.size) labels.add("Details");
     return [...labels];
   }, [all, categoryId]);
-  if (!all.length && !clipboardItems) return null;
+  if (!all.length && !clipboardItems && !(isObject(shownData) && shownData.truncated === true && accountName)) return null;
   const pageSize = mode === "simple" ? 5 : 10;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
   const rows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
@@ -261,6 +320,9 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       <div><h3>Found details</h3><p>{all.length} {all.length === 1 ? "item" : "items"} available; the scan total is above.</p></div>
       <label><span className="sr-only">Filter found details</span><input type="search" value={query} placeholder="Filter details" aria-label={accountLabel ? `Filter ${accountLabel} details` : "Filter details"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
     </div>
+    {isObject(shownData) && shownData.truncated === true ? <p role="status">Only part of this scan is shown; {accountName && (!expandedRaw || nextPage) ? "load more account details to expand this preview." : "additional records were not returned."}</p> : null}
+    {isObject(shownData) && shownData.truncated === true && accountName && (!expandedRaw || nextPage) ? <button type="button" disabled={loadingExpanded} onClick={loadFullDetails}>{loadingExpanded ? "Loading account details…" : "Load more account details"}</button> : null}
+    {expandedNotice ? <p role="status">{expandedNotice}</p> : null}
     {clipboardNotice ? <p role="status">{clipboardNotice}</p> : null}
     {secretError ? <p role="alert">{secretError}</p> : null}
     <div className="cleanup-readable-detail__table cleanup-record-preview__table"><table>
@@ -270,9 +332,9 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         if (categoryId === "amcache" || categoryId === "ntUserTraces") cells.set("Category", [row.label.replace(/ \d+$/, "")]);
         if (categoryId === "wlanProfiles") {
           let password = accountLabel ? "Unavailable for this account" : loadingSecrets ? "Loading…" : "Unavailable";
+          const profiles = isObject(shownData) ? (Array.isArray(shownData.profiles) ? shownData.profiles : Array.isArray(shownData.records) ? shownData.records : []) : [];
+          const profile = profiles[row.number - 1];
           if (secrets) {
-            const profiles = isObject(rawData) && Array.isArray(rawData.profiles) ? rawData.profiles : [];
-            const profile = profiles[row.number - 1];
             if (isObject(profile) && typeof profile.name === "string") {
               const matches = secrets.filter(secret => secret.name === profile.name &&
                 (typeof profile.interfaceId !== "string" || secret.interfaceId?.toLowerCase() === profile.interfaceId.toLowerCase()));
@@ -282,7 +344,6 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           }
           // A scan may already contain a password; prefer it until a fresh
           // local lookup returns a verified result for this adapter.
-          const profile = isObject(rawData) && Array.isArray(rawData.profiles) ? rawData.profiles[row.number - 1] : undefined;
           if (!secrets && isObject(profile) && typeof profile.password === "string") password = profile.password;
           cells.set("Password", [password]);
         }

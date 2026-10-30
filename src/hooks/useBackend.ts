@@ -1616,6 +1616,7 @@ export function useBackend() {
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;
+          cleanupOutcome?: { attemptedUtc: string; success: boolean; removed: number; deferred: number; failed: number } | null;
         }>;
         total: number;
       }>("Get-AutoEraseSchedules"),
@@ -1643,9 +1644,11 @@ export function useBackend() {
       }>("Get-FleetAccessUsers"),
     // Scan cleanup traces for users. The UI views one user at a time, so it
     // passes a single targetUsers entry; omit it to scan every account.
-    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[]) =>
+    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[], fullDetail = false, detailOffset = 0, snapshotHash = "") =>
       execute<{
         status: string;
+        error?: boolean;
+        message?: string;
         userCount: number;
         isAdmin: boolean;
         users: Array<{
@@ -1662,11 +1665,22 @@ export function useBackend() {
             count: number;
             items: string[];
             records?: Array<Record<string, unknown>>;
+            sampleCount?: number;
+            previewLimit?: number;
+            truncated?: boolean;
+            snapshotHash?: string;
+            nextOffset?: number | null;
+            totalRows?: number;
+            status?: string;
+            message?: string;
+            error?: boolean;
           }>;
         }>;
       }>("Get-CleanupSummaryAllUsers", {
         ...(categoryIds && categoryIds.length > 0 ? { CategoryIds: categoryIds.join(',') } : {}),
         ...(targetUsers && targetUsers.length > 0 ? { TargetUsers: targetUsers.join(',') } : {}),
+        ...(fullDetail ? { FullDetail: true } : {}),
+        ...(fullDetail && detailOffset > 0 ? { DetailOffset: detailOffset, SnapshotHash: snapshotHash } : {}),
       }),
     getLoggedInUsers: () =>
       execute<{ users: string[] }>("Get-LoggedInUsers"),

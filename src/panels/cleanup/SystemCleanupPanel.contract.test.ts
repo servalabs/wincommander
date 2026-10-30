@@ -336,7 +336,8 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("rawData: userData?.raw");
     expect(dialog).toContain("buildTraceView(group.rawData, group.items)");
     expect(cleanupScript).toContain("$count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null");
-    expect(cleanupScript).toContain("records = @($records | Select-Object -First $previewMax)");
+    expect(cleanupScript).toContain("$returned = @($records | Select-Object -First $previewMax)");
+    expect(cleanupScript).toContain("records = $returned");
   });
 
   test("developer-cache viewer aggregates the full scan but bounds its IPC preview", async () => {

@@ -105,6 +105,10 @@ describe("System Cleanup display projection", () => {
     const ran = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, lastRun: "2026-10-30T10:30:00Z", lastResult: 0 }} />);
     expect(ran).toContain("task completed (0)");
     expect(ran).toContain("do not confirm which items were removed");
+    const incomplete = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="verified" scheduleRecord={{ ...record, cleanupOutcome: { attemptedUtc: "2026-10-30T10:31:00Z", success: false, removed: 2, deferred: 0, failed: 1 } }} />);
+    expect(incomplete).toContain("Last recorded cleanup:");
+    expect(incomplete).toContain("Incomplete");
+    expect(incomplete).toContain("Removed: 2; deferred: 0; failed: 1");
     const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
     expect(unknown).not.toContain("Scheduled task history");
   });

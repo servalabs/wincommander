@@ -5624,6 +5624,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         additional_modules.push_str(&load_module("productivity")?);
         additional_modules.push_str("\n\n");
     } else if command == "Get-BrowserFootprints"
+        || command == "Get-CleanupSummaryAllUsers"
         || matches_parts(&command, &["Clear~-", "Browser~", "Footprints~"])
     {
         // Browser functions need security module for Get-InstalledBrowsers + BrowserMap
@@ -5780,7 +5781,7 @@ pub(crate) async fn run_backend_script_with_timeout(
     // These outputs can contain locally requested Wi-Fi keys or clipboard text.
     // Never forward or log raw output when the child fails or sends malformed
     // JSON; its contents must not escape through an error or raw-output path.
-    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus")
+    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus" | "Get-CleanupSummaryAllUsers")
         && (!output.status.success()
             || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
     {

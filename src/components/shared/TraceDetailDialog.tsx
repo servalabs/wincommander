@@ -37,7 +37,8 @@ interface TraceDetailDialogProps {
   excludedFromBulk?: boolean;
   scopeLabel?: string;
   accountLabel?: string;
-  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
+  accountName?: string;
+  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown }>;
   clearing: boolean;
   onClose: () => void;
   onClear?: () => void;
@@ -60,6 +61,7 @@ export default function TraceDetailDialog({
   excludedFromBulk = false,
   scopeLabel,
   accountLabel,
+  accountName,
   groupedItems,
   clearing,
   onClose,
@@ -94,7 +96,7 @@ export default function TraceDetailDialog({
   if (displayMode) {
     return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems} excludedFromBulk={excludedFromBulk}
       error={error} clearing={clearing} clearDisabled={clearDisabled} clearLabel={clearLabel} onClose={onClose} onClear={onClear}
-      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} scheduleDisabled={scheduleDisabled} scheduleRecord={scheduleRecord} verification={verification} scopeLabel={scopeLabel} accountLabel={accountLabel} />;
+      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} scheduleDisabled={scheduleDisabled} scheduleRecord={scheduleRecord} verification={verification} scopeLabel={scopeLabel} accountLabel={accountLabel} accountName={accountName} />;
   }
 
   const datasetCount = groupedViews.length

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { getSafeCleanupPreview, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
+import { getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -81,6 +81,53 @@ describe("System Cleanup persona details", () => {
     expect(JSON.stringify(clipboard)).toContain("sensitive clipboard");
     expect(JSON.stringify(drives)).toContain("private-server");
     expect(JSON.stringify(recycle)).toContain("private file.txt");
+  });
+
+  test("shows Wi-Fi passwords returned in another account's records without looking up the current account", () => {
+    const wifi = ALL_CATEGORIES.find(category => category.id === "wlanProfiles")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={wifi} mode="advanced" count={1} items={[]}
+      groupedItems={[{ title: "Other user", count: 1, items: [], rawData: { records: [{ name: "Sample network", interfaceId: "adapter-1", password: "example-password" }] } }]}
+      clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("example-password");
+    expect(html).not.toContain("Unavailable for this account");
+    expect(shouldLoadCurrentUserDetails("wlanProfiles", "Other user")).toBe(false);
+  });
+
+  test("warns when another account's results are only a partial preview", () => {
+    const history = ALL_CATEGORIES.find(category => category.id === "psHistory")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="simple" count={4} items={[]}
+      groupedItems={[{ title: "Other user", username: "other-folder", count: 4, items: [], rawData: { records: [{ command: "first" }, { command: "second" }], truncated: true } }]}
+      clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("Only part of this scan is shown");
+    expect(html).toContain("Load more account details");
+    expect(html).toContain("first");
+  });
+
+  test("accepts expanded records only from the requested account and card", () => {
+    const category = { id: "psHistory", count: 2, items: ["one", "two"], records: [{ command: "one" }, { command: "two" }], sampleCount: 2, previewLimit: 50000, truncated: false, snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: null, totalRows: 2 };
+    const data = { users: [{ username: "folder-name", categories: [category] }] };
+    expect(readExpandedCleanupSummary(data, "folder-name", "psHistory")?.count).toBe(2);
+    expect(readExpandedCleanupSummary(data, "another-user", "psHistory")).toBeNull();
+    expect(readExpandedCleanupSummary(data, "folder-name", "recentFiles")).toBeNull();
+    expect(readExpandedCleanupSummary({ users: [...data.users, ...data.users] }, "folder-name", "psHistory")).toBeNull();
+    expect(readExpandedCleanupSummary({ users: [{ username: "folder-name", categories: [{ ...category, error: true }] }] }, "folder-name", "psHistory")).toBeNull();
+    expect(readExpandedCleanupSummary(data, "folder-name", "psHistory", 0, `sha256:${"b".repeat(64)}`)).toBeNull();
+    expect(readExpandedCleanupSummary({ users: [{ username: "folder-name", categories: [{ ...category, nextOffset: 1 }] }] }, "folder-name", "psHistory")).toBeNull();
+    const later = { ...category, count: 3, records: [{ command: "three" }], sampleCount: 1, totalRows: 3 };
+    expect(readExpandedCleanupSummary({ users: [{ username: "folder-name", categories: [later] }] }, "folder-name", "psHistory", 2, category.snapshotHash)?.count).toBe(3);
+    expect(readExpandedCleanupSummary({ users: [{ username: "folder-name", categories: [later] }] }, "folder-name", "psHistory", 1, category.snapshotHash)).toBeNull();
+  });
+
+  test("merged account pages clear the partial warning only after the final complete page", () => {
+    const first = mergeExpandedCleanupPage(null, { records: [{ command: "one" }, { command: "two" }], truncated: true }, 0)!;
+    expect(first.truncated).toBe(true);
+    const last = mergeExpandedCleanupPage(first, { records: [{ command: "three" }], truncated: false }, 2)!;
+    expect(last.truncated).toBe(false);
+    expect(last.records).toEqual([{ command: "one" }, { command: "two" }, { command: "three" }]);
+    expect(last.sampleCount).toBe(3);
+    expect(mergeExpandedCleanupPage(first, { records: [{ command: "three" }], truncated: false }, 1)).toBeNull();
+    const limited = mergeExpandedCleanupPage(first, { records: [{ command: "three" }], truncated: true }, 2)!;
+    expect(limited.truncated).toBe(true);
   });
 
   test("distinguishes bounded preview rows from the full count", () => {

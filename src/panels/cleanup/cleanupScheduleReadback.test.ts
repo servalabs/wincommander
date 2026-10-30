@@ -65,3 +65,13 @@ test("never attributes current-user task history to another account", () => {
   expect(canShowCleanupScheduleForSelection(false, true, { ...own, scope: "system" })).toBe(true);
   expect(canShowCleanupScheduleForSelection(false, true, undefined)).toBe(false);
 });
+
+test("keeps only well-formed cleanup outcomes for the verified local task", () => {
+  const outcome = { attemptedUtc: "2026-10-30T10:31:00Z", success: false, removed: 2, deferred: 0, failed: 1 };
+  const row = { ...ready, lastRun: "2026-10-30T10:30:00Z", cleanupOutcome: outcome };
+  expect(readCleanupScheduleSnapshot([row], relevant)!.records.dnsCache.cleanupOutcome).toEqual(outcome);
+  expect(readCleanupScheduleSnapshot([{ ...row, lastRun: null }], relevant)!.records.dnsCache.cleanupOutcome).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...row, cleanupOutcome: { ...outcome, success: true } }], relevant)!.records.dnsCache.cleanupOutcome).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...row, cleanupOutcome: { ...outcome, removed: -1 } }], relevant)!.records.dnsCache.cleanupOutcome).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...row, scope: "other-user", targetUser: "Other" }], relevant)!.records.dnsCache).toBeUndefined();
+});

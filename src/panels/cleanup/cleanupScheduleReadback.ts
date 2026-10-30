@@ -1,5 +1,13 @@
 export type CleanupScheduleScope = "system" | "current-user";
 
+export interface CleanupScheduledOutcome {
+  attemptedUtc: string;
+  success: boolean;
+  removed: number;
+  deferred: number;
+  failed: number;
+}
+
 export interface CleanupScheduleRow {
   categoryId: string;
   enabled: boolean;
@@ -12,6 +20,7 @@ export interface CleanupScheduleRow {
   lastRun?: string | null;
   lastResult?: number | null;
   nextRun?: string | null;
+  cleanupOutcome?: CleanupScheduledOutcome | null;
 }
 
 export interface CleanupScheduleRecord {
@@ -22,6 +31,19 @@ export interface CleanupScheduleRecord {
   lastRun?: string | null;
   lastResult?: number | null;
   nextRun?: string | null;
+  cleanupOutcome?: CleanupScheduledOutcome | null;
+}
+
+function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOutcome | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Partial<CleanupScheduledOutcome>;
+  if (typeof row.attemptedUtc !== "string" || !Number.isFinite(Date.parse(row.attemptedUtc)) ||
+      typeof row.success !== "boolean" || ![row.removed, row.deferred, row.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return null;
+  const removed = row.removed as number, deferred = row.deferred as number, failed = row.failed as number;
+  if (row.success !== (deferred === 0 && failed === 0)) return null;
+  // The backend binds the receipt to the current generated task payload.
+  if (!lastRun) return null;
+  return { attemptedUtc: row.attemptedUtc, success: row.success, removed, deferred, failed };
 }
 
 /** Rejects ambiguous, unknown, or internally contradictory local task state. */
@@ -42,7 +64,8 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     if (row.enabled !== enabled) return null;
     const interval = Number.isFinite(row.intervalMinutes) && row.intervalMinutes > 0 ? row.intervalMinutes : null;
     if (enabled && interval === null) return null;
-    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, lastRun: typeof row.lastRun === "string" ? row.lastRun : null, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null };
+    const lastRun = typeof row.lastRun === "string" && Number.isFinite(Date.parse(row.lastRun)) ? row.lastRun : null;
+    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
     (localRows[id] ??= []).push({ row, record });
   }
   for (const [id, candidates] of Object.entries(localRows)) {

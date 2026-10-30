@@ -9,7 +9,7 @@ import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, c
 
 type DetailCategory = Pick<CleanupCategory, "id" | "label" | "description" | "icon" | "severity" | "systemWide" | "scopeAware" | "clearDataKey" | "confirmMessage" | "regeneratesNote" | "schedulable">;
 
-export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, scheduleDisabled, scheduleRecord, verification, scopeLabel, accountLabel, excludedFromBulk = false }: {
+export default function CleanupDisplayDetails({ category, mode, count, items, rawData, groupedItems, error, clearing, clearDisabled, clearLabel, onClose, onClear, scheduleState, scheduleMinutes, scheduleDisabled, scheduleRecord, verification, scopeLabel, accountLabel, accountName, excludedFromBulk = false }: {
   category: DetailCategory; mode: CleanupDisplayMode; count: number; items: string[]; rawData?: unknown; error?: string;
   clearing: boolean; clearDisabled?: boolean; clearLabel: string; onClose: () => void; onClear?: () => void;
   scheduleState?: "checking" | "verified" | "unavailable"; scheduleMinutes?: number | null;
@@ -17,9 +17,10 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   scheduleRecord?: CleanupScheduleRecord;
   excludedFromBulk?: boolean;
   verification?: CleanupVerification;
-  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
+  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown }>;
   scopeLabel?: string;
   accountLabel?: string;
+  accountName?: string;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -89,7 +90,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
-          {!groupedItems?.length && (["found", "partial", "limited", "inconsistent"].includes(summary.state) || getSafeCleanupPreview(category.id, previewData).length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={previewData} mode={mode} accountLabel={accountLabel} /> : null}
+          {!groupedItems?.length && (["found", "partial", "limited", "inconsistent"].includes(summary.state) || getSafeCleanupPreview(category.id, previewData).length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={previewData} mode={mode} accountLabel={accountLabel} accountName={accountName} /> : null}
           {summary.count !== null && summary.count > 0 && summary.sampleCount === 0 && !groupedItems?.length && !getSafeCleanupPreview(category.id, previewData).length ? <p>No preview samples were supplied. The scan still reported {summary.count} {cleanupCountUnit(category.id, summary.count)}.</p> : null}
           {summary.count !== null && summary.count > 0 && summary.sampleCount !== 0 && !groupedItems?.length && getSafeCleanupPreview(category.id, previewData).length === 0 ? <p>No preview details are available; the scan total remains above.</p> : null}
           {category.clearDataKey ? <p className="cleanup-readable-detail__warning"><strong>What Clear does:</strong> {cleanupClearExplanation(category, mode)}</p> : null}
@@ -98,6 +99,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           <div className="cleanup-readable-detail__context"><span><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</span><span><strong>Schedule:</strong> {simpleScheduleStatus}</span></div>
           {scheduleState === "verified" && scheduleRecord ? <section aria-label="Scheduled task history"><h3>Scheduled task history</h3>
             <p><strong>Schedule scope:</strong> {scheduleRecord.scope === "system" ? "This device" : "Current Windows user"}</p><p><strong>Last run:</strong> {lastRun}</p><p><strong>Windows result:</strong> {resultText}</p>
+            {scheduleRecord.cleanupOutcome ? <p><strong>Last recorded cleanup:</strong> {scheduleRecord.cleanupOutcome.success ? "Completed" : "Incomplete"} at {new Date(scheduleRecord.cleanupOutcome.attemptedUtc).toLocaleString()}. Removed: {scheduleRecord.cleanupOutcome.removed}; deferred: {scheduleRecord.cleanupOutcome.deferred}; failed: {scheduleRecord.cleanupOutcome.failed}.</p> : <p><strong>Cleanup outcome:</strong> No verified result is available for this schedule.</p>}
             <p>A saved schedule and Windows task result do not confirm which items were removed. Rescan this card to check.</p>
           </section> : null}
           {mode === "simple" && verification ? <p><strong>Last check:</strong> {receipt}</p> : null}
@@ -121,7 +123,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           </> : null}
           {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><p>Only reported accounts are shown.</p>
             {groupedItems.map((group, index) => <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
-              {group.count >= 0 && (getSafeCleanupPreview(category.id, group.rawData).length > 0 || group.items.length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={getSafeCleanupPreview(category.id, group.rawData).length ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : group.count < 0 ? <p>This account could not be checked.</p> : null}
+              {group.count >= 0 && (getSafeCleanupPreview(category.id, group.rawData).length > 0 || group.items.length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={getSafeCleanupPreview(category.id, group.rawData).length ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : group.count < 0 ? <p>This account could not be checked.</p> : null}
             </div>)}
           </section> : null}
         </div>
