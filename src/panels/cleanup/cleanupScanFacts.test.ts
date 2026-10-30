@@ -17,6 +17,13 @@ describe('cleanup scan details', () => {
     ]);
   });
 
+  test('retains descriptive coverage while leaving status codes to the coverage indicator', () => {
+    expect(getCleanupScanFacts({ coverage: 'Database file metadata only. Historical usage records are not decoded.' })).toEqual([
+      { label: 'Coverage', value: 'Database file metadata only. Historical usage records are not decoded.' },
+    ]);
+    expect(getCleanupScanFacts({ coverage: 'limited' })).toEqual([]);
+  });
+
   test('does not duplicate records or display invalid values', () => {
     expect(getCleanupScanFacts({ records: [{ name: 'Example' }], count: 1, other: null, missing: undefined, invalid: NaN })).toEqual([]);
     expect(getCleanupScanFacts(null)).toEqual([]);

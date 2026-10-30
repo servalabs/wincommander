@@ -2,7 +2,7 @@ export type CleanupScanFact = { label: string; value: string };
 
 // Record arrays have their own table; these fields are already represented by
 // the result count, coverage, or preview indicators elsewhere in the dialog.
-const structuralFields = new Set(['total', 'count', 'sampleCount', 'previewLimit', 'truncated', 'coverage', 'scannedAt', 'scanTime']);
+const structuralFields = new Set(['total', 'count', 'sampleCount', 'previewLimit', 'truncated', 'scannedAt', 'scanTime']);
 const labels: Record<string, string> = {
   pcaSvcState: 'Compatibility Assistant service',
   wsearchState: 'Windows Search service',
@@ -17,6 +17,9 @@ export function getCleanupScanFacts(data: unknown, failed = false): CleanupScanF
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
   return Object.entries(data as Record<string, unknown>).flatMap(([key, value]) => {
     if (structuralFields.has(key) || (failed && /^(error|message|errorMessage)$/i.test(key)) || value === null || value === undefined) return [];
+    // Status codes are presented by the coverage indicator; descriptive
+    // coverage text contains additional source information and must be kept.
+    if (key === 'coverage' && typeof value === 'string' && /^(complete|limited|partial)$/i.test(value.trim())) return [];
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return [];
     if (typeof value === 'number' && !Number.isFinite(value)) return [];
     if (typeof value === 'string' && !value.trim()) return [];

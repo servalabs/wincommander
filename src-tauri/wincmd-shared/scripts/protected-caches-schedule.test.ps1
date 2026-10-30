@@ -11,16 +11,18 @@ try {
     $script:deny = $false
     $script:denyFirst = $false
     $script:scanCalls = @{}
-    function Get-AutoEraseFiles {
-        param([string]$Path, [switch]$Recurse)
-        if (-not $Recurse) { throw 'Expected recursive cache inventory.' }
-        if ($script:deny) { throw 'Synthetic inventory access denied.' }
-        if ($script:denyFirst -and $Path -eq 'C:\Fixture\Roaming\npm-cache') { throw 'Synthetic first-root access denied.' }
-        if (-not $script:scanCalls.ContainsKey($Path)) { $script:scanCalls[$Path] = 0 }
-        $script:scanCalls[$Path]++
-        if ($script:scanCalls[$Path] -eq 1 -or $script:retained) { [pscustomobject]@{ FullName = "$Path\item.bin" } }
+    function Erase-Dir {
+        param([string]$Path)
+        if ($script:deny -or ($script:denyFirst -and $Path -eq 'C:\Fixture\Roaming\npm-cache')) { throw 'Synthetic inventory access denied.' }
+        $script:scanCalls[$Path] = 1
     }
-    function Erase-FileSet { param([object[]]$Files) }
+    function Get-Item {
+        [CmdletBinding()] param([string]$LiteralPath, [switch]$Force)
+        if (-not $script:scanCalls.ContainsKey($LiteralPath)) { throw [Management.Automation.ItemNotFoundException]::new('Synthetic absent path') }
+        $script:scanCalls[$LiteralPath]++
+        if ($script:retained) { return [pscustomobject]@{ FullName = $LiteralPath } }
+        throw [Management.Automation.ItemNotFoundException]::new('Synthetic absent path')
+    }
     function Erase-OneFile { param([string]$Path) return $true }
     function Test-Path { param([string]$LiteralPath, $ErrorAction) return $false }
     foreach ($category in @('developerCaches', 'passwordManagerCaches')) {

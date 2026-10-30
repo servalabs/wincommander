@@ -130,7 +130,8 @@ $script:disabledTasks=@()
 $migration = Invoke-AutoEraseMigration -CategoryId 'wlanProfiles'
 Check (-not $migration.error -and $script:disabledTasks.Count -eq 1 -and $script:disabledTasks[0] -eq 'OldWifi') 'Unapproved legacy Wi-Fi task was not isolated and disabled.'
 function Invoke-AutoEraseMigration { param($CategoryId) @{ status='ok' } }
-function Get-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName) }
+function Get-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName) if ($TaskName) { return $script:savedTask } }
+function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId='wlanProfiles'; ownerSid='S-1-5-18' } }
 function ConvertTo-AutoEraseTaskArgument {
     param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$AllowDefaultExcluded)
     $script:taskApproval=$AllowDefaultExcluded; $script:taskScope=$ExecutionScope; $script:taskBody=$Script
@@ -143,6 +144,7 @@ function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ use
 function Register-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName,$Action,$Trigger,$Principal,$Settings,$Description,[switch]$Force)
     $script:registrations += @{ principal=$Principal; description=$Description; triggers=$Trigger }
+    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
 }
 $script:registrations=@()
 $catalog = Get-AutoEraseSupportedCategories
@@ -151,7 +153,7 @@ Check ((Set-AutoEraseSchedule -CategoryId 'wlanProfiles' -IntervalMinutes 60).er
 Check ((Set-AutoEraseSchedule -CategoryId 'wlanProfiles' -IntervalMinutes 60 -AllowDefaultExcluded -ManagedByAutoSet).error) 'Auto-set accepted protected Wi-Fi.'
 Check ($script:registrations.Count -eq 0) 'Rejected requests reached registration.'
 $registered = Set-AutoEraseSchedule -CategoryId 'wlanProfiles' -IntervalMinutes 60 -AllowDefaultExcluded
-Check ($registered.status -eq 'enabled' -and $script:registrations.Count -eq 1) 'Individual schedule did not reach mocked registration.'
+Check ($registered.status -eq 'enabled' -and $script:registrations.Count -eq 1) "Individual schedule did not reach mocked registration: $($registered.message)"
 Check ($script:taskApproval -and $script:taskScope -eq 'system' -and $script:registrations[0].principal.user -eq 'SYSTEM') 'Explicit consent or system identity was lost.'
 Check ($script:registrations[0].description -like '*(manual opt-in)' -and $script:taskBody.Contains('Invoke-WCWlanClear')) 'Task omitted its protected adapter.'
 Check (-not $script:taskBody.Contains('key=clear') -and -not $script:taskBody.Contains('Wlansvc\Profiles\Interfaces')) 'Task included credential collection or raw service-file deletion.'

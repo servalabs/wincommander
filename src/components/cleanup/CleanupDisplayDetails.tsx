@@ -55,7 +55,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     : category.id === "recallDb" ? "Checks four specified activity-data locations."
       : category.id === "dockerDesktopData" ? "Checks default Docker disk and log locations; custom disk locations are not included."
         : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
-  const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : "Not reported";
+  const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : typeof raw?.coverage === "string" && raw.coverage.trim() ? raw.coverage : "Not reported";
   const receipt = cleanupVerificationText(verification);
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
   const dateValue = typeof raw?.scannedAt === "string" ? raw.scannedAt : typeof raw?.scanTime === "string" ? raw.scanTime : "";

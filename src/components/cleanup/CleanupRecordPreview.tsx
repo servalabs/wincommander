@@ -210,6 +210,18 @@ export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: 
   return !accountLabel && (categoryId === "wlanProfiles" || categoryId === "clipboardHistory");
 }
 
+export function wifiPasswordForProfile(profile: unknown, secrets: Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null, loading: boolean, accountLabel?: string): string {
+  if (secrets && isObject(profile) && typeof profile.name === "string") {
+    const matches = secrets.filter(secret => secret.name === profile.name &&
+      (typeof profile.interfaceId !== "string" || secret.interfaceId?.toLowerCase() === profile.interfaceId.toLowerCase()));
+    if (matches.length === 1 && matches[0].passwordStatus === "available" && typeof matches[0].password === "string") return matches[0].password || "Empty password";
+  }
+  // A failed or ambiguous refresh does not erase a value already returned by
+  // the scan. It may be older than a successful refresh, which takes priority.
+  if (isObject(profile) && typeof profile.password === "string") return profile.password || "Empty password";
+  return accountLabel ? "Unavailable for this account" : loading ? "Loading…" : "Unavailable";
+}
+
 type CleanupRecordChunk = { offset: number; totalBytes: number; data: string; nextByteOffset: number | null };
 
 export function decodeCleanupRecordChunk(chunk: CleanupRecordChunk, expectedOffset: number): Uint8Array | null {
@@ -417,21 +429,9 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         const cells = new Map<string, string[]>();
         if (categoryId === "amcache" || categoryId === "ntUserTraces") cells.set("Category", [row.label.replace(/ \d+$/, "")]);
         if (categoryId === "wlanProfiles") {
-          let password = accountLabel ? "Unavailable for this account" : loadingSecrets ? "Loading…" : "Unavailable";
           const profiles = isObject(shownData) ? (Array.isArray(shownData.profiles) ? shownData.profiles : Array.isArray(shownData.records) ? shownData.records : []) : [];
           const profile = profiles[row.number - 1];
-          if (secrets) {
-            if (isObject(profile) && typeof profile.name === "string") {
-              const matches = secrets.filter(secret => secret.name === profile.name &&
-                (typeof profile.interfaceId !== "string" || secret.interfaceId?.toLowerCase() === profile.interfaceId.toLowerCase()));
-              password = matches.length === 1 && matches[0].passwordStatus === "available" && typeof matches[0].password === "string"
-                ? matches[0].password || "Empty password" : "Unavailable";
-            } else password = "Unavailable";
-          }
-          // A scan may already contain a password; prefer it until a fresh
-          // local lookup returns a verified result for this adapter.
-          if (!secrets && isObject(profile) && typeof profile.password === "string") password = profile.password;
-          cells.set("Password", [password]);
+          cells.set("Password", [wifiPasswordForProfile(profile, secrets, loadingSecrets, accountLabel)]);
         }
         for (const fact of row.facts) {
           const separator = fact.indexOf(": ");

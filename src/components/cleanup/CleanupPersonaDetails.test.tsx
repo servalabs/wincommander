@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -14,6 +14,21 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("keeps a captured Wi-Fi password when a later lookup cannot verify it", () => {
+    const profile = { name: "Example", interfaceId: "adapter-1", password: "captured" };
+    expect(wifiPasswordForProfile(profile, [{ name: "Example", interfaceId: "adapter-1", passwordStatus: "unavailable" }], false)).toBe("captured");
+    expect(wifiPasswordForProfile(profile, [{ name: "Example", interfaceId: "adapter-2", passwordStatus: "available", password: "different adapter" }], false)).toBe("captured");
+    expect(wifiPasswordForProfile(profile, [{ name: "Example", interfaceId: "adapter-1", passwordStatus: "available", password: "refreshed" }], false)).toBe("refreshed");
+    expect(wifiPasswordForProfile({ name: "Example" }, [], false)).toBe("Unavailable");
+  });
+
+  test("shows descriptive scan coverage in advanced details", () => {
+    const srum = ALL_CATEGORIES.find(category => category.id === "srumData")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={srum} mode="advanced" count={0} items={[]} rawData={{ files: [], coverage: "Database metadata only; historical records are not decoded." }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("Database metadata only; historical records are not decoded.");
+    expect(html).not.toContain("<dt>Scan coverage</dt><dd>Not reported</dd>");
+  });
+
   test("reassembles a large record without breaking Unicode across chunk boundaries", () => {
     const record = { command: `${"a".repeat(8 * 1024 * 1024)}🧪世界` };
     const bytes = new TextEncoder().encode(JSON.stringify(record));
