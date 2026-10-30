@@ -40,7 +40,7 @@ const backend = {
   getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
     calls.push(['scan', ids, targets]);
     const id = ids[0];
-    const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : id === 'dockerDesktopData' ? 'Docker disk' : 'Password manager cache';
+    const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : id === 'dockerDesktopData' ? 'Docker disk' : id === 'virtualMachineArtifacts' ? 'Virtual machine' : id === 'credentialManager' ? 'Credential storage artifact' : 'Password manager cache';
     return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name, path: 'C:\\Users\\Other\\fixture' }] }] }] } };
   },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
@@ -105,6 +105,22 @@ expect(hook.otherUserDataMap.dockerDesktopData.count).toBe(-1);
 expect(hook.otherUserDataMap.dockerDesktopData.raw).toMatchObject({ partial: true, records: [{ name: 'Docker disk' }] });
 await hook.handleOtherUserClear({ id: 'dockerDesktopData' } as never);
 await hook.handleCardClearAllUsers({ id: 'dockerDesktopData' } as never);
+expect(calls).toHaveLength(0);
+await hook.loadUserView(other, ['virtualMachineArtifacts']);
+expect(calls.shift()).toEqual(['scan', ['virtualMachineArtifacts'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.virtualMachineArtifacts.count).toBe(-1);
+expect(hook.otherUserDataMap.virtualMachineArtifacts.raw).toMatchObject({ partial: true, records: [{ name: 'Virtual machine' }] });
+await hook.handleOtherUserClear({ id: 'virtualMachineArtifacts' } as never);
+await hook.handleCardClearAllUsers({ id: 'virtualMachineArtifacts' } as never);
+expect(calls).toHaveLength(0);
+await hook.loadUserView(other, ['credentialManager']);
+expect(calls.shift()).toEqual(['scan', ['credentialManager'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.credentialManager.count).toBe(-1);
+expect(hook.otherUserDataMap.credentialManager.raw).toMatchObject({ partial: true, records: [{ name: 'Credential storage artifact' }] });
+await hook.handleOtherUserClear({ id: 'credentialManager' } as never);
+await hook.handleCardClearAllUsers({ id: 'credentialManager' } as never);
 expect(calls).toHaveLength(0);
 
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);

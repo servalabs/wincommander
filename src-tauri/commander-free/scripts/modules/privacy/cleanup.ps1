@@ -3721,21 +3721,18 @@ function Get-DeveloperCachesInfo {
 }
 
 function Get-CredentialManagerInfo {
-    # cmdkey exposes target names only; it never returns credential secret values here.
+    # The shared native reader returns identity metadata only and avoids
+    # parsing cmdkey's localized output. It does not return credential blobs.
     try {
+        if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+        . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
         $files = @()
-        $targets = @{}
-        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-            $text = ([string]$line).Trim()
-            if ($text -match '(?i)target=(.+)$') {
-                $target = $Matches[1].Trim()
-                if ($target) { $targets[$target] = $true }
-            }
+        foreach ($credential in @(Get-WCScheduledCredentials)) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+            $files += @{ name = "Saved credential target: $($credential.Name)"; target = [string]$credential.Name; credentialType = [uint32]$credential.Type; username = $credential.UserName; sizeKB = 0; modified = '' }
         }
-        foreach ($target in $targets.Keys | Sort-Object) {
-            $files += @{ name = "Saved credential target: $target"; sizeKB = 0; modified = '' }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+        # CredEnumerate does not enumerate every application's Windows Vault.
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities only'; message = 'Windows Vault entries from other applications were not inspected.' }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -6161,6 +6158,73 @@ function New-CleanupSummaryCategoryRecord {
     return $record
 }
 
+function Get-CleanupOtherUserVmInventory {
+    param([string]$ProfilePath, [string]$HiveRoot, [bool]$HiveAvailable, [int]$PreviewLimit)
+    # Metadata only. Never open an MRU destination or invoke a VM provider.
+    $parent = Get-Item -LiteralPath (Split-Path -Parent $ProfilePath) -Force -ErrorAction Stop
+    $root = Get-Item -LiteralPath $ProfilePath -Force -ErrorAction Stop
+    foreach ($ancestor in @($parent, $root)) {
+        if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+    }
+    $records = @(); $items = @(); $total = 0; $unavailable = -not $HiveAvailable
+    $sources = @(
+        @{ label='VMware'; relative='Documents\Virtual Machines'; tree=$true },
+        @{ label='VirtualBox'; relative='VirtualBox VMs'; tree=$true },
+        @{ label='VirtualBox configuration'; relative='.VirtualBox\VirtualBox.xml'; tree=$false }
+    )
+    foreach ($source in $sources) {
+        $path = $ProfilePath; $available = $true; $item = $null
+        $components = @($source.relative -split '\\')
+        for ($i = 0; $i -lt $components.Count; $i++) {
+            $path = Join-Path $path $components[$i]
+            try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+            catch { $available = $false; $unavailable = $true; break }
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (($i -lt $components.Count - 1 -or $source.tree) -and -not $item.PSIsContainer) -or ($i -eq $components.Count - 1 -and -not $source.tree -and $item.PSIsContainer)) { $available = $false; $unavailable = $true; break }
+        }
+        if (-not $available) { continue }
+        $queue = [Collections.Generic.Queue[object]]::new(); $queue.Enqueue($item)
+        while ($queue.Count -gt 0) {
+            $candidate = $queue.Dequeue()
+            if ($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) { $unavailable = $true; continue }
+            if ($candidate.PSIsContainer) {
+                try {
+                    $directory = Get-Item -LiteralPath $candidate.FullName -Force -ErrorAction Stop
+                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $unavailable = $true; continue }
+                    foreach ($child in @(Get-ChildItem -LiteralPath $candidate.FullName -Force -ErrorAction Stop)) { $queue.Enqueue($child) }
+                } catch { $unavailable = $true }
+                continue
+            }
+            $includeFile = if ($source.label -eq 'VMware') { $candidate.Name -like '*-0000*.vmdk' -or $candidate.Name -like '*.vmsn' -or $candidate.Name -like 'vmware*.log' }
+                elseif ($source.label -eq 'VirtualBox') { $candidate.Name -in @('VBox.log','VBoxSVC.log') -or ($candidate.FullName -match '(?i)\\Snapshots\\' -and ($candidate.Name -like '*.vdi' -or $candidate.Name -like '*.vbox-prev')) }
+                else { $true }
+            if (-not $includeFile) { continue }
+            $total++
+            if ($records.Count -lt $PreviewLimit) {
+                $records += @{ name="$($source.label): $($candidate.Name)"; path=$candidate.FullName; sizeKB=[math]::Round($candidate.Length / 1KB, 1); modified=$candidate.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $items += "$($source.label): $($candidate.Name)"
+            }
+        }
+    }
+    if ($HiveAvailable) {
+        $mruPath = "$HiveRoot\Software\VMware, Inc.\VMware Workstation"
+        try {
+            if (Test-CleanupSummaryPath $mruPath) {
+                $mru = Get-Item -LiteralPath $mruPath -ErrorAction Stop
+                foreach ($property in @($mru.Property | Where-Object { $_ -match '(?i)mru|recent' })) {
+                    $total++
+                    if ($records.Count -ge $PreviewLimit) { continue }
+                    $row = @{ name="VMware recent: $property"; registryPath=$mruPath; key=[string]$property }
+                    try { $row.value = Get-ItemPropertyValue -LiteralPath $mruPath -Name $property -ErrorAction Stop }
+                    catch { $row.readStatus = 'unavailable'; $unavailable = $true }
+                    $records += $row; $items += "VMware recent: $property"
+                }
+            }
+        } catch { $unavailable = $true }
+    }
+    @{ total=$total; records=$records; items=$items; unavailable=$unavailable }
+}
+
 function Get-CleanupSummaryAllUsers {
     [CmdletBinding()]
     param(
@@ -6188,7 +6252,7 @@ function Get-CleanupSummaryAllUsers {
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
                  'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
-    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData')
+    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
@@ -6259,7 +6323,7 @@ function Get-CleanupSummaryAllUsers {
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
-        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches','dockerDesktopData') }).Count -gt 0) {
+        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches','dockerDesktopData','credentialManager') }).Count -gt 0) {
             # Strategy: try the live SID path in HKEY_USERS FIRST — this works for
             # any user who is logged in (interactive, RDP, disconnected session, etc.)
             # without needing reg load. Only fall back to reg load for truly offline users.
@@ -6304,7 +6368,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false; $dockerUnavailable = $false
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
@@ -6390,6 +6454,12 @@ function Get-CleanupSummaryAllUsers {
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($records | ForEach-Object { $_.name })
                         }
+                        'credentialManager' {
+                            $r = Get-CredentialManagerInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
                         'wslData' {
                             $r = Get-WSLDataInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
@@ -6398,6 +6468,12 @@ function Get-CleanupSummaryAllUsers {
                         }
                         'dockerDesktopData' {
                             $r = Get-DockerDesktopDataInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'virtualMachineArtifacts' {
+                            $r = Get-VirtualMachineArtifactsInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($records | ForEach-Object { $_.name })
@@ -6477,6 +6553,56 @@ function Get-CleanupSummaryAllUsers {
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'credentialManager' {
+                        # Inspect only file metadata in fixed profile locations.
+                        # File counts are not credential counts; contents and
+                        # another user's credential provider are never opened.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='Roaming credential storage'; relative='AppData\Roaming\Microsoft\Credentials' },
+                            @{ label='Local credential storage'; relative='AppData\Local\Microsoft\Credentials' },
+                            @{ label='Windows Vault storage'; relative='AppData\Local\Microsoft\Vault' }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName; $available = $true
+                            foreach ($component in ($source.relative -split '\\')) {
+                                $sourcePath = Join-Path $sourcePath $component
+                                try { $directory = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $credentialUnavailable = $true; break }
+                                if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $available = $false; $credentialUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[string]]::new(); $queue.Enqueue($sourcePath)
+                            while ($queue.Count -gt 0) {
+                                $directoryPath = $queue.Dequeue()
+                                try {
+                                    $directory = Get-Item -LiteralPath $directoryPath -Force -ErrorAction Stop
+                                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $credentialUnavailable = $true; continue }
+                                    $children = @(Get-ChildItem -LiteralPath $directoryPath -Force -ErrorAction Stop)
+                                } catch { $credentialUnavailable = $true; continue }
+                                foreach ($child in $children) {
+                                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $credentialUnavailable = $true; continue }
+                                    if ($child.PSIsContainer) { $queue.Enqueue([string]$child.FullName); continue }
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ name = "$($source.label): $($child.Name)"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                        $items += "$($source.label): $($child.Name)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    'virtualMachineArtifacts' {
+                        $categoryPartial = $true
+                        $inventory = Get-CleanupOtherUserVmInventory -ProfilePath $prof.FullName -HiveRoot $hiveRoot -HiveAvailable $hiveAvailable -PreviewLimit $previewMax
+                        $count = $inventory.total; $records = @($inventory.records); $items = @($inventory.items); $vmUnavailable = [bool]$inventory.unavailable
+                    }
                     'dockerDesktopData' {
                         # This is read-only metadata for selected profile defaults.
                         # System-wide and custom disks and engine state are excluded.
@@ -7074,8 +7200,10 @@ function Get-CleanupSummaryAllUsers {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
                 $categoryRecord.message = 'Some sources could not be checked.'
                 if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
-                if ($cat -eq 'wslData' -and -not $isCurrentUser) { $categoryRecord.message = 'Only this account’s registered WSL distributions were checked; disks and provider-managed data were not inspected.'; $categoryRecord.coverage = 'Selected registry registrations only' }
+                if ($cat -eq 'wslData' -and -not $isCurrentUser) { $categoryRecord.message = 'Only registered WSL distributions for the selected account were checked; disks and provider-managed data were not inspected.'; $categoryRecord.coverage = 'Selected registry registrations only' }
+                if ($cat -eq 'virtualMachineArtifacts' -and -not $isCurrentUser) { $categoryRecord.message = if ($vmUnavailable) { 'Some selected VM locations or recent entries could not be checked; relocated machines, host logs and provider-managed data were not inspected.' } else { 'Only selected profile VM defaults and available recent registrations were checked; relocated machines, host logs and provider-managed data were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
                 if ($cat -eq 'dockerDesktopData' -and -not $isCurrentUser) { $categoryRecord.message = if ($dockerUnavailable) { 'Some default Docker locations could not be checked; custom locations and other engines were not inspected.' } else { 'Only selected profile Docker defaults were checked; custom locations and other engines were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
+                if ($cat -eq 'credentialManager' -and -not $isCurrentUser) { $categoryRecord.message = if ($credentialUnavailable) { 'Some credential storage locations could not be checked. Credential entries and names were not inspected.' } else { 'Only selected credential storage file metadata was checked. Credential entries and names were not inspected.' }; $categoryRecord.coverage = 'Credential storage file metadata only' }
                 if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
             }
             if ($delegated -and $r -and -not $scanError) {

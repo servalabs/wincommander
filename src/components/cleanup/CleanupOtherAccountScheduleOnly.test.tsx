@@ -4,21 +4,16 @@ import { ALL_CATEGORIES } from '../../panels/cleanup/cleanupCategories';
 import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_SCHEDULE_ONLY_IDS, OTHER_ACCOUNT_READ_ONLY_IDS } from '../../panels/cleanup/cleanupOtherAccountScheduleOnly';
 import CleanupTraceCard from './CleanupTraceCard';
 
-test('two protected categories have schedule-only cards for one selected account', () => {
-  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(2);
-  for (const id of OTHER_ACCOUNT_SCHEDULE_ONLY_IDS) {
+test('protected categories offer read-only scans for one selected account', () => {
+  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(0);
+  for (const id of OTHER_ACCOUNT_READ_ONLY_IDS) {
     const category = ALL_CATEGORIES.find(item => item.id === id)!;
     expect(category).not.toBe(undefined);
-    expect(isOtherAccountScheduleOnly(category, 'S-1-5-21-100-200-300-1002', false)).toBe(true);
-    expect(isOtherAccountScheduleOnly(category, null, false)).toBe(false);
-    expect(isOtherAccountScheduleOnly(category, 'S-1-5-21-100-200-300-1002', true)).toBe(false);
-    const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={-1} preview={[]} loading={false} clearing={false} scheduleOnly scheduleState="verified" onSetSchedule={() => true} />);
-    expect(html).toContain('data-cleanup-state="schedule-only"');
-    expect(html).toContain('Records cannot be scanned or cleared for this account here');
+    expect(isOtherAccountScheduleOnly(category, 'S-1-5-21-100-200-300-1002', false)).toBe(false);
+    const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={-1} preview={[]} loading={false} clearing={false} scheduleState="verified" onSetSchedule={() => true} onLoad={() => {}} />);
     expect(html).toContain(`Schedule a wipe for ${category.label}`);
-    expect(html).not.toContain(`Scan ${category.label}`);
+    expect(html).toContain(`Scan ${category.label}`);
     expect(html).not.toContain(`Clear ${category.label}`);
-    expect(html).not.toContain(`View details for ${category.label}`);
   }
   const browser = ALL_CATEGORIES.find(item => item.id === 'browserFootprints')!;
   expect(isOtherAccountScheduleOnly(browser, 'S-1-5-21-100-200-300-1002', false)).toBe(false);
@@ -26,4 +21,6 @@ test('two protected categories have schedule-only cards for one selected account
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('passwordManagerCaches')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('wslData')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('dockerDesktopData')).toBe(true);
+  expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('virtualMachineArtifacts')).toBe(true);
+  expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('credentialManager')).toBe(true);
 });
