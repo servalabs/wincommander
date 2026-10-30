@@ -40,7 +40,8 @@ const backend = {
   getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
     calls.push(['scan', ids, targets]);
     const id = ids[0];
-    return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name: id === 'sshState' ? 'SSH known_hosts' : 'Password manager cache', path: 'C:\\Users\\Other\\fixture' }] }] }] } };
+    const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : 'Password manager cache';
+    return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name, path: 'C:\\Users\\Other\\fixture' }] }] }] } };
   },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
     calls.push(['set', ...args]);
@@ -88,6 +89,14 @@ expect(hook.otherUserDataMap.passwordManagerCaches.count).toBe(-1);
 expect(hook.otherUserDataMap.passwordManagerCaches.raw).toMatchObject({ partial: true, records: [{ name: 'Password manager cache' }] });
 await hook.handleOtherUserClear({ id: 'passwordManagerCaches' } as never);
 await hook.handleCardClearAllUsers({ id: 'passwordManagerCaches' } as never);
+expect(calls).toHaveLength(0);
+await hook.loadUserView(other, ['wslData']);
+expect(calls.shift()).toEqual(['scan', ['wslData'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.wslData.count).toBe(-1);
+expect(hook.otherUserDataMap.wslData.raw).toMatchObject({ partial: true, records: [{ name: 'Linux distribution' }] });
+await hook.handleOtherUserClear({ id: 'wslData' } as never);
+await hook.handleCardClearAllUsers({ id: 'wslData' } as never);
 expect(calls).toHaveLength(0);
 
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);

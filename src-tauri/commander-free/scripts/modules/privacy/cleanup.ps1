@@ -6188,7 +6188,7 @@ function Get-CleanupSummaryAllUsers {
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
                  'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
-    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches')
+    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
@@ -6306,7 +6306,7 @@ function Get-CleanupSummaryAllUsers {
         foreach ($cat in $requestedCats) {
             $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false
             try {
-                if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory')) { throw $hiveError }
+                if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
                 # For the current user delegate to the same per-category functions the
                 # main cleanup panel uses — counts will always be identical.
@@ -6390,6 +6390,12 @@ function Get-CleanupSummaryAllUsers {
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($records | ForEach-Object { $_.name })
                         }
+                        'wslData' {
+                            $r = Get-WSLDataInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
                         'crashDumps' {
                             $r = Get-CrashDumpList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
@@ -6465,6 +6471,27 @@ function Get-CleanupSummaryAllUsers {
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'wslData' {
+                        # Inspect the selected SID's registration only. Do not
+                        # invoke wsl.exe in the operator's account, and do not
+                        # follow imported BasePath locations or open disks.
+                        $categoryPartial = $true
+                        $lxssPath = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Lxss"
+                        if (Test-CleanupSummaryPath $lxssPath) {
+                            foreach ($registration in @(Get-ChildItem -LiteralPath $lxssPath -ErrorAction Stop)) {
+                                $count++
+                                if ($records.Count -ge $previewMax) { continue }
+                                $row = @{ registrationId = [string]$registration.PSChildName; registryPath = [string]$registration.PSPath; registryValues = @{} }
+                                try {
+                                    foreach ($name in @($registration.Property)) {
+                                        $row.registryValues[[string]$name] = Get-ItemPropertyValue -LiteralPath $registration.PSPath -Name $name -ErrorAction Stop
+                                    }
+                                } catch { $row.readStatus = 'unavailable' }
+                                $records += $row
+                                $items += [string]$registration.PSChildName
+                            }
+                        }
+                    }
                     'passwordManagerCaches' {
                         # Read only fixed cache locations. Other vendors and
                         # custom paths remain outside this partial inventory.
@@ -6994,6 +7021,7 @@ function Get-CleanupSummaryAllUsers {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
                 $categoryRecord.message = 'Some sources could not be checked.'
                 if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
+                if ($cat -eq 'wslData' -and -not $isCurrentUser) { $categoryRecord.message = 'Only this account’s registered WSL distributions were checked; disks and provider-managed data were not inspected.'; $categoryRecord.coverage = 'Selected registry registrations only' }
                 if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
             }
             if ($delegated -and $r -and -not $scanError) {

@@ -4,8 +4,8 @@ import { ALL_CATEGORIES } from '../../panels/cleanup/cleanupCategories';
 import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_SCHEDULE_ONLY_IDS, OTHER_ACCOUNT_READ_ONLY_IDS } from '../../panels/cleanup/cleanupOtherAccountScheduleOnly';
 import CleanupTraceCard from './CleanupTraceCard';
 
-test('four protected categories have schedule-only cards for one selected account', () => {
-  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(4);
+test('three protected categories have schedule-only cards for one selected account', () => {
+  expect(OTHER_ACCOUNT_SCHEDULE_ONLY_IDS.size).toBe(3);
   for (const id of OTHER_ACCOUNT_SCHEDULE_ONLY_IDS) {
     const category = ALL_CATEGORIES.find(item => item.id === id)!;
     expect(category).not.toBe(undefined);
@@ -24,4 +24,5 @@ test('four protected categories have schedule-only cards for one selected accoun
   expect(isOtherAccountScheduleOnly(browser, 'S-1-5-21-100-200-300-1002', false)).toBe(false);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('sshState')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('passwordManagerCaches')).toBe(true);
+  expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('wslData')).toBe(true);
 });
