@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createCleanupVerification, retainCleanupVerification } from './cleanupVerification';
 import { reconcileCleanupClear } from './useCleanupScan';
+import { cleanupVerificationText } from './cleanupDisplayModel';
 
 describe('privacy-safe cleanup verification history', () => {
   test('stores only status and time for guarded outcomes', () => {
@@ -28,5 +29,12 @@ describe('privacy-safe cleanup verification history', () => {
   test('an ordinary scan does not invent a verification result', () => {
     expect(retainCleanupVerification({ verification: undefined })).toEqual({ verification: undefined });
     expect(createCleanupVerification('deferred').verifiedAt.length > 0).toBe(true);
+  });
+
+  test('retains the Wi-Fi coverage limitation in the verification message', () => {
+    const outcome = reconcileCleanupClear(2, 0, true, true);
+    const text = cleanupVerificationText(createCleanupVerification(outcome.result));
+    expect(text).toContain('private or policy-managed profiles were excluded');
+    expect(text).not.toContain('no remaining items');
   });
 });

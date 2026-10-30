@@ -1,5 +1,5 @@
 export type CleanupVerificationStatus =
-  | 'cleared' | 'reduced' | 'reset' | 'unchanged' | 'deferred' | 'failed' | 'unverified';
+  | 'cleared' | 'reduced' | 'reset' | 'unchanged' | 'deferred' | 'failed' | 'limited' | 'unverified';
 
 export type CleanupVerification = {
   status: CleanupVerificationStatus;

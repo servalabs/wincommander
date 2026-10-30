@@ -62,6 +62,13 @@ describe("System Cleanup usability tiers", () => {
     });
   });
 
+  test("does not report a full Wi-Fi clear when profiles were excluded", () => {
+    expect(reconcileCleanupClear(2, 0, true, true)).toEqual({ result: "limited", removed: 2 });
+    expect(reconcileCleanupClear(2, 1, true, true)).toEqual({ result: "limited", removed: 1 });
+    expect(reconcileCleanupClear(2, 0, false, true)).toEqual({ result: "failed", removed: 2 });
+    expect(reconcileCleanupClear(2, 0, true, false)).toEqual({ result: "cleared", removed: 2 });
+  });
+
   test("a recreated NTFS journal is verified by identity, even with the same active count", () => {
     const receipt = { verifiedReset: true, journals: [{ drive: "C:", beforeJournalId: "0x10", afterJournalId: "0x20" }] };
     expect(verifyNtfsJournalReset(receipt, { journals: [{ drive: "C:", journalId: "0x20" }] })).toBe(true);

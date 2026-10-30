@@ -102,7 +102,7 @@ export async function runCleanupWorkers<T>(
     ));
 }
 
-export type CleanupClearResult = 'cleared' | 'reduced' | 'reset' | 'unchanged' | 'deferred' | 'failed';
+export type CleanupClearResult = 'cleared' | 'reduced' | 'reset' | 'unchanged' | 'deferred' | 'failed' | 'limited';
 
 export interface CleanupClearReconciliation {
     result: CleanupClearResult;
@@ -131,9 +131,11 @@ export function reconcileCleanupClear(
     before: number,
     after: number,
     backendSucceeded: boolean,
+    coverageIncomplete = false,
 ): CleanupClearReconciliation {
     const removed = Math.max(0, before - after);
     if (!backendSucceeded) return { result: 'failed', removed };
+    if (coverageIncomplete) return { result: 'limited', removed };
     if (after === 0) return { result: 'cleared', removed };
     if (removed > 0) return { result: 'reduced', removed };
     return { result: 'unchanged', removed };
@@ -959,7 +961,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         let error: string | undefined;
         try {
             const res = await clearer(allowDefaultExcluded);
-            const payload = res.data as { ok?: boolean; error?: boolean; message?: string; stdout?: string;
+            const payload = res.data as { ok?: boolean; error?: boolean; message?: string; stdout?: string; coverageIncomplete?: boolean;
                 verifiedReset?: boolean; journals?: Array<{ drive?: string; beforeJournalId?: string; afterJournalId?: string }> } | undefined;
             backendSucceeded = payload?.ok === true && isCleanupCommandSuccessful(res);
             error = res.error || (payload?.error || payload?.ok === false ? payload.message || payload.stdout : undefined);
@@ -977,7 +979,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 return recordVerification({ result: resetVerified ? 'reset' : 'failed', before, after, removed: 0,
                     error: resetVerified ? undefined : 'Journal reset could not be verified by identity.' });
             }
-            return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded), before, after, error });
+            return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded, cat.id === 'wlanProfiles' && payload?.coverageIncomplete === true), before, after, error });
         } catch (cause) {
             const fresh = await loadSingleCategory(cat);
             if (!fresh || fresh.error || fresh.count < 0) {
@@ -1201,7 +1203,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
 
         const outcome = await clearAndReconcile(cat, allowDefaultExcluded);
-        if (outcome.result === 'cleared') {
+        if (outcome.result === 'limited') {
+            showError(`${cat.label}: the fresh scan found ${outcome.after} eligible profiles. Private or policy-managed profiles were excluded from cleanup.`);
+        } else if (outcome.result === 'cleared') {
             showSuccess(`${cat.label}: the fresh scan found no records.`);
         } else if (outcome.result === 'reduced') {
             showSuccess(`${cat.label}: the scan count fell from ${outcome.before} to ${outcome.after}.`);

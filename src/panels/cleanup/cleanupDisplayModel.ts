@@ -1,7 +1,7 @@
 import type { CleanupCategory } from "./cleanupCategories";
 
 export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "limited" | "inconsistent" | "empty" | "found";
-export type CleanupVerification = { status: "cleared" | "reduced" | "reset" | "unchanged" | "deferred" | "failed" | "unverified"; verifiedAt?: string };
+export type CleanupVerification = { status: "cleared" | "reduced" | "reset" | "unchanged" | "deferred" | "failed" | "limited" | "unverified"; verifiedAt?: string };
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
 
@@ -107,6 +107,7 @@ export function cleanupVerificationText(receipt?: CleanupVerification): string {
     case "unchanged": return "The fresh scan did not confirm a change.";
     case "deferred": return "The action is pending; verify after restart.";
     case "failed": return "The clear or verification failed.";
+    case "limited": return "The fresh scan checked eligible Wi-Fi profiles; private or policy-managed profiles were excluded from cleanup.";
     case "unverified": return "The result could not be verified by a fresh scan.";
     default: return "No verification receipt reported.";
   }
