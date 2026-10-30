@@ -64,6 +64,7 @@ mod flow_bundle;
 mod flow_capabilities;
 mod flow_engine;
 mod flow_health;
+mod glasses_detector;
 mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
@@ -2874,6 +2875,8 @@ pub fn run() {
             network_toggle::internet_kill_switch_get,
             bluetooth_control::bluetooth_control_status,
             bluetooth_control::bluetooth_control_set,
+            // ── Smart-glasses BLE proximity scan (free, read-only) ──
+            glasses_detector::glasses_detector_scan,
             // ── VPN-drop kill switch (free, tunnel watchdog) ──
             vpn_kill_switch::vpn_kill_switch_arm,
             vpn_kill_switch::vpn_kill_switch_status,

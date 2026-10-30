@@ -170,7 +170,12 @@ windows-runtime = { package = "windows", version = "=0.62.2", features = ["Win32
 #   Win32_UI_Shell_Common — ITEMIDLIST, which the two PIDL APIs above take.
 # GetForegroundWindow/GetAncestor/GetTopWindow/GetWindow deliberately stay on
 # windows-sys (already enabled below) so no UI feature is added here.
+# glasses_detector.rs — WinRT BLE advertisement watcher (company IDs, RSSI).
 windows = { version = "=0.61.3", features = [
+  "Devices_Bluetooth",
+  "Devices_Bluetooth_Advertisement",
+  "Foundation_Collections",
+  "Storage_Streams",
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_Variant",

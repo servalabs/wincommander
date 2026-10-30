@@ -9645,6 +9645,14 @@
       ]
     },
     {
+      "id": "tauri:glasses_detector_scan",
+      "name": "glasses_detector_scan",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:hide_all_server_apps",
       "name": "hide_all_server_apps",
       "transport": "tauri",
@@ -10100,6 +10108,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:open_search_files_from_shortcut",
+      "name": "open_search_files_from_shortcut",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx"
       ]
     },
     {
