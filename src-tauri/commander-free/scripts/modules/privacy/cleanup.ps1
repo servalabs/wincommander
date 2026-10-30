@@ -4549,34 +4549,41 @@ function Get-SearchPersonalizationInfo {
     # plus the inking/typing personalization store used to tailor search
     # suggestions. Cloud-synced query history tied to a Microsoft Account
     # lives server-side and cannot be reached from local tools.
-    try {
-        $files = @()
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
         $searchRoots = @(
             @{ label = 'JumplistData'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData' },
             @{ label = 'Launch';       path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\Launch' }
         )
         foreach ($root in $searchRoots) {
-            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $root.path -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ source = $root.label; name = $_.PSChildName; sizeKB = 0; modified = '' }
-                }
-                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
+            try {
+                try { $key = Get-Item -LiteralPath $root.path -ErrorAction Stop }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
+                try {
+                    Get-ChildItem -LiteralPath $root.path -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ source = $root.label; name = $_.PSChildName; path = $_.PSPath; sizeKB = 0; modified = '' })
                     }
+                } catch { $partial = $true }
+                foreach ($name in @($key.Property)) {
+                    try {
+                        $files.Add(@{ source = $root.label; name = $name; path = $root.path; value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$key.GetValueKind($name); sizeKB = 0; modified = '' })
+                    } catch { $partial = $true }
                 }
-            }
+            } catch { $partial = $true }
         }
         $trainedDataStore = "$env:LOCALAPPDATA\Microsoft\InputPersonalization\TrainedDataStore"
-        if (Test-Path $trainedDataStore -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $trainedDataStore -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ source = 'TrainedDataStore'; name = $_.Name; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        try {
+            try { $root = Get-Item -LiteralPath $trainedDataStore -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+                if (-not $root.PSIsContainer) { throw 'Search personalization location is not a directory.' }
+                Get-ChildItem -LiteralPath $trainedDataStore -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    $files.Add(@{ source = 'TrainedDataStore'; name = $_.Name; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round((($files | ForEach-Object { $_.sizeKB }) | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+        } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($size / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some search personalization locations could not be checked.' } else { $null } }
 }
 
 function Get-PreviousWindowsInstallInfo {

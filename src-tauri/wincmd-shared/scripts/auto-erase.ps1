@@ -2966,6 +2966,10 @@ function Test-AutoEraseCurrentPayload {
 # Keep migration's historical ownership check separate from this stricter status.
 function Test-AutoEraseRunnablePayload {
     param($Task, $Identity, [int]$IntervalMinutes)
+    # A valid script is not enough if Scheduler will execute a different
+    # program or additional actions. Match the action registered by us.
+    $actions = @($Task.Actions)
+    if ($actions.Count -ne 1 -or [string]$actions[0].Execute -ne 'powershell.exe') { return $false }
     if (-not (Test-AutoEraseCurrentPayload -Task $Task -Identity $Identity)) { return $false }
     # A task can be edited in Scheduler after registration. The correct script
     # cannot perform user-session cleanup when run under an incompatible logon

@@ -35,6 +35,14 @@ try {
     $script:fixtureTask.Actions[0].Arguments = $argument
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $script:fixtureTask.Actions[0].Execute = 'cmd.exe'
+    $wrongExecutable = Get-AutoEraseSchedules
+    if ($wrongExecutable.error -or $wrongExecutable.schedules[0].payloadVerified) { throw 'A task running another executable must not be verified.' }
+    $script:fixtureTask.Actions[0].Execute = 'powershell.exe'
+    $script:fixtureTask.Actions += [pscustomobject]@{ Execute = 'cmd.exe'; Arguments = '/c exit' }
+    $extraAction = Get-AutoEraseSchedules
+    if ($extraAction.error -or $extraAction.schedules[0].payloadVerified) { throw 'A task with additional actions must not be verified.' }
+    $script:fixtureTask.Actions = @($script:fixtureTask.Actions[0])
     $script:fixtureTask.Triggers[0].Enabled = $false
     $disabledTime = Get-AutoEraseSchedules
     if ($disabledTime.error -or $disabledTime.schedules[0].payloadVerified) { throw 'A disabled repeating trigger must not be verified.' }
@@ -72,7 +80,7 @@ try {
     $invalid = Get-AutoEraseSchedules
     if ($invalid.error -or $invalid.schedules[0].payloadVerified) { throw 'A script with a syntax error must not be verified.' }
     $interactiveArgs = ConvertTo-AutoEraseTaskArgument -CategoryId 'wslData' -IntervalMinutes 60 -Script $script:AutoEraseScripts['wslData'] -ExecutionScope 'user-fixture' -FirstDueUtc ([DateTime]::UtcNow.AddHours(1).ToString('o')) -AllowDefaultExcluded $true
-    $interactiveTask = [pscustomobject]@{ Principal = [pscustomobject]@{ LogonType = 'Interactive'; RunLevel = 'Highest' }; Actions = @([pscustomobject]@{ Arguments = $interactiveArgs }) }
+    $interactiveTask = [pscustomobject]@{ Principal = [pscustomobject]@{ LogonType = 'Interactive'; RunLevel = 'Highest' }; Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = $interactiveArgs }) }
     $interactiveIdentity = @{ categoryId = 'wslData'; ownerSid = $sid }
     if (-not (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60)) { throw 'An interactive WSL task must be verifiable.' }
     $interactiveTask.Principal.LogonType = 'S4U'
