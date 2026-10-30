@@ -83,6 +83,7 @@ describe("explicit per-card cleanup consent", () => {
   test("protected schedule warnings disclose saved passwords and SSH host keys", () => {
     expect(getCleanupManualConfirmation(cards.find(card => card.id === "browserFootprints")!, "schedule", 60).description).toContain("saved browser passwords");
     expect(getCleanupManualConfirmation(cards.find(card => card.id === "sshState")!, "schedule", 60).description).toContain("known_hosts");
+    expect(getCleanupManualConfirmation(cards.find(card => card.id === "passwordManagerCaches")!, "schedule", 60).description).toContain("Other password managers and custom locations are not covered");
   });
 
   test("Auto-set names high-impact cards and explains repeated deletion", () => {

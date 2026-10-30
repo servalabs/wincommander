@@ -3,9 +3,11 @@ $source = Join-Path $PSScriptRoot '..\..\src-tauri\wincmd-shared\scripts\auto-er
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Scheduler source could not be parsed.' }
-$fn = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-AutoEraseRecordedOutcome' }, $true)
-if (-not $fn) { throw 'Outcome reader is missing.' }
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach ($name in @('Test-AutoEraseOutcomeFields', 'Get-AutoEraseRecordedOutcome')) {
+    $fn = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    if (-not $fn) { throw "Outcome reader component is missing: $name" }
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
 
 $oldProgramData = $env:ProgramData; $oldLocalAppData = $env:LOCALAPPDATA
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('wc-outcome-fixture-' + [guid]::NewGuid())
@@ -24,6 +26,15 @@ try {
     [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
     $out = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60
     if (-not $out -or -not $out.success -or $out.removed -ne 2) { throw 'A matching recorded outcome was not returned.' }
+    $result.coverageIncomplete = $true; $result.success = $false
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
+    $out = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60
+    if (-not $out -or $out.success -or -not $out.coverageIncomplete -or $out.failed -ne 0 -or $out.deferred -ne 0) { throw 'Limited coverage must not be attributed to a failed or deferred deletion.' }
+    $result.success = $true
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
+    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'A successful receipt with incomplete coverage is contradictory.' }
+    $result.Remove('coverageIncomplete'); $result.success = $true
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
     $generated = Join-Path $scripts ('dnsCache.user-test.r16.g' + ('a' * 32) + '.ps1')
     [IO.File]::WriteAllText($generated, "`$categoryId = 'dnsCache'`n`$scopeKey = 'user-test'`n`$payloadGeneration = '$('a' * 32)'`n")
     $task.Actions[0].Arguments = "-NoProfile -File `"$generated`""

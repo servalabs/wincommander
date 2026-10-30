@@ -41,6 +41,7 @@ $script:EraseFunctions = @'
 $script:AutoEraseRemoved = 0
 $script:AutoEraseFailed = 0
 $script:AutoEraseDeferred = 0
+$script:AutoEraseCoverageIncomplete = $false
 # MoveFileEx (defined once, guarded) powers the delete-on-reboot fallback for a
 # file still locked by a running holder. MOVEFILE_DELAY_UNTIL_REBOOT = 0x4;
 # needs admin (writes HKLM PendingFileRenameOperations) and degrades to a
@@ -1939,6 +1940,8 @@ foreach ($relative in @('Bitwarden\Cache','Bitwarden\Local Storage\leveldb','Bit
         catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0) }
     } catch { $script:AutoEraseFailed++ }
 }
+# The selected roots do not cover every password manager or custom location.
+$script:AutoEraseCoverageIncomplete = $true
 '@
     'adobeRecent' = @'
 $root = 'HKCU:\Software\Adobe\Acrobat Reader'
@@ -2133,7 +2136,7 @@ function Get-AutoEraseNextDue {
 }
 
 function New-AutoEraseResult {
-    param([DateTime]$CompletedUtc, $LastSuccess, [int]$IntervalMinutes, [int]$Removed, [int]$Deferred, [int]$Failed, [DateTime]$ScheduledDueUtc = [DateTime]::MinValue)
+    param([DateTime]$CompletedUtc, $LastSuccess, [int]$IntervalMinutes, [int]$Removed, [int]$Deferred, [int]$Failed, [DateTime]$ScheduledDueUtc = [DateTime]::MinValue, [bool]$CoverageIncomplete = $false)
     $completed = $CompletedUtc.ToUniversalTime()
     # Windows repeats at fixed scheduled slots, not completion time. Advance to
     # the first slot after completion so a short run does not miss every other trigger.
@@ -2145,14 +2148,14 @@ function New-AutoEraseResult {
         $steps = [Math]::Floor($elapsedTicks / [double]$intervalTicks) + 1
         $nextDue = $due.AddTicks([long]($steps * $intervalTicks))
     }
-    $success = ($Failed -eq 0 -and $Deferred -eq 0)
+    $success = ($Failed -eq 0 -and $Deferred -eq 0 -and -not $CoverageIncomplete)
     if ($success) { $LastSuccess = $completed }
     @{
         attemptedUtc = $completed.ToString('o')
         lastSuccessfulUtc = if ($LastSuccess) { $LastSuccess.ToUniversalTime().ToString('o') } else { $null }
         nextDueUtc = $nextDue.ToString('o')
         intervalMinutes = $IntervalMinutes; success = $success
-        removed = $Removed; deferred = $Deferred; failed = $Failed
+        removed = $Removed; deferred = $Deferred; failed = $Failed; coverageIncomplete = $CoverageIncomplete
     }
 }
 
@@ -2253,7 +2256,7 @@ __AUTO_ERASE_BODY__
                 # clear can never silently report success while leaving traces.
                 try {
                     `$completedUtc = (Get-Date).ToUniversalTime()
-                    `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed `$schedule.nextDue
+                    `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed `$schedule.nextDue `$script:AutoEraseCoverageIncomplete
                     `$res.payloadGeneration = `$payloadGeneration
                     [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.g`$payloadGeneration.result.json")), (`$res | ConvertTo-Json -Compress))
                     [System.IO.File]::WriteAllText(`$marker, (`$res | ConvertTo-Json -Compress))
@@ -2946,6 +2949,20 @@ function ConvertTo-AutoEraseTimestamp {
     return $Value.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Test-AutoEraseOutcomeFields {
+    param($Result, [int]$IntervalMinutes)
+    if (-not $Result -or $Result.success -isnot [bool] -or $Result.intervalMinutes -isnot [int] -or $Result.intervalMinutes -ne $IntervalMinutes) { return $false }
+    foreach ($key in @('removed', 'deferred', 'failed')) {
+        if ($Result.$key -isnot [int] -or $Result.$key -lt 0) { return $false }
+    }
+    $coverageIncomplete = $false
+    if ($Result.PSObject.Properties.Name -contains 'coverageIncomplete') {
+        if ($Result.coverageIncomplete -isnot [bool]) { return $false }
+        $coverageIncomplete = $Result.coverageIncomplete
+    }
+    return $Result.success -eq ($Result.failed -eq 0 -and $Result.deferred -eq 0 -and -not $coverageIncomplete)
+}
+
 function Get-AutoEraseRecordedOutcome {
     param($Task, $Identity, [string]$CurrentSid, [int]$IntervalMinutes)
     try {
@@ -2985,15 +3002,13 @@ function Get-AutoEraseRecordedOutcome {
                 if ($Matches[1] -ne $fileGeneration -or [string]$result.payloadGeneration -ne $fileGeneration) { return $null }
             } else { return $null }
         }
-        if ($result.success -isnot [bool] -or $result.intervalMinutes -isnot [int] -or $result.intervalMinutes -ne $IntervalMinutes) { return $null }
-        foreach ($key in @('removed', 'deferred', 'failed')) {
-            if ($result.$key -isnot [int] -or $result.$key -lt 0) { return $null }
-        }
-        if ($result.success -ne ($result.failed -eq 0 -and $result.deferred -eq 0)) { return $null }
+        if (-not (Test-AutoEraseOutcomeFields $result $IntervalMinutes)) { return $null }
         $attempt = [DateTimeOffset]::MinValue
         if (-not [DateTimeOffset]::TryParseExact([string]$result.attemptedUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$attempt)) { return $null }
         if ($attempt.UtcDateTime -lt $scriptItem.LastWriteTimeUtc -or $attempt.UtcDateTime -gt [DateTime]::UtcNow.AddMinutes(5)) { return $null }
-        return @{ attemptedUtc = $attempt.ToUniversalTime().ToString('o'); success = $result.success; removed = $result.removed; deferred = $result.deferred; failed = $result.failed }
+        $outcome = @{ attemptedUtc = $attempt.ToUniversalTime().ToString('o'); success = $result.success; removed = $result.removed; deferred = $result.deferred; failed = $result.failed }
+        if ($result.PSObject.Properties.Name -contains 'coverageIncomplete') { $outcome.coverageIncomplete = $result.coverageIncomplete }
+        return $outcome
     } catch { return $null }
 }
 

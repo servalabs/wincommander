@@ -28,6 +28,17 @@ foreach ($counts in @(@(1, 0), @(0, 1))) {
 }
 $result = New-AutoEraseResult -CompletedUtc $completed -LastSuccess $previous -IntervalMinutes 60 -Removed 1 -Deferred 0 -Failed 0
 if (-not $result.success -or [DateTime]::Parse($result.lastSuccessfulUtc).ToUniversalTime() -ne $completed) { throw 'A successful clear did not advance the last success.' }
+$limited = New-AutoEraseResult -CompletedUtc $completed -LastSuccess $previous -IntervalMinutes 60 -Removed 1 -Deferred 0 -Failed 0 -CoverageIncomplete $true
+if ($limited.success -or -not $limited.coverageIncomplete -or $limited.failed -ne 0 -or $limited.deferred -ne 0 -or [DateTime]::Parse($limited.lastSuccessfulUtc).ToUniversalTime() -ne $previous) { throw 'Limited coverage must not count as a failed deletion or a complete successful run.' }
+$legacy = [pscustomobject]@{ success=$true; intervalMinutes=60; removed=1; deferred=0; failed=0 }
+if (-not (Test-AutoEraseOutcomeFields $legacy 60)) { throw 'A valid older receipt must remain accepted.' }
+$incomplete = [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete=$true }
+if (-not (Test-AutoEraseOutcomeFields $incomplete 60)) { throw 'A valid limited-coverage receipt must be accepted.' }
+foreach ($bad in @(
+    [pscustomobject]@{ success=$true; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete=$true },
+    [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete='true' },
+    [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0 }
+)) { if (Test-AutoEraseOutcomeFields $bad 60) { throw 'A contradictory or malformed receipt must not be accepted.' } }
 Write-Output 'Passed: initial, overdue, failed, interval-change, and duplicate-trigger timing.'
 
 # Completion a few seconds after the slot must not postpone the next scheduled trigger.

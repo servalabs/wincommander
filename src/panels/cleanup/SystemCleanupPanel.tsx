@@ -382,6 +382,7 @@ export default function SystemCleanupPanel() {
                             count: userData?.count ?? -1,
                             items: userData?.items ?? [],
                             rawData: userData?.raw,
+                            error: userData?.error,
                         };
                     });
                 return (

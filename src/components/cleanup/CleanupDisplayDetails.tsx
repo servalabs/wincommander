@@ -18,7 +18,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   scheduleRecord?: CleanupScheduleRecord;
   excludedFromBulk?: boolean;
   verification?: CleanupVerification;
-  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown }>;
+  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown; error?: string }>;
   scopeLabel?: string;
   accountLabel?: string;
   accountName?: string;
@@ -107,7 +107,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           <div className="cleanup-readable-detail__context"><span><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</span><span><strong>Schedule:</strong> {simpleScheduleStatus}</span></div>
           {scheduleState === "verified" && scheduleRecord ? <section aria-label="Scheduled task history"><h3>Scheduled task history</h3>
             <p><strong>Schedule scope:</strong> {scheduleRecord.scope === "system" ? "This device" : scheduleRecord.scope === "unknown" ? "Owner could not be determined" : scheduleRecord.scope === "other-user" ? (accountLabel || "Selected Windows user") : "Current Windows user"}</p><p><strong>Last run:</strong> {lastRun}</p><p><strong>Windows result:</strong> {resultText}</p>
-            {scheduleRecord.cleanupOutcome ? <p><strong>Last recorded cleanup:</strong> {scheduleRecord.cleanupOutcome.success ? "Completed" : "Incomplete"} at {new Date(scheduleRecord.cleanupOutcome.attemptedUtc).toLocaleString()}. Removed: {scheduleRecord.cleanupOutcome.removed}; deferred: {scheduleRecord.cleanupOutcome.deferred}; failed: {scheduleRecord.cleanupOutcome.failed}.</p> : <p><strong>Cleanup outcome:</strong> No verified result is available for this schedule.</p>}
+            {scheduleRecord.cleanupOutcome ? <p><strong>Last recorded cleanup:</strong> {scheduleRecord.cleanupOutcome.success ? "Completed" : "Incomplete"} at {new Date(scheduleRecord.cleanupOutcome.attemptedUtc).toLocaleString()}. Removed: {scheduleRecord.cleanupOutcome.removed}; deferred: {scheduleRecord.cleanupOutcome.deferred}; failed: {scheduleRecord.cleanupOutcome.failed}.{scheduleRecord.cleanupOutcome.coverageIncomplete ? " Coverage was limited; some locations were not checked." : ""}</p> : <p><strong>Cleanup outcome:</strong> No verified result is available for this schedule.</p>}
             <p>A saved schedule and Windows task result do not confirm which items were removed. Rescan this card to check.</p>
           </section> : null}
           {mode === "simple" && verification ? <p><strong>Last check:</strong> {receipt}</p> : null}
@@ -137,7 +137,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
               const hasRawPreview = getSafeCleanupPreview(category.id, group.rawData).length > 0 || truncated;
               return <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
               {facts.length ? <dl className="cleanup-readable-detail__facts">{facts.map((fact, factIndex) => <div key={`${fact.label}-${factIndex}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}
-              {group.count < 0 ? <p>This account could not be checked completely.</p> : null}
+              {group.count < 0 ? <p>{group.error?.trim() || "This account could not be checked completely."}</p> : null}
               {hasRawPreview || group.items.length > 0 ? <CleanupRecordPreview categoryId={category.id} rawData={hasRawPreview ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : null}
             </div>})}
           </section> : null}

@@ -11,6 +11,18 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("combined details retain each account's specific incomplete explanation and records", () => {
+    const wsl = ALL_CATEGORIES.find(item => item.id === "wslData")!;
+    const groups = [
+      { title: "Other user", username: "S-1-5-21-1-2-3-4", count: -1, items: [], error: "Disks and provider-managed data were not inspected.", rawData: { partial: true, records: [{ name: "Fixture distribution" }] } },
+      { title: "Second user", username: "S-1-5-21-1-2-3-5", count: -1, items: [], error: "Registry access was denied.", rawData: { error: true, records: [{ name: "Captured registration" }] } },
+    ];
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={wsl} mode="advanced" count={-1} items={[]} groupedItems={groups} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("Disks and provider-managed data were not inspected.");
+    expect(html).toContain("Registry access was denied.");
+    expect(html).toContain("Fixture distribution");
+    expect(html).toContain("Captured registration");
+  });
   test("an empty VM inventory with limited coverage is not shown as clean", () => {
     const vm = ALL_CATEGORIES.find(item => item.id === "virtualMachineArtifacts")!;
     const raw = { files: [], total: 0, coverage: "limited", coverageNote: "Relocated machines were not fully inspected." };

@@ -4113,7 +4113,7 @@ function Get-RemoteAccessLogsInfo {
 
 function Get-PasswordManagerCachesInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        $sources = @(
             @{ label = '1Password'; path = (Join-Path $env:LOCALAPPDATA '1Password\\Cache'); patterns = @('*') },
             @{ label = '1Password'; path = (Join-Path $env:LOCALAPPDATA '1Password\\Local Storage\\leveldb'); patterns = @('*') },
             @{ label = 'Bitwarden'; path = (Join-Path $env:APPDATA 'Bitwarden\\Cache'); patterns = @('*') },
@@ -4122,9 +4122,14 @@ function Get-PasswordManagerCachesInfo {
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Cache'); patterns = @('*') },
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Local Storage\\leveldb'); patterns = @('*') },
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Session Storage'); patterns = @('*') }
-        ))
+        )
+        $files = @(); $partial = $false
+        foreach ($source in $sources) {
+            try { $files += @(Get-CleanupArtifactFiles -Sources @($source)) }
+            catch { $partial = $true }
+        }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected 1Password, Bitwarden and LastPass cache locations only; other password managers and custom locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected password-manager cache locations could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }

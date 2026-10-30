@@ -41,7 +41,7 @@ const DEFAULT_WARNINGS: Record<string, string> = {
   developerCaches: 'This can remove developer caches, local credentials and configuration.',
   credentialManager: 'This removes saved sign-in credentials. You may need to sign in again.',
   sshState: 'This removes loaded SSH agent identities and the saved known_hosts file, including remembered server host keys. Future SSH connections may ask you to verify servers again.',
-  passwordManagerCaches: 'This removes password-manager caches and session state. You may need to unlock or sign in again.',
+  passwordManagerCaches: 'This removes selected 1Password, Bitwarden and LastPass cache and session files. Other password managers and custom locations are not covered. You may need to unlock or sign in again.',
 };
 
 export function getCleanupManualWarning(category: Pick<CleanupCategory, 'id' | 'confirmMessage'>): string {

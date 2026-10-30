@@ -38,7 +38,7 @@ interface TraceDetailDialogProps {
   scopeLabel?: string;
   accountLabel?: string;
   accountName?: string;
-  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown }>;
+  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown; error?: string }>;
   clearing: boolean;
   onClose: () => void;
   onClear?: () => void;

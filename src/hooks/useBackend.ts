@@ -1622,7 +1622,7 @@ export function useBackend(retainCleanupScanErrors = false) {
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;
-          cleanupOutcome?: { attemptedUtc: string; success: boolean; removed: number; deferred: number; failed: number } | null;
+          cleanupOutcome?: { attemptedUtc: string; success: boolean; removed: number; deferred: number; failed: number; coverageIncomplete?: boolean } | null;
         }>;
         total: number;
       }>("Get-AutoEraseSchedules"),

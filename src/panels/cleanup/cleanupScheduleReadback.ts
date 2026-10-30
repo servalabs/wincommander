@@ -6,6 +6,7 @@ export interface CleanupScheduledOutcome {
   removed: number;
   deferred: number;
   failed: number;
+  coverageIncomplete?: boolean;
 }
 
 export interface CleanupScheduleRow {
@@ -44,12 +45,14 @@ function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOu
   if (!value || typeof value !== "object") return null;
   const row = value as Partial<CleanupScheduledOutcome>;
   if (typeof row.attemptedUtc !== "string" || !Number.isFinite(Date.parse(row.attemptedUtc)) ||
-      typeof row.success !== "boolean" || ![row.removed, row.deferred, row.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return null;
+      typeof row.success !== "boolean" || (row.coverageIncomplete !== undefined && typeof row.coverageIncomplete !== "boolean") ||
+      ![row.removed, row.deferred, row.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return null;
   const removed = row.removed as number, deferred = row.deferred as number, failed = row.failed as number;
-  if (row.success !== (deferred === 0 && failed === 0)) return null;
+  if (row.success !== (deferred === 0 && failed === 0 && row.coverageIncomplete !== true)) return null;
   // The backend binds the receipt to the current generated task payload.
   if (!lastRun) return null;
-  return { attemptedUtc: row.attemptedUtc, success: row.success, removed, deferred, failed };
+  return { attemptedUtc: row.attemptedUtc, success: row.success, removed, deferred, failed,
+    ...(row.coverageIncomplete !== undefined ? { coverageIncomplete: row.coverageIncomplete } : {}) };
 }
 
 const accountSid = (value: unknown): value is string => typeof value === "string" && /^S-1-5-21-(?:\d+-){3}\d+$/i.test(value);

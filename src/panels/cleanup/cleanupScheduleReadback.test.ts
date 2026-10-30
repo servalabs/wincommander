@@ -122,6 +122,25 @@ test("keeps only well-formed cleanup outcomes for the verified local task", () =
   expect(readCleanupScheduleSnapshot([{ ...row, scope: "other-user", targetUser: "Other" }], relevant)!.records.dnsCache).toBeUndefined();
 });
 
+test("retains limited coverage separately from deletion failures while accepting older receipts", () => {
+  const base = { attemptedUtc: "2026-10-30T10:31:00Z", removed: 2, deferred: 0, failed: 0 };
+  const row = { ...ready, lastRun: "2026-10-30T10:30:00Z" };
+  for (const outcome of [
+    { ...base, success: true },
+    { ...base, success: true, coverageIncomplete: false },
+    { ...base, success: false, coverageIncomplete: true },
+    { ...base, success: false, failed: 1, coverageIncomplete: true },
+  ]) expect(readCleanupScheduleSnapshot([{ ...row, cleanupOutcome: outcome }], relevant)!.records.dnsCache.cleanupOutcome).toEqual(outcome);
+  for (const outcome of [
+    { ...base, success: true, coverageIncomplete: true },
+    { ...base, success: false, coverageIncomplete: false },
+    { ...base, success: false, coverageIncomplete: "true" },
+  ]) expect(readCleanupScheduleSnapshot([{ ...row, cleanupOutcome: outcome as never }], relevant)!.records.dnsCache.cleanupOutcome).toBeNull();
+  const sid = "S-1-5-21-100-200-300-1001";
+  const other = { ...row, scope: "other-user" as const, ownerSid: sid, targetUser: "Other", cleanupOutcome: { ...base, success: false, coverageIncomplete: true } };
+  expect(readCleanupScheduleSnapshot([other], relevant, { ownerSid: sid })!.records.dnsCache.cleanupOutcome).toBeNull();
+});
+
 test("selects an other-account schedule only by the exact Windows SID", () => {
   const sid = "S-1-5-21-100-200-300-1001";
   const otherSid = "S-1-5-21-100-200-300-1002";
