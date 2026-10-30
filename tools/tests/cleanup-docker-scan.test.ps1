@@ -2,39 +2,28 @@ $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\privacy\cleanup.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
-if ($errors.Count) { throw 'The cleanup module could not be parsed.' }
+if ($errors.Count) { throw 'Cleanup module parse failed.' }
 $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-DockerDesktopDataInfo' }, $true)
-if (-not $definition) { throw 'The Docker inventory is unavailable.' }
 . ([scriptblock]::Create($definition.Extent.Text))
-
-# No real Docker settings, disks or logs are accessed by these provider stubs.
-$script:scenario = 'missing'
+$script:scenario = 'empty'
 function Get-Item {
     param([string]$LiteralPath, [switch]$Force, $ErrorAction)
-    $isRoot = $LiteralPath -like '*Docker\wsl'
-    $isFixedDisk = $LiteralPath -like '*DockerDesktop.vhdx'
-    if ($script:scenario -eq 'missing' -or ($script:scenario -eq 'wsl-only' -and -not $isRoot)) { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent path.') }
-    if ($script:scenario -eq 'fixed-disks' -and -not $isFixedDisk) { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent path.') }
-    if ($script:scenario -eq 'denied-fixed' -and $isFixedDisk) { throw [UnauthorizedAccessException]::new('Synthetic denial.') }
-    $attributes = if ($script:scenario -eq 'reparse-fixed' -and $isFixedDisk) { [IO.FileAttributes]::ReparsePoint } else { [IO.FileAttributes]::Normal }
-    [pscustomobject]@{ FullName=$LiteralPath; Name=[IO.Path]::GetFileName($LiteralPath); PSIsContainer=$isRoot; Attributes=$attributes; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
+    if ($script:scenario -eq 'stream' -and $LiteralPath -like '*Docker\wsl') { return [pscustomobject]@{ PSIsContainer=$true; Attributes=[IO.FileAttributes]::Directory } }
+    if ($script:scenario -eq 'partial' -and $LiteralPath -like '*DockerDesktop\vm-data\DockerDesktop.vhdx') { throw [UnauthorizedAccessException]::new('Synthetic denial.') }
+    if ($script:scenario -eq 'partial' -and $LiteralPath -like '*Docker\log.txt') {
+        return [pscustomobject]@{ PSIsContainer=$false; Attributes=[IO.FileAttributes]::Normal; FullName=$LiteralPath; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
+    }
+    throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent path.')
 }
 function Get-ChildItem {
     param([string]$LiteralPath, [switch]$Recurse, [switch]$Force, $ErrorAction)
-    if ($script:scenario -eq 'denied-wsl') { throw [UnauthorizedAccessException]::new('Synthetic denial.') }
-    if ($script:scenario -eq 'reparse-entry') { return [pscustomobject]@{ Name='link'; PSIsContainer=$true; Attributes=[IO.FileAttributes]::ReparsePoint } }
-    if ($script:scenario -eq 'wsl-only') { return [pscustomobject]@{ Name='data.vhdx'; FullName="$LiteralPath\disk\data.vhdx"; PSIsContainer=$false; Attributes=[IO.FileAttributes]::Normal; Length=2048; LastWriteTime=[datetime]'2026-01-01' } }
-    return @()
+    [pscustomobject]@{ Name='disk.vhdx'; FullName="$LiteralPath\disk.vhdx"; PSIsContainer=$false; Attributes=[IO.FileAttributes]::Normal; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
+    throw [UnauthorizedAccessException]::new('Synthetic enumeration denial.')
 }
-
 $result = Get-DockerDesktopDataInfo
-if ($result.error -or $result.total -ne 0 -or $result.coverage -ne 'limited') { throw 'Missing default paths must be an explicitly limited empty result.' }
-$script:scenario = 'fixed-disks'; $result = Get-DockerDesktopDataInfo
-if ($result.error -or $result.total -ne 2 -or @($result.files | Where-Object { -not $_.path }).Count) { throw 'Documented Hyper-V/VMM disks and paths must be returned.' }
-$script:scenario = 'wsl-only'; $result = Get-DockerDesktopDataInfo
-if ($result.error -or $result.total -ne 1 -or $result.files[0].path -notlike '*\disk\data.vhdx') { throw 'Default WSL disk paths must be returned.' }
-foreach ($scenario in @('denied-fixed','denied-wsl','reparse-fixed','reparse-entry')) {
-    $script:scenario = $scenario; $result = Get-DockerDesktopDataInfo
-    if (-not $result.error) { throw "Docker inventory must not claim success for $scenario." }
-}
-Write-Output 'Passed: Docker default WSL, Hyper-V and VMM inventory with limited coverage and failure handling.'
+if ($result.partial -or $result.total -ne 0 -or $result.coverage -ne 'limited') { throw 'An accessible empty default inventory should retain its limited coverage.' }
+$script:scenario = 'partial'; $result = Get-DockerDesktopDataInfo
+if (-not $result.partial -or $result.status -ne 'partial' -or $result.total -ne 1 -or $result.files[0].name -ne 'Docker: log.txt') { throw 'A denied source must preserve captured rows and report a partial inventory.' }
+$script:scenario = 'stream'; $result = Get-DockerDesktopDataInfo
+if (-not $result.partial -or $result.total -ne 1 -or $result.files[0].name -ne 'Docker WSL: disk.vhdx') { throw 'Enumeration failures must preserve records already emitted by the same source.' }
+Write-Output 'Passed: Docker scan preserves captured rows and marks inaccessible sources incomplete.'

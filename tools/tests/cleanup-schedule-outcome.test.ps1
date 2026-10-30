@@ -25,8 +25,14 @@ try {
     $out = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60
     if (-not $out -or -not $out.success -or $out.removed -ne 2) { throw 'A matching recorded outcome was not returned.' }
     $generated = Join-Path $scripts ('dnsCache.user-test.r16.g' + ('a' * 32) + '.ps1')
-    [IO.File]::WriteAllText($generated, "`$categoryId = 'dnsCache'`n`$scopeKey = 'user-test'`n")
+    [IO.File]::WriteAllText($generated, "`$categoryId = 'dnsCache'`n`$scopeKey = 'user-test'`n`$payloadGeneration = '$('a' * 32)'`n")
     $task.Actions[0].Arguments = "-NoProfile -File `"$generated`""
+    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'A receipt from an older task generation must not be attributed to its replacement.' }
+    $result.payloadGeneration = 'b' * 32
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
+    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'A receipt from a different generation must not be attributed to this task.' }
+    $result.payloadGeneration = 'a' * 32
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
     if (-not (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60)) { throw 'A generation-specific payload must retain its outcome.' }
     $task.Actions[0].Arguments = "-NoProfile -File `"$payload`""
     if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-2' 60) { throw 'Another user must not receive this outcome.' }

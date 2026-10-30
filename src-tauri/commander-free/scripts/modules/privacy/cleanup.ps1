@@ -3243,26 +3243,30 @@ function Get-WSLDataInfo {
 
 function Get-DockerDesktopDataInfo {
     # Docker documents these default paths; customized disk locations require separate verification.
-    try {
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $dockerWsl = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
         $root = $null
+        try {
         try { $root = Get-Item -LiteralPath $dockerWsl -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { }
         if ($root) {
             if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker WSL disk inventory is unavailable.' }
-            foreach ($item in @(Get-ChildItem -LiteralPath $dockerWsl -Recurse -Force -ErrorAction Stop)) {
+            Get-ChildItem -LiteralPath $dockerWsl -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                $item = $_
                 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Docker WSL disk inventory contains a reparse point.' }
-                if ($item.PSIsContainer -or $item.Name -notlike '*.vhdx') { continue }
+                if ($item.PSIsContainer -or $item.Name -notlike '*.vhdx') { return }
                 $files += @{ name = "Docker WSL: $($item.Name)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $item.Length
             }
         }
+        } catch { $partial = $true }
         foreach ($disk in @(
             @{ name = 'Docker Hyper-V disk'; path = (Join-Path $env:ProgramData 'DockerDesktop\vm-data\DockerDesktop.vhdx') },
             @{ name = 'Docker VMM disk'; path = (Join-Path $env:LOCALAPPDATA 'Docker\vm-data\DockerDesktop.vhdx') }
         )) {
+            try {
             $item = $null
             try { $item = Get-Item -LiteralPath $disk.path -Force -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { }
@@ -3270,9 +3274,11 @@ function Get-DockerDesktopDataInfo {
             if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
             $files += @{ name = $disk.name; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
             $totalBytes += $item.Length
+            } catch { $partial = $true }
         }
         $dockerLog = Join-Path $env:APPDATA 'Docker\log.txt'
         $item = $null
+        try {
         try { $item = Get-Item -LiteralPath $dockerLog -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { }
         if ($item) {
@@ -3280,9 +3286,8 @@ function Get-DockerDesktopDataInfo {
             $files += @{ name = 'Docker: log.txt'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
             $totalBytes += $item.Length
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks documented default Docker disk and log locations. Customized disk locations are not included.' }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+        } catch { $partial = $true }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks documented default Docker disk and log locations. Customized disk locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Docker locations could not be checked.' } else { $null } }
 }
 
 function Get-VirtualMachineArtifactsInfo {

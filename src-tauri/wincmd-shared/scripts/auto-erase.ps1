@@ -2157,12 +2157,14 @@ function ConvertTo-AutoEraseTaskArgument {
     $categoryLiteral = $CategoryId.Replace("'", "''")
     $scopeKey = ConvertTo-AutoEraseSafeScope $ExecutionScope
     $scopeLiteral = $scopeKey.Replace("'", "''")
+    $generation = [Guid]::NewGuid().ToString('N')
     $wrapper = @"
 `$ErrorActionPreference = 'Stop'
 `$categoryId = '$categoryLiteral'
 `$allowDefaultExcluded = `$$($AllowDefaultExcluded.ToString().ToLowerInvariant())
 if (`$categoryId -in @('wlanProfiles','browserFootprints','notepadState','wslData','dockerDesktopData','virtualMachineArtifacts','developerCaches','credentialManager','sshState','passwordManagerCaches') -and -not `$allowDefaultExcluded) { throw 'This protected schedule has no explicit manual authorization.' }
 `$scopeKey = '$scopeLiteral'
+`$payloadGeneration = '$generation'
 `$intervalMinutes = $IntervalMinutes
 `$firstDueUtc = '$FirstDueUtc'
 `$stateRoot = if (`$scopeKey -eq 'system') {
@@ -2182,6 +2184,10 @@ if (Test-Path -LiteralPath `$marker) {
 } elseif (Test-Path -LiteralPath `$legacyMarker) {
     try { `$legacy = [System.IO.File]::ReadAllText(`$legacyMarker).Trim() } catch { throw 'Scheduled cleanup history could not be read.' }
 }
+# Timing belongs to the installed payload generation. A replaced task may
+# still be running and must not change this task's next due time.
+if (-not `$state -or [string]`$state.payloadGeneration -ne `$payloadGeneration) { `$state = `$null }
+`$legacy = ''
 try { `$schedule = Get-AutoEraseNextDue `$state `$legacy `$firstDue `$intervalMinutes } catch { throw 'Scheduled cleanup timing is invalid.' }
 `$due = (`$now.ToUniversalTime() -ge `$schedule.nextDue)
 if (`$due) {
@@ -2193,7 +2199,8 @@ if (`$due) {
             `$now = Get-Date
             if (Test-Path -LiteralPath `$marker) {
                 try { `$state = Get-Content -LiteralPath `$marker -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw 'Scheduled cleanup state could not be read.' }
-            }
+            } else { `$state = `$null }
+            if (-not `$state -or [string]`$state.payloadGeneration -ne `$payloadGeneration) { `$state = `$null }
             try { `$schedule = Get-AutoEraseNextDue `$state `$legacy `$firstDue `$intervalMinutes } catch { throw 'Scheduled cleanup timing is invalid.' }
             `$lastSuccess = `$schedule.lastSuccess
             `$due = (`$now.ToUniversalTime() -ge `$schedule.nextDue)
@@ -2211,6 +2218,7 @@ __AUTO_ERASE_BODY__
                 try {
                     `$completedUtc = (Get-Date).ToUniversalTime()
                     `$res = New-AutoEraseResult `$completedUtc `$lastSuccess `$intervalMinutes `$script:AutoEraseRemoved `$script:AutoEraseDeferred `$script:AutoEraseFailed
+                    `$res.payloadGeneration = `$payloadGeneration
                     [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.result.json")), (`$res | ConvertTo-Json -Compress))
                     [System.IO.File]::WriteAllText(`$marker, (`$res | ConvertTo-Json -Compress))
                 } catch { throw 'Scheduled cleanup outcome could not be saved.' }
@@ -2241,7 +2249,6 @@ __AUTO_ERASE_BODY__
     $revisionSuffix = if ($PayloadRevision -gt 0) { ".r$PayloadRevision" } else { '' }
     # Stage a new payload for every registration. Reusing a path would mutate
     # an existing task before Scheduler has accepted its replacement.
-    $generation = [Guid]::NewGuid().ToString('N')
     $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey$revisionSuffix.g$generation.ps1"
     # UTF8 (with BOM) so Windows PowerShell 5.1 reads it back correctly via -File.
     [System.IO.File]::WriteAllText($scriptPath, $fullScript, [System.Text.Encoding]::UTF8)
@@ -2506,11 +2513,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v16 (manual opt-in)'
+            'System Maintenance scheduled cleanup v17 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v16 (managed)'
+            'System Maintenance scheduled cleanup v17 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v16'
+            'System Maintenance scheduled cleanup v17'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2762,7 +2769,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16|17) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2806,6 +2813,14 @@ function Get-AutoEraseRecordedOutcome {
         $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
         if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 16384) { return $null }
         $result = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+        # A previously running generation may finish after a task was replaced.
+        # Only attribute a receipt to the generated task that actually wrote it.
+        if ([IO.Path]::GetFileName($scriptPath) -match '\.g([0-9a-f]{32})\.ps1$') {
+            $fileGeneration = $Matches[1]
+            if ($payload -match "(?m)^\`$payloadGeneration = '([0-9a-f]{32})'\r?$") {
+                if ($Matches[1] -ne $fileGeneration -or [string]$result.payloadGeneration -ne $fileGeneration) { return $null }
+            } else { return $null }
+        }
         if ($result.success -isnot [bool] -or $result.intervalMinutes -isnot [int] -or $result.intervalMinutes -ne $IntervalMinutes) { return $null }
         foreach ($key in @('removed', 'deferred', 'failed')) {
             if ($result.$key -isnot [int] -or $result.$key -lt 0) { return $null }
@@ -2918,7 +2933,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2926,7 +2941,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v16(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v17(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
@@ -2953,9 +2968,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 16
+                $revision = 17
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v16 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v16 (managed)' } else { 'System Maintenance scheduled cleanup v16' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v17 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v17 (managed)' } else { 'System Maintenance scheduled cleanup v17' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false
