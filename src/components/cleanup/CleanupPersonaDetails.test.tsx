@@ -117,6 +117,20 @@ describe("System Cleanup persona details", () => {
     expect(html).toContain("secret.exe");
   });
 
+  test("shows readable search history and preserves its registry bytes", () => {
+    const rows = getSafeCleanupPreview("ntUserTraces", { sections: [{ name: "WordWheelQuery", entries: [
+      { key: "0", value: [99, 0, 97, 0, 102, 0, 233, 0, 0, 0] },
+      { key: "MRUListEx", value: [0, 0, 0, 0, 255, 255, 255, 255] },
+      { key: "1", value: [255, 216] },
+      "plain activity",
+    ] }] });
+    expect(rows[0].facts).toContain("Value: café");
+    expect(rows[0].facts).toContain("Raw Bytes: 63 00 61 00 66 00 e9 00 00 00");
+    expect(rows[1].facts).toContain("Value: 00 00 00 00 ff ff ff ff");
+    expect(rows[2].facts).toContain("Value: ff d8");
+    expect(rows[3].facts).toContain("Value: plain activity");
+  });
+
   test("shows supplied clipboard, file and drive records", () => {
     const clipboard = getSafeCleanupPreview("clipboardHistory", { historyItems: [{ preview: "sensitive clipboard", type: "text" }] });
     const drives = getSafeCleanupPreview("netDrives", { drives: [{ Name: "Z:", DisplayRoot: "\\\\private-server\\secret" }] });

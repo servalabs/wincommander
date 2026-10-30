@@ -48,12 +48,24 @@ $script:AutoEraseDeferred = 0
 if (-not ([System.Management.Automation.PSTypeName]'WcAutoErase.Native').Type) {
     try { Add-Type -Namespace WcAutoErase -Name Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern bool MoveFileEx(string a, string b, int dwFlags);' } catch {}
 }
+function Assert-AutoEraseAncestors {
+    param([string]$Path)
+    $parent = [IO.Directory]::GetParent([IO.Path]::GetFullPath($Path))
+    while ($parent) {
+        $item = Get-Item -LiteralPath $parent.FullName -Force -ErrorAction Stop
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Reparse-point cleanup ancestors are not supported.'
+        }
+        $parent = $parent.Parent
+    }
+}
 function Erase-OneFile($p) {
     try { $f = Get-Item -LiteralPath $p -Force -ErrorAction Stop }
     catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return $false }
     catch { $script:AutoEraseFailed++; return $false }
     if (-not $f -or $f.PSIsContainer) { return $false }
     if ($f.Attributes -band [IO.FileAttributes]::ReparsePoint) { $script:AutoEraseFailed++; return $false }
+    try { Assert-AutoEraseAncestors $p } catch { $script:AutoEraseFailed++; return $false }
     $z = $f.Length
     if ($z -gt 0) {
         $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -103,6 +115,7 @@ function Erase-Dir($d) {
         $root = Get-Item -LiteralPath $d -Force -ErrorAction Stop
         if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
         if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
+        Assert-AutoEraseAncestors $d
     }
     catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
     catch { $script:AutoEraseFailed++; return }
@@ -123,6 +136,7 @@ function Get-AutoEraseFiles {
     catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
     if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
     if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
+    Assert-AutoEraseAncestors $Path
     $pending = [Collections.Generic.Queue[object]]::new()
     $pending.Enqueue(@{ path=$Path; depth=0 })
     $files = [Collections.Generic.List[object]]::new()
@@ -147,6 +161,7 @@ function Get-AutoEraseDirectories {
     catch [System.Management.Automation.ItemNotFoundException] { $Error.RemoveAt(0); return }
     if ($root.PSIsContainer -eq $false) { throw 'The cleanup directory changed type.' }
     if ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse-point cleanup roots are not supported.' }
+    Assert-AutoEraseAncestors $Path
     $pending = [Collections.Generic.Queue[object]]::new()
     $pending.Enqueue(@{ path=$Path; depth=0 })
     $directories = [Collections.Generic.List[object]]::new()
@@ -2362,11 +2377,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v10 (manual opt-in)'
+            'System Maintenance scheduled cleanup v11 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v10 (managed)'
+            'System Maintenance scheduled cleanup v11 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v10'
+            'System Maintenance scheduled cleanup v11'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2602,7 +2617,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2736,7 +2751,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2744,7 +2759,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v10(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v11(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             $makeVisible = $task.Settings -and $task.Settings.Hidden -eq $true
@@ -2770,9 +2785,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 10
+                $revision = 11
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v10 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v10 (managed)' } else { 'System Maintenance scheduled cleanup v10' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v11 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v11 (managed)' } else { 'System Maintenance scheduled cleanup v11' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

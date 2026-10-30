@@ -39,6 +39,20 @@ function visibleText(value: unknown): string | null {
   return typeof value === "string" ? (value === "" ? "(empty)" : value) : null;
 }
 
+function activityEntry(section: unknown, entry: RecordObject): RecordObject {
+  if (section !== "WordWheelQuery" || !Array.isArray(entry.value) ||
+      !entry.value.every(value => Number.isInteger(value) && value >= 0 && value <= 255)) return entry;
+  const bytes = Uint8Array.from(entry.value as number[]);
+  const rawBytes = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join(" ");
+  if (typeof entry.key === "string" && /^\d+$/.test(entry.key) && bytes.length % 2 === 0) {
+    try {
+      const text = new TextDecoder("utf-16le", { fatal: true }).decode(bytes).replace(/\0+$/, "");
+      if (text && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return { ...entry, value: text, rawBytes };
+    } catch { /* Preserve the bytes when Windows returned invalid text. */ }
+  }
+  return { ...entry, value: rawBytes };
+}
+
 function metadata(row: RecordObject, categoryId: string): string[] {
   const facts: string[] = [];
   const used = new Set<string>();
@@ -142,7 +156,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return activitySections.filter(isObject).flatMap((section) => {
       if (!Array.isArray(section.entries)) return [];
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
-      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(entry, id) : [] }));
+      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []) }));
     });
   }
   if (id === "wlanProfiles" && Array.isArray(input.profiles)) {
