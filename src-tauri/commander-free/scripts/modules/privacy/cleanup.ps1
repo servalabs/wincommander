@@ -1306,12 +1306,12 @@ function Get-FleetForensicProjection {
             'inactive_user_protection_metadata' { $result = Get-InactiveUserProtectionMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read inactive-user protection summaries.') }; return (& $metadataProjection 'inactive_user_protection_metadata' 'Inactive-user protection metadata' $result 'Protection metadata') }
             'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
             'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
-            'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
+            'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
             'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
             'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
             'game_captures' { $result = Get-GameCapturesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
-            'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
-            'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
+            'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
+            'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
             'communication_caches' { $result = Get-CommunicationCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read communication-cache summaries.') }; return (& $metadataProjection 'communication_caches' 'Communication caches' $result 'Communication cache') }
             'editor_history' { $result = Get-EditorHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read editor-history summaries.') }; return (& $metadataProjection 'editor_history' 'Editor history' $result 'Editor history metadata') }
             'git_activity' { $result = Get-GitActivityInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Git-activity summaries.') }; return (& $metadataProjection 'git_activity' 'Git activity' $result 'Git activity metadata') }
@@ -3663,25 +3663,39 @@ function Get-OneDriveMetadataInfo {
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
-function Get-SpotlightCacheInfo {
+function Get-CleanupPackageCacheInventory {
+    param([string[]]$PackagePatterns, [string]$RelativeRoot, [string]$Label, [switch]$NameOnly)
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [long]0
+    $partial = $false
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.Windows.ContentDeliveryManager_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $assets = Join-Path $_.FullName 'LocalState\\Assets'
-                if (Test-Path $assets -ErrorAction SilentlyContinue) {
-                    Get-ChildItem -Path $assets -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "Spotlight asset: $($_.Name)"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        try { $root = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Package inventory root is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                $package = $_
+                if (-not @($PackagePatterns | Where-Object { $package.Name -like $_ }).Count) { return }
+                $cacheRoot = Join-Path $package.FullName $RelativeRoot
+                try {
+                    try { $cache = Get-Item -LiteralPath $cacheRoot -Force -ErrorAction Stop }
+                    catch [Management.Automation.ItemNotFoundException] { return }
+                    if (-not $cache.PSIsContainer) { throw 'Package cache root is not a directory.' }
+                    Get-ChildItem -LiteralPath $cacheRoot -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                        $name = if ($NameOnly) { $_.Name } else { $_.FullName.Substring($cacheRoot.Length).TrimStart('\\') }
+                        $files.Add(@{ name = "${Label}: $name"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                         $totalBytes += $_.Length
                     }
-                }
+                } catch { $partial = $true }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some package cache locations could not be checked.' } else { $null } }
+}
+
+function Get-SpotlightCacheInfo {
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.Windows.ContentDeliveryManager_*') -RelativeRoot 'LocalState\Assets' -Label 'Spotlight asset' -NameOnly
 }
 
 function Get-FontCacheInfo {
@@ -3741,47 +3755,11 @@ function Get-GameCapturesInfo {
 }
 
 function Get-PhotosCacheInfo {
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.Windows.Photos_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $localState = Join-Path $_.FullName 'LocalState'
-                if (Test-Path $localState -ErrorAction SilentlyContinue) {
-                    Get-ChildItem -Path $localState -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "Photos cache: $($_.FullName.Substring($localState.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                        $totalBytes += $_.Length
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.Windows.Photos_*') -RelativeRoot 'LocalState' -Label 'Photos cache'
 }
 
 function Get-XboxCacheInfo {
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'Microsoft.GamingApp_*' -or $_.Name -like 'Microsoft.XboxApp_*' } |
-                ForEach-Object {
-                    $localState = Join-Path $_.FullName 'LocalState'
-                    if (Test-Path $localState -ErrorAction SilentlyContinue) {
-                        Get-ChildItem -Path $localState -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                            $files += @{ name = "Xbox cache: $($_.FullName.Substring($localState.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                            $totalBytes += $_.Length
-                        }
-                    }
-                }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.GamingApp_*', 'Microsoft.XboxApp_*') -RelativeRoot 'LocalState' -Label 'Xbox cache'
 }
 
 function Get-CleanupArtifactFiles {

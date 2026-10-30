@@ -21,6 +21,15 @@ describe("cleanup coverage presentation", () => {
     expect(summarizeCleanupResult({ id: "searchIndex", count: 0, raw: { files: [], total: 0, coverage: "Only selected Search files" } }).state).toBe("limited");
   });
 
+  test("SRUM metadata-only coverage remains limited when no database file is found", () => {
+    const srum = ALL_CATEGORIES.find(item => item.id === "srumData")!;
+    const raw = { files: [], total: 0, historicalRecordsAvailable: false, coverage: "Database file metadata only. Historical usage records inside SRUDB.dat are not decoded." };
+    expect(summarizeCleanupResult({ id: srum.id, count: 0, raw }).state).toBe("limited");
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={srum} mode="advanced" count={0} items={[]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("historical usage records are not decoded");
+    expect(html).toContain("Limited to selected locations");
+  });
+
   test("a capped partial result stays incomplete in the card and both detail views", () => {
     const raw = { files: [], total: 100, coverage: "limited", partial: true, truncated: true };
     const error = "A per-location limit was reached.";

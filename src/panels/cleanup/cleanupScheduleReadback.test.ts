@@ -4,6 +4,12 @@ import { canShowCleanupScheduleForSelection, isVerifiedIndividualSchedule, isVer
 const relevant = new Set(["dnsCache", "amcache"]);
 const ready: CleanupScheduleRow = { categoryId: "dnsCache", enabled: true, state: "Ready", scope: "current-user", intervalMinutes: 60, targetUser: null, managedByAutoSet: true, payloadVerified: true };
 
+test("preserves an altered task's repair requirement and cannot verify it", () => {
+  const snapshot = readCleanupScheduleSnapshot([{ ...ready, requiresTaskSchedulerRepair: true }], relevant)!;
+  expect(snapshot.records.dnsCache.requiresTaskSchedulerRepair).toBe(true);
+  expect(isVerifiedManagedSchedule(snapshot.records.dnsCache, 60, "current-user")).toBe(false);
+});
+
 test("keeps an unverified task manageable without reporting its payload as verified", () => {
   for (const payloadVerified of [false, undefined]) {
     const snapshot = readCleanupScheduleSnapshot([{ ...ready, managedByAutoSet: false, payloadVerified }], relevant)!;
@@ -65,6 +71,9 @@ test("uses the verified canonical task when disabled legacy tasks remain", () =>
   expect(readCleanupScheduleSnapshot([{ ...canonical, legacy: undefined }, old], relevant)).toBeNull();
   expect(readCleanupScheduleSnapshot([{ ...old, legacy: undefined }, canonical], relevant)).toBeNull();
   expect(readCleanupScheduleSnapshot([old, { ...old }], relevant)).toBeNull();
+  const needsReview = readCleanupScheduleSnapshot([canonical, { ...old, requiresTaskSchedulerRepair: true }], relevant)!;
+  expect(needsReview.records.dnsCache.requiresTaskSchedulerRepair).toBe(true);
+  expect(isVerifiedIndividualSchedule(needsReview.records.dnsCache, 60, 60, "current-user")).toBe(false);
 });
 
 

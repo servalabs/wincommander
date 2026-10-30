@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
+import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration, requiresCleanupTaskRepair } from "./cleanupScheduleMigrationGate";
+
+test("altered tasks need Windows review before bulk schedule changes", () => {
+  expect(requiresCleanupTaskRepair({ requiresTaskSchedulerRepair: true })).toBe(true);
+  expect(requiresCleanupTaskRepair({ requiresTaskSchedulerRepair: false })).toBe(false);
+  expect(requiresCleanupTaskRepair(undefined)).toBe(false);
+});
 
 test("bulk Auto-set requires verified readback and a completed migration", () => {
   expect(canAutoSetCleanupSchedules(true, "verified", false)).toBe(true);

@@ -112,6 +112,9 @@ describe("System Cleanup display projection", () => {
     const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
     expect(unknown).not.toContain("Scheduled task history");
     const missingScript = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false }} />);
+    const altered = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false, requiresTaskSchedulerRepair: true }} />);
+    expect(altered).toContain("Review it in Windows Task Scheduler");
+    expect(altered).not.toContain("Remove and recreate the schedule");
     expect(missingScript).toContain("cleanup script or Windows task settings could not be verified");
   });
 

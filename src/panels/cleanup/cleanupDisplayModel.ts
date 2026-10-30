@@ -6,7 +6,7 @@ type RecordValue = Record<string, unknown>;
 const object = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
 
 export function hasLimitedCleanupCoverage(id: string, raw: unknown): boolean {
-  return object(raw) && (raw.coverage === "limited" || (id === "searchIndex" && typeof raw.coverage === "string" && raw.coverage.length > 0));
+  return object(raw) && (raw.coverage === "limited" || (id === "srumData" && raw.historicalRecordsAvailable === false) || (id === "searchIndex" && typeof raw.coverage === "string" && raw.coverage.length > 0));
 }
 
 const SIMPLE_NAMES: Record<string, string> = {

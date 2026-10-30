@@ -5,6 +5,12 @@ import CleanupScheduleControl from "./CleanupScheduleControl";
 import CleanupTraceCard from "./CleanupTraceCard";
 
 describe("individual cleanup schedule controls", () => {
+  test("directs an altered task to Task Scheduler instead of offering in-app changes", () => {
+    const markup = renderToStaticMarkup(<CleanupScheduleControl categoryLabel="Wi-Fi Profiles" minInterval={60} scheduleMinutes={60} schedulePayloadVerified={false} scheduleRequiresTaskSchedulerRepair onSetSchedule={() => true} onClearSchedule={() => true} />);
+    expect(markup).toContain("Review in Task Scheduler");
+    expect(markup).not.toContain("Remove and recreate");
+    expect(markup).not.toContain("Change Wi-Fi Profiles scheduled wipe");
+  });
   test("offers management of an existing blocked schedule without offering a new schedule", () => {
     const turnOff = () => true;
     const control = renderToStaticMarkup(<CleanupScheduleControl categoryLabel="Wi-Fi Profiles" minInterval={60} scheduleMinutes={60} schedulePayloadVerified={true} onClearSchedule={turnOff} />);

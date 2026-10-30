@@ -22,6 +22,7 @@ export interface CleanupScheduleRow {
   nextRun?: string | null;
   cleanupOutcome?: CleanupScheduledOutcome | null;
   payloadVerified?: boolean;
+  requiresTaskSchedulerRepair?: boolean;
 }
 
 export interface CleanupScheduleRecord {
@@ -34,6 +35,7 @@ export interface CleanupScheduleRecord {
   nextRun?: string | null;
   cleanupOutcome?: CleanupScheduledOutcome | null;
   payloadVerified: boolean | null;
+  requiresTaskSchedulerRepair?: boolean;
 }
 
 function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOutcome | null {
@@ -69,7 +71,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     // An absent cadence cannot verify a runnable payload.
     if (enabled && interval === null && row.payloadVerified !== false) return null;
     const lastRun = typeof row.lastRun === "string" && Number.isFinite(Date.parse(row.lastRun)) ? row.lastRun : null;
-    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
+    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, requiresTaskSchedulerRepair: row.requiresTaskSchedulerRepair === true, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
     (localRows[id] ??= []).push({ row, record });
   }
   for (const [id, candidates] of Object.entries(localRows)) {
@@ -80,22 +82,26 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
         record.scope !== active[0].record.scope || (!record.enabled && row.legacy !== true))) return null;
       selected = active[0];
     }
-    const { record } = selected;
+    // A disabled legacy task may be visible alongside the canonical task.
+    // Do not hide a task that needs Windows review when choosing the active row.
+    const record = candidates.some(candidate => candidate.record.requiresTaskSchedulerRepair)
+      ? { ...selected.record, requiresTaskSchedulerRepair: true }
+      : selected.record;
     const { enabled, intervalMinutes: interval } = record;
     records[id] = record;
     if (enabled && interval !== null) schedules[id] = interval;
-    else if (!enabled) disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified };
+    else if (!enabled) disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified, requiresTaskSchedulerRepair: record.requiresTaskSchedulerRepair };
     if (record.managedByAutoSet) managedIds.add(id);
   }
   return { records, schedules, disabledSchedules, managedIds };
 }
 
 export function isVerifiedManagedSchedule(record: CleanupScheduleRecord | undefined, intervalMinutes: number, scope: CleanupScheduleScope): boolean {
-  return !!record && record.enabled && record.payloadVerified === true && record.managedByAutoSet && record.intervalMinutes === intervalMinutes && record.scope === scope;
+  return !!record && record.enabled && !record.requiresTaskSchedulerRepair && record.payloadVerified === true && record.managedByAutoSet && record.intervalMinutes === intervalMinutes && record.scope === scope;
 }
 
 export function isVerifiedIndividualSchedule(record: CleanupScheduleRecord | undefined, requestedMinutes: number, returnedMinutes: number | undefined, scope: CleanupScheduleScope): boolean {
-  return returnedMinutes === requestedMinutes && !!record && record.enabled && record.payloadVerified === true && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
+  return returnedMinutes === requestedMinutes && !!record && record.enabled && !record.requiresTaskSchedulerRepair && record.payloadVerified === true && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
 }
 
 /** The local snapshot cannot describe a different Windows account. */

@@ -54,6 +54,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     ? "Checks two app-data locations, up to five folder levels deep."
     : category.id === "recallDb" ? "Checks four specified activity-data locations."
       : category.id === "dockerDesktopData" ? "Checks default Docker disk and log locations; custom disk locations are not included."
+        : category.id === "srumData" ? "Checks database file metadata; historical usage records are not decoded."
         : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
   const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : typeof raw?.coverage === "string" && raw.coverage.trim() ? raw.coverage : "Not reported";
   const receipt = cleanupVerificationText(verification);
@@ -63,7 +64,8 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" || (scheduleRecord && scheduleRecord.payloadVerified !== true) ? "Not verified" :
     scheduleDisabled ? "Disabled" : scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable ? "; new schedules unavailable" : ""}` :
       category.schedulable ? "Off" : "Not available for this card";
-  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script or Windows task settings could not be verified. Remove and recreate the schedule.`
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord?.requiresTaskSchedulerRepair ? "This task has changed and cannot be safely managed here. Review it in Windows Task Scheduler."
+    : scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script or Windows task settings could not be verified. Remove and recreate the schedule.`
     : scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
     : scheduleState === "verified" && scheduleMinutes
     ? `Scheduled every ${scheduleMinutes} minutes${!category.schedulable ? ". New schedules are unavailable for this cleanup." : "."}`

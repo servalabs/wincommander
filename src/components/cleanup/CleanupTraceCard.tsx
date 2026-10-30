@@ -32,6 +32,7 @@ interface CleanupTraceCardProps {
   scheduleExists?: boolean;
   scheduleDisabled?: boolean;
   schedulePayloadVerified?: boolean | null;
+  scheduleRequiresTaskSchedulerRepair?: boolean;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -124,6 +125,7 @@ export default function CleanupTraceCard({
   scheduleExists,
   scheduleDisabled,
   schedulePayloadVerified,
+  scheduleRequiresTaskSchedulerRepair,
   scheduleBusy,
   scheduleState,
   onRefreshSchedule,
@@ -224,6 +226,7 @@ export default function CleanupTraceCard({
         scheduleExists={scheduleExists}
         scheduleDisabled={scheduleDisabled}
         schedulePayloadVerified={schedulePayloadVerified}
+        scheduleRequiresTaskSchedulerRepair={scheduleRequiresTaskSchedulerRepair}
         scheduleBusy={scheduleBusy}
         scheduleState={scheduleState}
         onRefreshSchedule={onRefreshSchedule}

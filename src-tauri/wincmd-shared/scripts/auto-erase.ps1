@@ -2878,6 +2878,14 @@ function Get-AutoEraseSchedules {
         $rows = @()
         foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
             $identity = Get-AutoEraseTaskIdentity $t
+            $requiresTaskSchedulerRepair = $false
+            if (-not $identity) {
+                # A user can edit an owned task to add an action or change its
+                # executable. Retain it in readback when an action still names
+                # our protected payload, but never relax mutation ownership.
+                $identity = Get-AutoEraseReadbackIdentity $t
+                $requiresTaskSchedulerRepair = [bool]$identity
+            }
             if (-not $identity) { continue }
             $info = Get-ScheduledTaskInfo -TaskPath $t.TaskPath -TaskName $t.TaskName -ErrorAction SilentlyContinue
             $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
@@ -2895,7 +2903,7 @@ function Get-AutoEraseSchedules {
             $payloadVerified = $false
             try {
                 $exactInterval = $repetition -and [Xml.XmlConvert]::ToTimeSpan($repetition) -eq [TimeSpan]::FromMinutes($minutes)
-                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity) -and (Test-AutoEraseSchedulePhase -Task $t) -and (Test-AutoEraseSettingsReadback $t))
+                $payloadVerified = [bool](-not $requiresTaskSchedulerRepair -and $exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity) -and (Test-AutoEraseSchedulePhase -Task $t) -and (Test-AutoEraseSettingsReadback $t))
             } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
@@ -2904,6 +2912,7 @@ function Get-AutoEraseSchedules {
                 state            = [string]$t.State
                 enabled          = (Test-AutoEraseTaskEnabled ([string]$t.State))
                 payloadVerified  = $payloadVerified
+                requiresTaskSchedulerRepair = $requiresTaskSchedulerRepair
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
                 scope            = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
@@ -2912,11 +2921,30 @@ function Get-AutoEraseSchedules {
                 lastRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.LastRunTime } else { $null }
                 nextRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.NextRunTime } else { $null }
                 lastResult       = if ($info) { $info.LastTaskResult } else { $null }
-                cleanupOutcome   = Get-AutoEraseRecordedOutcome $t $identity $currentSid $minutes
+                cleanupOutcome   = if ($requiresTaskSchedulerRepair) { $null } else { Get-AutoEraseRecordedOutcome $t $identity $currentSid $minutes }
             }
         }
         @{ schedules = $rows; total = $rows.Count }
     } catch { @{ error = $true; message = "Failed to list auto-erase schedules: $($_.Exception.Message)" } }
+}
+
+# Read-only discovery for edited task actions. Strict identity is retained for
+# every mutation: this helper merely prevents a recognizable altered task from
+# disappearing from the UI and being mistaken for an absent schedule.
+function Get-AutoEraseReadbackIdentity {
+    param($Task)
+    foreach ($action in @($Task.Actions)) {
+        if (-not $action) { continue }
+        $probe = [pscustomobject]@{
+            TaskPath = $Task.TaskPath; TaskName = $Task.TaskName; Principal = $Task.Principal
+            Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = [string]$action.Arguments })
+        }
+        try {
+            $identity = Get-AutoEraseTaskIdentity $probe
+            if ($identity) { return $identity }
+        } catch { continue }
+    }
+    return $null
 }
 
 # Task Scheduler omits default-valued nodes, including Settings/Enabled=true.

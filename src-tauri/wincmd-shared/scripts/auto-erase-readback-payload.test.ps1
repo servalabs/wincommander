@@ -63,11 +63,16 @@ try {
     $script:fixtureTask.Settings.StartWhenAvailable = $true
     $script:fixtureTask.Actions[0].Execute = 'cmd.exe'
     $wrongExecutable = Get-AutoEraseSchedules
-    if ($wrongExecutable.error -or $wrongExecutable.schedules[0].payloadVerified) { throw 'A task running another executable must not be verified.' }
+    if ($wrongExecutable.error -or $wrongExecutable.total -ne 1 -or $wrongExecutable.schedules[0].payloadVerified -or -not $wrongExecutable.schedules[0].requiresTaskSchedulerRepair) { throw 'An edited executable must remain visible as unverified and require Scheduler repair.' }
+    if (Get-AutoEraseTaskIdentity $script:fixtureTask) { throw 'Readback recognition must not relax mutation ownership.' }
+    $script:fixtureTask.Actions[0].Arguments = '-c unrelated'
+    if ((Get-AutoEraseSchedules).total -ne 0) { throw 'An unrelated action must not be identified as cleanup.' }
+    $script:fixtureTask.Actions[0].Arguments = $argument
     $script:fixtureTask.Actions[0].Execute = 'powershell.exe'
     $script:fixtureTask.Actions += [pscustomobject]@{ Execute = 'cmd.exe'; Arguments = '/c exit' }
     $extraAction = Get-AutoEraseSchedules
-    if ($extraAction.error -or $extraAction.schedules[0].payloadVerified) { throw 'A task with additional actions must not be verified.' }
+    if ($extraAction.error -or $extraAction.total -ne 1 -or $extraAction.schedules[0].payloadVerified -or -not $extraAction.schedules[0].requiresTaskSchedulerRepair) { throw 'An extra action must remain visible as unverified and require Scheduler repair.' }
+    if (Get-AutoEraseTaskIdentity $script:fixtureTask) { throw 'Additional actions must not become eligible for in-app mutation.' }
     $script:fixtureTask.Actions = @($script:fixtureTask.Actions[0])
     $script:fixtureTask.Triggers[0].Enabled = $false
     $disabledTime = Get-AutoEraseSchedules

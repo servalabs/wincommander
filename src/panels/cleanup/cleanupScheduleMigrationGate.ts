@@ -33,3 +33,8 @@ export function canAutoSetCleanupSchedules(schedulesEnabled: boolean, state: str
   // migration to complete.
   return schedulesEnabled && state === "verified" && (!migrationIncomplete || hasManagedSchedules);
 }
+
+/** An altered task must be reviewed in Windows, not changed by Auto-set. */
+export function requiresCleanupTaskRepair(record: { requiresTaskSchedulerRepair?: boolean } | undefined): boolean {
+  return record?.requiresTaskSchedulerRepair === true;
+}

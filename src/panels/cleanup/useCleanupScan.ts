@@ -9,7 +9,7 @@ import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSetti
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { createCleanupScheduleReadGate } from "./cleanupScheduleReadGate";
-import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
+import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration, requiresCleanupTaskRepair } from "./cleanupScheduleMigrationGate";
 import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope } from "./cleanupScheduleReadback";
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
@@ -974,6 +974,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const managedIds = Array.from(autoSetScheduleIds);
             if (managedIds.length > 0) {
                 for (const categoryId of managedIds) {
+                    if (requiresCleanupTaskRepair(scheduleRecordsById[categoryId])) {
+                        summary.failed++;
+                        firstFailure ??= `Review the ${categoryId} task in Windows Task Scheduler before changing it.`;
+                        continue;
+                    }
                     try {
                         // A distinct backend command fails closed against an older
                         // sidecar and removes only tasks bearing the managed marker.
@@ -1000,6 +1005,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 for (const category of SCHEDULABLE_CATEGORIES) {
                     if (!category.schedulable || !category.clearDataKey || isAutomaticCleanupExcluded(category.id, clearAllExcludes)) {
                         summary.skipped++;
+                        continue;
+                    }
+                    if (requiresCleanupTaskRepair(scheduleRecordsById[category.id])) {
+                        summary.failed++;
+                        firstFailure ??= `Review the ${category.label} task in Windows Task Scheduler before changing it.`;
                         continue;
                     }
                     const interval = getAutoScheduleInterval(
@@ -1034,6 +1044,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 // so it continues after navigating away from Cleanup or
                 // closing WinCommander.  The embedded action skips HDDs.
                 try {
+                    if (requiresCleanupTaskRepair(scheduleRecordsById[AUTO_SCHEDULE_TRIM_ID])) throw new Error('Review the SSD maintenance task in Windows Task Scheduler before changing it.');
                     const trim = await setManagedAutoEraseSchedule(
                         AUTO_SCHEDULE_TRIM_ID,
                         AUTO_SCHEDULE_TRIM_INTERVAL_MINUTES,
@@ -1047,9 +1058,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         else if (['Ready', 'Running', 'Queued'].includes(trim.data.taskState ?? '')) { summary.alreadyConfigured++; existingActiveIds.push(AUTO_SCHEDULE_TRIM_ID); }
                         else { summary.failed++; firstFailure ??= 'Existing SSD maintenance schedule status is unknown.'; }
                     } else verifyTrimCreation = true;
-                } catch {
+                } catch (error) {
                     summary.failed++;
-                    firstFailure ??= "Failed to schedule automatic SSD trim.";
+                    firstFailure ??= error instanceof Error ? error.message : "Failed to schedule automatic SSD trim.";
                 }
             }
         } finally {

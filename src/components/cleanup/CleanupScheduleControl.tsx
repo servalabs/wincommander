@@ -9,6 +9,7 @@ interface CleanupScheduleControlProps {
   scheduleExists?: boolean;
   scheduleDisabled?: boolean;
   schedulePayloadVerified?: boolean | null;
+  scheduleRequiresTaskSchedulerRepair?: boolean;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -41,6 +42,7 @@ export default function CleanupScheduleControl({
   scheduleExists = false,
   scheduleDisabled = false,
   schedulePayloadVerified,
+  scheduleRequiresTaskSchedulerRepair = false,
   scheduleBusy = false,
   scheduleState = "verified",
   onRefreshSchedule,
@@ -131,6 +133,9 @@ export default function CleanupScheduleControl({
     };
   }, [closeAndReturnFocus, isOpen, updatePosition]);
 
+  if (scheduleRequiresTaskSchedulerRepair && scheduleState === "verified") {
+    return <span role="status" title="Review this task in Windows Task Scheduler. WinCommander cannot safely change or remove it." aria-label={`${categoryLabel} schedule requires review in Windows Task Scheduler`}>Review in Task Scheduler</span>;
+  }
   if (!onSetSchedule && !((isScheduled || isDisabled) && onClearSchedule)) {
     if (!onRequestScheduleAccess) return isDisabled ? <span aria-label={`${categoryLabel} scheduled wipe is disabled`} title="Scheduled wipe is disabled">OFF</span> : null;
     return (

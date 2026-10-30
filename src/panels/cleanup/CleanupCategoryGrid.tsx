@@ -146,6 +146,7 @@ export default function CleanupCategoryGrid({
         scheduleExists={scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
         scheduleDisabled={scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
         schedulePayloadVerified={scheduleRecordsById[cat.id]?.payloadVerified}
+        scheduleRequiresTaskSchedulerRepair={scheduleRecordsById[cat.id]?.requiresTaskSchedulerRepair}
         scheduleState={scheduleState}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={autoSetSchedulesBusy || scheduleBusyId === cat.id}
@@ -267,6 +268,7 @@ export default function CleanupCategoryGrid({
         scheduleDisabled={isViewingCurrentUser && scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
         scheduleExists={isViewingCurrentUser && scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
         schedulePayloadVerified={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.payloadVerified : undefined}
+        scheduleRequiresTaskSchedulerRepair={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.requiresTaskSchedulerRepair : undefined}
         scheduleState={isViewingCurrentUser ? scheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
