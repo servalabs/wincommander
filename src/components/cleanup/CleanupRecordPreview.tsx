@@ -304,9 +304,11 @@ function metadata(row: RecordObject, categoryId: string): string[] {
   // Include every remaining value returned for this record, including new
   // producer fields, without relying on a fixed field allowlist.
   const append = (key: string, value: unknown) => {
-    if (value === null || value === undefined) return;
+    if (value === undefined) return;
     const label = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
-    if (isObject(value)) {
+    if (value === null) {
+      facts.push(`${label}: No value`);
+    } else if (isObject(value)) {
       for (const [child, childValue] of Object.entries(value)) append(`${label} ${child}`, childValue);
     } else if (Array.isArray(value)) {
       // Registry binary values and other arrays can contain thousands of

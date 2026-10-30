@@ -527,6 +527,23 @@ describe("System Cleanup persona details", () => {
     expect(activity[1].facts).toContain("Value: Unavailable");
   });
 
+  test("shows selected-account WSL registry values including unavailable fields", () => {
+    const raw = { partial: true, coverage: "Selected registry registrations only", records: [{ registrationId: "fixture-id", registryPath: "HKU\\fixture\\Lxss\\id", registryValues: { DistributionName: "Fixture Linux", BasePath: "D:\\fixture", Version: 2, Extra: [1, 2, 3], Missing: null } }] };
+    const rows = getSafeCleanupPreview("wslData", raw);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].facts).toContain("Registration Id: fixture-id");
+    expect(rows[0].facts).toContain("Registry Path: HKU\\fixture\\Lxss\\id");
+    expect(rows[0].facts).toContain("Registry Values Distribution Name: Fixture Linux");
+    expect(rows[0].facts).toContain("Registry Values Base Path: D:\\fixture");
+    expect(rows[0].facts).toContain("Registry Values Version: 2");
+    expect(rows[0].facts).toContain("Registry Values Extra: [1,2,3]");
+    expect(rows[0].facts).toContain("Registry Values Missing: No value");
+    const category = ALL_CATEGORIES.find(item => item.id === "wslData")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={-1} items={[]} rawData={raw} error="Incomplete" clearing={false} clearLabel="Clear" onClose={() => {}} accountName="S-1-5-21-100-200-300-1002" accountLabel="Other user" />);
+    for (const field of ["Registry Values Distribution Name", "Fixture Linux", "Registry Values Base Path", "D:\\fixture", "Registry Values Missing", "No value"]) expect(html).toContain(field);
+    expect(html).toContain("Scan incomplete");
+  });
+
   test("renders each DNS field in its own column with a compact number", () => {
     const dns = ALL_CATEGORIES.find(category => category.id === "dnsCache")!;
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={dns} mode="advanced" count={1} items={[]} rawData={{ entries: [{ Name: "example.test", Data: "192.0.2.1", TTL: 300, Status: "Success" }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
