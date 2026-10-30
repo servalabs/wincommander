@@ -12,7 +12,7 @@ export interface CleanupScheduleRow {
   categoryId: string;
   enabled: boolean;
   state?: string;
-  scope?: CleanupScheduleScope | "other-user";
+  scope?: CleanupScheduleScope | "other-user" | "unknown";
   intervalMinutes: number;
   targetUser: string | null;
   managedByAutoSet?: boolean;
@@ -28,7 +28,7 @@ export interface CleanupScheduleRow {
 export interface CleanupScheduleRecord {
   intervalMinutes: number | null;
   managedByAutoSet: boolean;
-  scope: CleanupScheduleScope;
+  scope: CleanupScheduleScope | "unknown";
   enabled: boolean;
   lastRun?: string | null;
   lastResult?: number | null;
@@ -54,13 +54,24 @@ function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOu
 export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[], relevantIds: ReadonlySet<string>) {
   const records: Record<string, CleanupScheduleRecord> = {};
   const schedules: Record<string, number> = {};
-  const disabledSchedules: Record<string, Omit<CleanupScheduleRecord, "enabled">> = {};
+  const disabledSchedules: Record<string, Omit<CleanupScheduleRecord, "enabled" | "scope"> & { scope: CleanupScheduleScope }> = {};
   const managedIds = new Set<string>();
   const localRows: Record<string, Array<{ row: CleanupScheduleRow; record: CleanupScheduleRecord }>> = {};
+  const unknownRows: Record<string, CleanupScheduleRecord> = {};
   for (const row of rows) {
     if (!row || typeof row.categoryId !== "string") return null;
     const id = row.categoryId === "clipboard" ? "clipboardHistory" : row.categoryId;
-    if (!relevantIds.has(id) || row.targetUser || row.scope === "other-user") continue;
+    if (!relevantIds.has(id) || row.scope === "other-user" || (row.targetUser && row.scope !== "unknown")) continue;
+    if (row.scope === "unknown") {
+      // An attributable task with an unresolved owner blocks only this category.
+      // Never assign it to the current user or allow mutation on that basis.
+      if (row.targetUser !== null || row.payloadVerified !== false || row.requiresTaskSchedulerRepair !== true ||
+          typeof row.enabled !== "boolean" || typeof row.managedByAutoSet !== "boolean" ||
+          !["Ready", "Running", "Queued", "Disabled"].includes(row.state ?? "") || row.enabled !== (row.state !== "Disabled")) return null;
+      unknownRows[id] = { intervalMinutes: Number.isFinite(row.intervalMinutes) && row.intervalMinutes > 0 ? row.intervalMinutes : null,
+        managedByAutoSet: false, scope: "unknown", enabled: row.enabled, payloadVerified: false, requiresTaskSchedulerRepair: true };
+      continue;
+    }
     if (row.scope !== "system" && row.scope !== "current-user") return null;
     if (!["Ready", "Running", "Queued", "Disabled"].includes(row.state ?? "")) return null;
     if (typeof row.managedByAutoSet !== "boolean" || typeof row.enabled !== "boolean") return null;
@@ -84,14 +95,17 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     }
     // A disabled legacy task may be visible alongside the canonical task.
     // Do not hide a task that needs Windows review when choosing the active row.
-    const record = candidates.some(candidate => candidate.record.requiresTaskSchedulerRepair)
+    const record = unknownRows[id] || candidates.some(candidate => candidate.record.requiresTaskSchedulerRepair)
       ? { ...selected.record, requiresTaskSchedulerRepair: true }
       : selected.record;
     const { enabled, intervalMinutes: interval } = record;
     records[id] = record;
     if (enabled && interval !== null) schedules[id] = interval;
-    else if (!enabled) disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope, payloadVerified: record.payloadVerified, requiresTaskSchedulerRepair: record.requiresTaskSchedulerRepair };
+    else if (!enabled) disabledSchedules[id] = { intervalMinutes: interval, managedByAutoSet: record.managedByAutoSet, scope: record.scope as CleanupScheduleScope, payloadVerified: record.payloadVerified, requiresTaskSchedulerRepair: record.requiresTaskSchedulerRepair };
     if (record.managedByAutoSet) managedIds.add(id);
+  }
+  for (const [id, record] of Object.entries(unknownRows)) {
+    if (!records[id]) records[id] = record;
   }
   return { records, schedules, disabledSchedules, managedIds };
 }

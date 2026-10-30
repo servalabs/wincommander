@@ -115,6 +115,10 @@ describe("System Cleanup display projection", () => {
     const altered = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false, requiresTaskSchedulerRepair: true }} />);
     expect(altered).toContain("Review it in Windows Task Scheduler");
     expect(altered).not.toContain("Remove and recreate the schedule");
+    const unknownOwner = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, scope: "unknown", payloadVerified: false, requiresTaskSchedulerRepair: true }} />);
+    expect(unknownOwner).toContain("Owner could not be determined");
+    expect(unknownOwner).toContain("Review it in Windows Task Scheduler");
+    expect(unknownOwner).not.toContain("Schedule scope:</strong> Current Windows user");
     expect(missingScript).toContain("cleanup script or Windows task settings could not be verified");
   });
 

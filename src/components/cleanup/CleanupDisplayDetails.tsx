@@ -61,10 +61,10 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
   const dateValue = typeof raw?.scannedAt === "string" ? raw.scannedAt : typeof raw?.scanTime === "string" ? raw.scanTime : "";
   const scanTime = dateValue && Number.isFinite(Date.parse(dateValue)) ? new Date(dateValue).toLocaleString() : "Not reported";
-  const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" || (scheduleRecord && scheduleRecord.payloadVerified !== true) ? "Not verified" :
+  const taskStatus = scheduleState === "checking" ? "Checking" : scheduleState !== "verified" || (scheduleRecord && (scheduleRecord.payloadVerified !== true || scheduleRecord.requiresTaskSchedulerRepair)) ? "Not verified" :
     scheduleDisabled ? "Disabled" : scheduleMinutes ? `Enabled every ${scheduleMinutes} min${!category.schedulable ? "; new schedules unavailable" : ""}` :
       category.schedulable ? "Off" : "Not available for this card";
-  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord?.requiresTaskSchedulerRepair ? "This task has changed and cannot be safely managed here. Review it in Windows Task Scheduler."
+  const simpleScheduleStatus = scheduleState === "verified" && scheduleRecord?.requiresTaskSchedulerRepair ? "A task needs review and cannot be safely managed here. Review it in Windows Task Scheduler."
     : scheduleState === "verified" && scheduleRecord && scheduleRecord.payloadVerified !== true ? `${scheduleDisabled ? "A disabled task exists" : "A task exists"}, but its cleanup script or Windows task settings could not be verified. Remove and recreate the schedule.`
     : scheduleState === "verified" && scheduleDisabled ? "An existing schedule is disabled. It will not run."
     : scheduleState === "verified" && scheduleMinutes
@@ -105,7 +105,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           {category.schedulable && isManualOnlyCleanupSchedule(category.id) ? <p><strong>Auto-set:</strong> This card is skipped. You can schedule it individually from the card.</p> : null}
           <div className="cleanup-readable-detail__context"><span><strong>Scope:</strong> {scopeLabel ?? (groupedItems?.length ? "Reported Windows accounts" : category.systemWide ? "This device" : category.scopeAware ? "Selected Windows user" : "Current context")}</span><span><strong>Schedule:</strong> {simpleScheduleStatus}</span></div>
           {scheduleState === "verified" && scheduleRecord ? <section aria-label="Scheduled task history"><h3>Scheduled task history</h3>
-            <p><strong>Schedule scope:</strong> {scheduleRecord.scope === "system" ? "This device" : "Current Windows user"}</p><p><strong>Last run:</strong> {lastRun}</p><p><strong>Windows result:</strong> {resultText}</p>
+            <p><strong>Schedule scope:</strong> {scheduleRecord.scope === "system" ? "This device" : scheduleRecord.scope === "unknown" ? "Owner could not be determined" : "Current Windows user"}</p><p><strong>Last run:</strong> {lastRun}</p><p><strong>Windows result:</strong> {resultText}</p>
             {scheduleRecord.cleanupOutcome ? <p><strong>Last recorded cleanup:</strong> {scheduleRecord.cleanupOutcome.success ? "Completed" : "Incomplete"} at {new Date(scheduleRecord.cleanupOutcome.attemptedUtc).toLocaleString()}. Removed: {scheduleRecord.cleanupOutcome.removed}; deferred: {scheduleRecord.cleanupOutcome.deferred}; failed: {scheduleRecord.cleanupOutcome.failed}.</p> : <p><strong>Cleanup outcome:</strong> No verified result is available for this schedule.</p>}
             <p>A saved schedule and Windows task result do not confirm which items were removed. Rescan this card to check.</p>
           </section> : null}

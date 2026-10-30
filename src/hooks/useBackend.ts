@@ -1609,7 +1609,7 @@ export function useBackend(retainCleanupScanErrors = false) {
           legacy?: boolean;
           enabled: boolean;
           state?: string;
-          scope?: "system" | "current-user" | "other-user";
+          scope?: "system" | "current-user" | "other-user" | "unknown";
           intervalMinutes: number;
           targetUser: string | null;
           ownerAccount?: string | null;

@@ -13,7 +13,7 @@ export interface DiskCleanupSchedule {
   taskName: string;
   enabled: boolean;
   state?: string;
-  scope?: "system" | "current-user" | "other-user";
+  scope?: "system" | "current-user" | "other-user" | "unknown";
   intervalMinutes: number;
   managedByAutoSet?: boolean;
   targetUser: string | null;

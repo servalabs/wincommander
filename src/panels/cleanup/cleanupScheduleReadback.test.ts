@@ -4,6 +4,23 @@ import { canShowCleanupScheduleForSelection, isVerifiedIndividualSchedule, isVer
 const relevant = new Set(["dnsCache", "amcache"]);
 const ready: CleanupScheduleRow = { categoryId: "dnsCache", enabled: true, state: "Ready", scope: "current-user", intervalMinutes: 60, targetUser: null, managedByAutoSet: true, payloadVerified: true };
 
+test("an unresolved owner blocks its category without hiding unrelated schedules", () => {
+  const unknown: CleanupScheduleRow = { ...ready, scope: "unknown", payloadVerified: false, requiresTaskSchedulerRepair: true };
+  for (const rows of [[unknown, { ...ready, categoryId: "amcache" }], [ready, unknown], [unknown, ready]]) {
+    const snapshot = readCleanupScheduleSnapshot(rows, relevant)!;
+    expect(snapshot.records.dnsCache.requiresTaskSchedulerRepair).toBe(true);
+    expect(isVerifiedManagedSchedule(snapshot.records.dnsCache, 60, "current-user")).toBe(false);
+  }
+  const onlyUnknown = readCleanupScheduleSnapshot([unknown, { ...ready, categoryId: "amcache" }], relevant)!;
+  expect(onlyUnknown.records.dnsCache.scope).toBe("unknown");
+  expect(onlyUnknown.schedules.dnsCache).toBeUndefined();
+  expect(onlyUnknown.managedIds.has("dnsCache")).toBe(false);
+  expect(isVerifiedManagedSchedule(onlyUnknown.records.amcache, 60, "current-user")).toBe(true);
+  expect(readCleanupScheduleSnapshot([{ ...unknown, payloadVerified: true }], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...unknown, requiresTaskSchedulerRepair: false }], relevant)).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...unknown, targetUser: "not-verified" }], relevant)).toBeNull();
+});
+
 test("preserves an altered task's repair requirement and cannot verify it", () => {
   const snapshot = readCleanupScheduleSnapshot([{ ...ready, requiresTaskSchedulerRepair: true }], relevant)!;
   expect(snapshot.records.dnsCache.requiresTaskSchedulerRepair).toBe(true);

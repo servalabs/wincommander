@@ -38,6 +38,33 @@ try {
     $script:fixtureTask.Triggers[0] | Add-Member -NotePropertyName StartBoundary -NotePropertyValue ($firstDue.ToString('o'))
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $knownTask = $script:fixtureTask
+    $unresolvedTask = [pscustomobject]@{
+        TaskPath = $knownTask.TaskPath; TaskName = $knownTask.TaskName; State = 'Ready'
+        Principal = [pscustomobject]@{ UserId = 'WC_UNRESOLVABLE_DOMAIN\MissingCleanupOwner'; LogonType = 'S4U'; RunLevel = 'Highest' }
+        Settings = $knownTask.Settings; Actions = $knownTask.Actions; Triggers = $knownTask.Triggers; Description = $knownTask.Description
+    }
+    $script:fixtureTask = @($knownTask, $unresolvedTask)
+    $unknown = Get-AutoEraseSchedules
+    $unknownRows = @($unknown.schedules | Where-Object { $_.scope -eq 'unknown' })
+    if ($unknown.error -or $unknown.total -ne 2 -or $unknownRows.Count -ne 1 -or $unknownRows[0].payloadVerified -or
+        -not $unknownRows[0].requiresTaskSchedulerRepair -or $null -ne $unknownRows[0].targetUser -or $null -ne $unknownRows[0].cleanupOutcome) {
+        throw 'An attributable task with an unresolved owner must remain visible as unknown and require Scheduler review.'
+    }
+    $strictFailed = $false
+    try { $null = Get-AutoEraseTaskIdentity $unresolvedTask } catch { $strictFailed = $true }
+    if (-not $strictFailed) { throw 'An unresolved owner must not acquire mutation identity.' }
+    $unresolvedTask.Actions += [pscustomobject]@{ Execute = 'cmd.exe'; Arguments = '/c exit' }
+    $alteredUnknown = Get-AutoEraseSchedules
+    $alteredUnknownRows = @($alteredUnknown.schedules | Where-Object { $_.scope -eq 'unknown' })
+    if ($alteredUnknown.error -or $alteredUnknownRows.Count -ne 1 -or -not $alteredUnknownRows[0].requiresTaskSchedulerRepair) { throw 'An altered cleanup task with unknown owner must remain visible for review.' }
+    $blocked = $false
+    try { Assert-AutoEraseKnownOwners -Tasks @($unresolvedTask) -CategoryId 'dnsCache' } catch { $blocked = $true }
+    if (-not $blocked) { throw 'An altered cleanup task with unknown owner must block mutations in its category.' }
+    $unresolvedTask.Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = '-File "C:\unrelated.ps1"' })
+    $unrelated = Get-AutoEraseSchedules
+    if ($unrelated.error -or $unrelated.total -ne 1) { throw 'An unrelated task with an unresolved owner must not be attributed to cleanup.' }
+    $script:fixtureTask = $knownTask
     foreach ($invalidInterval in @('not-an-interval', 'P999999999D', '')) {
         $script:fixtureTask.Triggers[0].Repetition.Interval = $invalidInterval
         $badInterval = Get-AutoEraseSchedules

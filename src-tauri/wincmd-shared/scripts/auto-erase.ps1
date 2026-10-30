@@ -2370,7 +2370,7 @@ function Get-AutoEraseTaskName {
 # Name alone is never ownership proof: require a supported category and our
 # protected script location (or a recognizable historical encoded payload).
 function Get-AutoEraseTaskIdentity {
-    param($Task)
+    param($Task, [switch]$AllowUnknownOwner)
     if ($Task.TaskPath -notin @('\', $script:SystemMaintenanceTaskPath)) { return $null }
     $name = [string]$Task.TaskName
     $category = $null
@@ -2402,7 +2402,15 @@ function Get-AutoEraseTaskIdentity {
         } catch { return $null }
     }
     if (-not $owned) { return $null }
-    $sid = Resolve-AutoEraseSid ([string]$Task.Principal.UserId)
+    try {
+        $sid = Resolve-AutoEraseSid ([string]$Task.Principal.UserId)
+        if ([string]::IsNullOrWhiteSpace($sid)) { throw 'Task owner SID is unavailable.' }
+    } catch {
+        # Only a recognizable cleanup name and protected action reach here.
+        # Unknown ownership is read-only: it must block changes until reviewed.
+        if ($AllowUnknownOwner) { return @{ categoryId = $category; ownerSid = $null; taskName = $name; ownerUnknown = $true } }
+        throw
+    }
     $canonical = Get-AutoEraseTaskName $category $sid
     if (($name.StartsWith('SL-') -or $name.StartsWith('SM-')) -and $name -ne $canonical -and $Task.TaskPath -eq $script:SystemMaintenanceTaskPath) { return $null }
     @{ categoryId = $category; ownerSid = $sid; taskName = $canonical }
@@ -2658,8 +2666,11 @@ function Set-ManagedAutoEraseSchedule {
         # disabled tasks, before choosing an execution account for the new task.
         $currentSid = (Get-AutoEraseCurrentIdentity).sid
         $existingTasks = @()
-        foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
-            $identity = Get-AutoEraseTaskIdentity $task
+        $tasks = @(Get-ScheduledTask -ErrorAction Stop)
+        Assert-AutoEraseKnownOwners -Tasks $tasks -CategoryId $CategoryId
+        foreach ($task in $tasks) {
+            $identity = Get-AutoEraseTaskIdentity $task -AllowUnknownOwner
+            if ($identity.ownerUnknown) { continue }
             if (-not $identity) {
                 # A modified action remains visible to readback but must not
                 # be replaced or bypassed by creating a second local schedule.
@@ -2807,8 +2818,13 @@ function Remove-MultiUserAutoEraseScheduleCore {
             if ([string]::IsNullOrWhiteSpace($sid)) { throw 'A selected Windows account could not be verified; no schedules were removed.' }
             $sid
         })
-        foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
-            $identity = Get-AutoEraseTaskIdentity $task
+        $tasks = @(Get-ScheduledTask -ErrorAction Stop)
+        # Check all candidates before removing anything. An unresolved owner
+        # could belong to the selected account, so it requires Windows review.
+        Assert-AutoEraseKnownOwners -Tasks $tasks -CategoryId $CategoryId
+        foreach ($task in $tasks) {
+            $identity = Get-AutoEraseTaskIdentity $task -AllowUnknownOwner
+            if ($identity.ownerUnknown) { continue }
             if (-not $identity -or $identity.categoryId -ne $CategoryId) { continue }
             if ($owners.Count -gt 0 -and $identity.ownerSid -notin $owners) { continue }
             if ($ManagedOnly -and -not (Test-AutoEraseManagedTask $task)) { continue }
@@ -2954,13 +2970,13 @@ function Get-AutoEraseSchedules {
         $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
         $rows = @()
         foreach ($t in @(Get-ScheduledTask -ErrorAction Stop)) {
-            $identity = Get-AutoEraseTaskIdentity $t
-            $requiresTaskSchedulerRepair = $false
+            $identity = Get-AutoEraseTaskIdentity $t -AllowUnknownOwner
+            $requiresTaskSchedulerRepair = [bool]($identity -and $identity.ownerUnknown)
             if (-not $identity) {
                 # A user can edit an owned task to add an action or change its
                 # executable. Retain it in readback when an action still names
                 # our protected payload, but never relax mutation ownership.
-                $identity = Get-AutoEraseReadbackIdentity $t
+                $identity = Get-AutoEraseReadbackIdentity $t -AllowUnknownOwner
                 $requiresTaskSchedulerRepair = [bool]$identity
             }
             if (-not $identity) { continue }
@@ -2991,8 +3007,8 @@ function Get-AutoEraseSchedules {
                 payloadVerified  = $payloadVerified
                 requiresTaskSchedulerRepair = $requiresTaskSchedulerRepair
                 intervalMinutes  = $minutes
-                targetUser       = if ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
-                scope            = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
+                targetUser       = if ($identity.ownerUnknown) { $null } elseif ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
+                scope            = if ($identity.ownerUnknown) { 'unknown' } elseif ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
                 ownerAccount     = $t.Principal.UserId
                 managedByAutoSet = (Test-AutoEraseManagedTask $t)
                 lastRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.LastRunTime } else { $null }
@@ -3009,7 +3025,7 @@ function Get-AutoEraseSchedules {
 # every mutation: this helper merely prevents a recognizable altered task from
 # disappearing from the UI and being mistaken for an absent schedule.
 function Get-AutoEraseReadbackIdentity {
-    param($Task)
+    param($Task, [switch]$AllowUnknownOwner)
     foreach ($action in @($Task.Actions)) {
         if (-not $action) { continue }
         $probe = [pscustomobject]@{
@@ -3017,11 +3033,24 @@ function Get-AutoEraseReadbackIdentity {
             Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = [string]$action.Arguments })
         }
         try {
-            $identity = Get-AutoEraseTaskIdentity $probe
+            $identity = Get-AutoEraseTaskIdentity $probe -AllowUnknownOwner:$AllowUnknownOwner
             if ($identity) { return $identity }
         } catch { continue }
     }
     return $null
+}
+
+# Unknown owners are recognized solely for readback and to block changes in
+# their category. They are never accepted as identity for any mutation.
+function Assert-AutoEraseKnownOwners {
+    param([object[]]$Tasks, [string]$CategoryId = '')
+    foreach ($task in @($Tasks)) {
+        $candidate = Get-AutoEraseTaskIdentity $task -AllowUnknownOwner
+        if (-not $candidate) { $candidate = Get-AutoEraseReadbackIdentity $task -AllowUnknownOwner }
+        if ($candidate -and $candidate.ownerUnknown -and (-not $CategoryId -or $candidate.categoryId -eq $CategoryId)) {
+            throw "The $($candidate.categoryId) cleanup schedule has an unverified owner. Review it in Windows Task Scheduler; no schedules in this category were changed."
+        }
+    }
 }
 
 # Task Scheduler omits default-valued nodes, including Settings/Enabled=true.
@@ -3191,13 +3220,17 @@ function Invoke-AutoEraseMigrationCore {
     [CmdletBinding()]
     param([string]$CategoryId = '', [string]$OwnerSid = '')
     Assert-AutoEraseAdmin
+    $tasks = @(Get-ScheduledTask -ErrorAction Stop)
+    try { Assert-AutoEraseKnownOwners -Tasks $tasks -CategoryId $CategoryId }
+    catch { return @{ error = $true; status = 'failed'; migrated = @(); disabledProtected = @(); message = $_.Exception.Message } }
     Initialize-SystemMaintenanceTaskFolder
     $migrated = @()
     $disabledProtected = @()
     $errors = @()
-    foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
+    foreach ($task in $tasks) {
         try {
-            $identity = Get-AutoEraseTaskIdentity $task
+            $identity = Get-AutoEraseTaskIdentity $task -AllowUnknownOwner
+            if ($identity.ownerUnknown) { continue }
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId) -or ($OwnerSid -and $identity.ownerSid -ne $OwnerSid)) { continue }
             $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19|20|21) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
@@ -3302,7 +3335,8 @@ function Invoke-AutoEraseMigration {
     Assert-AutoEraseAdmin
     try {
         $ids = @(@(Get-ScheduledTask -ErrorAction Stop) | ForEach-Object {
-            $identity = Get-AutoEraseTaskIdentity $_
+            $identity = Get-AutoEraseTaskIdentity $_ -AllowUnknownOwner
+            if (-not $identity) { $identity = Get-AutoEraseReadbackIdentity $_ -AllowUnknownOwner }
             if ($identity) { $identity.categoryId }
         } | Sort-Object -Unique)
         $migrated = @(); $disabledProtected = @(); $errors = @()

@@ -1143,7 +1143,7 @@ function Get-FleetForensicProjection {
 
             'crash_dumps' {
                 $result = Get-CrashDumpList
-                if ($result.error) { return (& $empty 'System Cleanup could not read crash-dump summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read crash-dump summaries.') }
                 $sourceRows = @($result.dumps)
                 $records = & $metadataRows $sourceRows 'Crash dump'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -3059,34 +3059,42 @@ function Get-PCAInfo {
 
 function Get-CrashDumpList {
     # Returns all crash dump files with size, name, and age
-    try {
-        $dumps = @()
-        $sources = @(
+    $dumps = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $sources = @(
             @{ label = 'Minidump';           path = "$env:SystemRoot\Minidump" },
             @{ label = 'CrashDumps';         path = "$env:LOCALAPPDATA\CrashDumps" },
             @{ label = 'WER ReportArchive';  path = "$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportArchive" },
             @{ label = 'WER ReportQueue';    path = "$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportQueue" }
         )
-        $memDmpPath = "$env:SystemRoot\MEMORY.DMP"
-        if (Test-Path $memDmpPath) {
-            $f = Get-Item $memDmpPath
-            $dumps += @{ source = 'FullDump'; name = 'MEMORY.DMP'; sizeKB = [math]::Round($f.Length/1KB,1); modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    $memDmpPath = "$env:SystemRoot\MEMORY.DMP"
+    try {
+        try { $f = Get-Item -LiteralPath $memDmpPath -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $f = $null }
+        if ($f) {
+            if ($f.PSIsContainer) { throw 'Crash dump path is not a file.' }
+            $dumps.Add(@{ source = 'FullDump'; name = $f.Name; path = $f.FullName; sizeKB = [math]::Round($f.Length/1KB,1); modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
         }
-        foreach ($src in $sources) {
-            if (Test-Path $src.path) {
-                Get-ChildItem -Path $src.path -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | ForEach-Object {
-                    $dumps += @{
+    } catch { $partial = $true }
+    foreach ($src in $sources) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+                if (-not $root.PSIsContainer) { throw 'Crash dump location is not a directory.' }
+                Get-ChildItem -LiteralPath $src.path -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    $dumps.Add(@{
                         source   = $src.label
                         name     = $_.Name
+                        path     = $_.FullName
                         sizeKB   = [math]::Round($_.Length/1KB,1)
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
+                    })
                 }
             }
-        }
-        @{ dumps = $dumps; total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    @{ dumps = @($dumps.ToArray()); total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some crash dump locations could not be checked.' } else { $null } }
 }
 
 function Get-SQLiteWALList {
