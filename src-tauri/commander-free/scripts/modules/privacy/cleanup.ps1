@@ -3987,7 +3987,7 @@ function Get-XboxCacheInfo {
 }
 
 function Get-CleanupArtifactFiles {
-    param([Parameter(Mandatory)] [array]$Sources)
+    param([Parameter(Mandatory)] [array]$Sources, [Collections.Generic.List[object]]$Collector = $null)
     $files = @()
     foreach ($source in $Sources) {
         try { $sourcePath = (Get-Item -LiteralPath $source.path -Force -ErrorAction Stop).FullName }
@@ -3995,16 +3995,29 @@ function Get-CleanupArtifactFiles {
         foreach ($pattern in $source.patterns) {
             Get-ChildItem -LiteralPath $sourcePath -Recurse:($source.recurse -ne $false) -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
                 $relative = $_.FullName.Substring($sourcePath.Length).TrimStart('\\')
-                $files += @{ name = "$($source.label): $relative"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $row = @{ name = "$($source.label): $relative"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                if ($null -ne $Collector) { $Collector.Add($row) } else { $files += $row }
             }
         }
     }
-    @($files)
+    if ($null -eq $Collector) { @($files) }
+}
+
+function Get-CleanupArtifactInventory {
+    param([Parameter(Mandatory)] [array]$Sources, [Parameter(Mandatory)] [string]$CoverageNote)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($source in $Sources) {
+        try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
+        catch { $partial = $true }
+    }
+    $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = $CoverageNote; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected locations could not be checked.' } else { $null } }
 }
 
 function Get-CommunicationCachesInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected Teams, Slack and Discord cache locations only.' -Sources @(
             @{ label = 'Teams'; path = (Join-Path $env:APPDATA 'Microsoft\\Teams\\Cache'); patterns = @('*') },
             @{ label = 'Teams'; path = (Join-Path $env:APPDATA 'Microsoft\\Teams\\IndexedDB'); patterns = @('*') },
             @{ label = 'Slack'; path = (Join-Path $env:APPDATA 'Slack\\Cache'); patterns = @('*') },
@@ -4013,9 +4026,7 @@ function Get-CommunicationCachesInfo {
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\Cache'); patterns = @('*') },
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\IndexedDB'); patterns = @('*') },
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\Local Storage\\leveldb'); patterns = @('*') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4103,15 +4114,13 @@ function Get-SSHStateInfo {
 
 function Get-RemoteAccessLogsInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected TeamViewer, AnyDesk, VNC and Chrome Remote Desktop log locations only.' -Sources @(
             @{ label = 'TeamViewer'; path = (Join-Path $env:APPDATA 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'AnyDesk'; path = (Join-Path $env:APPDATA 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'AnyDesk'; path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'VNC'; path = (Join-Path $env:APPDATA 'RealVNC'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'Chrome Remote Desktop'; path = (Join-Path $env:LOCALAPPDATA 'Google\\Chrome Remote Desktop'); patterns = @('Connections*.txt','*.trace','*.log') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4141,14 +4150,12 @@ function Get-PasswordManagerCachesInfo {
 
 function Get-GameLauncherLogsInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected Steam, Epic Games and Battle.net log locations only.' -Sources @(
             @{ label = 'Steam log'; path = (Join-Path ${env:ProgramFiles(x86)} 'Steam\\logs'); patterns = @('*') },
             @{ label = 'Epic Games Launcher'; path = (Join-Path $env:LOCALAPPDATA 'EpicGamesLauncher\\Saved\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:APPDATA 'Battle.net\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:ProgramData 'Battle.net\\Logs'); patterns = @('*') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }

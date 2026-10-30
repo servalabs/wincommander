@@ -13,7 +13,7 @@ function Get-Item {
     [CmdletBinding()] param([string]$LiteralPath, [switch]$Force)
     if ($script:deny) { throw [UnauthorizedAccessException]::new('Denied') }
     if ($LiteralPath -eq 'C:\Absent') { throw [System.Management.Automation.ItemNotFoundException]::new('Missing') }
-    [pscustomobject]@{ Name = 'mock directory'; FullName = [IO.Path]::GetFullPath($LiteralPath) }
+    [pscustomobject]@{ Name = 'mock directory'; FullName = [IO.Path]::GetFullPath($LiteralPath); PSIsContainer = $true }
 }
 function Get-ChildItem {
     [CmdletBinding()] param([string]$LiteralPath, [switch]$File, [switch]$Force, [switch]$Recurse, [string]$Filter)
@@ -49,7 +49,8 @@ if (-not $blocked) { throw 'Denied artifact traversal was treated as empty.' }
 $script:deny = $false
 if ((Get-BITSQueueInfo).total -ne 2) { throw 'BITS job and store counts were incorrect.' }
 $script:denyBits = $true
-if (-not (Get-BITSQueueInfo).error) { throw 'An incomplete all-user BITS scan was reported as complete.' }
+$bits = Get-BITSQueueInfo
+if (-not $bits.partial -or $bits.status -ne 'partial' -or $bits.total -ne 1) { throw 'An incomplete all-user BITS scan was reported as complete or lost its readable store.' }
 $script:denyBits = $false; $script:deny = $false; $script:paths = @(); $script:filters = @()
 $font = Get-FontCacheInfo
 $fontRoot = Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache'
@@ -57,5 +58,6 @@ if ($font.error -or $font.total -ne 1 -or $script:paths.Count -ne 1 -or $script:
     throw "Font cache reader included installed user fonts or an unapproved target: total=$($font.total) error=$($font.error) paths=$($script:paths -join ',') expected=$fontRoot filters=$($script:filters -join ',')."
 }
 $script:deny = $true
-if (-not (Get-FontCacheInfo).error) { throw 'Denied font-cache enumeration was reported as clean.' }
+$font = Get-FontCacheInfo
+if (-not $font.partial -or $font.status -ne 'partial') { throw 'Denied font-cache enumeration was reported as clean.' }
 Write-Output 'Passed: PCA, spool and font-cache targets, counts, and denied-read behavior.'
