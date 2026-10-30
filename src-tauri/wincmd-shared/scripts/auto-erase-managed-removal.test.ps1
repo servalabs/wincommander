@@ -6,7 +6,7 @@ foreach ($state in @('Disabled','Unknown','')) { if (Test-AutoEraseTaskEnabled $
 # Every Windows task boundary below is mocked. No real task is read or changed.
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }
-function Resolve-AutoEraseSid { param($Account) $Account }
+function Resolve-AutoEraseSid { param($Account) if ($Account -eq 'UnknownUser') { return '' }; $Account }
 $script:tasks = @(
     [pscustomobject]@{ TaskPath='\SystemMaintenance\'; TaskName='managed'; Category='dnsCache'; Owner='S-1-5-18'; Description='System Maintenance scheduled cleanup v6 (managed)' },
     [pscustomobject]@{ TaskPath='\SystemMaintenance\'; TaskName='manual'; Category='dnsCache'; Owner='S-1-5-21-1'; Description='System Maintenance scheduled cleanup v6' },
@@ -16,6 +16,11 @@ $script:removed = @()
 function Get-ScheduledTask { [CmdletBinding()] param() $script:tasks }
 function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId=$Task.Category; ownerSid=$Task.Owner } }
 function Unregister-ScheduledTask { [CmdletBinding()] param($TaskPath,$TaskName,[switch]$Confirm) $script:removed += $TaskName }
+
+$result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers ',, ,'
+if (-not $result.error -or @($script:removed).Count -ne 0) { throw 'An invalid explicit target list must not remove every user schedule.' }
+$result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers 'S-1-5-18,UnknownUser'
+if (-not $result.error -or @($script:removed).Count -ne 0) { throw 'An unresolved target must prevent all removals.' }
 
 $result = Remove-MultiUserAutoEraseSchedule -CategoryId dnsCache -TargetUsers 'S-1-5-18,S-1-5-21-1' -ManagedOnly
 if ($result.error -or @($script:removed).Count -ne 1 -or $script:removed[0] -ne 'managed') { throw 'Managed removal affected a manual or unrelated task.' }

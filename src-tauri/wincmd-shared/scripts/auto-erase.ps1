@@ -2778,8 +2778,14 @@ function Remove-MultiUserAutoEraseScheduleCore {
     param([Parameter(Mandatory)] [string]$CategoryId, [string]$TargetUsers = '', [switch]$ManagedOnly)
     Assert-AutoEraseAdmin
     try {
-        $owners = @($TargetUsers -split ',' | Where-Object { $_.Trim() } |
-            ForEach-Object { Resolve-AutoEraseSid $_.Trim() })
+        $explicitTargets = $TargetUsers -and $TargetUsers.Trim() -ne ''
+        $targets = @($TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($explicitTargets -and $targets.Count -eq 0) { throw 'No valid Windows accounts were specified; no schedules were removed.' }
+        $owners = @($targets | ForEach-Object {
+            $sid = Resolve-AutoEraseSid $_
+            if ([string]::IsNullOrWhiteSpace($sid)) { throw 'A selected Windows account could not be verified; no schedules were removed.' }
+            $sid
+        })
         $removed = @()
         $removedOwnerSids = @()
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {

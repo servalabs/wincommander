@@ -1289,7 +1289,7 @@ function Get-FleetForensicProjection {
 
             'protection_history' {
                 $result = Get-DefenderHistoryInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read protection-history summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete protection-history summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Protection history'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -4371,34 +4371,21 @@ function Get-UsageTraceLogsInfo {
 function Get-DefenderHistoryInfo {
     # Returns Windows Defender scan-history records + the MpCmdRun.log support log.
     # System path (ProgramData) — ACL-guarded like the other Phase E system viewers.
+    $history = Get-CleanupRecursiveFileInventory -Root (Join-Path $env:ProgramData 'Microsoft\Windows Defender\Scans\History\Service') -Source 'ScanHistory'
+    $files = [Collections.Generic.List[object]]::new()
+    foreach ($file in $history.files) { $files.Add($file) }
+    $partial = [bool]$history.partial
+    $mpLog = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Support\MpCmdRun.log'
     try {
-        $files = @()
-        $historyDir = "$env:ProgramData\Microsoft\Windows Defender\Scans\History\Service"
-        if (Test-Path $historyDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $historyDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'ScanHistory'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
+        try { $f = Get-Item -LiteralPath $mpLog -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $f = $null }
+        if ($f) {
+            if ($f.PSIsContainer) { throw 'The Defender support log is not a file.' }
+            $files.Add(@{ source='Support'; name=$f.Name; path=$f.FullName; sizeKB=[math]::Round($f.Length / 1KB, 1); modified=$f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
         }
-        $mpLog = "$env:ProgramData\Microsoft\Windows Defender\Support\MpCmdRun.log"
-        if (Test-Path $mpLog -ErrorAction SilentlyContinue) {
-            $f = Get-Item -Path $mpLog -Force -ErrorAction SilentlyContinue
-            if ($f) {
-                $files += @{
-                    source   = 'Support'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some protection history locations could not be checked.' } else { $null } }
 }
 
 # --- Additional system/app usage viewers (read-only, no admin required) ---

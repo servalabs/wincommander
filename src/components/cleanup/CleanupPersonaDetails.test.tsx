@@ -15,6 +15,16 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("keeps colons in plain returned records as values, not column headings", () => {
+    const category = ALL_CATEGORIES.find(item => item.id === "execCache")!;
+    const data = { records: ["Application: sample.exe", "Path: C:\\Example"], total: 2 };
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={2} items={[]} rawData={data} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain('<th scope="col">Value</th>');
+    expect(html).toContain("Application: sample.exe");
+    expect(html).toContain("Path: C:\\Example");
+    expect(html).not.toContain('<th scope="col">Application</th>');
+    expect(html).not.toContain('<th scope="col">Path</th>');
+  });
   test("retains the original timestamp when showing local time", () => {
     const original = "2026-10-20T12:00:00.123+05:30";
     const [row] = getSafeCleanupPreview("prefetchFiles", { entries: [{ name: "App", lastRun: original }] });

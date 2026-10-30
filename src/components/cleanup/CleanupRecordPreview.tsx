@@ -220,7 +220,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     .flatMap(key => Array.isArray(input[key]) && input[key].length ? [{ key, values: input[key] as unknown[] }] : []);
   if (collections.length) return collections.flatMap(({ key, values }) => values.map((value, index) => {
     const text = visibleText(value);
-    const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text ? [text] : [];
+    const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text ? [`Value: ${text}`] : [];
     if (collections.length > 1) facts.unshift(`Dataset: ${key}`);
     return { label: `Record ${index + 1}`, facts };
   }));
