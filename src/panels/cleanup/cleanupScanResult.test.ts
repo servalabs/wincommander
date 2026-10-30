@@ -126,7 +126,7 @@ describe("cleanup scan results", () => {
       expect(result.raw).toEqual(data);
       const failed = readCleanupScanResult(category, { success: true, data: { ...data, error: true, message: "Reader failed." } });
       expect(failed.error).toBe("Reader failed.");
-      expect(failed.raw).toBeUndefined();
+      expect(failed.raw).toEqual({ ...data, error: true, message: "Reader failed." });
     }
   });
 

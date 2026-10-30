@@ -4208,46 +4208,29 @@ function Get-ActivitiesTimelineInfo {
     # Returns Windows Timeline / Activities History database (ActivitiesCache.db)
     # + its WAL/SHM sidecars, recursed across every per-identity subfolder
     # under ConnectedDevicesPlatform.
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $cdpDir = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
     try {
-        $cdpDir = "$env:LOCALAPPDATA\ConnectedDevicesPlatform"
-        $files = @()
-        if (Test-Path $cdpDir -ErrorAction SilentlyContinue) {
-            $targets = @(Get-ChildItem -Path $cdpDir -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'ConnectedDevicesPlatform'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+        try { $root = Get-Item -LiteralPath $cdpDir -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Activity location is not a directory.' }
+            Get-ChildItem -LiteralPath $cdpDir -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source='ConnectedDevicesPlatform'; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some activity locations could not be checked.' } else { $null } }
 }
 
 function Get-RdpBitmapCacheInfo {
     # Returns RDP client bitmap-cache tile files (thumbnails cached from past
     # outgoing RDP sessions).
-    try {
-        $rdpCacheDir = "$env:LOCALAPPDATA\Microsoft\Terminal Server Client\Cache"
-        $files = @()
-        if (Test-Path $rdpCacheDir -ErrorAction SilentlyContinue) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $rdpCacheDir '*.bin') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $rdpCacheDir '*.bmc') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'Terminal Server Client\Cache'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $result = Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Terminal Server Client\Cache') -Patterns @('*.bin', '*.bmc')
+    foreach ($file in $result.files) { $file.source = 'Terminal Server Client\Cache' }
+    $result
 }
 
 function Get-ServicingLogsInfo {
@@ -4426,23 +4409,25 @@ function Get-EmbeddedWebCacheInfo {
     # embed a Chromium WebView2 runtime whose per-app profile cache lives under
     # a nested "EBWebView" folder somewhere below LOCALAPPDATA. -Depth 4 caps
     # the walk so this stays a bounded scan, not a slow full-profile crawl.
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
-        if (Test-Path $env:LOCALAPPDATA -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction SilentlyContinue | ForEach-Object {
-                $sizeBytes = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-                if (-not $sizeBytes) { $sizeBytes = 0 }
-                $files += @{
-                    source   = Split-Path (Split-Path $_.FullName -Parent) -Leaf
-                    name     = 'EBWebView'
-                    sizeKB   = [math]::Round($sizeBytes / 1KB, 1)
-                    modified = ''
-                }
+        try { $root = Get-Item -LiteralPath $env:LOCALAPPDATA -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Application data location is not a directory.' }
+            Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction Stop | ForEach-Object {
+                $directory = $_
+                $sizeBytes = [long]0
+                try {
+                    Get-ChildItem -LiteralPath $directory.FullName -Recurse -File -Force -ErrorAction Stop | ForEach-Object { $sizeBytes += $_.Length }
+                } catch { $partial = $true }
+                $files.Add(@{ source=(Split-Path (Split-Path $directory.FullName -Parent) -Leaf); name='EBWebView'; path=$directory.FullName; sizeKB=[math]::Round($sizeBytes / 1KB, 1); modified=$directory.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); coverage='limited'; coverageNote='Checks application data to depth 4 for WebView folders.'; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some WebView cache locations could not be checked.' } else { $null } }
 }
 
 function Get-P2PUpdateCacheInfo {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
+import { readCleanupScanResult } from "../../panels/cleanup/cleanupScanResult";
 import { summarizeCleanupGroups, summarizeCleanupResult } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
 import CleanupTraceCard from "./CleanupTraceCard";
@@ -43,6 +44,17 @@ describe("cleanup coverage presentation", () => {
     expect(failed).not.toContain("secret-token");
     const populated = renderToStaticMarkup(<CleanupTraceCard category={history} count={1} preview={["password=secret-token"]} rawData={{ entries: [{ command: "password=secret-token" }], total: 1 }} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
     expect(populated).toContain("password=secret-token");
+  });
+
+  test("shows captured records even when their inventory total is inconsistent", () => {
+    const raw = { files: [{ name: "observed.db", path: "C:\\Example\\observed.db" }], total: 2 };
+    const result = readCleanupScanResult(category, { success: true, data: raw });
+    expect(result.count).toBe(-1);
+    expect(result.raw).toEqual(raw);
+    const detail = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={result.count} items={result.items} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(detail).toContain("Scan failed");
+    expect(detail).toContain("observed.db");
+    expect(detail).toContain("disabled");
   });
 
   test("unknown preview counts stay unknown and account totals use record previews", () => {
