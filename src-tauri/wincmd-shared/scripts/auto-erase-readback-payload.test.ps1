@@ -32,6 +32,13 @@ try {
     $script:fixtureTask.Actions[0].Arguments = $argument
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    $script:fixtureTask.Triggers[0].Repetition.Interval = 'PT30M'
+    $changedInterval = Get-AutoEraseSchedules
+    if ($changedInterval.error -or $changedInterval.schedules[0].payloadVerified) { throw 'A Scheduler interval that differs from the payload cadence must not be verified.' }
+    $script:fixtureTask.Triggers[0].Repetition.Interval = 'PT60M30S'
+    $fractionalInterval = Get-AutoEraseSchedules
+    if ($fractionalInterval.error -or $fractionalInterval.schedules[0].payloadVerified) { throw 'A fractional-minute Scheduler interval must not be rounded into a verified cadence.' }
+    $script:fixtureTask.Triggers[0].Repetition.Interval = 'PT60M'
     if ($argument -notmatch '-File\s+"([^"]+)"') { throw 'Fixture payload path missing.' }
     $generatedPath = $Matches[1]
     $generated = [IO.File]::ReadAllText($generatedPath)

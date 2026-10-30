@@ -112,7 +112,7 @@ describe("System Cleanup display projection", () => {
     const unknown = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleState="unavailable" scheduleRecord={record} />);
     expect(unknown).not.toContain("Scheduled task history");
     const missingScript = renderToStaticMarkup(<CleanupDisplayDetails {...props} scheduleRecord={{ ...record, payloadVerified: false }} />);
-    expect(missingScript).toContain("cleanup script could not be verified");
+    expect(missingScript).toContain("cleanup script or wipe interval could not be verified");
   });
 
   test("incomplete and failed details never render a clean result in either view", () => {

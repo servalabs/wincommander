@@ -6378,21 +6378,38 @@ function Get-CleanupSummaryAllUsers {
                             $defaultK = "$hiveRoot\Software\Microsoft\Terminal Server Client\Default"
                             if (Test-CleanupSummaryPath $defaultK) {
                                 $props = (Get-Item $defaultK -EA Stop).Property |
-                                    Where-Object { $_ -like 'MR*' }
-                                $count += @($props).Count
-                                $items += @($props) | Select-Object -First $previewMax |
-                                    ForEach-Object { (Get-ItemPropertyValue $defaultK $_ -EA Stop) }
+                                    Where-Object { $_ -match '^MRU\d+$' }
+                                foreach ($property in @($props)) {
+                                    $hostValue = Get-ItemPropertyValue -LiteralPath $defaultK -Name $property -EA Stop
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ type='MRU'; host=$hostValue; key=$property }
+                                        $items += [string]$hostValue
+                                    }
+                                }
                             }
                             $serversK = "$hiveRoot\Software\Microsoft\Terminal Server Client\Servers"
                             if (Test-CleanupSummaryPath $serversK) {
-                                $servers = Get-ChildItem $serversK -EA Stop
-                                $count  += @($servers).Count
-                                $items  += @($servers) | Select-Object -First $previewMax |
-                                    ForEach-Object { $_.PSChildName }
+                                $servers = Get-ChildItem -LiteralPath $serversK -EA Stop
+                                foreach ($server in @($servers)) {
+                                    $serverProps = Get-ItemProperty -LiteralPath $server.PSPath -EA Stop
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ type='Server'; host=$server.PSChildName; username=$serverProps.UsernameHint; key=$server.PSPath }
+                                        $items += $server.PSChildName
+                                    }
+                                }
                             }
                             # Default.rdp file (profile-relative)
                             $defaultRdp = Join-Path (Split-Path $appData -Parent | Split-Path -Parent) 'Documents\Default.rdp'
-                            if (Test-CleanupSummaryPath $defaultRdp) { $count++ ; $items += 'Default.rdp' }
+                            if (Test-CleanupSummaryPath $defaultRdp) {
+                                $file = Get-Item -LiteralPath $defaultRdp -Force -EA Stop
+                                $count++
+                                if ($records.Count -lt $previewMax) {
+                                    $records += @{ type='DefaultRDP'; host='Default.rdp'; key=$defaultRdp; lastModified=$file.LastWriteTime.ToString('o') }
+                                    $items += 'Default.rdp'
+                                }
+                            }
                         } else { $items = @("[registry unavailable]") }
                     }
                     'shellBags' {
