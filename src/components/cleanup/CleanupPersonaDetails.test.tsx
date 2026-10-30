@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, ClipboardImage, ClipboardItemDetails, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, readClipboardDetailChunk, parseClipboardDetailBytes, clipboardEmptyMessage, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, ClipboardImage, ClipboardItemDetails, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, readClipboardDetailChunk, parseClipboardDetailBytes, clipboardEmptyMessage, clipboardRefreshNotice, preserveClipboardScanAfterFailedRefresh, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -102,10 +102,20 @@ describe("System Cleanup persona details", () => {
     const scan = { historyReadStatus: "complete", historyItems: [{}, {}] };
     expect(clipboardRefreshNotice(scan, { historyReadStatus: "complete", historyItems: [] })).toContain("changed since the scan");
     expect(clipboardRefreshNotice(scan, { historyReadStatus: "complete", historyItems: [{}, {}] })).toContain("newer check");
-    expect(clipboardRefreshNotice(scan, { historyReadStatus: "unavailable", historyItems: [] })).toContain("unavailable");
+    expect(clipboardRefreshNotice(scan, { historyReadStatus: "unavailable", historyItems: [] })).toContain("earlier scan");
     expect(clipboardEmptyMessage([], "Clipboard history is disabled", "", true)).toContain("contents are unknown");
     expect(clipboardEmptyMessage([], null, "", false)).toContain("No clipboard items");
     expect(clipboardEmptyMessage([], "Clipboard history is disabled", "search", true)).toContain("No returned items match");
+  });
+  test("keeps earlier clipboard observations when an empty refresh fails", () => {
+    const scan = { historyReadStatus: "complete", historyItems: [{ preview: "previously observed" }] };
+    const failed = { historyReadStatus: "unavailable", historyItems: [], partial: true };
+    expect(preserveClipboardScanAfterFailedRefresh(scan, failed)).toBe(true);
+    expect(clipboardRefreshNotice(scan, failed)).toContain("earlier scan");
+    expect(getSafeCleanupPreview("clipboardHistory", scan)[0].facts).toContain("Preview: previously observed");
+    expect(preserveClipboardScanAfterFailedRefresh(scan, { historyReadStatus: "complete", historyItems: [] })).toBe(false);
+    expect(preserveClipboardScanAfterFailedRefresh(scan, { ...failed, historyItems: [{ preview: "new observation" }] })).toBe(false);
+    expect(preserveClipboardScanAfterFailedRefresh({ historyItems: [] }, failed)).toBe(false);
   });
   test("keeps binary array details in one column without dropping any bytes", () => {
     const proxy = ALL_CATEGORIES.find(category => category.id === "proxyCache")!;

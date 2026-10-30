@@ -396,11 +396,20 @@ export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: 
 }
 
 export function clipboardRefreshNotice(scan: unknown, refreshed: { historyItems?: unknown[]; historyReadStatus?: string; partial?: boolean; message?: string }): string | null {
+  if (preserveClipboardScanAfterFailedRefresh(scan, refreshed)) return "Clipboard details could not be refreshed. Showing the earlier scan; its items may have changed.";
   if (refreshed.partial || refreshed.historyReadStatus !== "complete") return refreshed.message || "Some clipboard details may be unavailable.";
   if (isObject(scan) && scan.historyReadStatus === "complete" && scan.partial !== true && Array.isArray(scan.historyItems) && Array.isArray(refreshed.historyItems) && scan.historyItems.length !== refreshed.historyItems.length) {
     return "Clipboard history changed since the scan. These details are from a newer check; scan again to update the total.";
   }
   return "Clipboard details are from a newer check. The total above is from the earlier scan; scan again to update it.";
+}
+
+// An empty failed refresh does not establish that the earlier observations
+// disappeared. Keep those rows visible and label them as the earlier scan.
+export function preserveClipboardScanAfterFailedRefresh(scan: unknown, refreshed: { historyItems?: unknown[]; historyReadStatus?: string; partial?: boolean }): boolean {
+  return isObject(scan) && Array.isArray(scan.historyItems) && scan.historyItems.length > 0 &&
+    Array.isArray(refreshed.historyItems) && refreshed.historyItems.length === 0 &&
+    (refreshed.partial === true || refreshed.historyReadStatus !== "complete");
 }
 
 export function clipboardEmptyMessage(items: unknown[] | null, notice: string | null, query: string, incomplete: boolean): string {
@@ -540,7 +549,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       void backendRef.current.getClipboardHistoryStatus(true).then(result => {
         if (!active) return;
         if (result.success && result.data && Array.isArray(result.data.historyItems)) {
-          setClipboardItems(result.data.historyItems);
+          if (!preserveClipboardScanAfterFailedRefresh(rawData, result.data)) setClipboardItems(result.data.historyItems);
           setClipboardIncomplete(result.data.partial === true || result.data.historyReadStatus !== "complete");
           setClipboardNotice(clipboardRefreshNotice(rawData, result.data));
         } else { setClipboardIncomplete(true); setClipboardNotice(result.error || "Clipboard details could not be retrieved."); }
