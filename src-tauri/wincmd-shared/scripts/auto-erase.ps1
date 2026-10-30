@@ -2365,7 +2365,13 @@ function Set-AutoEraseScheduleCore {
         if ($migration.error) { throw $migration.message }
         Initialize-SystemMaintenanceTaskFolder
         $taskName = Get-AutoEraseTaskName $CategoryId $ownerSid
-        $existing = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction SilentlyContinue
+        # Enumerate with terminating errors: suppressing a Scheduler access error
+        # here could mistake an occupied name for an absent task and force-replace it.
+        $existingTasksAtName = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+            $_.TaskPath -eq $script:SystemMaintenanceTaskPath -and $_.TaskName -eq $taskName
+        })
+        if ($existingTasksAtName.Count -gt 1) { throw 'The existing task name could not be verified uniquely.' }
+        $existing = if ($existingTasksAtName.Count -eq 1) { $existingTasksAtName[0] } else { $null }
         if ($existing -and -not (Get-AutoEraseTaskIdentity $existing)) {
             throw 'A task with this name belongs to another application. It was left unchanged.'
         }
@@ -2436,6 +2442,22 @@ function Set-AutoEraseScheduleCore {
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
+
+        # A successful registration call alone is not proof that Scheduler retained
+        # the requested task. Fail closed when its independent readback is missing
+        # or differs; never delete a task in response to a failed verification.
+        $saved = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction Stop
+        $savedIdentity = if ($saved) { Get-AutoEraseTaskIdentity $saved } else { $null }
+        $savedActions = @($saved.Actions)
+        $savedIntervals = @($saved.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ })
+        if (-not $savedIdentity -or $savedIdentity.categoryId -ne $CategoryId -or $savedIdentity.ownerSid -ne $ownerSid -or
+            $saved.TaskPath -ne $script:SystemMaintenanceTaskPath -or $saved.TaskName -ne $taskName -or
+            $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
+            [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
+            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or $savedIntervals.Count -ne 1 -or
+            [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
+            throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
+        }
 
         @{
             status          = 'enabled'

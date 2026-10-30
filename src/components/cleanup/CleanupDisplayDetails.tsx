@@ -4,6 +4,7 @@ import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import type { CleanupScheduleRecord } from "../../panels/cleanup/cleanupScheduleReadback";
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
 import { isManualOnlyCleanupSchedule } from "../../panels/cleanup/cleanupManualPolicy";
+import { getCleanupScanFacts } from "../../panels/cleanup/cleanupScanFacts";
 import CleanupRecordPreview, { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, hasLimitedCleanupCoverage, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 
@@ -47,6 +48,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     ? rawData : { records: items }, [category.id, rawData, items]);
   const name = cleanupDisplayName(category, mode);
   const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
+  const scanFacts = getCleanupScanFacts(rawData, summary.state === "error");
   const groupedLimited = groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const limitedScope = hasLimitedCleanupCoverage(category.id, raw) || groupedLimited ? (category.id === "walFiles"
     ? "Checks two app-data locations, up to five folder levels deep."
@@ -91,6 +93,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           {summary.state === "partial" ? <p>Some sources were not checked. The result is incomplete.</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
+          {!groupedItems?.length && scanFacts.length ? <section aria-label="Scan details"><h3>Scan details</h3><dl className="cleanup-readable-detail__facts">{scanFacts.map((fact, index) => <div key={`${fact.label}-${index}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl></section> : null}
           {!groupedItems?.length && (["found", "partial", "limited", "inconsistent"].includes(summary.state) || getSafeCleanupPreview(category.id, previewData).length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={previewData} mode={mode} accountLabel={accountLabel} accountName={accountName} /> : null}
           {summary.count !== null && summary.count > 0 && summary.sampleCount === 0 && !groupedItems?.length && !getSafeCleanupPreview(category.id, previewData).length ? <p>No preview samples were supplied. The scan still reported {summary.count} {cleanupCountUnit(category.id, summary.count)}.</p> : null}
           {summary.count !== null && summary.count > 0 && summary.sampleCount !== 0 && !groupedItems?.length && getSafeCleanupPreview(category.id, previewData).length === 0 ? <p>No preview details are available; the scan total remains above.</p> : null}
@@ -123,9 +126,13 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
             <p className="cleanup-readable-detail__privacy">Record details are based on the data returned by this scan.</p>
           </> : null}
           {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><p>Only reported accounts are shown.</p>
-            {groupedItems.map((group, index) => <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
+            {groupedItems.map((group, index) => {
+              const failed = group.count < 0 || summarizeCleanupResult({ id: category.id, count: group.count, items: group.items, raw: group.rawData }).state === "error";
+              const facts = getCleanupScanFacts(group.rawData, failed);
+              return <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
+              {facts.length ? <dl className="cleanup-readable-detail__facts">{facts.map((fact, factIndex) => <div key={`${fact.label}-${factIndex}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}
               {group.count >= 0 && (getSafeCleanupPreview(category.id, group.rawData).length > 0 || group.items.length > 0) ? <CleanupRecordPreview categoryId={category.id} rawData={getSafeCleanupPreview(category.id, group.rawData).length ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : group.count < 0 ? <p>This account could not be checked.</p> : null}
-            </div>)}
+            </div>})}
           </section> : null}
         </div>
         <footer className="trace-dialog__footer"><Button text="Close" minimal onClick={onClose} />

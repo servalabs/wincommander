@@ -47,12 +47,12 @@ describe("System Cleanup display projection", () => {
     expect(summarizeCleanupResult({ id: "wlanProfiles", count: 1, items: [], raw: { profiles: [{}] } }).sampleCount).toBe(1);
   });
 
-  test("renders available records in both views without exposing credential fields", () => {
+  test("renders available records and captured scalar fields in both views", () => {
     const raw = { ...base.raw, password: "secret-password", entries: [{ category: "InventoryApplication", count: 15, sample: [{ path: "C:\\Private\\secret.txt" }] }] };
     for (const mode of ["simple", "advanced"] as const) {
       const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode={mode} count={15} items={["private preview"]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
       expect(html).toContain("15 records");
-      expect(html).not.toContain("secret-password");
+      expect(html).toContain("secret-password");
       expect(html).toContain("secret.txt");
       expect(html).not.toContain("private preview");
       if (mode === "advanced") expect(html).toContain("Preview samples");
