@@ -9,6 +9,13 @@ declare const Bun: {
 const read = (path: string) => Bun.file(path).text();
 
 describe("System Cleanup panel reconstruction contracts", () => {
+  test("account inventory failures show a retry without removing the account picker", async () => {
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+    expect(grid).toContain('accountInventoryState === "error"');
+    expect(grid).toContain('Could not load Windows accounts. Other accounts may be missing.');
+    expect(grid).toContain('onClick={() => void refreshAccountInventory()}');
+    expect(grid).toContain("availableUsers.map");
+  });
   test("the cleanup route delegates to the reconstructed panel", async () => {
     const route = await read("src/panels/cleanup/index.tsx");
 

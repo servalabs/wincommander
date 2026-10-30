@@ -58,6 +58,8 @@ export default function CleanupCategoryGrid({
     clearAllExcludes,
     setClearAllExcludes,
     availableUsers,
+    accountInventoryState,
+    refreshAccountInventory,
     currentUser,
     isAdminUser,
     selectedUser,
@@ -547,7 +549,11 @@ export default function CleanupCategoryGrid({
                   <Icon icon="user" size={13} />
                   <span>
                     {availableUsers.length === 0
-                      ? "Loading profile..."
+                      ? accountInventoryState === "loading"
+                        ? "Loading profiles..."
+                        : accountInventoryState === "error"
+                          ? "Profiles unavailable"
+                          : "No profiles found"
                       : `${selectedDisplay || availableUsers[0]?.displayName || availableUsers[0]?.name || "Current user"} (you)`}
                   </span>
                 </div>
@@ -578,7 +584,13 @@ export default function CleanupCategoryGrid({
                   />
                 </>
               )}
-              {!isAdminUser && (
+              {accountInventoryState === "error" && (
+                <div role="alert" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                  <span>Could not load Windows accounts. Other accounts may be missing.</span>
+                  <Button small minimal icon="refresh" text="Retry" onClick={() => void refreshAccountInventory()} />
+                </div>
+              )}
+              {accountInventoryState === "ready" && !isAdminUser && (
                 <div
                   style={{
                     fontSize: 10,

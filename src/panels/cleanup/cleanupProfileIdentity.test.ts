@@ -1,7 +1,22 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
+import { isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from './cleanupProfileIdentity';
 
 describe('cleanup account identity', () => {
+  test('distinguishes an empty account list from failed or unavailable inventory', async () => {
+    expect(await readCleanupProfileInventory(async () => ({ success: true, data: { profiles: [] } })))
+      .toEqual({ ok: true, data: { profiles: [] } });
+    expect(await readCleanupProfileInventory(async () => ({ success: false, data: null }))).toEqual({ ok: false });
+    expect(await readCleanupProfileInventory(async () => { throw new Error('unavailable'); })).toEqual({ ok: false });
+    expect(await readCleanupProfileInventory(async () => ({ success: true, data: null }))).toEqual({ ok: false });
+  });
+  test('keeps real accounts regardless of words in their names or paths', () => {
+    expect(isVisibleCleanupProfile({ name: 'SandboxAdmin', path: 'C:\\Users\\SandboxAdmin' })).toBe(true);
+    expect(isVisibleCleanupProfile({ name: 'Codex', displayName: 'Alex Codex', path: 'C:\\Users\\Codex' })).toBe(true);
+    expect(isVisibleCleanupProfile({ name: 'Alice', path: 'D:\\codex\\Users\\Alice' })).toBe(true);
+    expect(isVisibleCleanupProfile({ name: 'Public', path: 'C:\\Users\\Public' })).toBe(false);
+    expect(isVisibleCleanupProfile({ name: 'Alias', path: 'C:\\Users\\Public\\' })).toBe(false);
+    expect(isVisibleCleanupProfile({ name: 'Default', path: 'C:\\Users\\Default' })).toBe(false);
+  });
   test('uses a verified current profile, including a renamed account', () => {
     expect(resolveCurrentCleanupProfile([{ name: 'OldFolder', isCurrent: true }, { name: 'Other', isCurrent: false }], 'RenamedAccount')).toBe('OldFolder');
   });

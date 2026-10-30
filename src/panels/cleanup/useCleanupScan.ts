@@ -14,7 +14,7 @@ import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupSch
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
-import { resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
+import { isVisibleCleanupProfile, readCleanupProfileInventory, resolveCurrentCleanupProfile } from "./cleanupProfileIdentity";
 import { createCleanupVerification, retainCleanupVerification, type CleanupVerification } from "./cleanupVerification";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import {
@@ -162,34 +162,6 @@ export const MULTI_USER_CLEANUP_IDS = new Set<string>([
     'webCache', 'thumbnailDb', 'notificationDb', 'activitiesTimeline',
     'rdpBitmapCache', 'developerCaches',
 ]);
-const HIDDEN_PROFILE_NAMES = new Set([
-    "default",
-    "default user",
-    "defaultuser0",
-    "public",
-    "all users",
-    "sandbox",
-    "wdagutilityaccount",
-]);
-const HIDDEN_PROFILE_FRAGMENTS = [
-    "sandbox",
-    "codex",
-    "defaultuser",
-    "wdagutilityaccount",
-];
-
-function isRealVisibleProfile(profile: { name?: string; displayName?: string; path?: string }): boolean {
-    const name = (profile.name ?? "").trim();
-    if (!name) return false;
-    const displayName = (profile.displayName ?? "").trim();
-    const path = (profile.path ?? "").toLowerCase();
-    const normalized = name.toLowerCase();
-    if (HIDDEN_PROFILE_NAMES.has(normalized) || HIDDEN_PROFILE_NAMES.has(displayName.toLowerCase())) return false;
-    if (HIDDEN_PROFILE_FRAGMENTS.some(fragment => normalized.includes(fragment) || displayName.toLowerCase().includes(fragment) || path.includes(fragment))) return false;
-    if (path.endsWith("\\users\\default") || path.endsWith("\\users\\public")) return false;
-    return true;
-}
-
 // Subscribers: the mounted component registers a setter so module-level
 // code can push updates into React state even from background scans.
 let _cacheSubscriber: ((cache: Record<string, CardData>) => void) | null = null;
@@ -354,6 +326,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // When a non-current user is selected, scopeAware cards are populated from
     // Get-CleanupSummaryAllUsers scanned for that single user.
     const [availableUsers, setAvailableUsers] = useState<Array<{ name: string; displayName?: string; path: string; isCurrent?: boolean }>>([]);
+    const [accountInventoryState, setAccountInventoryState] = useState<"loading" | "ready" | "error">("loading");
     const [currentUser, setCurrentUser] = useState<string>('');
     const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
     const [selectedUser, setSelectedUser] = useState<string>('');
@@ -566,25 +539,26 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         return null;
     };
 
+    const refreshAccountInventory = async () => {
+        setAccountInventoryState("loading");
+        const result = await readCleanupProfileInventory(getUserProfiles);
+        if (!result.ok) {
+            setAccountInventoryState("error");
+            return;
+        }
+        const data = result.data;
+        const realProfiles = (data.profiles ?? []).filter(isVisibleCleanupProfile);
+        const current = resolveCurrentCleanupProfile(realProfiles, data.currentUser);
+        setAvailableUsers(realProfiles);
+        setCurrentUser(current);
+        setIsAdminUser(!!data.isAdmin);
+        setSelectedUser((prev) => prev || current);
+        setAccountInventoryState("ready");
+    };
+
     useEffect(() => {
         if (!auxiliaryStateEnabled) return;
-        // Populate the user switcher immediately. Schedule migration/hydration
-        // runs beside it so the profile selector is present as soon as the
-        // panel opens instead of waiting behind cleanup task probes.
-        (async () => {
-            try {
-                const res = await getUserProfiles();
-                const data = res.data;
-                if (res.success && data) {
-                    const realProfiles = (data.profiles ?? []).filter(isRealVisibleProfile);
-                    const current = resolveCurrentCleanupProfile(realProfiles, data.currentUser);
-                    setAvailableUsers(realProfiles);
-                    setCurrentUser(current);
-                    setIsAdminUser(!!data.isAdmin);
-                    setSelectedUser((prev) => prev || current);
-                }
-            } catch {}
-        })();
+        void refreshAccountInventory();
         void refreshSchedules();
         // Stable refs from useBackend's useMemo — safe to omit from deps.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1302,6 +1276,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         clearAllExcludes,
         setClearAllExcludes,
         availableUsers,
+        accountInventoryState,
+        refreshAccountInventory,
         currentUser,
         isAdminUser,
         selectedUser,

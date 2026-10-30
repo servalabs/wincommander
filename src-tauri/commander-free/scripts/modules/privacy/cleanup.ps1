@@ -4842,23 +4842,18 @@ function Get-PreviousWindowsInstallInfo {
 #   Invoke-CleanupClearAllUsers — orchestrate across all/selected accounts
 # ============================================================================
 
-# Returns true for real, user-facing profile folders. Excludes Windows
-# defaults plus automation/sandbox profiles that can have S-1-5-21 SIDs but
-# are not meaningful accounts for per-user cleanup.
+# Exclude only Windows' known default and utility profiles. Real accounts can
+# contain words such as "sandbox" in their name or profile path; callers also
+# check Win32_UserProfile.Special, SID and supported profile location.
 function Test-WCVisibleUserProfile {
     param(
         [string]$Name,
         [string]$DisplayName,
         [string]$Path
     )
-    $hiddenExact = @('Default', 'Default User', 'defaultuser0', 'Public', 'All Users', 'Sandbox', 'WDAGUtilityAccount')
-    $hiddenFragments = @('sandbox', 'codex', 'defaultuser', 'wdagutilityaccount')
+    $hiddenExact = @('Default', 'Default User', 'defaultuser0', 'Public', 'All Users', 'WDAGUtilityAccount')
     if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
     if ($hiddenExact -contains $Name -or $hiddenExact -contains $DisplayName) { return $false }
-    $probe = "$Name $DisplayName $Path".ToLowerInvariant()
-    foreach ($fragment in $hiddenFragments) {
-        if ($probe.Contains($fragment)) { return $false }
-    }
     return $true
 }
 
@@ -4877,7 +4872,8 @@ function Get-UserProfiles {
     $mySid = ''
     try { $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
 
-    $profiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+    try {
+    $profiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
         Where-Object {
             -not $_.Special -and
             $_.SID -match '^S-1-5-21-' -and
@@ -4894,6 +4890,9 @@ function Get-UserProfiles {
                 @{ name = $leaf; displayName = $display; path = $_.LocalPath; sid = $_.SID; isCurrent = ($_.SID -eq $mySid) }
             }
         }
+    } catch {
+        return @{ error = $true; message = 'Windows user profiles could not be read.'; profiles = @(); total = 0; currentUser = ''; currentSid = $mySid; isAdmin = [bool](Test-IsAdmin) }
+    }
     # currentUser is the current SID's profile FOLDER name (so it matches the
     # `name` keys the UI uses), not $env:USERNAME — otherwise selecting your own
     # account would be treated as "another user".
