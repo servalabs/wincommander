@@ -30,7 +30,11 @@ export function readCleanupUserSummary(data: {
     // Invalid record shapes make the scan incomplete, but are still returned
     // observations. Keep them for display instead of silently discarding them.
     const observed = records;
-    const raw = observed.length || Object.keys(scanFacts).length || data.truncated === true ? {
+    // An empty partial scan still carries meaningful coverage: it is neither
+    // a failed request nor proof that the selected account has no records.
+    const explicitlyPartial = data.error !== true && !['error', 'failed', 'unknown', 'unavailable'].includes(data.status ?? '') &&
+      (data.partial === true || data.complete === false || data.status === 'partial');
+    const raw = observed.length || Object.keys(scanFacts).length || data.truncated === true || explicitlyPartial ? {
       records: observed, scanFacts, partial: true,
       ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
       ...(data.truncated === true ? { truncated: true } : {}),

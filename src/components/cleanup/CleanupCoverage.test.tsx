@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
-import { readCleanupScanResult } from "../../panels/cleanup/cleanupScanResult";
+import { readCleanupScanResult, readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import { cleanupScanFailure } from "../../panels/cleanup/cleanupScanFailure";
 import { summarizeCleanupGroups, summarizeCleanupResult } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
@@ -11,6 +11,18 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("an empty partial selected-account scan retains its coverage and stays incomplete", () => {
+    const cache = ALL_CATEGORIES.find(item => item.id === "passwordManagerCaches")!;
+    const result = readCleanupUserSummary({ count: 0, records: [], partial: true, status: "partial", coverage: "Selected locations only", message: "Only selected locations were checked." });
+    expect(result.count).toBe(-1);
+    const card = renderToStaticMarkup(<CleanupTraceCard category={cache} count={result.count} preview={[]} rawData={result.raw} error={result.error} loading={false} clearing={false} onViewDetails={() => {}} />);
+    expect(card).toContain('data-cleanup-state="incomplete"');
+    expect(card).not.toContain("Scan failed");
+    const details = renderToStaticMarkup(<CleanupDisplayDetails category={cache} mode="advanced" count={result.count} items={[]} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(details).toContain("Scan incomplete");
+    expect(details).toContain("Selected locations only");
+    expect(details).not.toContain("No items found");
+  });
   test("a zero in a limited scope is not presented as a clean device", () => {
     const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={0} preview={[]} rawData={limited} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
     expect(html).toContain('data-cleanup-state="limited"');

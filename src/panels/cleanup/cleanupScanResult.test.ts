@@ -58,7 +58,7 @@ describe("cleanup scan results", () => {
     expect(readCleanupUserSummary({ count: 0, coverage: 'Only command lines were checked.', records: [] }).raw).toEqual({ records: [], coverage: 'Only command lines were checked.' });
     const partial = readCleanupUserSummary({ count: 0, coverage: 'limited', records: [], partial: true, message: 'Incomplete.' });
     expect(partial.count).toBe(-1);
-    expect(partial.raw).toBeUndefined();
+    expect(partial.raw).toEqual({ records: [], scanFacts: {}, partial: true, coverage: 'limited' });
     expect(partial.error).toBe('Incomplete.');
   });
 
@@ -66,7 +66,8 @@ describe("cleanup scan results", () => {
     for (const state of [{ error: true }, { partial: true }, { complete: false }, { status: 'unknown' }, { status: 'partial' }]) {
       const result = readCleanupUserSummary({ count: 0, records: [], ...state });
       expect(result.count).toBe(-1);
-      expect(result.raw).toBeUndefined();
+      if ('partial' in state || 'complete' in state || ('status' in state && state.status === 'partial')) expect(result.raw).toEqual({ records: [], scanFacts: {}, partial: true });
+      else expect(result.raw).toBeUndefined();
       expect(!!result.error).toBe(true);
     }
     expect(readCleanupUserSummary({ count: 0 }).count).toBe(-1);
