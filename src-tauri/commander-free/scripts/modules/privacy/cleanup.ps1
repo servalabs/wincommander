@@ -1078,8 +1078,8 @@ function Get-FleetForensicProjection {
             }
 
             'amcache' {
-                $result = Get-AmcacheEntries
-                if ($result.error) { return (& $empty 'System Cleanup could not read Amcache summaries.') }
+                $result = Get-AmcacheEntries -FleetProjection
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
                 $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
@@ -1318,7 +1318,7 @@ function Get-FleetForensicProjection {
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
             'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error) { return (& $empty 'System Cleanup could not read BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
             'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
-            'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
+            'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
             'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
@@ -2752,6 +2752,7 @@ function Get-VirtualMemoryStatus {
 # ============================================================================
 
 function Get-AmcacheEntries {
+    param([switch]$FleetProjection)
     # Returns Amcache hive file info + live registry entry counts per category
     try {
         $entries = @()
@@ -2765,6 +2766,12 @@ function Get-AmcacheEntries {
             $hveSize = 0
             $hveExists = $false
         }
+
+        # An existing hive file is not itself a live registry inventory. If
+        # the expected mount is absent, category zeros do not prove it empty.
+        $mountAvailable = $true
+        try { $null = Get-Item -Path 'HKLM:\AppCompatCache\Amcache' -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $mountAvailable = $false }
 
         # Categories accessible as live registry (mounted hive)
         $cats = @(
@@ -2791,6 +2798,15 @@ function Get-AmcacheEntries {
                         $value = $props.($pair[1])
                         if ($value -is [string] -and $value.Trim()) { $entry[$pair[0]] = $value }
                     }
+                    # Keep every registry value the scan obtained, including
+                    # fields that differ between Windows versions.
+                    if (-not $FleetProjection) {
+                        $registryValues = @{}
+                        foreach ($property in $props.PSObject.Properties) {
+                            if ($property.Name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) { $registryValues[$property.Name] = $property.Value }
+                        }
+                        if ($registryValues.Count) { $entry.registryValues = $registryValues }
+                    }
                     $entry
                 }
             } catch [System.Management.Automation.ItemNotFoundException] {
@@ -2802,7 +2818,8 @@ function Get-AmcacheEntries {
         # of keys. Read the record-count key explicitly instead.
         $totalCount = 0
         foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = $totalCount }
+        $partial = $hveExists -and -not $mountAvailable
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = $totalCount; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'The Amcache file exists, but its registry inventory is not available.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -4369,23 +4386,40 @@ function Get-DefenderHistoryInfo {
 # --- Additional system/app usage viewers (read-only, no admin required) ---
 
 function Get-AppLaunchHistoryInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
         $bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
         $root = $null
         try { $root = Get-Item -LiteralPath $bamRoot -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { }
-        $files = @()
         if ($null -ne $root) {
-            foreach ($sid in @(Get-ChildItem -LiteralPath $bamRoot -ErrorAction Stop)) {
-                $key = Get-Item -LiteralPath $sid.PSPath -ErrorAction Stop
-                foreach ($name in @($key.Property)) {
-                    # BAM also stores control values; only executable values are launch records.
-                    if ($name -in @('Version', 'SequenceNumber')) { continue }
-                    $files += @{ source = 'BAM'; name = $name; userSid = $sid.PSChildName }
+            try {
+                Get-ChildItem -LiteralPath $bamRoot -ErrorAction Stop | ForEach-Object {
+                    $sid = $_
+                    try {
+                        $key = Get-Item -LiteralPath $sid.PSPath -ErrorAction Stop
+                        foreach ($name in @($key.Property)) {
+                            # BAM also stores control values; only executable values are launch records.
+                            if ($name -in @('Version', 'SequenceNumber')) { continue }
+                            try {
+                                $value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                                if ($null -eq $value) { throw 'The app launch value could not be read.' }
+                                $row = @{ source = 'BAM'; name = $name; userSid = $sid.PSChildName; value = $value; valueType = [string]$key.GetValueKind($name) }
+                                if ($value -is [byte[]] -and $value.Length -ge 8) {
+                                    try {
+                                        $fileTime = [BitConverter]::ToInt64($value, 0)
+                                        if ($fileTime -gt 0) { $row.lastRun = [DateTime]::FromFileTimeUtc($fileTime).ToString('o') }
+                                    } catch { }
+                                }
+                                $files.Add($row)
+                            } catch { $partial = $true; $files.Add(@{ source = 'BAM'; name = $name; userSid = $sid.PSChildName }) }
+                        }
+                    } catch { $partial = $true }
                 }
-            }
+            } catch { $partial = $true }
         }
-        @{ files = $files; total = $files.Count; countUnit = 'tracked programs' }
+        @{ files = @($files.ToArray()); total = $files.Count; countUnit = 'tracked programs'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some app launch history could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = "Failed to read app launch history: $($_.Exception.Message)" } }
 }

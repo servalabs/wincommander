@@ -2566,7 +2566,7 @@ function Set-AutoEraseScheduleCore {
             $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
             [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
             [string]$saved.Principal.LogonType -ne $expectedLogonType -or (-not $RunAsSystem -and [string]$saved.Principal.RunLevel -ne 'Highest') -or
-            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not $catchUpMatches -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
+            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not (Test-AutoEraseSettingsReadback $saved) -or -not $catchUpMatches -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
             [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
             throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
         }
@@ -2883,7 +2883,7 @@ function Get-AutoEraseSchedules {
             $payloadVerified = $false
             try {
                 $exactInterval = $repetition -and [Xml.XmlConvert]::ToTimeSpan($repetition) -eq [TimeSpan]::FromMinutes($minutes)
-                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity))
+                $payloadVerified = [bool]($exactInterval -and (Test-AutoEraseRunnablePayload -Task $t -Identity $identity -IntervalMinutes $minutes) -and (Test-AutoEraseTriggerReadback -Task $t -Identity $identity) -and (Test-AutoEraseSettingsReadback $t))
             } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
@@ -3010,6 +3010,19 @@ function Test-AutoEraseTriggerReadback {
         $timeTriggers[0].Enabled -ne $true -or $catchUp.Count -ne 1 -or $catchUp[0].Enabled -ne $true) { return $false }
     if (-not $isSystem -and (-not $catchUp[0].UserId -or (Resolve-AutoEraseSid ([string]$catchUp[0].UserId)) -ne $Identity.ownerSid)) { return $false }
     return $true
+}
+
+# These are the conditions requested when registering a schedule. A task can
+# still be Ready when Scheduler will skip it on battery, wait for idle/network,
+# or not catch up after a missed run. Treat an unavailable setting as unknown.
+function Test-AutoEraseSettingsReadback {
+    param($Task)
+    $settings = $Task.Settings
+    if (-not $settings) { return $false }
+    foreach ($field in @('DisallowStartIfOnBatteries', 'StopIfGoingOnBatteries', 'RunOnlyIfIdle', 'RunOnlyIfNetworkAvailable')) {
+        if ($settings.$field -isnot [bool] -or $settings.$field) { return $false }
+    }
+    return $settings.StartWhenAvailable -is [bool] -and $settings.StartWhenAvailable
 }
 
 # Copy task XML instead of recreating schedules: dates, disabled state, selected

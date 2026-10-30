@@ -28,8 +28,13 @@ function Get-Item {
     if ($script:mode -eq 'denied') { throw [UnauthorizedAccessException]::new('Denied') }
     if ($script:mode -eq 'empty') { throw [System.Management.Automation.ItemNotFoundException]::new('Missing') }
     if ($script:mode -eq 'lockedSid' -and $LiteralPath -eq 'MockSid2') { throw [UnauthorizedAccessException]::new('Denied SID') }
-    if ($LiteralPath -eq 'MockSid1') { return [pscustomobject]@{ Property=@('Version', 'SequenceNumber', '\Device\Mock\a.exe', '\Device\Mock\b.exe') } }
-    if ($LiteralPath -eq 'MockSid2') { return [pscustomobject]@{ Property=@('\Device\Mock\c.exe') } }
+    if ($LiteralPath -in @('MockSid1', 'MockSid2')) {
+        $names = if ($LiteralPath -eq 'MockSid1') { @('Version', 'SequenceNumber', '\Device\Mock\a.exe', '\Device\Mock\b.exe') } else { @('\Device\Mock\c.exe') }
+        $item = [pscustomobject]@{ Property=$names }
+        $item | Add-Member ScriptMethod GetValue { param($name, $default, $options) return ,([BitConverter]::GetBytes(([DateTime]'2026-01-01T00:00:00Z').ToFileTimeUtc())) }
+        $item | Add-Member ScriptMethod GetValueKind { param($name) 'Binary' }
+        return $item
+    }
     [pscustomobject]@{ Name=($LiteralPath -split '\\')[-1]; FullName=$LiteralPath; Length=0; LastWriteTime=[DateTime]'2026-10-01' }
 }
 function Get-ChildItem {
@@ -56,9 +61,10 @@ $srum = Get-SRUMData
 if ($srum.error -or $srum.total -ne 1 -or $srum.files.Count -ne 1 -or -not $srum.databaseExists -or $srum.historicalRecordsAvailable -or $srum.srumSizeMb -ne 0) { throw 'SRUM file existence was confused with usage records or zero-byte absence.' }
 if ($srum.ContainsKey('entries')) { throw 'SRUM fabricated historical entries from live processes.' }
 $bam = Get-AppLaunchHistoryInfo
-if ($bam.error -or $bam.total -ne 3 -or $bam.files.Count -ne 3 -or @($bam.files | Where-Object { $_.name -in @('Version', 'SequenceNumber') }).Count) { throw 'BAM tracked programs were confused with user summaries or control values.' }
+if ($bam.error -or $bam.partial -or $bam.total -ne 3 -or $bam.files.Count -ne 3 -or @($bam.files | Where-Object { $_.name -in @('Version', 'SequenceNumber') }).Count -or -not $bam.files[0].lastRun -or @($bam.files[0].value).Count -ne 8) { throw 'BAM tracked programs or their timestamp data were not preserved.' }
 $script:mode = 'lockedSid'
-if (-not (Get-AppLaunchHistoryInfo).error) { throw 'An unreadable BAM SID was reported as complete.' }
+$bamPartial = Get-AppLaunchHistoryInfo
+if (-not $bamPartial.partial -or $bamPartial.total -ne 2 -or $bamPartial.files.Count -ne 2) { throw 'An unreadable BAM SID was reported as complete or discarded available records.' }
 $script:mode = 'populated'; $script:paths = @()
 $search = Get-SearchIndexInfo
 if ($search.error -or $search.total -ne 4 -or $search.files.Count -ne 4) { throw 'Search target file counts were wrong.' }

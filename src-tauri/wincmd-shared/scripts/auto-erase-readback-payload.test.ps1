@@ -12,6 +12,7 @@ try {
     $script:fixtureTask = [pscustomobject]@{
         TaskPath = $script:SystemMaintenanceTaskPath; TaskName = $taskName; State = 'Ready'
         Principal = [pscustomobject]@{ UserId = $sid; LogonType = 'S4U'; RunLevel = 'Highest' }
+        Settings = [pscustomobject]@{ DisallowStartIfOnBatteries = $false; StopIfGoingOnBatteries = $false; RunOnlyIfIdle = $false; RunOnlyIfNetworkAvailable = $false; StartWhenAvailable = $true }
         Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = "-NoProfile -File `"$path`"" })
         Triggers = @(
             [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = 'PT60M' }; Enabled = $true; CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskTimeTrigger' } },
@@ -35,6 +36,14 @@ try {
     $script:fixtureTask.Actions[0].Arguments = $argument
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    foreach ($field in @('DisallowStartIfOnBatteries', 'StopIfGoingOnBatteries', 'RunOnlyIfIdle', 'RunOnlyIfNetworkAvailable')) {
+        $script:fixtureTask.Settings.$field = $true
+        if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw "A task restricted by $field must not be verified." }
+        $script:fixtureTask.Settings.$field = $false
+    }
+    $script:fixtureTask.Settings.StartWhenAvailable = $false
+    if ((Get-AutoEraseSchedules).schedules[0].payloadVerified) { throw 'A task that cannot catch up must not be verified.' }
+    $script:fixtureTask.Settings.StartWhenAvailable = $true
     $script:fixtureTask.Actions[0].Execute = 'cmd.exe'
     $wrongExecutable = Get-AutoEraseSchedules
     if ($wrongExecutable.error -or $wrongExecutable.schedules[0].payloadVerified) { throw 'A task running another executable must not be verified.' }
