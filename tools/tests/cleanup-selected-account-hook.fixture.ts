@@ -39,7 +39,8 @@ const backend = {
   getAutoEraseSchedules: async () => ({ success: true, data: { schedules: rows } }),
   getCleanupSummaryAllUsers: async (ids: string[], targets: string[]) => {
     calls.push(['scan', ids, targets]);
-    return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id: 'sshState', count: 1, partial: true, status: 'partial', message: 'SSH agent state cannot be checked for another account.', records: [{ name: 'SSH known_hosts', path: 'C:\\Users\\Other\\.ssh\\known_hosts' }] }] }] } };
+    const id = ids[0];
+    return { success: true, data: { users: [{ sid: other, username: 'Other', categories: [{ id, count: 1, partial: true, status: 'partial', message: 'Selected locations only.', records: [{ name: id === 'sshState' ? 'SSH known_hosts' : 'Password manager cache', path: 'C:\\Users\\Other\\fixture' }] }] }] } };
   },
   setMultiUserAutoEraseSchedule: async (...args: unknown[]) => {
     calls.push(['set', ...args]);
@@ -79,6 +80,14 @@ expect(hook.otherUserDataMap.sshState.count).toBe(-1);
 expect(hook.otherUserDataMap.sshState.raw).toMatchObject({ partial: true, records: [{ name: 'SSH known_hosts' }] });
 await hook.handleOtherUserClear({ id: 'sshState' } as never);
 await hook.handleCardClearAllUsers({ id: 'sshState' } as never);
+expect(calls).toHaveLength(0);
+await hook.loadUserView(other, ['passwordManagerCaches']);
+expect(calls.shift()).toEqual(['scan', ['passwordManagerCaches'], [other]]);
+hook = render();
+expect(hook.otherUserDataMap.passwordManagerCaches.count).toBe(-1);
+expect(hook.otherUserDataMap.passwordManagerCaches.raw).toMatchObject({ partial: true, records: [{ name: 'Password manager cache' }] });
+await hook.handleOtherUserClear({ id: 'passwordManagerCaches' } as never);
+await hook.handleCardClearAllUsers({ id: 'passwordManagerCaches' } as never);
 expect(calls).toHaveLength(0);
 
 expect(await hook.handleSetSchedule('browserFootprints', 60, false)).toBe(false);

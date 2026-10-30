@@ -1,4 +1,5 @@
 import { canShowCleanupScheduleForSelection } from "./cleanupScheduleReadback";
+import { OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 // Recreated System Cleanup panel: one panel-owned scroller, preserved layout,
 // and the existing backend hook contracts.
 import { Button, Icon } from "@/components/ui/bp";
@@ -355,7 +356,7 @@ export default function SystemCleanupPanel() {
                     scheduleDisabled={scan.otherScheduleState === "verified" && !!scan.otherScheduleSnapshot?.disabledSchedules[otherDetail.catId]}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
-                    onClear={!isInvestigator && canSwitchUsers && otherDetail.catId !== 'sshState'
+                    onClear={!isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(otherDetail.catId)
                         ? () => {
                             const cat = allTraceCategories.find(c => c.id === otherDetail.catId);
                             setOtherDetail(null);

@@ -6188,7 +6188,7 @@ function Get-CleanupSummaryAllUsers {
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
                  'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
-    $supportedCats = @($allCats) + @('sshState')
+    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
@@ -6259,7 +6259,7 @@ function Get-CleanupSummaryAllUsers {
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
-        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -ne 'sshState' }).Count -gt 0) {
+        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches') }).Count -gt 0) {
             # Strategy: try the live SID path in HKEY_USERS FIRST — this works for
             # any user who is logged in (interactive, RDP, disconnected session, etc.)
             # without needing reg load. Only fall back to reg load for truly offline users.
@@ -6304,7 +6304,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $cacheUnavailable = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory')) { throw $hiveError }
 
@@ -6384,6 +6384,12 @@ function Get-CleanupSummaryAllUsers {
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($records | ForEach-Object { $_.name })
                         }
+                        'passwordManagerCaches' {
+                            $r = Get-PasswordManagerCachesInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
                         'crashDumps' {
                             $r = Get-CrashDumpList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
@@ -6459,6 +6465,58 @@ function Get-CleanupSummaryAllUsers {
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'passwordManagerCaches' {
+                        # Read only fixed cache locations. Other vendors and
+                        # custom paths remain outside this partial inventory.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='1Password'; relative='AppData\Local\1Password\Cache' },
+                            @{ label='1Password'; relative='AppData\Local\1Password\Local Storage\leveldb' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Cache' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Local Storage\leveldb' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Session Storage' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Cache' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Local Storage\leveldb' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Session Storage' }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName
+                            $available = $true
+                            foreach ($component in ($source.relative -split '\\')) {
+                                $sourcePath = Join-Path $sourcePath $component
+                                try { $directory = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $cacheUnavailable = $true; break }
+                                if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $available = $false; $cacheUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[string]]::new()
+                            $queue.Enqueue($sourcePath)
+                            while ($queue.Count -gt 0) {
+                                $directoryPath = $queue.Dequeue()
+                                try {
+                                    $directory = Get-Item -LiteralPath $directoryPath -Force -ErrorAction Stop
+                                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $cacheUnavailable = $true; continue }
+                                    $children = @(Get-ChildItem -LiteralPath $directoryPath -Force -ErrorAction Stop)
+                                } catch { $cacheUnavailable = $true; continue }
+                                foreach ($child in $children) {
+                                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $cacheUnavailable = $true; continue }
+                                    if ($child.PSIsContainer) { $queue.Enqueue([string]$child.FullName); continue }
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $relativeName = $child.FullName.Substring($sourcePath.Length).TrimStart('\\')
+                                        $records += @{ name = "$($source.label): $relativeName"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                        $items += "$($source.label): $relativeName"
+                                    }
+                                }
+                            }
+                        }
+                    }
                     'sshState' {
                         # The other account's agent is unavailable in this
                         # session. Inspect known_hosts metadata only.
@@ -6936,6 +6994,7 @@ function Get-CleanupSummaryAllUsers {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
                 $categoryRecord.message = 'Some sources could not be checked.'
                 if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
+                if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
             }
             if ($delegated -and $r -and -not $scanError) {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
