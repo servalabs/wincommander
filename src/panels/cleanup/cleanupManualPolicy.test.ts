@@ -99,3 +99,20 @@ describe("explicit per-card cleanup consent", () => {
     expect(isCleanupCommandSuccessful({ success: true, data: { ok: true } })).toBe(true);
   });
 });
+
+test("each protected schedule confirmation identifies the selected account and honors cancellation", async () => {
+  const target = "Other User (S-1-5-21-100-200-300-1001)";
+  for (const id of DEFAULT_BULK_CLEAR_EXCLUDES) {
+    const card = cards.find(item => item.id === id)!;
+    expect(card).toBeDefined();
+    let calls = 0;
+    const allowed = await requestCleanupManualAuthorization(card, "schedule", async options => {
+      calls++;
+      expect(options.description).toContain(target);
+      expect(options.description).toContain("every 60 minutes");
+      return false;
+    }, 60, target);
+    expect(calls).toBe(1);
+    expect(allowed).toBe(false);
+  }
+});

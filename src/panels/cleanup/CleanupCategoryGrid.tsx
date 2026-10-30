@@ -82,6 +82,9 @@ export default function CleanupCategoryGrid({
     handleOtherUserClear,
     handleCardClearAllUsers,
     schedulesById,
+    otherScheduleSnapshot,
+    otherScheduleState,
+    selectedOwnerSid,
     disabledSchedulesById,
     scheduleRecordsById,
     scheduleState,
@@ -153,7 +156,7 @@ export default function CleanupCategoryGrid({
         scheduleRequiresTaskSchedulerRepair={scheduleRecordsById[cat.id]?.requiresTaskSchedulerRepair}
         scheduleState={scheduleState}
         onRefreshSchedule={() => void refreshSchedules()}
-        scheduleBusy={autoSetSchedulesBusy || scheduleBusyId === cat.id}
+        scheduleBusy={autoSetSchedulesBusy || !!scheduleBusyId}
         onSetSchedule={
           cat.schedulable && schedulesEnabled
             ? (m: number) =>
@@ -209,6 +212,11 @@ export default function CleanupCategoryGrid({
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
     const offerAllUsers = canSwitchUsers;
+    const canScheduleSelection = isViewingCurrentUser || (!!selectedOwnerSid && !isViewingAllUsers && !cat.schedulerRunAsSystem);
+    const selectedScheduleState = isViewingCurrentUser ? scheduleState : otherScheduleState;
+    const selectedRecords = isViewingCurrentUser ? scheduleRecordsById : otherScheduleSnapshot?.records;
+    const selectedSchedules = isViewingCurrentUser ? schedulesById : otherScheduleSnapshot?.schedules;
+    const selectedDisabled = isViewingCurrentUser ? disabledSchedulesById : otherScheduleSnapshot?.disabledSchedules;
     return (
       <CleanupTraceCard
         key={cat.id}
@@ -265,32 +273,32 @@ export default function CleanupCategoryGrid({
               : loadUserView(selectedUser, [cat.id])
         }
         scheduleMinutes={
-          isViewingCurrentUser && scheduleState === "verified"
-            ? (schedulesById[cat.id] ?? null)
+          canScheduleSelection && selectedScheduleState === "verified"
+            ? (selectedSchedules?.[cat.id] ?? null)
             : undefined
         }
-        scheduleDisabled={isViewingCurrentUser && scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
-        scheduleExists={isViewingCurrentUser && scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
-        schedulePayloadVerified={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.payloadVerified : undefined}
-        scheduleRequiresTaskSchedulerRepair={isViewingCurrentUser ? scheduleRecordsById[cat.id]?.requiresTaskSchedulerRepair : undefined}
-        scheduleState={isViewingCurrentUser ? scheduleState : undefined}
+        scheduleDisabled={canScheduleSelection && selectedScheduleState === "verified" && !!selectedDisabled?.[cat.id]}
+        scheduleExists={canScheduleSelection && selectedScheduleState === "verified" && !!selectedRecords?.[cat.id]?.enabled}
+        schedulePayloadVerified={canScheduleSelection ? selectedRecords?.[cat.id]?.payloadVerified : undefined}
+        scheduleRequiresTaskSchedulerRepair={canScheduleSelection ? selectedRecords?.[cat.id]?.requiresTaskSchedulerRepair : undefined}
+        scheduleState={canScheduleSelection ? selectedScheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
-          autoSetSchedulesBusy || (isViewingCurrentUser && scheduleBusyId === cat.id)
+          autoSetSchedulesBusy || !!scheduleBusyId
         }
         onSetSchedule={
-          isViewingCurrentUser && cat.schedulable && schedulesEnabled
+          canScheduleSelection && cat.schedulable && schedulesEnabled
             ? (minutes: number) =>
                 handleSetSchedule(cat.id, minutes, !!cat.schedulerRunAsSystem)
             : undefined
         }
         onClearSchedule={
-          isViewingCurrentUser && schedulesEnabled && scheduleState === "verified" && !!scheduleRecordsById[cat.id]
+          canScheduleSelection && schedulesEnabled && selectedScheduleState === "verified" && !!selectedRecords?.[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
         onRequestScheduleAccess={
-          isViewingCurrentUser && cat.schedulable && !schedulesEnabled
+          canScheduleSelection && cat.schedulable && !schedulesEnabled
             ? onRequestScheduleAccess
             : undefined
         }
@@ -492,7 +500,7 @@ export default function CleanupCategoryGrid({
                             icon="people"
                             text="All users"
                             label="Combined"
-                            disabled={otherUserLoading || otherUserClearing}
+                            disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                             active={accountSelectValue === ALL_USERS_KEY}
                             onClick={() => {
                               handleSwitchUser(ALL_USERS_KEY);
@@ -504,7 +512,7 @@ export default function CleanupCategoryGrid({
                           <MenuItem
                             key={cleanupProfileKey(u)}
                             icon={u.isCurrent ? "user" : "person"}
-                            disabled={otherUserLoading || otherUserClearing}
+                            disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                             text={u.displayName ?? u.name}
                             label={u.isCurrent ? "You" : u.name}
                             active={accountSelectValue === cleanupProfileKey(u)}
@@ -532,6 +540,7 @@ export default function CleanupCategoryGrid({
                         !canSwitchUsers ||
                         otherUserLoading ||
                         otherUserClearing ||
+                        !!scheduleBusyId || autoSetSchedulesBusy ||
                         availableUsers.length === 0
                       }
                       onClick={(e) => {

@@ -121,3 +121,45 @@ test("keeps only well-formed cleanup outcomes for the verified local task", () =
   expect(readCleanupScheduleSnapshot([{ ...row, cleanupOutcome: { ...outcome, removed: -1 } }], relevant)!.records.dnsCache.cleanupOutcome).toBeNull();
   expect(readCleanupScheduleSnapshot([{ ...row, scope: "other-user", targetUser: "Other" }], relevant)!.records.dnsCache).toBeUndefined();
 });
+
+test("selects an other-account schedule only by the exact Windows SID", () => {
+  const sid = "S-1-5-21-100-200-300-1001";
+  const otherSid = "S-1-5-21-100-200-300-1002";
+  const other = { ...ready, scope: "other-user" as const, ownerSid: sid, targetUser: "DOMAIN\\SameName", managedByAutoSet: false,
+    lastRun: "2026-10-30T10:30:00Z", cleanupOutcome: { attemptedUtc: "2026-10-30T10:31:00Z", success: true, removed: 1, deferred: 0, failed: 0 } };
+  const elsewhere = { ...other, ownerSid: otherSid, intervalMinutes: 15 };
+  const selected = readCleanupScheduleSnapshot([ready, elsewhere, other], relevant, { ownerSid: sid.toLowerCase() })!;
+  expect(selected.records.dnsCache.ownerSid).toBe(sid);
+  expect(selected.schedules.dnsCache).toBe(60);
+  expect(selected.records.dnsCache.cleanupOutcome).toBeNull();
+  expect(isVerifiedIndividualSchedule(selected.records.dnsCache, 60, 60, "other-user", sid)).toBe(true);
+  expect(isVerifiedIndividualSchedule(selected.records.dnsCache, 60, 60, "other-user", otherSid)).toBe(false);
+  expect(isVerifiedIndividualSchedule(selected.records.dnsCache, 60, 60, "other-user")).toBe(false);
+  expect(readCleanupScheduleSnapshot([other], relevant, { ownerSid: otherSid })!.records.dnsCache).toBeUndefined();
+  expect(readCleanupScheduleSnapshot([other], relevant)!.records.dnsCache).toBeUndefined();
+  expect(readCleanupScheduleSnapshot([other], relevant, { ownerSid: "SameName" })).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...other, ownerSid: undefined }], relevant, { ownerSid: sid })).toBeNull();
+  expect(readCleanupScheduleSnapshot([{ ...other, targetUser: null }], relevant, { ownerSid: sid })).toBeNull();
+  expect(readCleanupScheduleSnapshot([other, { ...other }], relevant, { ownerSid: sid })).toBeNull();
+});
+
+test("unresolved task owners prevent verified selected-account schedules", () => {
+  const sid = "S-1-5-21-100-200-300-1001";
+  const own = { ...ready, scope: "other-user" as const, ownerSid: sid, targetUser: "Other", managedByAutoSet: false };
+  const unknown = { ...ready, scope: "unknown" as const, targetUser: null, payloadVerified: false, requiresTaskSchedulerRepair: true };
+  const snapshot = readCleanupScheduleSnapshot([own, unknown], relevant, { ownerSid: sid })!;
+  expect(snapshot.records.dnsCache.requiresTaskSchedulerRepair).toBe(true);
+  expect(isVerifiedIndividualSchedule(snapshot.records.dnsCache, 60, 60, "other-user", sid)).toBe(false);
+});
+
+test("other-account readback confirms removal only for the requested SID", () => {
+  const firstSid = "S-1-5-21-100-200-300-1001";
+  const secondSid = "S-1-5-21-100-200-300-1002";
+  const task = { ...ready, scope: "other-user" as const, ownerSid: firstSid, targetUser: "First", managedByAutoSet: false };
+  const secondTask = { ...task, ownerSid: secondSid, targetUser: "Second" };
+  const afterFirstRemoval = readCleanupScheduleSnapshot([ready, secondTask], relevant, { ownerSid: firstSid })!;
+  expect(afterFirstRemoval.records.dnsCache).toBeUndefined();
+  expect(readCleanupScheduleSnapshot([ready, secondTask], relevant, { ownerSid: secondSid })!.records.dnsCache.ownerSid).toBe(secondSid);
+  expect(readCleanupScheduleSnapshot([ready, task, secondTask], relevant, { ownerSid: firstSid })!.records.dnsCache).toBeDefined();
+  expect(readCleanupScheduleSnapshot([{ ...secondTask, ownerSid: null }], relevant, { ownerSid: firstSid })).toBeNull();
+});

@@ -10,7 +10,7 @@ import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { createCleanupScheduleReadGate } from "./cleanupScheduleReadGate";
 import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration, requiresCleanupTaskRepair } from "./cleanupScheduleMigrationGate";
-import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope } from "./cleanupScheduleReadback";
+import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope, type CleanupScheduleRow } from "./cleanupScheduleReadback";
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
 import { readCleanupScanResult, readCleanupUserSummary } from "./cleanupScanResult";
@@ -279,6 +279,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         clearUsageTraceLogs,
         clearDefenderHistory,
         setIndividualAutoEraseSchedule,
+        setMultiUserAutoEraseSchedule,
+        removeMultiUserAutoEraseSchedule,
         setManagedAutoEraseSchedule,
         removeAutoEraseSchedule,
         removeManagedAutoEraseSchedule,
@@ -331,6 +333,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [currentUser, setCurrentUser] = useState<string>('');
     const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
     const [selectedUser, setSelectedUser] = useState<string>('');
+    const selectedUserRef = useRef(selectedUser);
+    selectedUserRef.current = selectedUser;
     const [otherUserDataMap, setOtherUserDataMap] = useState<Record<string, CardData>>({});
     const [otherUserLoading, setOtherUserLoading] = useState(false);
     const [otherUserClearing, setOtherUserClearing] = useState(false);
@@ -505,17 +509,26 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // authoritative and replaces this cache silently after panel startup.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>(readScheduleCache);
     const [scheduleRecordsById, setScheduleRecordsById] = useState<NonNullable<ReturnType<typeof readCleanupScheduleSnapshot>>["records"]>({});
+    const [scheduleRows, setScheduleRows] = useState<CleanupScheduleRow[] | null>(null);
     const [disabledSchedulesById, setDisabledSchedulesById] = useState<Record<string, { intervalMinutes: number | null; managedByAutoSet: boolean; scope: CleanupScheduleScope }>>({});
     const [scheduleState, setScheduleState] = useState<"checking" | "verified" | "unavailable">("checking");
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
+    const scheduleMutationBusy = useRef(false);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const [migrationIncomplete, setMigrationIncomplete] = useState(false);
     const migrationGate = useRef(createCleanupScheduleMigrationGate());
     const scheduleReadGate = useRef(createCleanupScheduleReadGate());
     const visibleScheduleState = scheduleState;
+    const selectedOwnerSid = !isViewingCurrentUser && !isViewingAllUsers && isAdminUser &&
+        /^S-1-5-21-\d+(?:-\d+)+$/i.test(selectedUser) &&
+        availableUsers.some(profile => profile.sid?.toLowerCase() === selectedUser.toLowerCase()) ? selectedUser : null;
+    const otherScheduleSnapshot = useMemo(() => selectedOwnerSid && scheduleRows
+        ? readCleanupScheduleSnapshot(scheduleRows, CLEANUP_SCHEDULE_IDS, { ownerSid: selectedOwnerSid }) : null,
+        [selectedOwnerSid, scheduleRows]);
+    const otherScheduleState = scheduleState === 'verified' && !otherScheduleSnapshot ? 'unavailable' : scheduleState;
 
-    const refreshSchedules = async () => {
+    const refreshSchedules = async (verifyOwnerSid?: string) => {
         const ticket = scheduleReadGate.current.begin();
         setScheduleState("checking");
         if (entitlementsReady && schedulesEnabled && migrationEnabled) {
@@ -535,19 +548,21 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
         let res;
         try { res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true); }
-        catch { if (scheduleReadGate.current.isCurrent(ticket)) setScheduleState("unavailable"); return null; }
+        catch { if (scheduleReadGate.current.isCurrent(ticket)) { setScheduleRows(null); setScheduleState("unavailable"); } return null; }
         if (!scheduleReadGate.current.isCurrent(ticket)) return null;
         if (isCleanupCommandSuccessful(res) && Array.isArray(res.data?.schedules)) {
             const snapshot = readCleanupScheduleSnapshot(res.data.schedules, CLEANUP_SCHEDULE_IDS);
-            if (!snapshot) { setScheduleState("unavailable"); return null; }
+            if (!snapshot) { setScheduleRows(null); setScheduleState("unavailable"); return null; }
+            setScheduleRows(res.data.schedules);
             setSchedulesById(snapshot.schedules);
             setScheduleRecordsById(snapshot.records);
             setDisabledSchedulesById(snapshot.disabledSchedules);
             writeScheduleCache(snapshot.schedules);
             setAutoSetScheduleIds(snapshot.managedIds);
             setScheduleState("verified");
-            return snapshot;
+            return { ...snapshot, selectedSnapshot: verifyOwnerSid ? readCleanupScheduleSnapshot(res.data.schedules, CLEANUP_SCHEDULE_IDS, { ownerSid: verifyOwnerSid }) : null };
         }
+        setScheduleRows(null);
         setScheduleState("unavailable");
         return null;
     };
@@ -589,50 +604,64 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     const handleSetSchedule = async (categoryId: string, minutes: number, runAsSystem: boolean) => {
         const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
-        if (!category?.schedulable || !schedulesEnabled || visibleScheduleState !== "verified") return false;
+        const ownerSid = !isViewingCurrentUser && category?.scopeAware && !runAsSystem ? selectedOwnerSid : null;
+        if (scheduleMutationBusy.current || autoSetSchedulesBusy || !category?.schedulable || !schedulesEnabled || visibleScheduleState !== "verified" ||
+            (!isViewingCurrentUser && category.scopeAware && (!ownerSid || otherScheduleState !== 'verified'))) return false;
         const allowDefaultExcluded = isDefaultExcludedCleanup(categoryId);
-        if (!await requestCleanupManualAuthorization(category, 'schedule', requestConfirm, minutes)) return false;
+        scheduleMutationBusy.current = true;
         setScheduleBusyId(categoryId);
         try {
+            if (!await requestCleanupManualAuthorization(category, 'schedule', requestConfirm, minutes, ownerSid ? `${selectedDisplay} (${ownerSid})` : undefined)) return false;
+            if (ownerSid && selectedUserRef.current !== ownerSid) return false;
             const schedulerId = getSchedulerCategoryId(categoryId);
-            const res = await setIndividualAutoEraseSchedule(schedulerId, minutes, runAsSystem, allowDefaultExcluded);
+            const res = ownerSid
+                ? await setMultiUserAutoEraseSchedule(schedulerId, minutes, [ownerSid], false, allowDefaultExcluded)
+                : await setIndividualAutoEraseSchedule(schedulerId, minutes, runAsSystem, allowDefaultExcluded);
             if (!isCleanupCommandSuccessful(res)) {
                 showError(res.error || `Failed to schedule auto-clean for ${category.label}`);
                 return false;
             }
             invalidateDiskCleanupScheduleStatus();
-            const verified = await refreshSchedules();
-            const registeredMinutes = res.data?.intervalMinutes;
-            const record = verified?.records[categoryId];
-            if (!isVerifiedIndividualSchedule(record, minutes, registeredMinutes, runAsSystem ? 'system' : 'current-user')) {
+            const verified = await refreshSchedules(ownerSid ?? undefined);
+            const payload = res.data as { intervalMinutes?: number; total?: number; results?: Array<{ intervalMinutes?: number; status?: string }> } | undefined;
+            const registeredMinutes = ownerSid ? (payload?.total === 1 && payload.results?.length === 1 && payload.results[0].status === 'enabled' ? payload.results[0].intervalMinutes : undefined) : payload?.intervalMinutes;
+            const record = ownerSid ? verified?.selectedSnapshot?.records[categoryId] : verified?.records[categoryId];
+            if (!isVerifiedIndividualSchedule(record, minutes, registeredMinutes, ownerSid ? 'other-user' : runAsSystem ? 'system' : 'current-user', ownerSid ?? undefined)) {
                 showError(`${category.label}: the enabled schedule could not be confirmed. Check Task Scheduler and retry.`);
                 return false;
             }
-            showSuccess(`Auto-clean scheduled every ${minutes} min for ${category.label}`);
+            showSuccess(`Auto-clean scheduled every ${minutes} min for ${category.label}${ownerSid ? ` — ${selectedDisplay}` : ''}`);
             return true;
         } finally {
+            scheduleMutationBusy.current = false;
             setScheduleBusyId(null);
         }
     };
 
     const handleClearSchedule = async (categoryId: string) => {
+        const category = SCHEDULABLE_CATEGORIES.find(candidate => candidate.id === categoryId);
+        const ownerSid = !isViewingCurrentUser && category?.scopeAware && !category.schedulerRunAsSystem ? selectedOwnerSid : null;
+        if (scheduleMutationBusy.current || autoSetSchedulesBusy || !category || (!isViewingCurrentUser && category.scopeAware && (!ownerSid || otherScheduleState !== 'verified'))) return false;
+        scheduleMutationBusy.current = true;
         setScheduleBusyId(categoryId);
         try {
             const schedulerId = getSchedulerCategoryId(categoryId);
-            const res = await removeAutoEraseSchedule(schedulerId);
+            const res = ownerSid ? await removeMultiUserAutoEraseSchedule(schedulerId, [ownerSid]) : await removeAutoEraseSchedule(schedulerId);
             if (!isCleanupCommandSuccessful(res)) {
                 showError(res.error || `Failed to turn off auto-clean for ${categoryId}`);
                 return false;
             }
             invalidateDiskCleanupScheduleStatus();
-            const verified = await refreshSchedules();
-            if (!verified || verified.records[categoryId] !== undefined) {
+            const verified = await refreshSchedules(ownerSid ?? undefined);
+            const snapshot = ownerSid ? verified?.selectedSnapshot : verified;
+            if (!snapshot || snapshot.records[categoryId] !== undefined) {
                 showError(`${categoryId}: schedule removal could not be confirmed. Check Task Scheduler and retry.`);
                 return false;
             }
-            showSuccess(`Auto-clean turned off for ${categoryId}`);
+            showSuccess(`Auto-clean turned off for ${categoryId}${ownerSid ? ` — ${selectedDisplay}` : ''}`);
             return true;
         } finally {
+            scheduleMutationBusy.current = false;
             setScheduleBusyId(null);
         }
     };
@@ -944,12 +973,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (!canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete, autoSetScheduleIds.size > 0)) {
+        if (scheduleMutationBusy.current || !canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete, autoSetScheduleIds.size > 0)) {
             if (migrationIncomplete) showError("Resolve the scheduled cleanup upgrade before using Auto-set.");
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;
         }
 
+        scheduleMutationBusy.current = true;
         setAutoSetSchedulesBusy(true);
         const createdIds: Array<{ id: string; interval: number; scope: CleanupScheduleScope }> = [];
         const disabledIds: string[] = [];
@@ -1090,6 +1120,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 summary.failed++;
                 firstFailure ??= 'The SSD maintenance schedule could not be verified.';
             }
+            scheduleMutationBusy.current = false;
             setAutoSetSchedulesBusy(false);
         }
 
@@ -1315,6 +1346,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleOtherUserClear,
         handleCardClearAllUsers,
         schedulesById,
+        otherScheduleSnapshot,
+        otherScheduleState,
+        selectedOwnerSid,
         disabledSchedulesById,
         scheduleRecordsById,
         scheduleState: visibleScheduleState,

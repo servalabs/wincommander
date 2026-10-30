@@ -349,6 +349,10 @@ export default function SystemCleanupPanel() {
                     scopeLabel={selectedDisplay || "Selected Windows user"}
                     accountLabel={selectedDisplay || "Selected Windows user"}
                     accountName={scan.selectedUser}
+                    scheduleState={scan.otherScheduleState}
+                    scheduleMinutes={scan.otherScheduleState === "verified" ? scan.otherScheduleSnapshot?.schedules[otherDetail.catId] ?? null : undefined}
+                    scheduleRecord={scan.otherScheduleState === "verified" ? scan.otherScheduleSnapshot?.records[otherDetail.catId] : undefined}
+                    scheduleDisabled={scan.otherScheduleState === "verified" && !!scan.otherScheduleSnapshot?.disabledSchedules[otherDetail.catId]}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
                     onClear={!isInvestigator && canSwitchUsers
@@ -433,6 +437,7 @@ function CleanupTabNavigation({
         handleClearAllCategories,
         handleAutoSetSchedules,
         autoSetSchedulesBusy,
+        scheduleBusyId,
         hasScheduledWipes,
         scheduleState,
         refreshSchedules,
@@ -489,7 +494,7 @@ function CleanupTabNavigation({
                                 : "Set safe default intervals without changing existing schedules"
                             : "Unlock scheduled wipes"}
                     loading={autoSetSchedulesBusy}
-                    disabled={isInvestigator || autoSetSchedulesBusy || (schedulesEnabled && scheduleState === "checking")}
+                    disabled={isInvestigator || autoSetSchedulesBusy || !!scheduleBusyId || (schedulesEnabled && scheduleState === "checking")}
                     onClick={() => {
                         if (!schedulesEnabled) {
                             onRequestScheduleAccess?.();

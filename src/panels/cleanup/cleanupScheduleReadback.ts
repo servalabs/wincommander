@@ -1,4 +1,4 @@
-export type CleanupScheduleScope = "system" | "current-user";
+export type CleanupScheduleScope = "system" | "current-user" | "other-user";
 
 export interface CleanupScheduledOutcome {
   attemptedUtc: string;
@@ -15,6 +15,7 @@ export interface CleanupScheduleRow {
   scope?: CleanupScheduleScope | "other-user" | "unknown";
   intervalMinutes: number;
   targetUser: string | null;
+  ownerSid?: string | null;
   managedByAutoSet?: boolean;
   legacy?: boolean;
   lastRun?: string | null;
@@ -29,6 +30,7 @@ export interface CleanupScheduleRecord {
   intervalMinutes: number | null;
   managedByAutoSet: boolean;
   scope: CleanupScheduleScope | "unknown";
+  ownerSid?: string | null;
   enabled: boolean;
   lastRun?: string | null;
   lastResult?: number | null;
@@ -50,8 +52,11 @@ function readOutcome(value: unknown, lastRun: string | null): CleanupScheduledOu
   return { attemptedUtc: row.attemptedUtc, success: row.success, removed, deferred, failed };
 }
 
-/** Rejects ambiguous, unknown, or internally contradictory local task state. */
-export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[], relevantIds: ReadonlySet<string>) {
+const accountSid = (value: unknown): value is string => typeof value === "string" && /^S-1-5-21-(?:\d+-){3}\d+$/i.test(value);
+
+/** Rejects ambiguous or contradictory state and never attributes another account's task by name. */
+export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[], relevantIds: ReadonlySet<string>, selection?: { ownerSid: string }) {
+  if (selection && !accountSid(selection.ownerSid)) return null;
   const records: Record<string, CleanupScheduleRecord> = {};
   const schedules: Record<string, number> = {};
   const disabledSchedules: Record<string, Omit<CleanupScheduleRecord, "enabled" | "scope"> & { scope: CleanupScheduleScope }> = {};
@@ -61,7 +66,16 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
   for (const row of rows) {
     if (!row || typeof row.categoryId !== "string") return null;
     const id = row.categoryId === "clipboard" ? "clipboardHistory" : row.categoryId;
-    if (!relevantIds.has(id) || row.scope === "other-user" || (row.targetUser && row.scope !== "unknown")) continue;
+    if (!relevantIds.has(id)) continue;
+    if (selection) {
+      if (row.scope !== "other-user" && row.scope !== "unknown") continue;
+      if (row.scope === "other-user") {
+        // An older or malformed readback cannot prove which account owns a task.
+        if (!accountSid(row.ownerSid)) return null;
+        if (row.ownerSid.toLowerCase() !== selection.ownerSid.toLowerCase()) continue;
+        if (typeof row.targetUser !== "string" || !row.targetUser.trim()) return null;
+      }
+    } else if (row.scope === "other-user" || (row.targetUser && row.scope !== "unknown")) continue;
     if (row.scope === "unknown") {
       // An attributable task with an unresolved owner blocks only this category.
       // Never assign it to the current user or allow mutation on that basis.
@@ -72,7 +86,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
         managedByAutoSet: false, scope: "unknown", enabled: row.enabled, payloadVerified: false, requiresTaskSchedulerRepair: true };
       continue;
     }
-    if (row.scope !== "system" && row.scope !== "current-user") return null;
+    if (row.scope !== "system" && row.scope !== "current-user" && !(selection && row.scope === "other-user")) return null;
     if (!["Ready", "Running", "Queued", "Disabled"].includes(row.state ?? "")) return null;
     if (typeof row.managedByAutoSet !== "boolean" || typeof row.enabled !== "boolean") return null;
     const enabled = row.state !== "Disabled";
@@ -82,7 +96,7 @@ export function readCleanupScheduleSnapshot(rows: readonly CleanupScheduleRow[],
     // An absent cadence cannot verify a runnable payload.
     if (enabled && interval === null && row.payloadVerified !== false) return null;
     const lastRun = typeof row.lastRun === "string" && Number.isFinite(Date.parse(row.lastRun)) ? row.lastRun : null;
-    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, requiresTaskSchedulerRepair: row.requiresTaskSchedulerRepair === true, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: readOutcome(row.cleanupOutcome, lastRun) };
+    const record: CleanupScheduleRecord = { intervalMinutes: interval, managedByAutoSet: row.managedByAutoSet, scope: row.scope, ownerSid: row.scope === "other-user" ? row.ownerSid : undefined, enabled, payloadVerified: typeof row.payloadVerified === "boolean" ? row.payloadVerified : null, requiresTaskSchedulerRepair: row.requiresTaskSchedulerRepair === true, lastRun, lastResult: typeof row.lastResult === "number" && Number.isInteger(row.lastResult) ? row.lastResult : null, nextRun: typeof row.nextRun === "string" ? row.nextRun : null, cleanupOutcome: row.scope === "other-user" ? null : readOutcome(row.cleanupOutcome, lastRun) };
     (localRows[id] ??= []).push({ row, record });
   }
   for (const [id, candidates] of Object.entries(localRows)) {
@@ -114,8 +128,8 @@ export function isVerifiedManagedSchedule(record: CleanupScheduleRecord | undefi
   return !!record && record.enabled && !record.requiresTaskSchedulerRepair && record.payloadVerified === true && record.managedByAutoSet && record.intervalMinutes === intervalMinutes && record.scope === scope;
 }
 
-export function isVerifiedIndividualSchedule(record: CleanupScheduleRecord | undefined, requestedMinutes: number, returnedMinutes: number | undefined, scope: CleanupScheduleScope): boolean {
-  return returnedMinutes === requestedMinutes && !!record && record.enabled && !record.requiresTaskSchedulerRepair && record.payloadVerified === true && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
+export function isVerifiedIndividualSchedule(record: CleanupScheduleRecord | undefined, requestedMinutes: number, returnedMinutes: number | undefined, scope: CleanupScheduleScope, ownerSid?: string): boolean {
+  return (scope !== "other-user" || (accountSid(ownerSid) && accountSid(record?.ownerSid) && ownerSid.toLowerCase() === record.ownerSid.toLowerCase())) && returnedMinutes === requestedMinutes && !!record && record.enabled && !record.requiresTaskSchedulerRepair && record.payloadVerified === true && !record.managedByAutoSet && record.intervalMinutes === requestedMinutes && record.scope === scope;
 }
 
 /** The local snapshot cannot describe a different Windows account. */
