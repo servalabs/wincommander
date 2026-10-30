@@ -4233,77 +4233,38 @@ function Get-RdpBitmapCacheInfo {
     $result
 }
 
-function Get-ServicingLogsInfo {
-    # Returns Windows servicing log files: CBS (Component-Based Servicing) + DISM.
-    # System paths — Test-Path is guarded because ACLs can deny access on some builds.
-    try {
-        $sources = @(
-            @{ label = 'CBS';  path = "$env:SystemRoot\Logs\CBS" },
-            @{ label = 'DISM'; path = "$env:SystemRoot\Logs\DISM" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $src.path -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+function Get-CleanupMultiSourceFileInventory {
+    param([object[]]$Sources)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($source in $Sources) {
+        $result = Get-CleanupCacheFileInventory -Root $source.path -Patterns $source.patterns
+        if ($result.partial) { $partial = $true }
+        foreach ($file in $result.files) { $file.source = $source.label; $files.Add($file) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some log locations could not be checked.' } else { $null } }
+}
+
+function Get-ServicingLogsInfo {
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='CBS'; path=(Join-Path $env:SystemRoot 'Logs\CBS'); patterns=@('*') },
+        @{ label='DISM'; path=(Join-Path $env:SystemRoot 'Logs\DISM'); patterns=@('*') }
+    )
 }
 
 function Get-DeviceInstallLogsInfo {
-    # Returns device-installation setup logs (setupapi.dev.log, setupapi.app.log, etc.)
-    try {
-        $infDir = "$env:SystemRoot\INF"
-        $files = @()
-        if (Test-Path $infDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path (Join-Path $infDir 'setupapi.*.log') -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'INF'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='INF'; path=(Join-Path $env:SystemRoot 'INF'); patterns=@('setupapi.*.log') }
+    )
 }
 
 function Get-UsageTraceLogsInfo {
-    # Returns ETW trace logs: SleepStudy (modern-standby diagnostics) + WDI
-    # (Windows Diagnostic Infrastructure) + WMI trace logs.
-    try {
-        $sources = @(
-            @{ label = 'SleepStudy'; path = "$env:SystemRoot\System32\SleepStudy" },
-            @{ label = 'WDI';        path = "$env:SystemRoot\System32\WDI\LogFiles" },
-            @{ label = 'WMI';        path = "$env:SystemRoot\System32\LogFiles\WMI" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path (Join-Path $src.path '*.etl') -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='SleepStudy'; path=(Join-Path $env:SystemRoot 'System32\SleepStudy'); patterns=@('*.etl') },
+        @{ label='WDI'; path=(Join-Path $env:SystemRoot 'System32\WDI\LogFiles'); patterns=@('*.etl') },
+        @{ label='WMI'; path=(Join-Path $env:SystemRoot 'System32\LogFiles\WMI'); patterns=@('*.etl') }
+    )
 }
 
 function Get-DefenderHistoryInfo {

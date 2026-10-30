@@ -25,6 +25,7 @@ function Invoke-WCDocker {
     param([string]$ConfigPath, [string[]]$Arguments, [bool]$Mutation)
     if ($Arguments[0] -eq 'info') {
         $script:identityReads++
+        if ($script:scenario -eq 'unavailable') { throw 'Synthetic unavailable daemon' }
         if ($script:scenario -eq 'remote') { return '{"ID":"fixture","OSType":"linux","OperatingSystem":"Remote Linux"}' }
         if ($script:scenario -eq 'changed' -and $script:identityReads -gt 1) { return '{"ID":"other-engine","OSType":"linux","OperatingSystem":"Docker Desktop"}' }
         return '{"ID":"engine-one","OSType":"linux","OperatingSystem":"Docker Desktop"}'
@@ -96,6 +97,11 @@ $script:scenario = 'remote'; $script:identityReads = 0; $script:mutations.Clear(
 $result = Invoke-WCDockerDesktopCleanup
 Assert-WCDockerTest ($result.failed -gt 0 -and $script:mutations.Count -eq 0) 'A non-Desktop engine must not be modified.'
 
+$script:scenario = 'unavailable'; $script:identityReads = 0; $script:mutations.Clear(); $script:dockerLogPaths = @()
+$result = Invoke-WCDockerDesktopCleanup
+Assert-WCDockerTest ($result.failed -gt 0 -and $script:mutations.Count -eq 0) 'An unavailable daemon must remain incomplete without provider mutations.'
+Assert-WCDockerTest ($script:dockerLogPaths.Count -eq 1 -and $script:dockerLogPaths[0] -eq (Join-Path $env:APPDATA 'Docker\log.txt')) 'The exact local log must still be attempted when Docker is unavailable.'
+
 $script:scenario = 'changed'; $script:identityReads = 0; $script:mutations.Clear()
 $result = Invoke-WCDockerDesktopCleanup
 Assert-WCDockerTest ($result.failed -gt 0 -and $script:mutations.Count -eq 0) 'A changing engine identity must prevent mutation.'
@@ -118,7 +124,9 @@ $null = New-Item -ItemType Directory -Path $fixtureRoot -ErrorAction Stop
 function Initialize-AutoEraseStorage { return @{ scripts = $fixtureRoot } }
 try {
     $null = ConvertTo-AutoEraseTaskArgument -CategoryId 'dockerDesktopData' -IntervalMinutes 60 -Script $script:AutoEraseScripts['dockerDesktopData'] -ExecutionScope 'fixture-user' -FirstDueUtc ([DateTime]::UtcNow.ToString('o')) -AllowDefaultExcluded $true
-    $generated = Join-Path $fixtureRoot 'dockerDesktopData.fixture-user.ps1'
+    $generatedItems = @(Get-ChildItem -LiteralPath $fixtureRoot -Filter 'dockerDesktopData.fixture-user.g*.ps1' -File)
+    Assert-WCDockerTest ($generatedItems.Count -eq 1) 'Exactly one generated Docker task script must exist.'
+    $generated = $generatedItems[0].FullName
     $source = [IO.File]::ReadAllText($generated)
     Assert-WCDockerTest ($source.Contains('function Invoke-WCDockerDesktopCleanup') -and $source.Contains('Invoke-WCDockerDesktopCleanup')) 'Scheduled script must embed the Docker provider and action.'
     $tokens = $null; $errors = $null
@@ -128,8 +136,7 @@ try {
     $absolute = [IO.Path]::GetFullPath($fixtureRoot)
     $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     if (-not $absolute.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetFileName($absolute) -notlike 'wincommander-docker-schedule-test-*') { throw 'Unexpected test fixture path.' }
-    $generated = Join-Path $absolute 'dockerDesktopData.fixture-user.ps1'
-    if ([IO.File]::Exists($generated)) { [IO.File]::Delete($generated) }
+    foreach ($generated in @(Get-ChildItem -LiteralPath $absolute -Filter 'dockerDesktopData.fixture-user.g*.ps1' -File)) { [IO.File]::Delete($generated.FullName) }
     [IO.Directory]::Delete($absolute, $false)
 }
 Write-Output 'Passed: local Desktop identity, isolated environment, provider cleanup and truthful incomplete status fixtures.'

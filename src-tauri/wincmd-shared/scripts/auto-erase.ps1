@@ -1090,6 +1090,11 @@ function Get-WCDockerBuildCacheCount {
 function Invoke-WCDockerDesktopCleanup {
     $result = @{ removed = 0; failed = 0 }
     $script:WCDockerMutationTimedOut = $false
+    # This local log is also in the manual cleanup target. It does not depend
+    # on the Docker daemon being available, so attempt it independently before
+    # making any provider calls; Erase-OneFile rejects reparse points.
+    try { Erase-OneFile (Join-Path $env:APPDATA 'Docker\log.txt') | Out-Null }
+    catch { $result.failed++ }
     $config = Join-Path ([IO.Path]::GetTempPath()) ('wincommander-docker-cli-' + [guid]::NewGuid())
     try {
         $null = New-Item -ItemType Directory -Path $config -ErrorAction Stop
@@ -1110,9 +1115,6 @@ function Invoke-WCDockerDesktopCleanup {
             } catch { $result.failed++; if ($script:WCDockerMutationTimedOut) { throw } }
         }
         if ($volumes.excluded) { $result.failed++ }
-        # This is the same per-user Docker log included in the scan and manual
-        # cleanup. Erase-OneFile rejects reparse points and records failures.
-        Erase-OneFile (Join-Path $env:APPDATA 'Docker\log.txt') | Out-Null
         $after = Get-WCDockerResources $config $identity
         $result.removed = [Math]::Max(0, $before.containers.Count - $after.containers.Count) + [Math]::Max(0, $before.images.Count - $after.images.Count) + [Math]::Max(0, $before.volumes.Count - $after.volumes.Count)
         if ($after.containers.Count -or $after.images.Count -or $after.volumes.Count -or (Get-WCDockerBuildCacheCount $config $identity) -gt 0 -or (Get-WCDockerArtifactRemainders) -gt 0) { $result.failed++ }
@@ -2510,11 +2512,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v18 (manual opt-in)'
+            'System Maintenance scheduled cleanup v19 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v18 (managed)'
+            'System Maintenance scheduled cleanup v19 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v18'
+            'System Maintenance scheduled cleanup v19'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2766,7 +2768,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16|17|18) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12|13|14|15|16|17|18|19) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2932,7 +2934,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2940,7 +2942,7 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v18(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v19(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
@@ -2967,9 +2969,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 18
+                $revision = 19
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v18 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v18 (managed)' } else { 'System Maintenance scheduled cleanup v18' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v19 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v19 (managed)' } else { 'System Maintenance scheduled cleanup v19' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false
