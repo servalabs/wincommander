@@ -11,6 +11,13 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("an empty VM inventory with limited coverage is not shown as clean", () => {
+    const vm = ALL_CATEGORIES.find(item => item.id === "virtualMachineArtifacts")!;
+    const raw = { files: [], total: 0, coverage: "limited", coverageNote: "Relocated machines were not fully inspected." };
+    const html = renderToStaticMarkup(<CleanupTraceCard category={vm} count={0} preview={[]} rawData={raw} loading={false} clearing={false} onViewDetails={() => {}} />);
+    expect(html).toContain('data-cleanup-state="limited"');
+    expect(html).not.toContain('data-cleanup-state="clean"');
+  });
   test("an empty partial selected-account scan retains its coverage and stays incomplete", () => {
     const cache = ALL_CATEGORIES.find(item => item.id === "passwordManagerCaches")!;
     const result = readCleanupUserSummary({ count: 0, records: [], partial: true, status: "partial", coverage: "Selected locations only", message: "Only selected locations were checked." });

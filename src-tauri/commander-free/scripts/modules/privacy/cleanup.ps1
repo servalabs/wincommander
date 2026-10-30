@@ -3641,11 +3641,14 @@ function Get-VirtualMachineArtifactsInfo {
         catch [System.Management.Automation.ItemNotFoundException] { $mru = $null }
         if ($mru) {
             foreach ($property in @($mru.Property | Where-Object { $_ -match '(?i)mru|recent' })) {
-                $files.Add(@{ name = "VMware MRU: $property"; sizeKB = 0; modified = '' })
+                $row = @{ name = "VMware MRU: $property"; registryPath = $mru.PSPath; key = [string]$property; sizeKB = 0; modified = '' }
+                try { $row.value = Get-ItemPropertyValue -LiteralPath $mru.PSPath -Name $property -ErrorAction Stop }
+                catch { $row.readStatus = 'unavailable'; $partial = $true }
+                $files.Add($row)
             }
         }
     } catch { $partial = $true }
-    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some virtual-machine locations could not be checked.' } else { $null } }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected default VM locations, host logs and VMware recent entries; relocated machines and provider-managed data are not fully inspected.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some virtual-machine locations could not be checked.' } else { $null } }
 }
 
 function Assert-CleanupDeveloperCacheAncestors {
