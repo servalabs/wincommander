@@ -34,4 +34,3 @@ try {
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }
 Write-Output 'Passed: protected cache directory removal and rejected-tree preservation.'
-
