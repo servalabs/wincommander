@@ -1511,7 +1511,7 @@ function Get-FleetForensicProjection {
             'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
             'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
-            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
+            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
             'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
@@ -4377,8 +4377,9 @@ function Get-BITSQueueInfo {
 }
 
 function Get-CellularHistoryInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
         $interfaces = @(& netsh.exe mbn show interfaces 2>$null)
         if ($LASTEXITCODE -ne 0) { throw 'Cellular interfaces could not be read.' }
         $interfaceNames = @()
@@ -4389,16 +4390,19 @@ function Get-CellularHistoryInfo {
             }
         }
         foreach ($interface in $interfaceNames) {
-            $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
-            if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
-            foreach ($line in $profiles) {
-                $text = ([string]$line).Trim()
-                if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
-                    $files += @{ name = "Cellular profile ($interface): $($Matches[2].Trim())"; sizeKB = 0; modified = '' }
+            try {
+                $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
+                if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
+                foreach ($line in $profiles) {
+                    $text = ([string]$line).Trim()
+                    if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
+                        $profileName = $Matches[2].Trim()
+                        $files.Add(@{ name = "Cellular profile ($interface): $profileName"; profileName = $profileName; interface = $interface; source = 'Cellular profile'; sizeKB = 0; modified = '' })
+                    }
                 }
-            }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some cellular profiles could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }

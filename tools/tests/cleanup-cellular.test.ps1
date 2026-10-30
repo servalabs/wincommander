@@ -17,4 +17,13 @@ $empty = Get-CellularHistoryInfo
 if ($empty.error -or $empty.total -ne 0 -or $empty.interfaceCount -ne 1) { throw 'A live cellular interface was counted as history.' }
 $script:failCommand = $true
 if (-not (Get-CellularHistoryInfo).error) { throw 'A failed cellular command was reported as empty.' }
+$script:failCommand = $false
+function netsh.exe {
+    $global:LASTEXITCODE = 0
+    if (($args -join ' ') -like '*show interfaces*') { 'Name : first'; 'Name : second' }
+    elseif (($args -join ' ') -like '*second*') { $global:LASTEXITCODE = 1 }
+    else { 'Profile Name : observed' }
+}
+$partial = Get-CellularHistoryInfo
+if (-not $partial.partial -or $partial.status -ne 'partial' -or $partial.total -ne 1 -or $partial.files[0].profileName -ne 'observed' -or $partial.files[0].interface -ne 'first') { throw 'A later adapter failure discarded observed cellular details or appeared complete.' }
 Write-Output 'Passed: cellular profiles counted; interfaces remain metadata; command failure is explicit.'
