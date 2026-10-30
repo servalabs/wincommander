@@ -226,6 +226,14 @@ export function shouldLoadCurrentUserDetails(categoryId: string, accountLabel?: 
   return !accountLabel && (categoryId === "wlanProfiles" || categoryId === "clipboardHistory");
 }
 
+export function clipboardRefreshNotice(scan: unknown, refreshed: { historyItems?: unknown[]; historyReadStatus?: string; partial?: boolean; message?: string }): string | null {
+  if (refreshed.partial || refreshed.historyReadStatus !== "complete") return refreshed.message || "Some clipboard details may be unavailable.";
+  if (isObject(scan) && scan.historyReadStatus === "complete" && scan.partial !== true && Array.isArray(scan.historyItems) && Array.isArray(refreshed.historyItems) && scan.historyItems.length !== refreshed.historyItems.length) {
+    return "Clipboard history changed since the scan. These details are from a newer check; scan again to update the total.";
+  }
+  return "Clipboard details are from a newer check. The total above is from the earlier scan; scan again to update it.";
+}
+
 export function wifiPasswordForProfile(profile: unknown, secrets: Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null, loading: boolean, accountLabel?: string): string {
   if (secrets && isObject(profile) && typeof profile.name === "string") {
     const matches = secrets.filter(secret => secret.name === profile.name &&
@@ -354,7 +362,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         if (!active) return;
         if (result.success && result.data && Array.isArray(result.data.historyItems)) {
           setClipboardItems(result.data.historyItems);
-          if (result.data.partial || result.data.historyReadStatus !== "complete") setClipboardNotice(result.data.message || "Some clipboard details may be unavailable.");
+          setClipboardNotice(clipboardRefreshNotice(rawData, result.data));
         } else setClipboardNotice(result.error || "Clipboard details could not be retrieved.");
       }).catch(() => { if (active) setClipboardNotice("Clipboard details could not be retrieved."); });
     }
@@ -464,7 +472,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>
     </table></div>
-    {!rows.length ? <p role="status">No items match this filter.</p> : null}
+    {!rows.length ? <p role="status">{clipboardItems && all.length === 0 && !query.trim() ? "No clipboard items were returned by the latest check." : "No items match this filter."}</p> : null}
     {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Detail pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} items</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
   </section>;
 }

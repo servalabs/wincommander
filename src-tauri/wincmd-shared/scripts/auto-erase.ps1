@@ -2992,6 +2992,10 @@ function Test-AutoEraseRunnablePayload {
     $argument = [string](@($Task.Actions)[0].Arguments)
     if ($argument -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
     $body = Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction Stop
+    # Protected categories only execute after explicit per-card authorization.
+    # A valid-looking script with the flag removed or false immediately exits.
+    if ($Identity.categoryId -in $script:AutoEraseProtectedCategories -and
+        $body -notmatch '(?m)^\$allowDefaultExcluded = \$true\r?$') { return $false }
     # Task Scheduler can be edited independently of the generated script.
     # Its repetition must agree with the script's own due-time calculation.
     $embeddedInterval = 0

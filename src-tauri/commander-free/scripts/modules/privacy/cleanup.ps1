@@ -6506,21 +6506,29 @@ function Get-CleanupSummaryAllUsers {
                     }
                     'shellBags' {
                         if ($hiveAvailable) {
-                            # BagMRU stores binary PIDL data — actual folder paths cannot
-                            # be decoded from an offline hive without shell COM APIs.
-                            # Count the subkeys (each = one folder view slot) and surface
-                            # the NodeSlot depth as a minimal indicator of activity.
-                            $totalBags = 0
+                            # Preserve each observed registry slot and its values. PIDL
+                            # bytes are not necessarily a decodable filesystem path.
                             foreach ($bagRoot in @(
                                 "$hiveRoot\Software\Microsoft\Windows\Shell\BagMRU",
                                 "$hiveRoot\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU"
                             )) {
-                                if (Test-CleanupSummaryPath $bagRoot) {
-                                    $totalBags += @(Get-ChildItem $bagRoot -Recurse -EA Stop).Count
-                                }
+                                try {
+                                    if (Test-CleanupSummaryPath $bagRoot) {
+                                        Get-ChildItem -LiteralPath $bagRoot -Recurse -EA Stop | ForEach-Object {
+                                            $bag = $_; $count++
+                                            if ($records.Count -lt $previewMax) {
+                                                $values = @{}
+                                                foreach ($name in @($bag.Property)) {
+                                                    try { $values[$name] = Get-ItemPropertyValue -LiteralPath $bag.PSPath -Name $name -EA Stop }
+                                                    catch { $categoryPartial = $true }
+                                                }
+                                                $records += @{ path = $bag.PSPath; source = 'ShellBags'; registryValues = $values }
+                                                $items += [string]$bag.PSPath
+                                            }
+                                        }
+                                    }
+                                } catch { $categoryPartial = $true }
                             }
-                            $count = $totalBags
-                            if ($totalBags -gt 0) { $items = @("$totalBags folder view slots recorded") }
                         } else { $items = @("[registry unavailable]") }
                     }
                     'execCache' {
@@ -6695,7 +6703,7 @@ function Get-CleanupSummaryAllUsers {
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
             if ($categoryPartial -and -not $scanError) {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
-                $categoryRecord.message = 'Some execution history sources could not be checked.'
+                $categoryRecord.message = 'Some sources could not be checked.'
             }
             if ($delegated -and $r -and -not $scanError) {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }

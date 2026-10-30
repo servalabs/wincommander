@@ -120,6 +120,12 @@ try {
     $interactiveTask = [pscustomobject]@{ Principal = [pscustomobject]@{ LogonType = 'Interactive'; RunLevel = 'Highest' }; Actions = @([pscustomobject]@{ Execute = 'powershell.exe'; Arguments = $interactiveArgs }) }
     $interactiveIdentity = @{ categoryId = 'wslData'; ownerSid = $sid }
     if (-not (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60)) { throw 'An interactive WSL task must be verifiable.' }
+    if ($interactiveArgs -notmatch '-File\s+"([^"]+)"') { throw 'Protected fixture payload path missing.' }
+    $protectedPath = $Matches[1]
+    $protectedBody = [IO.File]::ReadAllText($protectedPath)
+    [IO.File]::WriteAllText($protectedPath, $protectedBody.Replace('$allowDefaultExcluded = $true', '$allowDefaultExcluded = $false'))
+    if (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60) { throw 'A protected task that refuses manual authorization must not be verified.' }
+    [IO.File]::WriteAllText($protectedPath, $protectedBody)
     $interactiveTask.Principal.LogonType = 'S4U'
     if (Test-AutoEraseRunnablePayload -Task $interactiveTask -Identity $interactiveIdentity -IntervalMinutes 60) { throw 'A WSL task without an interactive session must not be verified.' }
 } finally {

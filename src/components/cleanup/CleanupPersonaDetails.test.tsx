@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupRecordChunks, clipboardRefreshNotice, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -15,6 +15,12 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("explains when clipboard details come from a newer or incomplete read", () => {
+    const scan = { historyReadStatus: "complete", historyItems: [{}, {}] };
+    expect(clipboardRefreshNotice(scan, { historyReadStatus: "complete", historyItems: [] })).toContain("changed since the scan");
+    expect(clipboardRefreshNotice(scan, { historyReadStatus: "complete", historyItems: [{}, {}] })).toContain("newer check");
+    expect(clipboardRefreshNotice(scan, { historyReadStatus: "unavailable", historyItems: [] })).toContain("unavailable");
+  });
   test("keeps binary array details in one column without dropping any bytes", () => {
     const proxy = ALL_CATEGORIES.find(category => category.id === "proxyCache")!;
     const bytes = Array.from({ length: 512 }, (_, index) => index % 256);
