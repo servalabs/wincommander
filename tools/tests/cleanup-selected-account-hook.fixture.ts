@@ -33,6 +33,10 @@ let requestedConfirmation = '';
 let responseOwner = other;
 let confirmationWaiter: Promise<boolean> | null = null;
 let mutationWaiter: Promise<void> | null = null;
+let omitTargetForOther = false;
+let omitOtherProfile = false;
+let completeTargetedScan = false;
+let reportedOtherSid = other;
 const backend = {
   getUserProfiles: async () => ({ success: true, data: { profiles: [
     { name: 'Self', sid: current, path: 'C:\\Users\\Self', isCurrent: true },
@@ -43,8 +47,11 @@ const backend = {
     calls.push(['scan', ids, targets]);
     if (targets.length === 0) {
       const partial = ['sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager'];
-      const categories = partial.filter(id => ids.includes(id)).map(id => ({ id, count: 1, partial: true, status: 'partial', message: 'Selected sources only.', records: [{ name: `${id} observation` }] }));
-      return { success: true, data: { users: [{ sid: current, username: 'Self', categories }, { sid: other, username: 'Other', categories }] } };
+      const categories = partial.filter(id => ids.includes(id)).map(id => completeTargetedScan
+        ? { id, count: 0, records: [], items: [] }
+        : { id, count: 1, partial: true, status: 'partial', message: 'Selected sources only.', records: [{ name: `${id} observation` }] });
+      const otherCategories = omitTargetForOther ? [] : categories;
+      return { success: true, data: { users: [{ sid: current.toLowerCase(), username: 'Self', categories }, ...(!omitOtherProfile ? [{ sid: reportedOtherSid, username: 'Other', categories: otherCategories }] : [])] } };
     }
     const id = ids[0];
     const name = id === 'sshState' ? 'SSH known_hosts' : id === 'wslData' ? 'Linux distribution' : id === 'dockerDesktopData' ? 'Docker disk' : id === 'virtualMachineArtifacts' ? 'Virtual machine' : id === 'credentialManager' ? 'Credential storage artifact' : 'Password manager cache';
@@ -201,4 +208,36 @@ for (const id of ['sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktop
   await hook.handleCardClearAllUsers({ id } as never);
 }
 expect(calls).toHaveLength(4);
+// Refreshing one category preserves other observations for the same SID,
+// but never retains the refreshed result if that account omitted it.
+omitTargetForOther = true;
+expect(await hook.loadAllUsersView('sshState')).toBe(false);
+hook = render();
+expect(hook.allUsersRaw[0].categories.passwordManagerCaches.raw).toMatchObject({ partial: true, records: [{ name: 'passwordManagerCaches observation' }] });
+expect(hook.allUsersRaw[1].categories.passwordManagerCaches.raw).toMatchObject({ partial: true, records: [{ name: 'passwordManagerCaches observation' }] });
+expect(hook.allUsersRaw[1].categories.sshState).toBeUndefined();
+expect(hook.combinedDataMap.sshState.count).toBe(-1);
+// A profile absent from the latest inventory must not be resurrected from a
+// previous snapshot merely to preserve its unrelated categories.
+omitOtherProfile = true;
+completeTargetedScan = true;
+expect(await hook.loadAllUsersView('sshState')).toBe(false);
+hook = render();
+expect(hook.allUsersRaw).toHaveLength(1);
+expect(hook.allUsersRaw[0].username).toBe(current.toLowerCase());
+expect(hook.allUsersRaw[0].categories.sshState.count).toBe(0);
+expect(hook.combinedDataMap.sshState.count).toBe(-1);
+expect(hook.combinedDataMap.sshState.error).toBeTruthy();
+omitOtherProfile = false;
+omitTargetForOther = false;
+reportedOtherSid = other.toLowerCase();
+expect(await hook.loadAllUsersView('sshState')).toBe(true);
+hook = render();
+expect(hook.combinedDataMap.sshState.count).toBe(0);
+reportedOtherSid = another;
+expect(await hook.loadAllUsersView('sshState')).toBe(false);
+hook = render();
+expect(hook.allUsersRaw).toHaveLength(2);
+expect(hook.combinedDataMap.sshState.count).toBe(-1);
+expect(hook.combinedDataMap.sshState.error).toBeTruthy();
 });

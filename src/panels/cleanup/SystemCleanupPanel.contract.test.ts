@@ -337,7 +337,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
     expect(backendTypes).toContain("records?: Array<Record<string, unknown>>");
     expect(scan).toContain("byId[c.id] = readCleanupUserSummary(c)");
-    expect(scan).toContain("return [c.id, readCleanupUserSummary(c)]");
+    expect(scan).toContain("categories[c.id] = readCleanupUserSummary(c)");
     expect(scan).toContain("count: d?.count ?? -1");
     expect(panel).toContain("rawData={otherUserDataMap[otherDetail.catId]?.raw}");
     expect(panel).toContain("rawData: userData?.raw");

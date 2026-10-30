@@ -154,6 +154,15 @@ export function verifyNtfsJournalReset(
 
 // Sentinel "account" for the combined All-Users view (#7).
 export const ALL_USERS_KEY = '__all__';
+function matchesCleanupAccountInventory(expected: readonly string[], reported: readonly string[], ready: boolean): boolean {
+    const expectedKeys = expected.map(value => value.toLowerCase());
+    const reportedKeys = reported.map(value => value.toLowerCase());
+    const expectedSet = new Set(expectedKeys);
+    const reportedSet = new Set(reportedKeys);
+    return ready && expectedKeys.length > 0 && expectedKeys.every(Boolean) && reportedKeys.every(Boolean) &&
+        expectedSet.size === expectedKeys.length && reportedSet.size === reportedKeys.length &&
+        expectedKeys.length === reportedKeys.length && expectedKeys.every(key => reportedSet.has(key));
+}
 // Must match the allowlist implemented by Get-CleanupSummaryAllUsers and
 // Invoke-CleanupClearAllUsers in privacy/cleanup.ps1. Current-user cards use
 // their dedicated Get-*/Clear-* handlers and are not limited by this set.
@@ -427,23 +436,33 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const ticket = profileReadGate.current.begin();
         setOtherUserLoading(true);
         try {
-            const res = await getCleanupSummaryAllUsers(categoryId ? [categoryId] : [...MULTI_USER_CLEANUP_IDS, ...OTHER_ACCOUNT_READ_ONLY_IDS], []);
+            const requested = categoryId ? [categoryId] : [...MULTI_USER_CLEANUP_IDS, ...OTHER_ACCOUNT_READ_ONLY_IDS];
+            const res = await getCleanupSummaryAllUsers(requested, []);
             if (!profileReadGate.current.isCurrent(ticket)) return false;
             if (res.success && res.data?.users?.length && !(res.data as { error?: boolean }).error) {
-                setAllUsersRaw(res.data.users.map(u => ({
-                    username: u.sid || u.username,
-                    displayName: availableUsers.find(a => cleanupProfileKey(a).toLowerCase() === (u.sid || u.username).toLowerCase())?.displayName ?? u.username,
-                    categories: Object.fromEntries((u.categories ?? []).map(c => {
-                        return [c.id, readCleanupUserSummary(c)];
-                    })),
-                })));
-                return categoryId
-                    ? res.data.users.every(u => {
-                        const c = u.categories?.find(item => item.id === categoryId) as
-                            | (typeof u.categories[number] & { error?: boolean; status?: string }) | undefined;
-                        return !!c && readCleanupUserSummary(c).count === 0;
-                    })
-                    : res.data.users.every(u => (u.categories ?? []).every(c => c.count === 0));
+                // A one-category verification must not erase other captured
+                // categories. Preserve them only for the same returned account;
+                // profiles no longer in the response are not carried forward.
+                setAllUsersRaw(previous => res.data!.users.map(u => {
+                    const identity = u.sid || u.username;
+                    const prior = categoryId && identity
+                        ? previous.find(item => item.username.toLowerCase() === identity.toLowerCase())
+                        : undefined;
+                    const categories = prior ? { ...prior.categories } : {};
+                    if (categoryId) delete categories[categoryId];
+                    for (const c of u.categories ?? []) categories[c.id] = readCleanupUserSummary(c);
+                    return {
+                        username: identity,
+                        displayName: availableUsers.find(a => cleanupProfileKey(a).toLowerCase() === identity.toLowerCase())?.displayName ?? u.username,
+                        categories,
+                    };
+                }));
+                const accountsMatch = matchesCleanupAccountInventory(
+                    availableUsers.map(cleanupProfileKey), res.data.users.map(user => user.sid || user.username), accountInventoryState === 'ready');
+                return accountsMatch && res.data.users.every(user => requested.every(id => {
+                    const category = user.categories?.find(item => item.id === id);
+                    return !!category && readCleanupUserSummary(category).count === 0;
+                }));
             } else {
                 showError(res.error || 'Failed to load combined user traces.');
                 setAllUsersRaw([]);
@@ -485,11 +504,17 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // for the combined "All users" grid.
     const combinedDataMap = useMemo<Record<string, CardData>>(() => {
         const map: Record<string, CardData> = {};
+        // A combined total is only complete when the scan covers the same
+        // visible accounts as the account picker. If inventory changed or a
+        // response omitted an account, keep returned observations but do not
+        // present their sum as the total for all users.
+        const accountsMatch = matchesCleanupAccountInventory(
+            availableUsers.map(cleanupProfileKey), allUsersRaw.map(user => user.username), accountInventoryState === 'ready');
         for (const cat of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]) {
             if (!cat.scopeAware || (!MULTI_USER_CLEANUP_IDS.has(cat.id) && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id))) continue;
             let total = 0;
             const breakdown: string[] = [];
-            let incomplete = allUsersRaw.length === 0;
+            let incomplete = !accountsMatch;
             for (const u of allUsersRaw) {
                 const d = u.categories[cat.id];
                 const c = d?.count ?? -1;
@@ -498,10 +523,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 if (c > 0) breakdown.push(`${u.displayName} — ${c}`);
             }
             map[cat.id] = { count: incomplete ? -1 : total, items: breakdown, loading: false, clearing: false,
-                error: incomplete && allUsersRaw.length > 0 ? 'One or more user scans were incomplete.' : undefined };
+                error: incomplete && allUsersRaw.length > 0
+                    ? !accountsMatch ? 'Account inventory changed or a profile was missing. Refresh accounts and scan again.' : 'One or more user scans were incomplete.'
+                    : undefined };
         }
         return map;
-    }, [allUsersRaw]);
+    }, [allUsersRaw, availableUsers, accountInventoryState]);
 
     // ── Auto-erase scheduler state ───────────────────────────────────
     // schedulesById: categoryId → intervalMinutes for cards with an
