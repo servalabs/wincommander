@@ -21,7 +21,7 @@ function Set-AutoEraseScheduleCore {
     if ($script:expectManaged -and (-not $PreserveExisting -or -not $ManagedByAutoSet)) { throw 'Managed creation did not force safety flags.' }
     $script:writes++
     $script:lastTarget = $TargetUser
-    if ($TargetUser -eq 'OtherUser') { return @{ error=$true; message='Synthetic failure' } }
+    if ($TargetUser -eq 'OtherUser' -or ($TargetUser -eq 'SYSTEM' -and $script:failSystem)) { return @{ error=$true; message='Synthetic failure' } }
     @{ status='enabled'; categoryId=$CategoryId }
 }
 $script:expectManaged = $true
@@ -93,4 +93,7 @@ $script:profileMode = 'failed'
 $before = $script:writes
 $system = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -RunAsSystem $true
 if ($system.error -or $system.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'A system schedule incorrectly depended on profile enumeration.' }
+$script:failSystem = $true
+$systemFailure = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -RunAsSystem $true
+if (-not $systemFailure.error -or $systemFailure.message -ne 'Synthetic failure' -or $systemFailure.completed -ne 0 -or $systemFailure.failed -ne 1) { throw 'A system schedule failure lost its reason or counts.' }
 Write-Output 'Passed: managed setup preserves both owner scopes, disabled tasks, and rejects ambiguous or unknown state.'

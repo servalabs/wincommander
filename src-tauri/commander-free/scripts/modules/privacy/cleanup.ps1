@@ -1307,8 +1307,8 @@ function Get-FleetForensicProjection {
             'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
             'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
             'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
-            'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
-            'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
+            'font_cache' { $result = Get-FontCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
+            'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
             'game_captures' { $result = Get-GameCapturesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
             'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
             'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
@@ -1321,7 +1321,7 @@ function Get-FleetForensicProjection {
             'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-launcher summaries.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
             'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
             'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
-            'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
+            'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
             'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
             'netbios_cache' { $result = Get-NetBIOSCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read NetBIOS-cache summaries.') }; return (& $metadataProjection 'netbios_cache' 'NetBIOS cache' $result 'NetBIOS cache metadata') }
             'geolocation_cache' { $result = Get-GeolocationCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read geolocation-cache summaries.') }; return (& $metadataProjection 'geolocation_cache' 'Geolocation cache' $result 'Geolocation metadata') }
@@ -3703,19 +3703,19 @@ function Get-SpotlightCacheInfo {
 }
 
 function Get-FontCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
     try {
-        $files = @()
-        $totalBytes = [int64]0
         $root = Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache'
         try { $null = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { return @{ files = @(); total = 0; totalSizeMB = 0 } }
         Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.dat' -Force -ErrorAction Stop | ForEach-Object {
-            $files += @{ name = "Font cache: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $files.Add(@{ name = "Font cache: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             $totalBytes += $_.Length
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some font cache locations could not be checked.' } else { $null } }
 }
 
 function Get-LegacyIconCacheInfo {
@@ -3723,10 +3723,13 @@ function Get-LegacyIconCacheInfo {
         $files = @()
         $totalBytes = [int64]0
         $path = Join-Path $env:LOCALAPPDATA 'IconCache.db'
-        if (Test-Path $path -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        $item = $null
+        try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($item) {
+            if ($item.PSIsContainer) { throw 'Icon cache path is not a file.' }
             if ($item) {
-                $files += @{ name = 'IconCache.db'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files += @{ name = 'IconCache.db'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $item.Length
             }
         }
@@ -4018,11 +4021,13 @@ function Get-WCCloudPlaceholderFiles {
 }
 
 function Get-FirewallLogInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
     try {
-        $files = @()
-        $totalBytes = [int64]0
         $seenPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($profile in @(Get-NetFirewallProfile -ErrorAction Stop)) {
+            try {
             $path = [Environment]::ExpandEnvironmentVariables([string]$profile.LogFileName)
             if ($path -match '%[^%]+%') { throw 'Firewall log path contains an unresolved environment variable.' }
             if (-not $path -or -not $seenPaths.Add($path)) { continue }
@@ -4031,13 +4036,13 @@ function Get-FirewallLogInfo {
             catch [System.Management.Automation.ItemNotFoundException] { continue }
             if ($item.PSIsContainer) { throw 'Firewall log configuration points to a folder instead of a file.' }
             if ($item) {
-                $files += @{ name = "Firewall $($profile.Name) log: $($item.Name)"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files.Add(@{ name = "Firewall $($profile.Name) log: $($item.Name)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $item.Length
             }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some firewall logs could not be checked.' } else { $null } }
 }
 
 function Get-NeighborCacheInfo {

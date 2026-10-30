@@ -2751,7 +2751,7 @@ function Set-MultiUserAutoEraseSchedule {
             -TargetUser      'SYSTEM' `
             -ManagedByAutoSet:$ManagedByAutoSet `
             -AllowDefaultExcluded:$AllowDefaultExcluded
-        if ($r.error) { return @{ error = $true; status = 'failed'; results = @($r); total = 1 } }
+        if ($r.error) { return @{ error = $true; status = 'failed'; message = [string]$r.message; results = @($r); total = 1; completed = 0; failed = 1 } }
         return @{ status = 'ok'; results = @($r); total = 1 }
     }
 
