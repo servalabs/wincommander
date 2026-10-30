@@ -293,6 +293,17 @@ describe("System Cleanup persona details", () => {
     expect(rows[0].facts.join(" ")).toContain("C:\\Reports");
   });
 
+  test("decodes flat account search history while preserving the original bytes", () => {
+    const entry = { section: "WordWheelQuery", key: "0", value: [99, 0, 97, 0, 102, 0, 233, 0, 0, 0] };
+    for (const data of [{ records: [entry] }, { records: [{ name: "TypedPaths", entries: [{ value: "C:\\Grouped" }] }, entry] }]) {
+      const rows = getSafeCleanupPreview("ntUserTraces", data);
+      const row = rows[rows.length - 1];
+      expect(row.facts).toContain("Value: café");
+      expect(row.facts).toContain("Raw Bytes: 63 00 61 00 66 00 e9 00 00 00");
+      expect(row.facts).toContain("Section: WordWheelQuery");
+    }
+  });
+
   test("preserves flat activity observations alongside grouped entries in an incomplete scan", () => {
     const activity = ALL_CATEGORIES.find(category => category.id === "ntUserTraces")!;
     const raw = { partial: true, records: [{ name: "TypedPaths", entries: [{ value: "C:\\Grouped" }] }, { entry: "C:\\Flat" }] };

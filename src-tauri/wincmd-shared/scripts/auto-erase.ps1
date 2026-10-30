@@ -2881,7 +2881,7 @@ function Get-AutoEraseSchedules {
             # Scheduler's Ready state describes the registration, not whether
             # its referenced cleanup script is still present and readable.
             $payloadVerified = $false
-            try { $payloadVerified = [bool](Test-AutoEraseCurrentPayload -Task $t -Identity $identity) } catch { $payloadVerified = $false }
+            try { $payloadVerified = [bool](Test-AutoEraseRunnablePayload -Task $t -Identity $identity) } catch { $payloadVerified = $false }
             $rows += [pscustomobject]@{
                 categoryId       = $identity.categoryId
                 taskName         = $t.TaskName
@@ -2957,6 +2957,27 @@ function Test-AutoEraseCurrentPayload {
     $category = '(?m)^\$categoryId = ''' + [regex]::Escape([string]$Identity.categoryId) + '''\r?$'
     if (-not $body -or $body -notmatch $category) { throw 'The cleanup task payload cannot be verified.' }
     return $true
+}
+
+# A matching category line alone does not mean the script can perform cleanup.
+# Keep migration's historical ownership check separate from this stricter status.
+function Test-AutoEraseRunnablePayload {
+    param($Task, $Identity)
+    if (-not (Test-AutoEraseCurrentPayload -Task $Task -Identity $Identity)) { return $false }
+    $argument = [string](@($Task.Actions)[0].Arguments)
+    if ($argument -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
+    $body = Get-Content -LiteralPath $Matches[1] -Raw -ErrorAction Stop
+    $expected = [string]$script:AutoEraseScripts[$Identity.categoryId]
+    if ([string]::IsNullOrWhiteSpace($expected)) { return $false }
+    $normalBody = $body.Replace("`r`n", "`n")
+    $normalExpected = $expected.Replace("`r`n", "`n")
+    if (-not $normalBody.Contains($normalExpected) -or
+        -not $normalBody.Contains('function Erase-OneFile') -or
+        -not $normalBody.Contains('function Get-AutoEraseNextDue') -or
+        -not $normalBody.Contains('function New-AutoEraseResult')) { return $false }
+    $tokens = $null; $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput($body, [ref]$tokens, [ref]$parseErrors)
+    return @($parseErrors).Count -eq 0
 }
 
 # Copy task XML instead of recreating schedules: dates, disabled state, selected

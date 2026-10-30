@@ -165,7 +165,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       // observations. Preserve the latter even when other groups have entries.
       if (!isObject(section) || !Array.isArray(section.entries)) {
         const value = visibleText(section);
-        return [{ label: `Activity record ${sectionIndex + 1}`, facts: isObject(section) ? metadata(section, id) : value ? [`Value: ${value}`] : [] }];
+        return [{ label: `Activity record ${sectionIndex + 1}`, facts: isObject(section) ? metadata(activityEntry(section.section, section), id) : value ? [`Value: ${value}`] : [] }];
       }
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
       const { name: sourceSection, count: _count, entries: _entries, ...sectionDetails } = section;
@@ -212,7 +212,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     .flatMap(key => Array.isArray(input[key]) && input[key].length ? [{ key, values: input[key] as unknown[] }] : []);
   if (collections.length) return collections.flatMap(({ key, values }) => values.map((value, index) => {
     const text = visibleText(value);
-    const facts = isObject(value) ? metadata(value, id) : text ? [text] : [];
+    const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text ? [text] : [];
     if (collections.length > 1) facts.unshift(`Dataset: ${key}`);
     return { label: `Record ${index + 1}`, facts };
   }));

@@ -373,11 +373,12 @@ function Get-USBDeviceHistory {
 
 
 function Get-DnsCacheEntries {
+    param([switch]$FleetFiltered)
     try {
         $entries = @()
         $blocklistDomains = @{}
         $hostsPath = 'C:\Windows\System32\drivers\etc\hosts'
-        if (Test-Path $hostsPath) {
+        if ($FleetFiltered -and (Test-Path $hostsPath)) {
             $inVaultSection = $false
             Get-Content $hostsPath -ErrorAction SilentlyContinue | ForEach-Object {
                 $line = $_.Trim()
@@ -423,15 +424,15 @@ function Get-DnsCacheEntries {
             9701 = 'Bad Packet'; 9702 = 'No Packet';
         }
 
-        $cache = Get-DnsClientCache -ErrorAction SilentlyContinue
+        $cache = Get-DnsClientCache -ErrorAction Stop
         foreach ($c in $cache) {
             $name = ([string]$c.Entry).Trim()
-            if (& $isBlockedDomain $name) { continue }
+            if ($FleetFiltered -and (& $isBlockedDomain $name)) { continue }
 
-            # Exclude reverse lookups and localhost/null artifacts
-            if ($name.EndsWith(".in-addr.arpa", [System.StringComparison]::InvariantCultureIgnoreCase) -or
+            # Retain the historic Fleet scope; local cleanup displays every DNS record.
+            if ($FleetFiltered -and ($name.EndsWith(".in-addr.arpa", [System.StringComparison]::InvariantCultureIgnoreCase) -or
                 $name -eq "0.0.0.0" -or
-                $name -eq ".") { continue }
+                $name -eq ".")) { continue }
 
             $rtNum = $null
             try { $rtNum = [int]$c.RecordType } catch {}
@@ -683,7 +684,7 @@ function Get-FleetForensicProjection {
     try {
         switch ($Category) {
             'dns_cache' {
-                $result = Get-DnsCacheEntries
+                $result = Get-DnsCacheEntries -FleetFiltered
                 if ($result.error) { return (& $empty 'System Cleanup could not read the DNS cache.') }
 
                 $sourceRows = @($result.entries)
@@ -6510,29 +6511,28 @@ function Get-CleanupSummaryAllUsers {
                     }
                     'ntUserTraces' {
                         if ($hiveAvailable) {
-                            # Match Get-NTUserTraces: RunMRU + TypedPaths + TypedURLs + WordWheelQuery + ComDlg32
-                            $traceSuffixes = @(
-                                'RunMRU',
-                                'TypedPaths',
-                                'TypedURLs',
-                                'WordWheelQuery',
-                                'ComDlg32\OpenSavePidlMRU',
-                                'ComDlg32\LastVisitedPidlMRU'
+                            # TypedURLs lives under Internet Explorer, not Explorer.
+                            $traceSources = @(
+                                @{ section='RunMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" },
+                                @{ section='TypedPaths'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths" },
+                                @{ section='TypedURLs'; path="$hiveRoot\Software\Microsoft\Internet Explorer\TypedURLs" },
+                                @{ section='WordWheelQuery'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery" },
+                                @{ section='ComDlg32\OpenSavePidlMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU" },
+                                @{ section='ComDlg32\LastVisitedPidlMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU" }
                             )
-                            foreach ($kSuffix in $traceSuffixes) {
-                                $k = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\$kSuffix"
-                                if (Test-CleanupSummaryPath $k) {
-                                    $props = (Get-Item $k -EA Stop).Property |
-                                        Where-Object { $_ -ne '(default)' -and $_ -notmatch '^MRU' }
-                                    $count += @($props).Count
-                                    foreach ($prop in @($props) | Select-Object -First $previewMax) {
-                                        $raw = Get-ItemPropertyValue $k $prop -EA Stop
-                                        # WordWheelQuery (and some ComDlg32 entries) store
-                                        # search terms as REG_BINARY null-terminated Unicode.
-                                        if ($raw -is [byte[]]) {
-                                            try { $raw = [System.Text.Encoding]::Unicode.GetString($raw).TrimEnd([char]0) } catch { $raw = $null }
+                            foreach ($source in $traceSources) {
+                                if (Test-CleanupSummaryPath $source.path) {
+                                    $props = (Get-Item -LiteralPath $source.path -EA Stop).Property |
+                                        Where-Object { $_ -ne '(default)' -and -not ($source.section -eq 'RunMRU' -and $_ -match '^MRUList') }
+                                    foreach ($prop in @($props)) {
+                                        $raw = Get-ItemPropertyValue -LiteralPath $source.path -Name $prop -EA Stop
+                                        if ($source.section -eq 'RunMRU' -and $raw -is [string]) { $raw = $raw -replace '\\1$', '' }
+                                        $count++
+                                        if ($records.Count -lt $previewMax) {
+                                            # Preserve binary bytes and empty values; display may decode text separately.
+                                            $records += @{ section=$source.section; key=$prop; value=$raw }
+                                            $items += "$($source.section)\$prop"
                                         }
-                                        if ($raw) { $items += "$kSuffix\$prop`: $raw" }
                                     }
                                 }
                             }

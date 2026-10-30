@@ -21,11 +21,26 @@ try {
     $missing = Get-AutoEraseSchedules
     if ($missing.error -or $missing.total -ne 1 -or -not $missing.schedules[0].enabled -or $missing.schedules[0].payloadVerified) { throw 'A Ready task with a missing payload must report its registration while its payload is unverified.' }
     [IO.File]::WriteAllText($path, "`$categoryId = 'dnsCache'`n")
-    $present = Get-AutoEraseSchedules
-    if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A readable matching payload should be verified.' }
+    $truncated = Get-AutoEraseSchedules
+    if ($truncated.error -or $truncated.schedules[0].payloadVerified) { throw 'A category line without cleanup code must not be verified.' }
     [IO.File]::WriteAllText($path, "`$categoryId = 'other'`n")
     $wrong = Get-AutoEraseSchedules
     if ($wrong.error -or $wrong.schedules[0].payloadVerified) { throw 'A mismatched payload must not be verified.' }
+    $script:fixtureScripts = $scripts
+    function Initialize-AutoEraseStorage { @{ scripts = $script:fixtureScripts } }
+    $argument = ConvertTo-AutoEraseTaskArgument -CategoryId 'dnsCache' -IntervalMinutes 60 -Script $script:AutoEraseScripts['dnsCache'] -ExecutionScope 'user-fixture' -FirstDueUtc ([DateTime]::UtcNow.AddHours(1).ToString('o'))
+    $script:fixtureTask.Actions[0].Arguments = $argument
+    $present = Get-AutoEraseSchedules
+    if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    if ($argument -notmatch '-File\s+"([^"]+)"') { throw 'Fixture payload path missing.' }
+    $generatedPath = $Matches[1]
+    $generated = [IO.File]::ReadAllText($generatedPath)
+    [IO.File]::WriteAllText($generatedPath, $generated.Replace($script:AutoEraseScripts['dnsCache'], 'Write-Output "no cleanup"'))
+    $noCleanup = Get-AutoEraseSchedules
+    if ($noCleanup.error -or $noCleanup.schedules[0].payloadVerified) { throw 'A valid script missing its cleanup body must not be verified.' }
+    [IO.File]::WriteAllText($generatedPath, $generated + "`nif (`$true) {`n")
+    $invalid = Get-AutoEraseSchedules
+    if ($invalid.error -or $invalid.schedules[0].payloadVerified) { throw 'A script with a syntax error must not be verified.' }
 } finally {
     $env:ProgramData = $oldProgramData
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
