@@ -2636,6 +2636,14 @@ function Set-ManagedAutoEraseSchedule {
         $existingTasks = @()
         foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
             $identity = Get-AutoEraseTaskIdentity $task
+            if (-not $identity) {
+                # A modified action remains visible to readback but must not
+                # be replaced or bypassed by creating a second local schedule.
+                $alteredIdentity = Get-AutoEraseReadbackIdentity $task
+                if ($alteredIdentity -and $alteredIdentity.categoryId -eq $CategoryId -and $alteredIdentity.ownerSid -in @($currentSid, 'S-1-5-18')) {
+                    return @{ error = $true; message = "The existing '$CategoryId' schedule was altered. Review it in Windows Task Scheduler before using Auto-set." }
+                }
+            }
             if ($identity -and $identity.categoryId -eq $CategoryId -and $identity.ownerSid -in @($currentSid, 'S-1-5-18')) { $existingTasks += $task }
         }
         if ($existingTasks.Count -gt 1) { return @{ error = $true; message = 'Multiple existing schedules need review before Auto-set.' } }

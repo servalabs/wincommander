@@ -1309,7 +1309,7 @@ function Get-FleetForensicProjection {
             'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
             'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
             'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
-            'game_captures' { $result = Get-GameCapturesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
+            'game_captures' { $result = Get-GameCapturesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
             'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
             'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
             'communication_caches' { $result = Get-CommunicationCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read communication-cache summaries.') }; return (& $metadataProjection 'communication_caches' 'Communication caches' $result 'Communication cache') }
@@ -3732,26 +3732,33 @@ function Get-LegacyIconCacheInfo {
 }
 
 function Get-GameCapturesInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $roots = @((Join-Path $env:USERPROFILE 'Videos\Captures'))
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $roots = @((Join-Path $env:USERPROFILE 'Videos\\Captures'))
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue |
+        try { $packages = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $packages = $null }
+        if ($packages) {
+            if (-not $packages.PSIsContainer) { throw 'Package location is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Force -ErrorAction Stop |
                 Where-Object { $_.Name -like 'Microsoft.XboxGamingOverlay_*' -or $_.Name -like 'Microsoft.GamingApp_*' } |
                 ForEach-Object { $roots += Join-Path $_.FullName 'LocalState' }
         }
-        foreach ($root in $roots) {
-            if (-not (Test-Path $root -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Game capture: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    } catch { $partial = $true }
+    foreach ($root in $roots) {
+        try {
+            try { $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $rootItem.PSIsContainer) { throw 'Capture location is not a directory.' }
+            Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ name = "Game capture: $($_.FullName.Substring($root.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some game capture locations could not be checked.' } else { $null } }
 }
 
 function Get-PhotosCacheInfo {

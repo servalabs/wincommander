@@ -9,7 +9,8 @@ function Resolve-AutoEraseSid { param($Account) 'S-1-5-21-1' }
 $script:tasks = @()
 $script:writes = 0
 function Get-ScheduledTask { [CmdletBinding()] param() $script:tasks }
-function Get-AutoEraseTaskIdentity { param($Task) @{ categoryId=$Task.Category; ownerSid=$Task.Owner } }
+function Get-AutoEraseTaskIdentity { param($Task) if ($Task.Altered) { return $null }; @{ categoryId=$Task.Category; ownerSid=$Task.Owner } }
+function Get-AutoEraseReadbackIdentity { param($Task) if ($Task.Altered) { return @{ categoryId=$Task.Category; ownerSid=$Task.Owner } }; return $null }
 function Set-AutoEraseScheduleCore {
     [CmdletBinding()] param($CategoryId,$IntervalMinutes,$RunAsSystem,$TargetUser,[switch]$PreserveExisting,[switch]$ManagedByAutoSet,[switch]$AllowDefaultExcluded)
     if ($script:expectManaged -and (-not $PreserveExisting -or -not $ManagedByAutoSet)) { throw 'Managed creation did not force safety flags.' }
@@ -31,6 +32,13 @@ foreach ($order in @(0, 1)) {
 }
 $script:tasks = @([pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-21-1'; State='Unknown'; TaskName='unknown' })
 if (-not (Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60).error) { throw 'Unknown task state was accepted.' }
+$script:tasks = @([pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-18'; State='Ready'; TaskName='altered-system'; Altered=$true })
+$result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if (-not $result.error -or $result.message -notlike '*Task Scheduler*' -or $script:writes -ne 0) { throw 'Altered system task did not block duplicate managed user creation.' }
+$script:tasks = @([pscustomobject]@{ Category='dnsCache'; Owner='S-1-5-21-2'; State='Ready'; TaskName='altered-other'; Altered=$true })
+$result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if ($result.status -ne 'enabled' -or $script:writes -ne 1) { throw 'An unrelated other-user task blocked the current user.' }
+$script:writes = 0
 $script:tasks = @()
 $result = Set-ManagedAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
 if ($result.status -ne 'enabled' -or $script:writes -ne 1) { throw 'New managed setup did not use the protected child operation.' }
