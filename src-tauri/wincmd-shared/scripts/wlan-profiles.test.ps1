@@ -28,13 +28,29 @@ function Remove-WCWlanEntry {
     if ($script:removeAdapterAfterDelete) { $script:adapters=@($script:adapters | Where-Object { $_ -ine $InterfaceId }) }
     if ($script:addAfterDelete) { $script:profiles += [pscustomobject]@{ InterfaceId=$adapterB; Name='New profile'; Flags=0 }; $script:addAfterDelete=$false }
 }
+function Get-WCWlanKey {
+    param([string]$InterfaceId,[string]$Name)
+    $script:keyReads += "$InterfaceId|$Name"
+    if ($InterfaceId -eq $adapterB) { throw 'Synthetic access denied' }
+    return 'synthetic-password'
+}
 function Check($Condition,[string]$Message) { if (-not $Condition) { throw $Message } }
 
 Reset-Fixture
-$scan = Get-WlanProfiles -IncludeSecrets:$true
+$script:keyReads = @()
+$scan = Get-WlanProfiles -IncludeSecrets:$false
 Check ($scan.total -eq 2 -and @($scan.profiles).Count -eq 2) 'Scanner did not retain the all-user scope.'
 Check ($scan.coverage -eq 'limited') 'Excluded private and managed profiles must remain a limited scan.'
 Check (-not ($scan | ConvertTo-Json -Depth 5).Contains('password')) 'Scanner returned credentials.'
+Check ($script:keyReads.Count -eq 0) 'Normal scan requested a credential.'
+$script:profiles += [pscustomobject]@{ InterfaceId=$adapterB; Name="Cafe's network"; Flags=0 }
+$revealed = Get-WlanProfiles -IncludeSecrets:$true
+$first = @($revealed.profiles | Where-Object { $_.name -ceq "Cafe's network" -and $_.interfaceId -eq $adapterA })[0]
+$second = @($revealed.profiles | Where-Object { $_.name -ceq "Cafe's network" -and $_.interfaceId -eq $adapterB })[0]
+Check ($first.password -eq 'synthetic-password' -and $first.passwordStatus -eq 'available') 'Explicit reveal failed for an available key.'
+Check ($null -eq $second.password -and $second.passwordStatus -eq 'unavailable') 'Denied duplicate profile exposed or reused another adapter key.'
+Check ($script:keyReads.Count -eq 3) 'Explicit reveal did not inspect each all-user adapter profile.'
+Reset-Fixture
 $result = Invoke-WCWlanClear
 Check ($result.ok -and $result.removed -eq 2 -and $result.failed -eq 0) 'All-user profiles were not verified removed.'
 Check ($script:removed.Count -eq 2 -and @($script:profiles).Count -eq 2) 'Private or policy profiles were touched.'

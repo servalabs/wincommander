@@ -1095,6 +1095,8 @@ export interface ProcessIntelligenceEntry {
 export interface WlanProfile {
   name: string;
   interfaceId?: string;
+  password?: string | null;
+  passwordStatus?: 'available' | 'unavailable';
 }
 
 export interface BluetoothDevice {
@@ -1538,6 +1540,7 @@ export function useBackend() {
     invokeDiskCleanup: () => execute("Invoke-DiskCleanup"),
     invokeMasterPrivacyClean: () => execute(invokeCommand("MasterPrivacyClean")),
     getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: false }),
+    getWlanProfileSecrets: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: true }),
     removeWlanProfile: (name: string, allowDefaultExcluded = false) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name, AllowDefaultExcluded: allowDefaultExcluded }),
     getBluetoothDevices: () => execute<{ devices: BluetoothDevice[] }>("Get-BluetoothDevices"),
     clearBluetoothHistory: () => execute(clearCommand("BluetoothDevices")),
@@ -1547,7 +1550,7 @@ export function useBackend() {
     // Scheduled Clipboard Erase — REMOVED, replaced by setAutoEraseSchedule('clipboard', n)
     disableClipboardHistory: () => execute("Disable-ClipboardHistory"),
     enableClipboardHistory: () => execute("Enable-ClipboardHistory"),
-    getClipboardHistoryStatus: () => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ type: string; preview: string; charCount: number }> }>("Get-ClipboardHistoryStatus"),
+    getClipboardHistoryStatus: (includePreviews = false) => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ type: string; preview: string; charCount: number }>; historyReadStatus?: string; partial?: boolean; message?: string }>("Get-ClipboardHistoryStatus", { IncludePreviews: includePreviews }),
     disableCloudClipboardSync: () => execute("Disable-CloudClipboardSync"),
     enableCloudClipboardSync: () => execute("Enable-CloudClipboardSync"),
 

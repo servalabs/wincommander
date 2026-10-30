@@ -52,7 +52,7 @@ function Get-ItemProperty {
     if ($Path -match 'TypedPaths$') { return [pscustomobject]@{ url1 = 'fixture-path' } }
     return [pscustomobject]@{ Name = ''; ProductName = 'Synthetic App'; BinFileVersion = ''; LowerCaseLongPath = 'C:\fixture\app.exe'; LongPathHash = '' }
 }
-function Get-CleanupClipboardHistory { $script:clipboardReads++; return $script:clipboardResult }
+function Get-CleanupClipboardHistory { param([bool]$IncludePreviews = $false) $script:clipboardReads++; $script:clipboardPreviewRequested = $IncludePreviews; return $script:clipboardResult }
 function Assert-Count($actual, $expected, $label) {
     if ($actual -ne $expected) { throw "$label`: expected $expected, got $actual" }
 }
@@ -102,12 +102,23 @@ try {
     $script:historyEnabled = 1
     $script:clipboardResult = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'Success'; Items = @() })
     $clipboard = Get-ClipboardHistoryStatus
+    Assert-Count $script:clipboardPreviewRequested $false 'Default clipboard inventory excludes content'
     Assert-Count $clipboard.historyReadStatus 'complete' 'Empty clipboard history coverage'
     Assert-Count $clipboard.historyItems.Count 0 'Enabled empty clipboard history'
     $script:clipboardResult = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'Success'; Items = @('secret-fixture', 'private-fixture') })
     $clipboard = Get-ClipboardHistoryStatus
     Assert-Count $clipboard.historyItems.Count 2 'Populated clipboard history'
     if (($clipboard | ConvertTo-Json -Depth 5) -match 'secret-fixture|private-fixture') { throw 'Clipboard content leaked into the response' }
+    $preview = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'Success'; Items = @('first', 'unreadable') }) -ReadPreview {
+        param($item)
+        if ($item -eq 'unreadable') { throw 'Synthetic read failure' }
+        @{ type = 'text'; preview = 'Sample text'; charCount = 11 }
+    }
+    Assert-Count $preview.items.Count 2 'Preview retains unreadable items'
+    Assert-Count $preview.items[0].preview 'Sample text' 'Explicit preview returns readable content'
+    Assert-Count $preview.items[1].preview '[Content unavailable]' 'Unreadable preview is identified'
+    $null = Get-ClipboardHistoryStatus -IncludePreviews $true
+    Assert-Count $script:clipboardPreviewRequested $true 'Explicit local request enables preview reading'
     $script:clipboardResult = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'AccessDenied'; Items = @() })
     $clipboard = Get-ClipboardHistoryStatus
     Assert-Count $clipboard.historyReadStatus 'unavailable' 'Denied clipboard history coverage'

@@ -27,17 +27,26 @@ function Clear-Clipboard {
 }
 
 function Convert-CleanupClipboardHistoryResult {
-    param($Result)
+    param($Result, [scriptblock]$ReadPreview)
     if ($null -eq $Result) { return @{ status = 'unavailable'; items = @() } }
     $status = [string]$Result.Status
     if ($status -eq 'ClipboardHistoryDisabled') { return @{ status = 'disabled'; items = @() } }
     if ($status -ne 'Success' -or $null -eq $Result.Items) { return @{ status = 'unavailable'; items = @() } }
-    # Record only the number of entries. Clipboard content may contain secrets.
-    $items = @($Result.Items | ForEach-Object { @{ type = 'item'; preview = '[Clipboard item]'; charCount = 0 } })
+    $items = @($Result.Items | ForEach-Object {
+        $item = @{ type = 'item'; preview = '[Clipboard item]'; charCount = 0 }
+        if ($ReadPreview) {
+            try {
+                $detail = & $ReadPreview $_
+                if ($detail) { $item = $detail }
+            } catch { $item = @{ type = 'item'; preview = '[Content unavailable]'; charCount = 0 } }
+        }
+        $item
+    })
     return @{ status = 'complete'; items = $items }
 }
 
 function Get-CleanupClipboardHistory {
+    param([bool]$IncludePreviews = $false)
     try {
         Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
         $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
@@ -50,13 +59,30 @@ function Get-CleanupClipboardHistory {
         $resultTy = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]
         $task = $asTask.MakeGenericMethod($resultTy).Invoke($null, @($asyncOp))
         if (-not $task.Wait(2000)) { return @{ status = 'unavailable'; items = @() } }
-        return (Convert-CleanupClipboardHistoryResult -Result $task.Result)
+        $readPreview = $null
+        if ($IncludePreviews) {
+            $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+            $readPreview = {
+                param($item)
+                if (-not $item.Content.Contains([Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text)) {
+                    return @{ type = 'other'; preview = '[Image or other content]'; charCount = 0 }
+                }
+                $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($item.Content.GetTextAsync()))
+                if (-not $textTask.Wait(500)) { return @{ type = 'item'; preview = '[Content unavailable]'; charCount = 0 } }
+                $raw = [string]$textTask.Result
+                $preview = ($raw -replace '[\r\n\t]+', ' ').Trim()
+                if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + '…' }
+                return @{ type = 'text'; preview = $preview; charCount = $raw.Length }
+            }
+        }
+        return (Convert-CleanupClipboardHistoryResult -Result $task.Result -ReadPreview $readPreview)
     } catch {
         return @{ status = 'unavailable'; items = @() }
     }
 }
 
 function Get-ClipboardHistoryStatus {
+    param([bool]$IncludePreviews = $false)
     try {
         $cb    = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -EA SilentlyContinue
         # Also detect if an external policy (GPO/MDM we didn't set) is blocking things.
@@ -68,7 +94,7 @@ function Get-ClipboardHistoryStatus {
 
         # A disabled setting alone does not establish whether stored history is
         # empty. Only a successful inventory can establish the record count.
-        $history = Get-CleanupClipboardHistory
+        $history = Get-CleanupClipboardHistory -IncludePreviews $IncludePreviews
         if ($history.status -eq 'disabled') { $histDisabled = $true }
 
         @{
@@ -1824,14 +1850,24 @@ function Get-ShellBags {
 
 function Get-WlanProfiles {
     param(
-        # Kept for older callers. Credentials are never requested or returned.
+        # Only the local viewer explicitly requests credentials. Fleet and
+        # normal scans pass false and must never collect them.
         [bool]$IncludeSecrets = $false
     )
     try {
         $snapshot = Get-WCWlanSnapshot
         Assert-WCWlanSnapshot $snapshot
         $profiles = @($snapshot.Profiles | Where-Object { [int64]$_.Flags -eq 0 } | ForEach-Object {
-            @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId }
+            $profile = @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId }
+            if ($IncludeSecrets) {
+                $profile.password = $null
+                $profile.passwordStatus = 'unavailable'
+                try {
+                    $key = Get-WCWlanKey -InterfaceId $profile.interfaceId -Name $profile.name
+                    if ($null -ne $key -and $key -ne '') { $profile.password = [string]$key; $profile.passwordStatus = 'available' }
+                } catch { }
+            }
+            $profile
         })
         @{ profiles = $profiles; total = $profiles.Count; adapterCount = [int]$snapshot.InterfaceCount;
            coverage = 'limited'; coverageNote = 'All-user saved profiles on available Wi-Fi adapters; private and policy profiles are excluded.' }

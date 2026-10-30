@@ -36,18 +36,21 @@ describe("System Cleanup persona details", () => {
     const wifi = ALL_CATEGORIES.find(category => category.id === "wlanProfiles")!;
     const browserHtml = renderToStaticMarkup(<CleanupDisplayDetails category={browser} mode="advanced" count={1} items={[]} rawData={{ browsers: [{ browser: "Google Chrome", profilePath: "C:\\Private\\Profile", totalSizeKB: 2, artifacts: [{ name: "History", sizeKB: 1 }] }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(browserHtml).toContain("Google Chrome");
-    expect(browserHtml).toContain("History: 1.0 KB");
+    expect(browserHtml).toContain(">History</th>");
+    expect(browserHtml).toContain(">1.0 KB</td>");
     expect(browserHtml).toContain("Private\\Profile");
     const wifiHtml = renderToStaticMarkup(<CleanupDisplayDetails category={wifi} mode="simple" count={1} items={[]} rawData={{ profiles: [{ name: "PrivateNetwork", password: "secret-value" }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
-    expect(wifiHtml).toContain("Saved Wi-Fi profile 1");
+    expect(wifiHtml).toContain("Found details");
     expect(wifiHtml).toContain("PrivateNetwork");
+    expect(wifiHtml).toContain("Show passwords");
+    expect(wifiHtml).toContain(">Hidden</td>");
     expect(wifiHtml).not.toContain("secret-value");
   });
 
   test("shows the activity record returned by the scan", () => {
     const history = ALL_CATEGORIES.find(category => category.id === "ntUserTraces")!;
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="advanced" count={1} items={[]} rawData={{ total: 1, sections: [{ name: "RunMRU", count: 1, entries: [{ key: "a", value: "C:\\Private\\secret.exe" }] }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
-    expect(html).toContain("Run command 1");
+    expect(html).toContain("Run command");
     expect(html).toContain("secret.exe");
   });
 
@@ -68,8 +71,8 @@ describe("System Cleanup persona details", () => {
     const source = { total: 30, entries: [{ category: "InventoryApplication", count: 30, sample: samples }] };
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={amcache} mode="advanced" count={30} items={[]} rawData={source} clearing={false} clearLabel="Clear" onClose={() => {}} />);
     expect(html).toContain("30 records");
-    expect(html).toContain("30 preview rows available here");
-    expect(html).toContain("Filter preview");
+    expect(html).toContain("30 items available");
+    expect(html).toContain("Filter details");
     expect(html).not.toContain("Sample 30");
     expect(html).toContain("Next");
   });
@@ -128,6 +131,30 @@ describe("System Cleanup persona details", () => {
     expect(dns.facts.join(" ")).toContain("TTL: 300");
     expect(dns.facts.join(" ")).toContain("Success");
     expect(JSON.stringify(dns)).not.toContain("never-render");
+  });
+
+  test("renders each DNS field in its own column with a compact number", () => {
+    const dns = ALL_CATEGORIES.find(category => category.id === "dnsCache")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={dns} mode="advanced" count={1} items={[]} rawData={{ entries: [{ Name: "example.test", Data: "192.0.2.1", TTL: 300, Status: "Success" }] }} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    for (const label of ["Name", "Value", "Status", "TTL"]) expect(html).toContain(`>${label}</th>`);
+    for (const value of ["example.test", "192.0.2.1", "Success", "300"]) expect(html).toContain(`>${value}</td>`);
+    expect(html).not.toContain("Name: example.test ·");
+    expect(html).not.toContain("Record 1</td>");
+  });
+
+  test("retains distinct returned timestamps and DNS fields", () => {
+    const [prefetch] = getSafeCleanupPreview("prefetchFiles", { entries: [{ name: "App", lastRun: "2026-10-20T12:00:00Z", created: "2026-10-19T12:00:00Z" }] });
+    expect(prefetch.facts.join(" ")).toContain("Last run:");
+    expect(prefetch.facts.join(" ")).toContain("Created:");
+    const [dns] = getSafeCleanupPreview("dnsCache", { entries: [{ name: "example.test", section: "Answer", dataLength: 4, recordTypeRaw: 1 }] });
+    for (const value of ["Section: Answer", "Data length: 4", "Type code: 1"]) expect(dns.facts.join(" ")).toContain(value);
+  });
+
+  test("shows registry keys for history without exposing Wi-Fi keys", () => {
+    const history = getSafeCleanupPreview("rdpHistory", { entries: [{ host: "example", key: "HKCU\\Software\\Example" }] });
+    expect(history[0].facts.join(" ")).toContain("HKCU\\Software\\Example");
+    const wifi = getSafeCleanupPreview("wlanProfiles", { profiles: [{ name: "Example", key: "secret-value" }] });
+    expect(JSON.stringify(wifi)).not.toContain("secret-value");
   });
 
   test("distinguishes same-name Wi-Fi profiles on different reported adapters", () => {

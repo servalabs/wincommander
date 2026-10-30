@@ -5777,6 +5777,17 @@ pub(crate) async fn run_backend_script_with_timeout(
     let trimmed = stdout.trim();
     let stderr_trimmed = stderr.trim();
 
+    // These outputs can contain locally requested Wi-Fi keys or clipboard text.
+    // Never forward or log raw output when the child fails or sends malformed
+    // JSON; its contents must not escape through an error or raw-output path.
+    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus")
+        && (!output.status.success()
+            || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
+    {
+        crate::log_message("error", "[Backend] Sensitive cleanup inspection failed.");
+        return Err("Cleanup inspection failed.".to_string());
+    }
+
     if trimmed.is_empty() && !stderr_trimmed.is_empty() {
         return Err(format!("Command failed: {}", stderr_trimmed));
     }

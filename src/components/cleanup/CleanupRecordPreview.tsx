@@ -1,5 +1,6 @@
 import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useBackend } from "../../hooks/useBackend";
 
 type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
@@ -40,20 +41,23 @@ function visibleText(value: unknown, redactSecrets = false): string | null {
   return value.replace(/(https?:\/\/)[^@\s/]+@/gi, "$1[redacted]@");
 }
 
-function metadata(row: RecordObject): string[] {
+function metadata(row: RecordObject, categoryId: string): string[] {
   const facts: string[] = [];
   const values = new Map(Object.entries(row).map(([key, value]) => [key.toLowerCase(), value]));
   const field = (key: string) => values.get(key.toLowerCase());
   const fields: Array<[string[], string]> = [
     [["name", "friendlyName", "processName", "displayName", "title"], "Name"],
     [["fileName"], "File"],
-    [["path", "fullPath", "profilePath", "originalPath", "target", "displayRoot", "deviceObject", "dir"], "Location"],
+    [["path", "fullPath", "profilePath", "displayRoot", "deviceObject", "dir"], "Location"],
+    [["originalPath"], "Original location"],
+    [["target"], "Target"],
     [["source"], "Source"],
     [["destination"], "Destination"],
     [["command"], "Command"],
     [["value", "entry", "data"], "Value"],
     [["host", "hostname", "address", "domain", "url"], "Host"],
-    [["username", "account", "userSid"], "Account"],
+    [["username", "account"], "Account"],
+    [["userSid", "sid"], "Account ID"],
     [["deviceId", "journalId", "id"], "Identifier"],
     [["interfaceId"], "Adapter"],
     [["drive"], "Drive"],
@@ -68,6 +72,7 @@ function metadata(row: RecordObject): string[] {
     [["description"], "Description"],
     [["dnsSuffix"], "DNS suffix"],
     [["category"], "Category"],
+    [["section"], "Section"],
     [["signed"], "Signature"],
     [["signer"], "Signer"],
     [["elevated"], "Elevated"],
@@ -76,13 +81,17 @@ function metadata(row: RecordObject): string[] {
     const value = keys.map(key => visibleText(field(key), ["Command", "Value", "Description"].includes(label))).find(Boolean);
     if (value) facts.push(`${label}: ${value}`);
   }
+  if (["rdpHistory", "connectivityHistory", "ntUserTraces"].includes(categoryId)) {
+    const key = visibleText(field("key"), true);
+    if (key) facts.push(`Key: ${key}`);
+  }
   const sizeBytes = field("sizeBytes");
   const bytes = typeof sizeBytes === "number" ? sizeBytes / 1024 : undefined;
   const sizeMB = field("sizeMB");
   const mb = typeof sizeMB === "number" ? sizeMB * 1024 : undefined;
   const kb = sizeLabel(field("sizeKB") ?? bytes ?? mb);
   if (kb) facts.push(`Size: ${kb}`);
-  for (const [key, label] of [["pid", "PID"], ["count", "Count"], ["ttl", "TTL"]] as const) {
+  for (const [key, label] of [["pid", "PID"], ["count", "Count"], ["ttl", "TTL"], ["recordTypeRaw", "Type code"], ["dataLength", "Data length"], ["timeStamp", "Timestamp"]] as const) {
     const value = field(key);
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) facts.push(`${label}: ${value}`);
   }
@@ -90,10 +99,11 @@ function metadata(row: RecordObject): string[] {
     const value = field(key);
     if (typeof value === "boolean") facts.push(`${label}: ${value ? "Yes" : "No"}`);
   }
-  for (const key of ["lastRun", "lastModified", "deletedTime", "modified", "lastSeen", "created", "timestamp"]) {
+  for (const [key, label] of [["lastRun", "Last run"], ["lastModified", "Last modified"], ["deletedTime", "Deleted"], ["modified", "Modified"], ["lastSeen", "Last seen"], ["created", "Created"], ["timestamp", "Date"]] as const) {
     const value = field(key);
-    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(Date.parse(value))) {
-      facts.push(`Date: ${new Date(value).toLocaleString()}`); break;
+    if (typeof value === "string" && value.trim()) {
+      const display = /^\d{4}-\d{2}-\d{2}/.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : value;
+      facts.push(`${label}: ${display}`);
     }
   }
   return facts;
@@ -107,7 +117,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       const categoryName = typeof category.category === "string" ? amcacheLabels[category.category] ?? "Record" : "Record";
       return category.sample.filter(isObject).map((sample, index) => ({
         label: `${categoryName} ${index + 1}`,
-        facts: metadata(sample),
+        facts: metadata(sample, id),
       }));
     });
   }
@@ -117,11 +127,11 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return activitySections.filter(isObject).flatMap((section) => {
       if (!Array.isArray(section.entries)) return [];
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
-      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(entry) : [] }));
+      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(entry, id) : [] }));
     });
   }
   if (id === "wlanProfiles" && Array.isArray(input.profiles)) {
-    return input.profiles.map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile) : [] }));
+    return input.profiles.map((profile, index) => ({ label: `Saved Wi-Fi profile ${index + 1}`, facts: isObject(profile) ? metadata(profile, id) : [] }));
   }
   if (id === "clipboardHistory" && Array.isArray(input.historyItems)) {
     return input.historyItems.map((_, index) => ({ label: `Clipboard item ${index + 1}`, facts: ["Content not supplied by the scan"] }));
@@ -130,11 +140,11 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return input.drives.map((value, index) => {
       const candidate = isObject(value) ? value.Name ?? value.localName : null;
       const drive = typeof candidate === "string" && /^[A-Za-z]:?$/.test(candidate.trim()) ? candidate.trim().replace(/:?$/, ":").toUpperCase() : null;
-      return { label: drive ? `Drive ${drive}` : `Network drive ${index + 1}`, facts: isObject(value) ? metadata(value) : [] };
+      return { label: drive ? `Drive ${drive}` : `Network drive ${index + 1}`, facts: isObject(value) ? metadata(value, id) : [] };
     });
   }
   if (id === "recycleBin" && Array.isArray(input.items)) {
-    return input.items.map((item, index) => ({ label: `Recycle Bin record ${index + 1}`, facts: isObject(item) ? metadata(item) : [] }));
+    return input.items.map((item, index) => ({ label: `Recycle Bin record ${index + 1}`, facts: isObject(item) ? metadata(item, id) : [] }));
   }
   const browsers = Array.isArray(input.browsers) ? input.browsers : input.records;
   if (id === "browserFootprints" && Array.isArray(browsers)) {
@@ -147,7 +157,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
         const artifactSize = sizeLabel(artifact.sizeKB);
         return [artifactSize ? `${label}: ${artifactSize}` : label];
       }) : [];
-      return { label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser), ...(size ? [`Total size: ${size}`] : []), ...artifacts] };
+      return { label: name ?? `Browser ${index + 1}`, facts: [...metadata(browser, id), ...(size ? [`Total size: ${size}`] : []), ...artifacts] };
     });
   }
   // Show known record fields without exposing arbitrary credential fields.
@@ -156,7 +166,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     if (!Array.isArray(values) || !values.length) continue;
     return values.map((value, index) => {
       const text = visibleText(value, true);
-      return { label: `Record ${index + 1}`, facts: isObject(value) ? metadata(value) : text ? [text] : [] };
+      return { label: `Record ${index + 1}`, facts: isObject(value) ? metadata(value, id) : text ? [text] : [] };
     });
   }
   return [];
@@ -166,26 +176,124 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [sortDescending, setSortDescending] = useState(false);
-  const all = useMemo(() => getSafeCleanupPreview(categoryId, rawData), [categoryId, rawData]);
+  const { getWlanProfileSecrets, getClipboardHistoryStatus } = useBackend();
+  const [secrets, setSecrets] = useState<Array<{ name: string; interfaceId?: string; password?: string | null; passwordStatus?: string }> | null>(null);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  const [clipboardItems, setClipboardItems] = useState<Array<{ type: string; preview: string; charCount: number }> | null>(null);
+  const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
+  const [loadingClipboard, setLoadingClipboard] = useState(false);
+  const [loadingSecrets, setLoadingSecrets] = useState(false);
+  const revealRequest = useRef(0);
+  useEffect(() => {
+    setSecrets(null);
+    setClipboardItems(null);
+    setClipboardNotice(null);
+    setLoadingClipboard(false);
+    setSecretError(null);
+    setLoadingSecrets(false);
+    return () => { revealRequest.current += 1; };
+  }, [categoryId, rawData]);
+  const togglePasswords = async () => {
+    if (secrets) { revealRequest.current += 1; setSecrets(null); setSecretError(null); return; }
+    const request = ++revealRequest.current;
+    setLoadingSecrets(true);
+    setSecretError(null);
+    try {
+      const result = await getWlanProfileSecrets();
+      if (request !== revealRequest.current) return;
+      if (result.success && result.data && Array.isArray(result.data.profiles)) setSecrets(result.data.profiles);
+      else setSecretError(result.error || "Passwords could not be retrieved.");
+    } catch {
+      if (request === revealRequest.current) setSecretError("Passwords could not be retrieved.");
+    } finally {
+      if (request === revealRequest.current) setLoadingSecrets(false);
+    }
+  };
+  const toggleClipboardDetails = async () => {
+    if (clipboardItems) { revealRequest.current += 1; setClipboardItems(null); setClipboardNotice(null); return; }
+    const request = ++revealRequest.current;
+    setLoadingClipboard(true);
+    setClipboardNotice(null);
+    try {
+      const result = await getClipboardHistoryStatus(true);
+      if (request !== revealRequest.current) return;
+      if (result.success && result.data && Array.isArray(result.data.historyItems)) {
+        setClipboardItems(result.data.historyItems);
+        if (result.data.partial || result.data.historyReadStatus !== "complete") setClipboardNotice(result.data.message || "Some clipboard details may be unavailable.");
+      } else setClipboardNotice(result.error || "Clipboard details could not be retrieved.");
+    } catch {
+      if (request === revealRequest.current) setClipboardNotice("Clipboard details could not be retrieved.");
+    } finally {
+      if (request === revealRequest.current) setLoadingClipboard(false);
+    }
+  };
+  const all = useMemo(() => clipboardItems ? clipboardItems.map((item, index) => ({
+    label: `Clipboard item ${index + 1}`,
+    facts: [`Type: ${visibleText(item.type) ?? "Unknown"}`, `Preview: ${visibleText(item.preview, true) ?? "Unavailable"}`, `Characters: ${item.charCount}`],
+  })) : getSafeCleanupPreview(categoryId, rawData), [categoryId, rawData, clipboardItems]);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    return all.filter(row => `${row.label} ${row.facts.join(" ")}`.toLocaleLowerCase().includes(needle))
-      .sort((a, b) => (sortDescending ? -1 : 1) * a.label.localeCompare(b.label, undefined, { numeric: true }));
+    return all.map((row, index) => ({ ...row, number: index + 1 }))
+      .filter(row => `${row.label} ${row.facts.join(" ")}`.toLocaleLowerCase().includes(needle))
+      .sort((a, b) => (sortDescending ? -1 : 1) * (a.number - b.number));
   }, [all, query, sortDescending]);
-  if (!all.length) return null;
+  const columns = useMemo(() => {
+    const labels = new Set<string>();
+    if (categoryId === "amcache" || categoryId === "ntUserTraces") labels.add("Category");
+    for (const row of all) for (const fact of row.facts) {
+      const separator = fact.indexOf(": ");
+      labels.add(separator < 0 ? "Details" : fact.slice(0, separator));
+    }
+    if (categoryId === "wlanProfiles") labels.add("Password");
+    if (!labels.size) labels.add("Details");
+    return [...labels];
+  }, [all, categoryId]);
+  if (!all.length && !clipboardItems) return null;
   const pageSize = mode === "simple" ? 5 : 10;
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
   const rows = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-  return <section className="cleanup-record-preview" aria-label="Record preview">
+  return <section className="cleanup-record-preview" aria-label="Found details">
     <div className="cleanup-record-preview__header">
-      <div><h3>Record preview</h3><p>{all.length} preview {all.length === 1 ? "row" : "rows"} available here; the scan total is above.</p></div>
-      <label><span className="sr-only">Filter record preview</span><input type="search" value={query} placeholder="Filter preview" aria-label={accountLabel ? `Filter ${accountLabel} record preview` : "Filter record preview"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
+      <div><h3>Found details</h3><p>{all.length} {all.length === 1 ? "item" : "items"} available; the scan total is above.</p></div>
+      <label><span className="sr-only">Filter found details</span><input type="search" value={query} placeholder="Filter details" aria-label={accountLabel ? `Filter ${accountLabel} details` : "Filter details"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
     </div>
-    <div className="cleanup-readable-detail__table"><table>
-      <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort preview records ${sortDescending ? "ascending" : "descending"}`}>Record {sortDescending ? "↓" : "↑"}</button></th><th scope="col">{mode === "simple" ? "Details" : "Preview details"}</th></tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={`${row.label}:${index}`}><td>{row.label}</td><td>{row.facts.length ? row.facts.join(" · ") : "No displayable details returned"}</td></tr>)}</tbody>
+    {categoryId === "clipboardHistory" && !accountLabel ? <div className="cleanup-record-preview__reveal">
+      <button type="button" disabled={loadingClipboard} onClick={toggleClipboardDetails}>{loadingClipboard ? "Loading clipboard details…" : clipboardItems ? "Hide clipboard details" : "Show clipboard details"}</button>
+      {clipboardNotice ? <span role="status">{clipboardNotice}</span> : null}
+    </div> : null}
+    {categoryId === "wlanProfiles" ? <div className="cleanup-record-preview__reveal">
+      <button type="button" disabled={loadingSecrets} onClick={togglePasswords}>{loadingSecrets ? "Loading passwords…" : secrets ? "Hide passwords" : "Show passwords"}</button>
+      {secretError ? <span role="alert">{secretError}</span> : null}
+    </div> : null}
+    <div className="cleanup-readable-detail__table cleanup-record-preview__table"><table>
+      <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort items ${sortDescending ? "ascending" : "descending"}`}># {sortDescending ? "↓" : "↑"}</button></th>{columns.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+      <tbody>{rows.map(row => {
+        const cells = new Map<string, string[]>();
+        if (categoryId === "amcache" || categoryId === "ntUserTraces") cells.set("Category", [row.label.replace(/ \d+$/, "")]);
+        if (categoryId === "wlanProfiles") {
+          let password = "Hidden";
+          if (secrets) {
+            const profiles = isObject(rawData) && Array.isArray(rawData.profiles) ? rawData.profiles : [];
+            const profile = profiles[row.number - 1];
+            if (isObject(profile) && typeof profile.name === "string") {
+              const matches = secrets.filter(secret => secret.name === profile.name &&
+                (typeof profile.interfaceId !== "string" || secret.interfaceId?.toLowerCase() === profile.interfaceId.toLowerCase()));
+              password = matches.length === 1 && matches[0].passwordStatus === "available" && typeof matches[0].password === "string"
+                ? matches[0].password || "Empty password" : "Unavailable";
+            } else password = "Unavailable";
+          }
+          cells.set("Password", [password]);
+        }
+        for (const fact of row.facts) {
+          const separator = fact.indexOf(": ");
+          const label = separator < 0 ? "Details" : fact.slice(0, separator);
+          const value = separator < 0 ? fact : fact.slice(separator + 2);
+          cells.set(label, [...(cells.get(label) ?? []), value]);
+        }
+        return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
+      })}</tbody>
     </table></div>
-    {!rows.length ? <p role="status">No preview rows match this filter.</p> : null}
-    {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Record preview pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} preview rows</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
+    {!rows.length ? <p role="status">No items match this filter.</p> : null}
+    {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Detail pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} items</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
   </section>;
 }

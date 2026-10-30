@@ -207,7 +207,7 @@ function Invoke-AutoEraseWithServices {
 $script:WlanProfileFunctions = @'
 function Initialize-WCWlanNative {
     if (([System.Management.Automation.PSTypeName]'WcCleanup.Wlan').Type) { return }
-    Add-Type -ErrorAction Stop -TypeDefinition @"
+    Add-Type -ErrorAction Stop -ReferencedAssemblies 'System.Xml.dll' -TypeDefinition @"
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -225,6 +225,7 @@ namespace WcCleanup {
         [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanEnumInterfaces(IntPtr handle, IntPtr reserved, out IntPtr list);
         [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern uint WlanGetProfileList(IntPtr handle, ref Guid iface, IntPtr reserved, out IntPtr list);
         [DllImport("wlanapi.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] private static extern uint WlanDeleteProfile(IntPtr handle, ref Guid iface, string name, IntPtr reserved);
+        [DllImport("wlanapi.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] private static extern uint WlanGetProfile(IntPtr handle, ref Guid iface, string name, IntPtr reserved, out IntPtr xml, ref uint flags, out uint access);
         [DllImport("wlanapi.dll", ExactSpelling=true)] private static extern void WlanFreeMemory(IntPtr memory);
         private static void Check(uint result) { if (result != 0) throw new Win32Exception((int)result); }
         private static IntPtr Open() { uint negotiated; IntPtr h; Check(WlanOpenHandle(2, IntPtr.Zero, out negotiated, out h)); return h; }
@@ -266,6 +267,24 @@ namespace WcCleanup {
             try { Check(WlanDeleteProfile(h, ref id, name, IntPtr.Zero)); }
             finally { WlanCloseHandle(h, IntPtr.Zero); }
         }
+        public static string ReadKey(string interfaceId, string name) {
+            Guid id;
+            if (!Guid.TryParse(interfaceId, out id) || String.IsNullOrEmpty(name) || name.Length > 255) throw new ArgumentException("Invalid Wi-Fi profile identity.");
+            IntPtr h = Open(), xml = IntPtr.Zero;
+            try {
+                uint flags = 4, access;
+                Check(WlanGetProfile(h, ref id, name, IntPtr.Zero, out xml, ref flags, out access));
+                if (xml == IntPtr.Zero) return null;
+                var doc = new System.Xml.XmlDocument();
+                doc.XmlResolver = null;
+                var settings = new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null };
+                using (var reader = System.Xml.XmlReader.Create(new System.IO.StringReader(Marshal.PtrToStringUni(xml)), settings)) doc.Load(reader);
+                var protection = doc.SelectSingleNode("//*[local-name()='sharedKey']/*[local-name()='protected']");
+                if (protection == null || !String.Equals(protection.InnerText, "false", StringComparison.OrdinalIgnoreCase)) return null;
+                var node = doc.SelectSingleNode("//*[local-name()='sharedKey']/*[local-name()='keyMaterial']");
+                return node == null ? null : node.InnerText;
+            } finally { if (xml != IntPtr.Zero) WlanFreeMemory(xml); WlanCloseHandle(h, IntPtr.Zero); }
+        }
     }
 }
 "@
@@ -273,6 +292,11 @@ namespace WcCleanup {
 function Get-WCWlanSnapshot {
     Initialize-WCWlanNative
     [WcCleanup.Wlan]::Enumerate()
+}
+function Get-WCWlanKey {
+    param([string]$InterfaceId, [string]$Name)
+    Initialize-WCWlanNative
+    [WcCleanup.Wlan]::ReadKey($InterfaceId, $Name)
 }
 function Remove-WCWlanEntry {
     param([Parameter(Mandatory)][string]$InterfaceId, [Parameter(Mandatory)][string]$Name)

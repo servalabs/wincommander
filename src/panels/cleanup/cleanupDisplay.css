@@ -24,6 +24,14 @@
 .cleanup-record-preview p { color: var(--color-text-muted); font-size: 11px; }
 .cleanup-record-preview__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .cleanup-record-preview__header input { max-width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text-primary); background: var(--color-bg-secondary); }
+.cleanup-record-preview__reveal { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.cleanup-record-preview__reveal button { padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text-primary); background: var(--color-bg-secondary); }
+.cleanup-record-preview__reveal span { color: var(--color-danger); }
+.cleanup-record-preview__table { border: 1px solid var(--color-border); border-radius: 6px; }
+.cleanup-record-preview__table table { min-width: max-content; }
+.cleanup-record-preview__table th, .cleanup-record-preview__table td { min-width: 120px; max-width: 320px; vertical-align: top; }
+.cleanup-record-preview__table th:first-child, .cleanup-record-preview__table td:first-child { min-width: 48px; width: 48px; text-align: center; }
+.cleanup-record-preview__table tbody tr:last-child td { border-bottom: 0; }
 .cleanup-record-preview__pagination { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; }
 .cleanup-record-preview__pagination button { padding: 4px 8px; border: 1px solid var(--color-border); border-radius: 4px; color: var(--color-text-primary); }
 .cleanup-record-preview__pagination button:disabled { opacity: .5; }
