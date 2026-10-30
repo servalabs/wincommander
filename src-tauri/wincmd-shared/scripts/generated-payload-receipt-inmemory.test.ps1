@@ -62,6 +62,19 @@ try {
     Save-WCFixtureText $receiptPath ($receipt | ConvertTo-Json -Compress)
     $legacy = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60
     if (-not $legacy -or -not $legacy.success -or $legacy.ContainsKey('coverageIncomplete')) { throw 'A compatible legacy receipt was rejected.' }
+    $validAttempt = $receipt.attemptedUtc
+    foreach ($invalidDate in @('2026-10-01', '2026-10-01T00:00:00Z', 'not-a-date')) {
+        $receipt.attemptedUtc = $invalidDate
+        Save-WCFixtureText $receiptPath ($receipt | ConvertTo-Json -Compress)
+        if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'A non-round-trip timestamp was accepted.' }
+    }
+    $receipt.attemptedUtc = $validAttempt
+    foreach ($invalidCount in @('2', 1.5, ([int64][int]::MaxValue + 1))) {
+        $receipt.removed = $invalidCount
+        Save-WCFixtureText $receiptPath ($receipt | ConvertTo-Json -Compress)
+        if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'An invalid removal count was accepted.' }
+    }
+    $receipt.removed = 2
     $receipt.success = $false; $receipt.payloadGeneration = 'a' * 32
     $receipt.coverageIncomplete = $true
     if ($receipt.payloadGeneration -eq $generation) { $receipt.payloadGeneration = 'b' * 32 }

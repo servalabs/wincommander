@@ -341,10 +341,14 @@ function Assert-WCWlanSnapshot {
 }
 function Invoke-WCWlanClear {
     param([string]$Name = '')
-    $removed = 0; $failed = 0; $targets = @()
+    $removed = 0; $failed = 0; $targets = @(); $coverageIncomplete = $false
     try {
         $initial = Get-WCWlanSnapshot
         Assert-WCWlanSnapshot $initial
+        # Private and policy profiles are observed but cannot be removed by
+        # this all-user cleanup. Record that limitation without calling their
+        # intentional exclusion a deletion failure.
+        if (@($initial.Profiles | Where-Object { [int64]$_.Flags -ne 0 -and (-not $Name -or $_.Name -ceq $Name) }).Count) { $coverageIncomplete = $true }
         # The previous reader reported all-user profiles only; do not touch
         # group-policy or private per-user profiles (flags 1 and 2).
         $targets = @($initial.Profiles | Where-Object { [int64]$_.Flags -eq 0 -and (-not $Name -or $_.Name -ceq $Name) })
@@ -365,11 +369,12 @@ function Invoke-WCWlanClear {
         }
         $final = Get-WCWlanSnapshot
         Assert-WCWlanSnapshot $final
+        if (@($final.Profiles | Where-Object { [int64]$_.Flags -ne 0 -and (-not $Name -or $_.Name -ceq $Name) }).Count) { $coverageIncomplete = $true }
         if (@($initial.Interfaces | Where-Object { $_ -notin @($final.Interfaces) }).Count) { $failed++ }
         if (@($final.Profiles | Where-Object { [int64]$_.Flags -eq 0 -and (-not $Name -or $_.Name -ceq $Name) }).Count) { $failed++ }
     } catch { $failed++ }
     $ok = $failed -eq 0
-    @{ ok = $ok; status = if ($ok) { 'complete' } else { 'failed' }; targeted = $targets.Count; removed = $removed; failed = $failed; stdout = "$(if ($ok) { 'ok' } else { 'fail' }): removed=$removed failed=$failed" }
+    @{ ok = $ok; status = if ($ok) { 'complete' } else { 'failed' }; targeted = $targets.Count; removed = $removed; failed = $failed; coverageIncomplete = $coverageIncomplete; stdout = "$(if ($ok) { 'ok' } else { 'fail' }): removed=$removed failed=$failed" }
 }
 '@
 . ([scriptblock]::Create($script:WlanProfileFunctions))
@@ -1472,6 +1477,7 @@ foreach (`$pcaPath in @(
 $result = Invoke-WCWlanClear
 $script:AutoEraseRemoved += [int]$result.removed
 $script:AutoEraseFailed += [int]$result.failed
+if ($result.coverageIncomplete -eq $true) { $script:AutoEraseCoverageIncomplete = $true }
 if (-not $result.ok -and [int]$result.failed -eq 0) { $script:AutoEraseFailed++ }
 '@
     'netDrives' = @'
@@ -2960,9 +2966,14 @@ function ConvertTo-AutoEraseTimestamp {
 
 function Test-AutoEraseOutcomeFields {
     param($Result, [int]$IntervalMinutes)
-    if (-not $Result -or $Result.success -isnot [bool] -or $Result.intervalMinutes -isnot [int] -or $Result.intervalMinutes -ne $IntervalMinutes) { return $false }
+    # Windows PowerShell 5.1 decodes small JSON integers as Int32; newer
+    # PowerShell versions decode them as Int64. Keep the original Int32 range
+    # and reject floating-point or string values on both runtimes.
+    if (-not $Result -or $Result.success -isnot [bool] -or
+        ($Result.intervalMinutes -isnot [int] -and $Result.intervalMinutes -isnot [long]) -or
+        $Result.intervalMinutes -ne $IntervalMinutes) { return $false }
     foreach ($key in @('removed', 'deferred', 'failed')) {
-        if ($Result.$key -isnot [int] -or $Result.$key -lt 0) { return $false }
+        if (($Result.$key -isnot [int] -and $Result.$key -isnot [long]) -or $Result.$key -lt 0 -or $Result.$key -gt [int]::MaxValue) { return $false }
     }
     $coverageIncomplete = $false
     if ($Result.PSObject.Properties.Name -contains 'coverageIncomplete') {
@@ -3002,7 +3013,16 @@ function Get-AutoEraseRecordedOutcome {
         $path = Join-Path $root ("$($Identity.categoryId).$scopeKey$generationSuffix.result.json")
         $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
         if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 16384) { return $null }
-        $result = [IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+        $receiptJson = [IO.File]::ReadAllText($path)
+        # PowerShell 7.5+ otherwise converts ISO timestamp strings to DateTime
+        # before validation, losing their original round-trip representation.
+        # Windows PowerShell 5.1 has no DateKind parameter and retains strings.
+        $jsonCommand = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($jsonCommand.Parameters.ContainsKey('DateKind')) {
+            $result = $receiptJson | ConvertFrom-Json -DateKind String -ErrorAction Stop
+        } else {
+            $result = $receiptJson | ConvertFrom-Json -ErrorAction Stop
+        }
         # A previously running generation may finish after a task was replaced.
         # Only attribute a receipt to the generated task that actually wrote it.
         if ([IO.Path]::GetFileName($scriptPath) -match '\.g([0-9a-f]{32})\.ps1$') {

@@ -54,7 +54,22 @@ Reset-Fixture
 $result = Invoke-WCWlanClear
 Check ($result.ok -and $result.removed -eq 2 -and $result.failed -eq 0) 'All-user profiles were not verified removed.'
 Check ($script:removed.Count -eq 2 -and @($script:profiles).Count -eq 2) 'Private or policy profiles were touched.'
+Check ($result.coverageIncomplete) 'Excluded private or policy profiles were reported as full coverage.'
 Check (-not $result.stdout.Contains("Cafe's network")) 'Receipt exposed a profile name.'
+
+Reset-Fixture
+$script:AutoEraseRemoved=0; $script:AutoEraseFailed=0; $script:AutoEraseCoverageIncomplete=$false
+$tailMarker = "`n`$result = Invoke-WCWlanClear"
+$tailIndex = $script:AutoEraseScripts.wlanProfiles.LastIndexOf($tailMarker, [StringComparison]::Ordinal)
+Check ($tailIndex -ge 0) 'Scheduled Wi-Fi payload was not found.'
+Invoke-Expression $script:AutoEraseScripts.wlanProfiles.Substring($tailIndex + 1)
+Check ($script:AutoEraseRemoved -eq 2 -and $script:AutoEraseFailed -eq 0 -and $script:AutoEraseCoverageIncomplete) 'Scheduled Wi-Fi cleanup did not separate excluded profiles from failures.'
+
+Reset-Fixture
+$script:profiles = @($script:profiles | Where-Object { $_.Flags -eq 0 })
+$script:AutoEraseRemoved=0; $script:AutoEraseFailed=0; $script:AutoEraseCoverageIncomplete=$false
+Invoke-Expression $script:AutoEraseScripts.wlanProfiles.Substring($tailIndex + 1)
+Check ($script:AutoEraseRemoved -eq 2 -and $script:AutoEraseFailed -eq 0 -and -not $script:AutoEraseCoverageIncomplete) 'An all-user-only Wi-Fi cleanup was reported incomplete.'
 
 Reset-Fixture
 $result = Invoke-WCWlanClear -Name "Cafe's network"
