@@ -10,6 +10,7 @@ import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
+import { cleanupScanFailure } from "../panels/cleanup/cleanupScanFailure";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1399,7 +1400,7 @@ async function runBackendScriptTracked<T>(
 }
 
 // Hook for executing backend commands
-export function useBackend() {
+export function useBackend(retainCleanupScanErrors = false) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1424,7 +1425,7 @@ export function useBackend() {
       if (isPoshError || isProOkFalse) {
         const errorMsg = getErrorMessage(result);
         setError(errorMsg);
-        return { success: false, error: errorMsg };
+        return cleanupScanFailure<T>(command, result, errorMsg, retainCleanupScanErrors);
       }
 
       // If data property exists (some commands might wrap it, but usually top level is the data)
@@ -1439,7 +1440,7 @@ export function useBackend() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [retainCleanupScanErrors]);
 
   // Convenience methods for common operations
   const backend = useMemo(() => ({

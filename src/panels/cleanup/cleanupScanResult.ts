@@ -56,7 +56,7 @@ export function readCleanupScanResult(
     count: -1, items: [], loading: false, clearing: false, error: message, ...(raw ? { raw } : {}),
   });
   if (!response.success || !response.data || typeof response.data !== "object") {
-    return failed(response.error || "Scan failed.");
+    return failed(response.error || "Scan failed.", response.data && typeof response.data === "object" && !Array.isArray(response.data) ? response.data as Record<string, unknown> : undefined);
   }
   const data = response.data as Record<string, unknown>;
   if (data.error === true || (typeof data.error === "string" && data.error.length > 0) || ["error", "failed", "unknown", "unavailable"].includes(String(data.status))) {

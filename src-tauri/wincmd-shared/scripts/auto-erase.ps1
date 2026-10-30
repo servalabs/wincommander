@@ -2959,13 +2959,27 @@ function Invoke-AutoEraseMigrationCore {
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
             if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
             $makeVisible = $task.Settings -and $task.Settings.Hidden -eq $true
+            $originalXml = $null
+            # These providers require the interactive user's session. Older
+            # manually authorized tasks were registered as S4U; rewriting their
+            # payload cannot give them that session. Never silently replace the
+            # principal or claim that such a migration is complete.
+            if ($identity.ownerSid -ne 'S-1-5-18' -and $identity.categoryId -in @('credentialManager', 'wslData', 'virtualMachineArtifacts', 'dockerDesktopData')) {
+                $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+                [xml]$principalDocument = $originalXml
+                $principalNodes = @($principalDocument.SelectNodes('/*[local-name()="Task"]/*[local-name()="Principals"]/*[local-name()="Principal"]'))
+                $logonNodes = @(if ($principalNodes.Count -eq 1) { $principalNodes[0].SelectNodes('./*[local-name()="LogonType"]') })
+                if ($logonNodes.Count -ne 1 -or [string]$logonNodes[0].InnerText -ne 'InteractiveToken') {
+                    throw "The $($identity.categoryId) schedule uses an incompatible Windows sign-in mode. Remove and recreate that individual schedule while signed in to its Windows account. The existing task was left unchanged."
+                }
+            }
             if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload -and -not $makeVisible) { continue }
             if ([string]$task.State -eq 'Running') { throw 'An active scheduled cleanup must finish before its task can be migrated.' }
             $renaming = $task.TaskName -ne $identity.taskName -or $task.TaskPath -ne $script:SystemMaintenanceTaskPath
             if ($renaming -and (Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $identity.taskName -ErrorAction SilentlyContinue)) {
                 throw 'The replacement task name is occupied. Both existing tasks were left unchanged.'
             }
-            $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
+            if (-not $originalXml) { $originalXml = Export-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop }
             [xml]$xml = $originalXml
             if ($makeVisible) {
                 $hidden = $xml.SelectSingleNode('/*[local-name()="Task"]/*[local-name()="Settings"]/*[local-name()="Hidden"]')

@@ -2,7 +2,7 @@ export function isVerifiedCleanupMigration(result: { success?: boolean; data?: {
   return result.success === true && result.data?.status === "ok" && result.data.error !== true && Array.isArray(result.data.migrated);
 }
 
-/** A failed upgrade must remain retryable and cannot authorize a schedule read. */
+/** A failed upgrade remains retryable; schedule readback is independent. */
 export function createCleanupScheduleMigrationGate() {
   let completed = false;
   let pending: Promise<boolean> | null = null;
@@ -25,4 +25,8 @@ export function createCleanupScheduleMigrationGate() {
       return pending;
     },
   };
+}
+
+export function canAutoSetCleanupSchedules(schedulesEnabled: boolean, state: string, migrationIncomplete: boolean): boolean {
+  return schedulesEnabled && state === "verified" && !migrationIncomplete;
 }

@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
+import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
+
+test("bulk Auto-set requires verified readback and a completed migration", () => {
+  expect(canAutoSetCleanupSchedules(true, "verified", false)).toBe(true);
+  expect(canAutoSetCleanupSchedules(true, "verified", true)).toBe(false);
+  expect(canAutoSetCleanupSchedules(true, "unavailable", false)).toBe(false);
+  expect(canAutoSetCleanupSchedules(false, "verified", false)).toBe(false);
+});
 
 test("only an explicit complete migration receipt is accepted", () => {
   expect(isVerifiedCleanupMigration({ success: true, data: { status: "ok", migrated: [] } })).toBe(true);

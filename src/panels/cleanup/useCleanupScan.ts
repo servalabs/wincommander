@@ -9,7 +9,7 @@ import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSetti
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { createCleanupScheduleReadGate } from "./cleanupScheduleReadGate";
-import { createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
+import { canAutoSetCleanupSchedules, createCleanupScheduleMigrationGate, isVerifiedCleanupMigration } from "./cleanupScheduleMigrationGate";
 import { isVerifiedIndividualSchedule, isVerifiedManagedSchedule, readCleanupScheduleSnapshot, type CleanupScheduleScope } from "./cleanupScheduleReadback";
 import { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup, isAutomaticCleanupExcluded, requestCleanupManualAuthorization, getCleanupManualWarning, getCleanupAutoScheduleConfirmation, isCleanupCommandSuccessful } from "./cleanupManualPolicy";
 export { DEFAULT_BULK_CLEAR_EXCLUDES, isDefaultExcludedCleanup } from "./cleanupManualPolicy";
@@ -217,7 +217,7 @@ interface CleanupScanOptions {
 
 export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationEnabled, auxiliaryStateEnabled = true }: CleanupScanOptions) {
     const requestConfirm = useAppConfirm();
-    const backend = useBackend();
+    const backend = useBackend(true);
     const { data: settings } = useSettingsQuery();
     const { mutate: persistSettings } = usePatchSettings();
     const {
@@ -524,27 +524,28 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
+    const [migrationIncomplete, setMigrationIncomplete] = useState(false);
     const migrationGate = useRef(createCleanupScheduleMigrationGate());
     const scheduleReadGate = useRef(createCleanupScheduleReadGate());
-    const visibleScheduleState = entitlementsReady && schedulesEnabled && migrationEnabled && !migrationGate.current.isCompleted() && scheduleState === "verified"
-        ? "checking" : scheduleState;
+    const visibleScheduleState = scheduleState;
 
     const refreshSchedules = async () => {
         const ticket = scheduleReadGate.current.begin();
         setScheduleState("checking");
         if (entitlementsReady && schedulesEnabled && migrationEnabled) {
+            let migrationError = "Scheduled cleanup upgrade could not be verified.";
             const migrated = await migrationGate.current.ensure(async () => {
                 const result = await invokeAutoEraseMigration();
-                if (!isVerifiedCleanupMigration(result)) return false;
+                if (!isVerifiedCleanupMigration(result)) {
+                    migrationError = result.error || migrationError;
+                    return false;
+                }
                 invalidateDiskCleanupScheduleStatus();
                 return true;
             });
             if (!scheduleReadGate.current.isCurrent(ticket)) return null;
-            if (!migrated) {
-                setScheduleState("unavailable");
-                showError("Scheduled cleanup upgrade could not be verified. Retry schedule status.");
-                return null;
-            }
+            setMigrationIncomplete(!migrated);
+            if (!migrated) showError(migrationError);
         }
         let res;
         try { res = await loadDiskCleanupSchedules(getAutoEraseSchedules, true); }
@@ -956,7 +957,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (!schedulesEnabled || visibleScheduleState !== "verified") {
+        if (!canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete)) {
+            if (migrationIncomplete) showError("Resolve the scheduled cleanup upgrade before using Auto-set.");
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;
         }

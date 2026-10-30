@@ -2303,17 +2303,18 @@ function Get-CleanupBrowserFootprints {
             $sz = 0
             try {
                 if ((Get-Item $p -Force -ErrorAction Stop).PSIsContainer) {
-                    $sz = (Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+                    $sz = (Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction Stop | Measure-Object -Property Length -Sum -ErrorAction Stop).Sum
                 } else {
                     $sz = (Get-Item $p -Force -ErrorAction Stop).Length
                 }
-            } catch {}
+            } catch { return $null }
             if (-not $sz) { $sz = 0 }
             return $sz
         }
 
         $installed = @($Browsers)
         $browsers  = @()
+        $partial = $false
 
         foreach ($b in $installed) {
             $udd = $b.UserDataDir
@@ -2328,8 +2329,8 @@ function Get-CleanupBrowserFootprints {
                         $p = Join-Path $profileDir $art
                         if (Test-Path $p) {
                             $sz = & $helper_measurePath $p
-                            $totalBytes += $sz
-                            $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1); profilePath = $profileDir }
+                            if ($null -eq $sz) { $partial = $true; $sizeKB = $null } else { $totalBytes += $sz; $sizeKB = [math]::Round($sz / 1KB, 1) }
+                            $artifacts += @{ name = $art; sizeKB = $sizeKB; profilePath = $profileDir }
                         }
                     }
                 }
@@ -2372,8 +2373,8 @@ function Get-CleanupBrowserFootprints {
                         $p = Join-Path $profDir $art
                         if (Test-Path $p) {
                             $sz = & $helper_measurePath $p
-                            $totalBytes += $sz
-                            $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1); profilePath = $profDir }
+                            if ($null -eq $sz) { $partial = $true; $sizeKB = $null } else { $totalBytes += $sz; $sizeKB = [math]::Round($sz / 1KB, 1) }
+                            $artifacts += @{ name = $art; sizeKB = $sizeKB; profilePath = $profDir }
                         }
                     }
                 }
@@ -2389,7 +2390,7 @@ function Get-CleanupBrowserFootprints {
             }
         }
 
-        @{ browsers = $browsers; totalBrowsers = $browsers.Count }
+        @{ browsers = $browsers; totalBrowsers = $browsers.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some browser data sizes could not be checked.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to get browser footprints: $($_.Exception.Message)" }
@@ -3760,7 +3761,9 @@ function Get-GitActivityInfo {
         $gitConfig = Join-Path $env:USERPROFILE '.gitconfig'
         if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) {
             $safeDirectories = @(& git.exe config --global --get-all safe.directory 2>$null)
-            if ($safeDirectories.Count -gt 0) { $files += @{ name = 'Global git safe.directory entries present'; sizeKB = 0; modified = '' } }
+            foreach ($directory in $safeDirectories) {
+                $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
+            }
         }
         @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
     }

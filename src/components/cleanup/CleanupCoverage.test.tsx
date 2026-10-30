@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { readCleanupScanResult } from "../../panels/cleanup/cleanupScanResult";
+import { cleanupScanFailure } from "../../panels/cleanup/cleanupScanFailure";
 import { summarizeCleanupGroups, summarizeCleanupResult } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
 import CleanupTraceCard from "./CleanupTraceCard";
@@ -55,6 +56,18 @@ describe("cleanup coverage presentation", () => {
     expect(detail).toContain("Scan failed");
     expect(detail).toContain("observed.db");
     expect(detail).toContain("disabled");
+  });
+
+  test("retains rows from a failed cleanup backend response without enabling Clear", () => {
+    const raw = { error: true, message: "Source unavailable", files: [{ name: "observed.db", path: "C:\\Example\\observed.db" }] };
+    const response = cleanupScanFailure("Get-TestScan", raw, "Source unavailable", true);
+    const result = readCleanupScanResult(category, response);
+    expect(result.count).toBe(-1);
+    const detail = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={result.count} items={result.items} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(detail).toContain("observed.db");
+    expect(detail).toContain("disabled");
+    expect(cleanupScanFailure("Get-TestScan", raw, "failed", false).data).toBeUndefined();
+    expect(cleanupScanFailure("Clear-Test", raw, "failed", true).data).toBeUndefined();
   });
 
   test("unknown preview counts stay unknown and account totals use record previews", () => {
