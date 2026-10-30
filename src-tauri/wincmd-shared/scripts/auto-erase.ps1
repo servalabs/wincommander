@@ -1400,9 +1400,11 @@ foreach (`$drv in `$drives) {
     'notepadState'      = @'
 $packages = @(Get-AutoEraseDirectories -Path (Join-Path $env:LOCALAPPDATA 'Packages') -Filter 'Microsoft.WindowsNotepad_*')
 foreach ($package in $packages) {
-    $tabState = Join-Path $package.FullName 'LocalState\TabState'
-    Erase-FileSet @(Get-AutoEraseFiles -Path $tabState -Recurse)
-    if (@(Get-AutoEraseFiles -Path $tabState -Recurse).Count) { throw 'Notepad tab-state cleanup is incomplete.' }
+    try {
+        $tabState = Join-Path $package.FullName 'LocalState\TabState'
+        Erase-FileSet @(Get-AutoEraseFiles -Path $tabState -Recurse)
+        if (@(Get-AutoEraseFiles -Path $tabState -Recurse).Count) { throw 'Notepad tab-state cleanup is incomplete.' }
+    } catch { $script:AutoEraseFailed++ }
 }
 '@
     'pcaDatabase'       = @"
@@ -1733,13 +1735,17 @@ foreach ($root in @(
     (Join-Path $env:LOCALAPPDATA 'pip\Cache'), (Join-Path $env:USERPROFILE '.cargo\registry\cache'),
     (Join-Path $env:USERPROFILE '.cargo\registry\src')
 )) {
-    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
-    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Developer cache cleanup is incomplete.' }
+    try {
+        Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+        if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Developer cache cleanup is incomplete.' }
+    } catch { $script:AutoEraseFailed++ }
 }
 foreach ($relative in @('.npmrc','.cargo\config.toml','.cargo\credentials.toml')) {
-    $target = Join-Path $env:USERPROFILE $relative
-    Erase-OneFile $target | Out-Null
-    if (Test-Path -LiteralPath $target -ErrorAction Stop) { throw 'Developer configuration cleanup is incomplete.' }
+    try {
+        $target = Join-Path $env:USERPROFILE $relative
+        Erase-OneFile $target | Out-Null
+        if (Test-Path -LiteralPath $target -ErrorAction Stop) { throw 'Developer configuration cleanup is incomplete.' }
+    } catch { $script:AutoEraseFailed++ }
 }
 '@
     'networkWizardHistory' = "Erase-RegistryTree 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Network\Network Connection Wizard'"
@@ -1804,14 +1810,18 @@ try {
 '@
     'passwordManagerCaches' = @'
 foreach ($relative in @('1Password\Cache','1Password\Local Storage\leveldb')) {
-    $root = Join-Path $env:LOCALAPPDATA $relative
-    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
-    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
+    try {
+        $root = Join-Path $env:LOCALAPPDATA $relative
+        Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+        if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
+    } catch { $script:AutoEraseFailed++ }
 }
 foreach ($relative in @('Bitwarden\Cache','Bitwarden\Local Storage\leveldb','Bitwarden\Session Storage','LastPass\Cache','LastPass\Local Storage\leveldb','LastPass\Session Storage')) {
-    $root = Join-Path $env:APPDATA $relative
-    Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
-    if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
+    try {
+        $root = Join-Path $env:APPDATA $relative
+        Erase-FileSet @(Get-AutoEraseFiles -Path $root -Recurse)
+        if (@(Get-AutoEraseFiles -Path $root -Recurse).Count) { throw 'Password-manager cache cleanup is incomplete.' }
+    } catch { $script:AutoEraseFailed++ }
 }
 '@
     'adobeRecent' = @'
@@ -2377,11 +2387,11 @@ function Set-AutoEraseScheduleCore {
         }
 
         $description = if ($CategoryId -in $script:AutoEraseProtectedCategories) {
-            'System Maintenance scheduled cleanup v11 (manual opt-in)'
+            'System Maintenance scheduled cleanup v12 (manual opt-in)'
         } elseif ($ManagedByAutoSet) {
-            'System Maintenance scheduled cleanup v11 (managed)'
+            'System Maintenance scheduled cleanup v12 (managed)'
         } else {
-            'System Maintenance scheduled cleanup v11'
+            'System Maintenance scheduled cleanup v12'
         }
         Register-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force -ErrorAction Stop | Out-Null
@@ -2617,7 +2627,7 @@ function Remove-ManagedAutoEraseSchedule {
 
 function Test-AutoEraseManagedTask {
     param($Task)
-    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
+    return ($Task.Description -match '^System Maintenance scheduled cleanup v(?:[456789]|10|11|12) \(managed\)$' -or $Task.Description -like 'WinCommander Auto-set scheduled wipe*')
 }
 
 function Test-AutoEraseTaskEnabled {
@@ -2737,6 +2747,28 @@ function ConvertTo-AutoEraseComparableTaskXml {
     return [xml]$definition.XmlText
 }
 
+function Test-AutoEraseCurrentPayload {
+    param($Task, $Identity)
+    $argument = [string](@($Task.Actions)[0].Arguments)
+    if ($argument -notmatch '(?i)(?:^|\s)-File\s+"([^"]+)"\s*$') { return $false }
+    $path = [IO.Path]::GetFullPath($Matches[1])
+    $root = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'WinCommander\auto-erase\scripts'))
+    if ([IO.Path]::GetDirectoryName($path) -ine $root) { throw 'The cleanup task payload path is not owned.' }
+    $parent = [IO.Directory]::GetParent($path)
+    while ($parent) {
+        $directory = Get-Item -LiteralPath $parent.FullName -Force -ErrorAction Stop
+        if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The cleanup task payload directory cannot be verified.' }
+        $parent = $parent.Parent
+    }
+    try { $file = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return $false }
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -gt 1MB) { throw 'The cleanup task payload cannot be verified.' }
+    $body = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+    $category = '(?m)^\$categoryId = ''' + [regex]::Escape([string]$Identity.categoryId) + '''\r?$'
+    if (-not $body -or $body -notmatch $category) { throw 'The cleanup task payload cannot be verified.' }
+    return $true
+}
+
 # Copy task XML instead of recreating schedules: dates, disabled state, selected
 # account, scope and settings belong to the user and survive a naming migration.
 function Invoke-AutoEraseMigrationCore {
@@ -2751,7 +2783,7 @@ function Invoke-AutoEraseMigrationCore {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
-            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11) \(manual opt-in\)$'
+            $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
                 $protectedReadback = Get-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
@@ -2759,9 +2791,10 @@ function Invoke-AutoEraseMigrationCore {
                 $disabledProtected += $identity.categoryId
                 continue
             }
-            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v11(?: \((?:manual opt-in|managed)\))?$'
+            $currentPayload = $task.Description -match '^System Maintenance scheduled cleanup v12(?: \((?:manual opt-in|managed)\))?$'
             $argument = [string](@($task.Actions)[0].Arguments)
             $upgradePayload = -not ($argument -like '*WinCommander\auto-erase\scripts*' -and $currentPayload)
+            if (-not $upgradePayload -and -not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) { $upgradePayload = $true }
             $makeVisible = $task.Settings -and $task.Settings.Hidden -eq $true
             if ($task.TaskPath -eq $script:SystemMaintenanceTaskPath -and $task.TaskName -eq $identity.taskName -and -not $upgradePayload -and -not $makeVisible) { continue }
             if ([string]$task.State -eq 'Running') { throw 'An active scheduled cleanup must finish before its task can be migrated.' }
@@ -2785,9 +2818,9 @@ function Invoke-AutoEraseMigrationCore {
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
                 $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
-                $revision = 11
+                $revision = 12
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v11 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v11 (managed)' } else { 'System Maintenance scheduled cleanup v11' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v12 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v12 (managed)' } else { 'System Maintenance scheduled cleanup v12' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

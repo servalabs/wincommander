@@ -9,11 +9,13 @@ try {
     $env:APPDATA = 'C:\Fixture\Roaming'
     $script:retained = $false
     $script:deny = $false
+    $script:denyFirst = $false
     $script:scanCalls = @{}
     function Get-AutoEraseFiles {
         param([string]$Path, [switch]$Recurse)
         if (-not $Recurse) { throw 'Expected recursive cache inventory.' }
         if ($script:deny) { throw 'Synthetic inventory access denied.' }
+        if ($script:denyFirst -and $Path -eq 'C:\Fixture\Roaming\npm-cache') { throw 'Synthetic first-root access denied.' }
         if (-not $script:scanCalls.ContainsKey($Path)) { $script:scanCalls[$Path] = 0 }
         $script:scanCalls[$Path]++
         if ($script:scanCalls[$Path] -eq 1 -or $script:retained) { [pscustomobject]@{ FullName = "$Path\item.bin" } }
@@ -25,14 +27,17 @@ try {
         $script:scanCalls = @{}; $script:retained = $false
         Invoke-Expression $script:AutoEraseScripts[$category]
         if (@($script:scanCalls.Values | Where-Object { $_ -ne 2 }).Count) { throw "$category did not recheck every cache root." }
-        $script:scanCalls = @{}; $script:retained = $true; $failed = $false
-        try { Invoke-Expression $script:AutoEraseScripts[$category] } catch { $failed = $true }
-        if (-not $failed) { throw "$category reported success despite remaining files." }
-        $script:scanCalls = @{}; $script:deny = $true; $failed = $false
-        try { Invoke-Expression $script:AutoEraseScripts[$category] } catch { $failed = $true }
-        if (-not $failed) { throw "$category reported success despite inaccessible files." }
+        $script:scanCalls = @{}; $script:retained = $true; $script:AutoEraseFailed = 0
+        Invoke-Expression $script:AutoEraseScripts[$category]
+        if ($script:AutoEraseFailed -eq 0) { throw "$category reported success despite remaining files." }
+        $script:scanCalls = @{}; $script:deny = $true; $script:AutoEraseFailed = 0
+        Invoke-Expression $script:AutoEraseScripts[$category]
+        if ($script:AutoEraseFailed -eq 0) { throw "$category reported success despite inaccessible files." }
         $script:deny = $false
     }
+    $script:scanCalls = @{}; $script:retained = $false; $script:denyFirst = $true; $script:AutoEraseFailed = 0
+    Invoke-Expression $script:AutoEraseScripts['developerCaches']
+    if ($script:AutoEraseFailed -eq 0 -or -not $script:scanCalls.ContainsKey('C:\Fixture\Local\npm-cache')) { throw 'An inaccessible first cache stopped cleanup of later roots.' }
     Write-Output 'Passed: protected cache inventory, post-clear readback and access failures.'
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }

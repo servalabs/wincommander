@@ -28,14 +28,23 @@ try {
 
     [void]$script:fakeFiles.Add('C:\Fixture\Local\Packages\Microsoft.WindowsNotepad_fixture\LocalState\TabState\nested\locked.bin')
     function Erase-FileSet { param([object[]]$Files) }
-    $failed = $false
-    try { Invoke-Expression $script:AutoEraseScripts['notepadState'] } catch { $failed = $true }
-    if (-not $failed) { throw 'Remaining tab-state records were reported as cleared.' }
+    $script:AutoEraseFailed = 0
+    Invoke-Expression $script:AutoEraseScripts['notepadState']
+    if ($script:AutoEraseFailed -eq 0) { throw 'Remaining tab-state records were reported as cleared.' }
 
     function Get-AutoEraseFiles { param([string]$Path, [switch]$Recurse) throw 'Synthetic access denied.' }
-    $failed = $false
-    try { Invoke-Expression $script:AutoEraseScripts['notepadState'] } catch { $failed = $true }
-    if (-not $failed) { throw 'An inaccessible tab-state directory was reported as cleared.' }
+    $script:AutoEraseFailed = 0
+    Invoke-Expression $script:AutoEraseScripts['notepadState']
+    if ($script:AutoEraseFailed -eq 0) { throw 'An inaccessible tab-state directory was reported as cleared.' }
+    $script:AutoEraseFailed = 0; $script:scanned = [Collections.Generic.List[string]]::new()
+    function Get-AutoEraseDirectories { param([string]$Path, [string]$Filter) @([pscustomobject]@{ FullName='C:\Fixture\first' }, [pscustomobject]@{ FullName='C:\Fixture\second' }) }
+    function Get-AutoEraseFiles {
+        param([string]$Path, [switch]$Recurse)
+        $script:scanned.Add($Path)
+        if ($Path -like '*first*') { throw 'Synthetic first package access denied.' }
+    }
+    Invoke-Expression $script:AutoEraseScripts['notepadState']
+    if ($script:AutoEraseFailed -eq 0 -or -not @($script:scanned | Where-Object { $_ -like '*second*' }).Count) { throw 'An inaccessible first Notepad package stopped later packages.' }
     Write-Output 'Passed: nested Notepad tab-state cleanup, readback and access failure fixtures.'
 } finally {
     $env:LOCALAPPDATA = $originalLocalAppData

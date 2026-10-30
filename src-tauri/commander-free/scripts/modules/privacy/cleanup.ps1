@@ -6164,9 +6164,20 @@ function Get-CleanupSummaryAllUsers {
                     'recentFiles' {
                         $p = Join-Path $appData 'Microsoft\Windows\Recent'
                         if (Test-CleanupSummaryPath $p) {
-                            $files = Get-ChildItem $p -File -Force -EA Stop
+                            $files = @(Get-ChildItem -LiteralPath $p -File -Force -EA Stop)
                             $count = $files.Count
-                            $items = $files | Select-Object -First $previewMax | ForEach-Object { $_.BaseName }
+                            $shell = $null
+                            $records = @($files | Select-Object -First $previewMax | ForEach-Object {
+                                $target = $null
+                                if ($_.Extension -ieq '.lnk') {
+                                    try {
+                                        if (-not $shell) { $shell = New-Object -ComObject WScript.Shell }
+                                        $target = $shell.CreateShortcut($_.FullName).TargetPath
+                                    } catch { }
+                                }
+                                @{ name=$_.BaseName; path=$_.FullName; extension=$_.Extension; target=$target; lastModified=$_.LastWriteTime.ToString('o'); sizeBytes=$_.Length }
+                            })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'psHistory' {
@@ -6183,8 +6194,14 @@ function Get-CleanupSummaryAllUsers {
                         $cust = Join-Path $appData 'Microsoft\Windows\Recent\CustomDestinations'
                         $f1 = if (Test-CleanupSummaryPath $auto) { @(Get-ChildItem $auto -File -Force -EA Stop) } else { @() }
                         $f2 = if (Test-CleanupSummaryPath $cust) { @(Get-ChildItem $cust -File -Force -EA Stop) } else { @() }
-                        $count = $f1.Count + $f2.Count
-                        $items = @($f1 + $f2) | Select-Object -First $previewMax | ForEach-Object { $_.BaseName }
+                        $count = @($f1).Count + @($f2).Count
+                        $allRecords = @(foreach ($group in @(@{ type='Automatic'; files=$f1 }, @{ type='Custom'; files=$f2 })) {
+                            foreach ($file in @($group.files)) {
+                                @{ name=$file.Name; path=$file.FullName; type=$group.type; sizeKB=[math]::Round($file.Length / 1KB, 1); lastModified=$file.LastWriteTime.ToString('o') }
+                            }
+                        })
+                        $records = @($allRecords | Select-Object -First $previewMax)
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'browserFootprints' {
                         $inventory = @(Get-CleanupSummaryBrowserInventory -ProfilePath $prof.FullName)
@@ -6240,24 +6257,30 @@ function Get-CleanupSummaryAllUsers {
                             -Include '*.wal','*.db-wal','*.sqlite-wal','*.shm','*.db-shm' `
                             -Recurse -Depth 5 -File -Force -EA Stop } else { @() }
                         $count = @($f).Count
-                        $items = @($f) | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                        $records = @(@($f) | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); dir=(Split-Path (Split-Path $_.FullName -Parent) -Leaf); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'recallDb' {
-                        # Match Get-RecallDatabaseInfo: Recall + alternate + Timeline + ActionCenter
+                        # Match the four recursive locations in Get-RecallDatabaseInfo.
                         $dirs = @(
-                            Join-Path $localApp 'CoreAIPlatform.00\UKP',
-                            Join-Path $localApp 'CoreAIPlatform.00',
-                            Join-Path $localApp 'ConnectedDevicesPlatform',
-                            Join-Path $localApp 'Microsoft\Windows\ActionCenterCache'
+                            @{ label='Recall'; path=(Join-Path $localApp 'CoreAIPlatform.00') },
+                            @{ label='Recall'; path=(Join-Path $localApp 'Microsoft\Windows\Recall') },
+                            @{ label='Timeline'; path=(Join-Path $localApp 'ConnectedDevicesPlatform') },
+                            @{ label='ActionCenter'; path=(Join-Path $localApp 'Microsoft\Windows\ActionCenter') }
                         )
-                        foreach ($d in $dirs) {
-                            if (Test-CleanupSummaryPath $d) {
-                                $f = Get-ChildItem $d -File -Force -EA Stop |
-                                    Where-Object { $_.Extension -in @('.db','.db-wal','.db-shm','.db-journal','.edb') }
-                                $count += $f.Count
-                                $items += $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                        $recallRows = [Collections.Generic.List[object]]::new()
+                        foreach ($source in $dirs) {
+                            if (Test-CleanupSummaryPath $source.path) {
+                                $files = @(Get-ChildItem -Path $source.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -File -Force -EA Stop)
+                                $count += $files.Count
+                                foreach ($file in $files) {
+                                    if ($recallRows.Count -ge $previewMax) { break }
+                                    $recallRows.Add(@{ source=$source.label; name=$file.Name; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                }
                             }
                         }
+                        $records = @($recallRows.ToArray())
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'webCache' {
                         # Match Get-WebCacheInfo: WebCacheV*.dat (V01 historically, V24 on newer builds) + rotating V01*.log
