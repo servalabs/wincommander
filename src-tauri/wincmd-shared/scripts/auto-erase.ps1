@@ -3000,7 +3000,13 @@ function Invoke-AutoEraseMigrationCore {
                 $owner = [string]$task.Principal.UserId
                 $scope = if ($identity.ownerSid -eq 'S-1-5-18') { 'system' } else { "user-$owner" }
                 $info = Get-ScheduledTaskInfo -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop
-                $firstDue = if ($info.NextRunTime -gt [DateTime]::MinValue) { $info.NextRunTime.ToUniversalTime() } else { [DateTime]::UtcNow.AddMinutes($minutes) }
+                # A disabled task may have no Scheduler next-run value. Guessing
+                # now + interval would shift its payload out of phase with its
+                # preserved trigger and can skip the next run after re-enabling.
+                if (-not $info.NextRunTime -or $info.NextRunTime -le [DateTime]::MinValue) {
+                    throw 'The existing schedule next run could not be verified. Remove and recreate this individual schedule to keep its timing accurate. The existing task was left unchanged.'
+                }
+                $firstDue = $info.NextRunTime.ToUniversalTime()
                 $revision = 20
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
                 $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v20 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v20 (managed)' } else { 'System Maintenance scheduled cleanup v20' }

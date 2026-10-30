@@ -22,7 +22,7 @@ function Disable-ScheduledTask {
 }
 function Get-ScheduledTaskInfo {
     [CmdletBinding()] param($TaskPath,$TaskName)
-    @{ NextRunTime=[DateTime]::Parse('2026-11-02T01:00:00Z') }
+    @{ NextRunTime=$script:nextRunTime }
 }
 function Export-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName)
@@ -41,6 +41,7 @@ function ConvertTo-AutoEraseTaskArgument {
     '-NoProfile -File "mock-revision11.ps1"'
 }
 $script:disabled = @(); $script:registrations = 0; $script:registeredXml = ''
+$script:nextRunTime = [DateTime]::Parse('2026-11-02T01:00:00Z')
 $script:task = [pscustomobject]@{
     Category='dnsCache'; TaskPath='\System Maintenance\'; TaskName='SM-U-08-12345678'; State='Disabled'
     Description='System Maintenance scheduled cleanup v4 (managed)'
@@ -57,6 +58,11 @@ $script:originalXml = @'
 <Actions><Exec><Command>powershell.exe</Command><Arguments>old-payload</Arguments></Exec></Actions>
 </Task>
 '@
+$script:nextRunTime = [DateTime]::MinValue
+$unknownNext = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
+if (-not $unknownNext.error -or $unknownNext.message -notmatch 'next run could not be verified' -or $script:registrations -ne 0 -or $script:registeredXml) { throw 'An unavailable next run must not change the original task or guess its timing.' }
+$script:locks = @()
+$script:nextRunTime = [DateTime]::Parse('2026-11-02T01:00:00Z')
 $result = Invoke-AutoEraseMigration -CategoryId 'dnsCache'
 if ($result.error -or $script:registrations -ne 1 -or $result.migrated.Count -ne 1) { throw "v4 upgrade failed: $($result.message)" }
 [xml]$before = $script:originalXml; [xml]$after = $script:registeredXml

@@ -4021,17 +4021,21 @@ function Get-VPNPhonebooksInfo {
 }
 
 function Get-ProxyCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $connections = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
     try {
-        $files = @()
-        $connections = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
-        if (Test-Path $connections -ErrorAction SilentlyContinue) {
-            (Get-Item -Path $connections -ErrorAction SilentlyContinue).Property | Where-Object { $_ -notmatch '^PS' } | ForEach-Object {
-                $files += @{ name = "Proxy connection metadata: $_"; sizeKB = 0; modified = '' }
+        try { $item = Get-Item -LiteralPath $connections -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $item = $null }
+        if ($item) {
+            foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $files.Add(@{ name = "Proxy connection metadata: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' })
+                } catch { $partial = $true }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some proxy connection metadata could not be checked.' } else { $null } }
 }
 
 function Get-CloudPlaceholdersInfo {
