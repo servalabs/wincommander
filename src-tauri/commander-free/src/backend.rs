@@ -6717,23 +6717,26 @@ pub fn start_privacy_shield_if_enabled_on_launch(app: AppHandle) {
     });
 }
 
+const FIND_SESSION_PRIVACY_SHIELD_PID: &str = r#"
+        $sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+          Where-Object {
+            ($_.Name -in @('pythonw.exe', 'python.exe')) -and
+            $_.SessionId -eq $sessionId -and
+            $_.CommandLine -like '*--wc-privacy-shield*'
+          } |
+          Select-Object -First 1 -ExpandProperty ProcessId
+    "#;
+
 /// Returns the already-running detector process, if one belongs to this user
 /// session. This is deliberately independent of persisted toggle state: that
 /// state may be stale after an app reload, but an active detector must always
 /// have its local notification reader restored.
 fn find_running_privacy_shield_pid() -> Option<u32> {
-    let script = r#"
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-          Where-Object {
-            ($_.Name -in @('pythonw.exe', 'python.exe')) -and
-            $_.CommandLine -like '*--wc-privacy-shield*'
-          } |
-          Select-Object -First 1 -ExpandProperty ProcessId
-    "#;
     let (mut command, _) = build_powershell_command();
     let mut child = command.spawn().ok()?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(script.as_bytes()).ok()?;
+        stdin.write_all(FIND_SESSION_PRIVACY_SHIELD_PID.as_bytes()).ok()?;
     }
     let output = child.wait_with_output().ok()?;
     if !output.status.success() {
@@ -6742,6 +6745,41 @@ fn find_running_privacy_shield_pid() -> Option<u32> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+#[cfg(all(test, windows))]
+mod shield_reattach_session_tests {
+    use std::os::windows::process::CommandExt;
+
+    fn run_discovery(include_current: bool) -> String {
+        let fixture = format!(
+            r#"
+            $sid = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            function Get-CimInstance {{
+                @(
+                    [pscustomobject]@{{ Name='pythonw.exe'; SessionId=($sid + 1); CommandLine='--wc-privacy-shield'; ProcessId=9001 }}
+                    if ({}) {{ [pscustomobject]@{{ Name='pythonw.exe'; SessionId=$sid; CommandLine='--wc-privacy-shield'; ProcessId=9002 }} }}
+                )
+            }}
+            {}
+            "#,
+            if include_current { "$true" } else { "$false" },
+            super::FIND_SESSION_PRIVACY_SHIELD_PID
+        );
+        let result = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &fixture])
+            .creation_flags(0x08000000)
+            .output()
+            .expect("PowerShell fixture must run");
+        assert!(result.status.success());
+        String::from_utf8_lossy(&result.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn discovery_selects_only_the_current_windows_session() {
+        assert_eq!(run_discovery(true), "9002");
+        assert_eq!(run_discovery(false), "");
+    }
 }
 
 /// Attach exactly one local event reader to the real detector process. The
