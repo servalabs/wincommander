@@ -21,4 +21,9 @@ function Get-CleanupProcessElevation { param([int]$ProcessId) switch ($ProcessId
 function Get-Process { param($ErrorAction) @([pscustomobject]@{ Id=1; ProcessName='one'; MainModule=$null }, [pscustomobject]@{ Id=2; ProcessName='two'; MainModule=$null }, [pscustomobject]@{ Id=3; ProcessName='three'; MainModule=$null }) }
 $result = Get-ProcessIntelligence
 if ($result.error -or @($result.processes).Count -ne 3 -or $result.processes[0].elevated -ne 'Yes' -or $result.processes[1].elevated -ne 'No' -or $result.processes[2].elevated -ne 'Unknown') { throw 'Process elevation results were not preserved accurately.' }
+$exited = [pscustomobject]@{ Id=4; MainModule=$null }
+$exited | Add-Member -MemberType ScriptProperty -Name ProcessName -Value { throw 'The process exited.' }
+function Get-Process { param($ErrorAction) @([pscustomobject]@{ Id=1; ProcessName='one'; MainModule=$null }, $exited, [pscustomobject]@{ Id=2; ProcessName='two'; MainModule=$null }) }
+$result = Get-ProcessIntelligence
+if ($result.error -or -not $result.partial -or @($result.processes).Count -ne 2 -or $result.processes[0].name -ne 'one' -or $result.processes[1].name -ne 'two') { throw 'An exited process must not discard other process observations.' }
 Write-Output 'Passed: process elevation uses token readback and preserves inaccessible results as unknown.'

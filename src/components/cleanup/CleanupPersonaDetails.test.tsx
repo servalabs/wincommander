@@ -215,6 +215,19 @@ describe("System Cleanup persona details", () => {
     expect(readExpandedCleanupSummary({ users: [{ username: "other-folder", categories: [{ ...category, error: true }] }] }, "other-folder", "psHistory")).toBeNull();
   });
 
+  test("offers more account details when an incomplete preview has no rows", () => {
+    const preview = readCleanupUserSummary({ count: 2, partial: true, records: [], sampleCount: 0, previewLimit: 0, truncated: true });
+    expect(preview.count).toBe(-1);
+    expect(preview.raw).toMatchObject({ records: [], partial: true, truncated: true });
+    const history = ALL_CATEGORIES.find(category => category.id === "psHistory")!;
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="simple" count={-1} items={[]}
+      groupedItems={[{ title: "Other user", username: "other-folder", count: preview.count, items: preview.items, rawData: preview.raw }]}
+      clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Load more account details");
+    expect(html).toContain("could not be checked completely");
+    expect(html).toContain("disabled");
+  });
+
   test("accepts expanded records only from the requested account and card", () => {
     const category = { id: "psHistory", count: 2, items: ["one", "two"], records: [{ command: "one" }, { command: "two" }], sampleCount: 2, previewLimit: 50000, truncated: false, snapshotHash: `sha256:${"a".repeat(64)}`, nextOffset: null, totalRows: 2 };
     const data = { users: [{ username: "folder-name", categories: [category] }] };

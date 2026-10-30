@@ -1385,10 +1385,16 @@ namespace WcCleanup {
 }
 
 function Get-ProcessIntelligence {
+    $entries = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $entries = @()
-        $procs = Get-Process -ErrorAction Stop | Where-Object { $_.Id -gt 0 }
+        $procs = @(Get-Process -ErrorAction Stop)
         foreach ($p in $procs) {
+            try {
+            $processId = $p.Id
+            if ($processId -le 0) { continue }
+            $processName = $p.ProcessName
+            if ([string]::IsNullOrWhiteSpace([string]$processName)) { $partial = $true; continue }
             $path = $null
             $sigStatus = "UnknownError"
             $signer = $null
@@ -1410,17 +1416,18 @@ function Get-ProcessIntelligence {
                     $sigStatus = "UnknownError"
                 }
             }
-            $elevated = Get-CleanupProcessElevation -ProcessId $p.Id
-            $entries += @{
-                name     = $p.ProcessName
-                pid      = $p.Id
+            $elevated = Get-CleanupProcessElevation -ProcessId $processId
+            $entries.Add(@{
+                name     = $processName
+                pid      = $processId
                 path     = if ($path) { $path } else { "" }
                 signed   = $sigStatus
                 signer   = $signer
                 elevated = $elevated
-            }
+            })
+            } catch { $partial = $true }
         }
-        @{ processes = $entries }
+        @{ processes = @($entries.ToArray()); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some processes could not be inspected.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to get process intelligence: $($_.Exception.Message)"; processes = @() }

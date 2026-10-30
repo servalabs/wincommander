@@ -138,13 +138,13 @@ function ConvertTo-AutoEraseTaskArgument {
     'mock-task-argument'
 }
 function New-ScheduledTaskAction { param($Execute,$Argument) @{ execute=$Execute; argument=$Argument } }
-function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ startup=[bool]$AtStartup; interval=$RepetitionInterval } }
+function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ startup=[bool]$AtStartup; at=$At; interval=$RepetitionInterval } }
 function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[switch]$StartWhenAvailable,[switch]$Hidden) @{} }
 function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ user=$UserId; logon=$LogonType; level=$RunLevel } }
 function Register-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName,$Action,$Trigger,$Principal,$Settings,$Description,[switch]$Force)
     $script:registrations += @{ principal=$Principal; description=$Description; triggers=$Trigger }
-    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
+    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
 }
 $script:registrations=@()
 $catalog = Get-AutoEraseSupportedCategories

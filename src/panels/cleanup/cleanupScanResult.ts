@@ -28,7 +28,7 @@ export function readCleanupUserSummary(data: {
     // Keep safely decoded observations from a partial scan while leaving its
     // count unavailable, so these rows cannot authorize a cleanup.
     const observed = records.filter(row => row && typeof row === 'object' && !Array.isArray(row));
-    const raw = observed.length || Object.keys(scanFacts).length ? {
+    const raw = observed.length || Object.keys(scanFacts).length || data.truncated === true ? {
       records: observed, scanFacts, partial: true,
       ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
       ...(data.truncated === true ? { truncated: true } : {}),

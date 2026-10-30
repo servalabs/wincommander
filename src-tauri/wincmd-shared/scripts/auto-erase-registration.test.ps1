@@ -23,6 +23,8 @@ function Get-ScheduledTask {
         if ($script:readbackMode -eq 'wrongAction') { $saved.Actions[0].Arguments = 'different payload' }
         if ($script:readbackMode -eq 'disabled') { $saved.State = 'Disabled' }
         if ($script:readbackMode -eq 'wrongInterval') { $saved.Triggers[0].Repetition.Interval = 'PT5M' }
+        if ($script:readbackMode -eq 'wrongStart') { $saved.Triggers[0].StartBoundary = ([DateTime]::Parse($saved.Triggers[0].StartBoundary).AddMinutes(10)).ToString('s') }
+        if ($script:readbackMode -eq 'missingStart') { $saved.Triggers[0].StartBoundary = '' }
         if ($script:readbackMode -eq 'wrongLogon') { $saved.Principal.LogonType = 'S4U' }
         if ($script:readbackMode -eq 'wrongRunLevel') { $saved.Principal.RunLevel = 'Limited' }
         return $saved
@@ -32,7 +34,7 @@ function Get-ScheduledTask {
 function Get-AutoEraseTaskIdentity { param($Task) if ($script:unowned) { return $null }; @{ categoryId=$Task.CategoryId; ownerSid=$Task.OwnerSid } }
 function ConvertTo-AutoEraseTaskArgument { param($CategoryId,$IntervalMinutes,$Script,$ExecutionScope,$FirstDueUtc,$AllowDefaultExcluded) $script:approval=$AllowDefaultExcluded; "mock:${CategoryId}:$IntervalMinutes" }
 function New-ScheduledTaskAction { param($Execute,$Argument) @{ execute=$Execute; argument=$Argument } }
-function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ once=[bool]$Once; interval=$RepetitionInterval; startup=[bool]$AtStartup; logon=[bool]$AtLogOn; user=$User } }
+function New-ScheduledTaskTrigger { param([switch]$Once,$At,$RepetitionInterval,$RepetitionDuration,[switch]$AtStartup,[switch]$AtLogOn,$User) @{ once=[bool]$Once; at=$At; interval=$RepetitionInterval; startup=[bool]$AtStartup; logon=[bool]$AtLogOn; user=$User } }
 function New-ScheduledTaskSettingsSet { param([switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries,[switch]$StartWhenAvailable,[switch]$Hidden) @{ startWhenAvailable=[bool]$StartWhenAvailable; hidden=[bool]$Hidden } }
 function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ user=$UserId; logon=$LogonType; level=$RunLevel } }
 function Register-ScheduledTask {
@@ -44,7 +46,7 @@ function Register-ScheduledTask {
         TaskPath=$TaskPath; TaskName=$TaskName; CategoryId=$category; OwnerSid=(Resolve-AutoEraseSid $Principal.user)
         Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument })
         Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }
-        Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } })
+        Triggers=@([pscustomobject]@{ StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } })
         Description=$Description; State='Ready'
     }
     $script:readbackPending = $true
@@ -89,7 +91,7 @@ foreach ($id in $script:AutoEraseHourlyCategories) {
 }
 if (-not (Set-AutoEraseSchedule -CategoryId 'recentFiles' -IntervalMinutes 60 -RunAsSystem $true).error) { throw 'A user category accepted SYSTEM context.' }
 if ($script:registered.Count -ne $before) { throw 'Rejected policy requests created a task.' }
-foreach ($mode in @('registerFailure','missing','wrongAction','disabled','wrongInterval')) {
+foreach ($mode in @('registerFailure','missing','wrongAction','disabled','wrongInterval','wrongStart','missingStart')) {
     $script:readbackMode = $mode
     $result = Set-IndividualAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60
     if (-not $result.error -or $result.status -eq 'enabled') { throw "Registration incorrectly succeeded with $mode readback." }

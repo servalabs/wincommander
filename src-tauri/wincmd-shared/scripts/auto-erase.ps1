@@ -2544,13 +2544,18 @@ function Set-AutoEraseScheduleCore {
         $saved = Get-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $taskName -ErrorAction Stop
         $savedIdentity = if ($saved) { Get-AutoEraseTaskIdentity $saved } else { $null }
         $savedActions = @($saved.Actions)
-        $savedIntervals = @($saved.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ })
+        $savedTimeTriggers = @($saved.Triggers | Where-Object { $_.Repetition.Interval })
+        $savedIntervals = @($savedTimeTriggers | ForEach-Object { $_.Repetition.Interval })
+        $savedStart = [DateTimeOffset]::MinValue
+        $startMatches = $savedTimeTriggers.Count -eq 1 -and
+            [DateTimeOffset]::TryParse([string]$savedTimeTriggers[0].StartBoundary, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$savedStart) -and
+            $savedStart.UtcDateTime -eq $firstDue
         if (-not $savedIdentity -or $savedIdentity.categoryId -ne $CategoryId -or $savedIdentity.ownerSid -ne $ownerSid -or
             $saved.TaskPath -ne $script:SystemMaintenanceTaskPath -or $saved.TaskName -ne $taskName -or
             $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
             [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
             [string]$saved.Principal.LogonType -ne $expectedLogonType -or (-not $RunAsSystem -and [string]$saved.Principal.RunLevel -ne 'Highest') -or
-            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or $savedIntervals.Count -ne 1 -or
+            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
             [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
             throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
         }
