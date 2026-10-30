@@ -27,6 +27,9 @@ export function createCleanupScheduleMigrationGate() {
   };
 }
 
-export function canAutoSetCleanupSchedules(schedulesEnabled: boolean, state: string, migrationIncomplete: boolean): boolean {
-  return schedulesEnabled && state === "verified" && !migrationIncomplete;
+export function canAutoSetCleanupSchedules(schedulesEnabled: boolean, state: string, migrationIncomplete: boolean, hasManagedSchedules = false): boolean {
+  // A verified set of existing managed schedules can still be turned off
+  // while an unrelated legacy task needs repair. Creating defaults waits for
+  // migration to complete.
+  return schedulesEnabled && state === "verified" && (!migrationIncomplete || hasManagedSchedules);
 }

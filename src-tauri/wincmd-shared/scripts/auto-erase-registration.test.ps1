@@ -23,6 +23,8 @@ function Get-ScheduledTask {
         if ($script:readbackMode -eq 'wrongAction') { $saved.Actions[0].Arguments = 'different payload' }
         if ($script:readbackMode -eq 'disabled') { $saved.State = 'Disabled' }
         if ($script:readbackMode -eq 'wrongInterval') { $saved.Triggers[0].Repetition.Interval = 'PT5M' }
+        if ($script:readbackMode -eq 'wrongLogon') { $saved.Principal.LogonType = 'S4U' }
+        if ($script:readbackMode -eq 'wrongRunLevel') { $saved.Principal.RunLevel = 'Limited' }
         return $saved
     }
     if ($script:existing) { [pscustomobject]@{ TaskPath=$script:SystemMaintenanceTaskPath; TaskName=(Get-AutoEraseTaskName 'dnsCache' 'S-1-5-21-1-2-3-1001'); State='Ready'; CategoryId='dnsCache'; OwnerSid='S-1-5-21-1-2-3-1001' } }
@@ -41,6 +43,7 @@ function Register-ScheduledTask {
     $script:savedTask = [pscustomobject]@{
         TaskPath=$TaskPath; TaskName=$TaskName; CategoryId=$category; OwnerSid=(Resolve-AutoEraseSid $Principal.user)
         Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument })
+        Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }
         Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } })
         Description=$Description; State='Ready'
     }
@@ -89,6 +92,11 @@ if ($script:registered.Count -ne $before) { throw 'Rejected policy requests crea
 foreach ($mode in @('registerFailure','missing','wrongAction','disabled','wrongInterval')) {
     $script:readbackMode = $mode
     $result = Set-IndividualAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60
+    if (-not $result.error -or $result.status -eq 'enabled') { throw "Registration incorrectly succeeded with $mode readback." }
+}
+foreach ($mode in @('wrongLogon','wrongRunLevel')) {
+    $script:readbackMode = $mode
+    $result = Set-IndividualAutoEraseSchedule -CategoryId 'wslData' -IntervalMinutes 60 -AllowDefaultExcluded
     if (-not $result.error -or $result.status -eq 'enabled') { throw "Registration incorrectly succeeded with $mode readback." }
 }
 $script:readbackMode = ''

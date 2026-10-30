@@ -957,7 +957,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             skipped: 0,
             failed: 0,
         };
-        if (!canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete)) {
+        if (!canAutoSetCleanupSchedules(schedulesEnabled, visibleScheduleState, migrationIncomplete, autoSetScheduleIds.size > 0)) {
             if (migrationIncomplete) showError("Resolve the scheduled cleanup upgrade before using Auto-set.");
             summary.skipped = SCHEDULABLE_CATEGORIES.length;
             return summary;

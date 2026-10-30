@@ -2318,11 +2318,13 @@ function Get-CleanupBrowserFootprints {
 
         foreach ($b in $installed) {
             $udd = $b.UserDataDir
-            if (-not $udd -or -not (Test-Path $udd)) { continue }
-
             $artifacts  = @()
             $totalBytes = 0
 
+            # A single inaccessible profile must not discard browser records
+            # already collected from this or an earlier browser.
+            try {
+            if (-not $udd -or -not (Test-Path -LiteralPath $udd -ErrorAction Stop)) { continue }
             if ($b.Engine -eq 'Chromium') {
                 foreach ($profileDir in @(Get-CleanupChromiumProfiles $b)) {
                     foreach ($art in $chromiumArtifacts) {
@@ -2340,7 +2342,8 @@ function Get-CleanupBrowserFootprints {
                 $profileDirs = @()
                 $profilesIni = Join-Path $udd 'profiles.ini'
                 if (Test-Path $profilesIni) {
-                    $ini = Get-Content $profilesIni -ErrorAction SilentlyContinue
+                    try { $ini = Get-Content -LiteralPath $profilesIni -ErrorAction Stop }
+                    catch { $partial = $true; $ini = @() }
                     $currentPath = $null
                     $isRelative  = $true
                     foreach ($line in $ini) {
@@ -2363,7 +2366,7 @@ function Get-CleanupBrowserFootprints {
                 if ($profileDirs.Count -eq 0) {
                     $pfDir = Join-Path $udd 'Profiles'
                     if (Test-Path $pfDir) {
-                        $profileDirs = Get-ChildItem $pfDir -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+                        $profileDirs = @(Get-ChildItem -LiteralPath $pfDir -Directory -ErrorAction Stop | Select-Object -ExpandProperty FullName)
                     }
                 }
                 if ($profileDirs.Count -eq 0) { continue }
@@ -2379,6 +2382,7 @@ function Get-CleanupBrowserFootprints {
                     }
                 }
             }
+            } catch { $partial = $true }
 
             if ($artifacts.Count -gt 0) {
                 $browsers += @{
@@ -2390,7 +2394,7 @@ function Get-CleanupBrowserFootprints {
             }
         }
 
-        @{ browsers = $browsers; totalBrowsers = $browsers.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some browser data sizes could not be checked.' } else { $null } }
+        @{ browsers = $browsers; totalBrowsers = $browsers.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some browser profiles or data sizes could not be checked.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to get browser footprints: $($_.Exception.Message)" }

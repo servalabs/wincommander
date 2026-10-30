@@ -144,7 +144,7 @@ function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ use
 function Register-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName,$Action,$Trigger,$Principal,$Settings,$Description,[switch]$Force)
     $script:registrations += @{ principal=$Principal; description=$Description; triggers=$Trigger }
-    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
+    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
 }
 $script:registrations=@()
 $catalog = Get-AutoEraseSupportedCategories

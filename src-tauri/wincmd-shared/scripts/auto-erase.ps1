@@ -2449,7 +2449,9 @@ function Set-AutoEraseScheduleCore {
 
     try {
         $ownerSid = if ($RunAsSystem) { 'S-1-5-18' } else { Resolve-AutoEraseSid $TargetUser }
-        $migration = Invoke-AutoEraseMigrationCore -CategoryId $CategoryId
+        # A different account's task must not block a deliberate update for
+        # this owner. Global migration still inspects every owned task.
+        $migration = Invoke-AutoEraseMigrationCore -CategoryId $CategoryId -OwnerSid $ownerSid
         if ($migration.error) { throw $migration.message }
         Initialize-SystemMaintenanceTaskFolder
         $taskName = Get-AutoEraseTaskName $CategoryId $ownerSid
@@ -2515,11 +2517,14 @@ function Set-AutoEraseScheduleCore {
                     -StartWhenAvailable
 
         if ($RunAsSystem) {
+            $expectedLogonType = 'ServiceAccount'
             $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         } elseif ($CategoryId -in @('credentialManager', 'wslData', 'virtualMachineArtifacts', 'dockerDesktopData')) {
             # These providers are bound to the user's interactive session.
+            $expectedLogonType = 'Interactive'
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
         } else {
+            $expectedLogonType = 'S4U'
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType S4U -RunLevel Highest
         }
 
@@ -2544,6 +2549,7 @@ function Set-AutoEraseScheduleCore {
             $saved.TaskPath -ne $script:SystemMaintenanceTaskPath -or $saved.TaskName -ne $taskName -or
             $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
             [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
+            [string]$saved.Principal.LogonType -ne $expectedLogonType -or (-not $RunAsSystem -and [string]$saved.Principal.RunLevel -ne 'Highest') -or
             -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or $savedIntervals.Count -ne 1 -or
             [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
             throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
@@ -2936,7 +2942,7 @@ function Test-AutoEraseCurrentPayload {
 # account, scope and settings belong to the user and survive a naming migration.
 function Invoke-AutoEraseMigrationCore {
     [CmdletBinding()]
-    param([string]$CategoryId = '')
+    param([string]$CategoryId = '', [string]$OwnerSid = '')
     Assert-AutoEraseAdmin
     Initialize-SystemMaintenanceTaskFolder
     $migrated = @()
@@ -2945,7 +2951,7 @@ function Invoke-AutoEraseMigrationCore {
     foreach ($task in @(Get-ScheduledTask -ErrorAction Stop)) {
         try {
             $identity = Get-AutoEraseTaskIdentity $task
-            if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId)) { continue }
+            if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId) -or ($OwnerSid -and $identity.ownerSid -ne $OwnerSid)) { continue }
             $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19|20) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null
