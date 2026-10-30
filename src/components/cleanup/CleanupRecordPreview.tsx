@@ -80,6 +80,10 @@ function visibleScalar(value: unknown): string | null {
   return visibleText(value);
 }
 
+function visibleObservation(value: unknown): string | null {
+  return Array.isArray(value) ? JSON.stringify(value) : value === null ? "Unavailable" : visibleScalar(value);
+}
+
 // A fresh, bounded chunk is checked before it is joined with any earlier
 // chunk. The digest also binds all chunks to the same clipboard snapshot.
 export function readClipboardImageChunk(value: unknown, expectedOffset: number, expectedHash = "") {
@@ -336,7 +340,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
       // A partial response can contain both grouped sections and individual
       // observations. Preserve the latter even when other groups have entries.
       if (!isObject(section) || !Array.isArray(section.entries)) {
-        const value = visibleScalar(section);
+        const value = visibleObservation(section);
         return [{ label: `Activity record ${sectionIndex + 1}`, facts: isObject(section) ? metadata(activityEntry(section.section, section), id) : value ? [`Value: ${value}`] : [] }];
       }
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
@@ -362,7 +366,11 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   }
   const browsers = Array.isArray(input.browsers) ? input.browsers : input.records;
   if (id === "browserFootprints" && Array.isArray(browsers)) {
-    return browsers.filter(isObject).flatMap((browser, index) => {
+    return browsers.flatMap((browser, index) => {
+      if (!isObject(browser)) {
+        const value = visibleObservation(browser);
+        return [{ label: `Browser ${index + 1}`, facts: value !== null ? [`Value: ${value}`] : [] }];
+      }
       const name = typeof browser.browser === "string" ? browserNames[browser.browser.trim().toLowerCase()] : undefined;
       const size = sizeLabel(browser.totalSizeKB);
       const { artifacts: browserArtifacts, ...browserDetails } = browser;
@@ -373,7 +381,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
         const rawName = artifact.name;
         const artifactDetails = { ...artifact };
         delete artifactDetails.name; delete artifactDetails.profilePath; delete artifactDetails.sizeKB;
-        return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : []), `Artifact: ${label}`, ...(typeof rawName === "string" && rawName !== label ? [`Artifact source: ${rawName}`] : []), ...(profilePath ? [`Profile: ${profilePath}`] : []), ...(artifactSize ? [`Artifact size: ${artifactSize}`] : []), ...metadata(artifactDetails, id)] }];
+        return [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : []), `Artifact: ${label}`, ...(typeof rawName === "string" && rawName !== label ? [`Artifact source: ${rawName}`] : []), ...(profilePath ? [`Profile: ${profilePath}`] : []), ...(artifactSize ? [`Artifact size: ${artifactSize}`] : Object.hasOwn(artifact, "sizeKB") ? ["Artifact size: Unavailable"] : []), ...metadata(artifactDetails, id)] }];
       }) : [];
       return artifacts.length ? artifacts : [{ label: name ?? `Browser ${index + 1}`, facts: [...metadata(browserDetails, id), ...(size ? [`Total size: ${size}`] : [])] }];
     });
@@ -383,7 +391,7 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
   const collections = ["records", "entries", "files", "logs", "devices", "journals", "copies", "dumps", "databases", "processes", "historyItems", "drives", "items", "paths"]
     .flatMap(key => Array.isArray(input[key]) && input[key].length ? [{ key, values: input[key] as unknown[] }] : []);
   if (collections.length) return collections.flatMap(({ key, values }) => values.map((value, index) => {
-    const text = visibleScalar(value);
+    const text = visibleObservation(value);
     const facts = isObject(value) ? metadata(id === "ntUserTraces" ? activityEntry(value.section, value) : value, id) : text !== null ? [`Value: ${text}`] : [];
     if (collections.length > 1) facts.unshift(`Dataset: ${key}`);
     return { label: `Record ${index + 1}`, facts };

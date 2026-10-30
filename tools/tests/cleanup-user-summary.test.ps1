@@ -33,6 +33,9 @@ function Get-ChildItem {
 function Get-RecentFiles {
     if ($script:delegated -eq 'error') { return @{ error=$true; message='Mock reader failed' } }
     if ($script:delegated -eq 'partial') { return @{ partial=$true; total=7; coverage='Selected locations only'; sourcePath='C:\Fixture'; message='Mock reader incomplete'; entries=@(@{ name='Mock' }) } }
+    if ($script:delegated -eq 'lateError') {
+        return @{ error=$true; message='Reader failed after collecting an observation'; total=1; entries=@(@{ name='Observed'; path='C:\Fixture\Observed' }) }
+    }
     @{ total=2; entries=@(@{ name='Mock1' },@{ name='Mock2' }) }
 }
 $mixed=Get-CleanupSummaryAllUsers -CategoryIds 'shellBags,recentFiles' -TargetUsers 'CleanupMock'
@@ -63,6 +66,10 @@ $script:delegated='partial'
 $result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 $category=$result.users[0].categories[0]
 if (-not $category.partial -or $category.status -ne 'partial' -or @($category.records).Count -ne 1 -or $result.users[0].complete -or $result.users[0].total -ne -1 -or $category.coverage -ne 'Selected locations only' -or $category.scanFacts.sourcePath -ne 'C:\Fixture') { throw 'Delegated partial scan lost records or was reported complete.' }
+$script:delegated='lateError'
+$result=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
+$category=$result.users[0].categories[0]
+if (-not $category.error -or $category.count -ne -1 -or @($category.records).Count -ne 1 -or $category.records[0].path -ne 'C:\Fixture\Observed' -or $result.users[0].complete) { throw "Late failure: error=$($category.error), count=$($category.count), rows=$(@($category.records).Count), complete=$($result.users[0].complete)" }
 $script:delegated='success'
 $success=Get-CleanupSummaryAllUsers -CategoryIds 'recentFiles'
 if ($success.users[0].total -ne 2 -or -not $success.users[0].complete) { throw 'A successful current-user result changed.' }

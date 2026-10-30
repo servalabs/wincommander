@@ -245,6 +245,17 @@ describe("System Cleanup persona details", () => {
     expect(wifiHtml).toContain("secret-value");
   });
 
+  test("keeps unreadable browser sizes and malformed account observations visible", () => {
+    const browser = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Chrome", artifacts: [{ name: "History", sizeKB: null, profilePath: "C:\\profile" }] }] });
+    expect(browser[0].facts).toContain("Artifact size: Unavailable");
+    const summary = readCleanupUserSummary({ id: "dnsCache", count: 3, records: [{ name: "example.test" }, "raw observation", [1, 2]] });
+    expect(summary.count).toBe(-1);
+    const rows = getSafeCleanupPreview("dnsCache", summary.raw);
+    expect(rows.map(row => row.facts)).toEqual([["Name: example.test"], ["Value: raw observation"], ["Value: [1,2]"]]);
+    const browsers = getSafeCleanupPreview("browserFootprints", { records: ["unparsed browser"] });
+    expect(browsers[0].facts).toEqual(["Value: unparsed browser"]);
+  });
+
   test("shows browser artifact profile paths from each installed profile", () => {
     const rows = getSafeCleanupPreview("browserFootprints", { browsers: [{ browser: "Google Chrome", artifacts: [
       { name: "History", profilePath: "C:\\Browser\\Profile 1", customDetail: "first-only" },

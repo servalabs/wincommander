@@ -6862,7 +6862,10 @@ function Get-CleanupSummaryAllUsers {
                 if ($count -lt 0) { throw 'The category scan returned an invalid count.' }
             } catch {
                 $scanError = $_.Exception.Message
-                $count = -1; $items = @(); $records = @()
+                # Keep observations already obtained from this profile and
+                # category. The failed count must remain unknown so they can
+                # be inspected without authorizing a cleanup.
+                $count = -1
             }
             if (@($records).Count -eq 0 -and @($items).Count -gt 0) {
                 $records = @($items | Select-Object -First $previewMax | ForEach-Object {

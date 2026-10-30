@@ -27,7 +27,9 @@ export function readCleanupUserSummary(data: {
   if (incomplete) {
     // Keep safely decoded observations from a partial scan while leaving its
     // count unavailable, so these rows cannot authorize a cleanup.
-    const observed = records.filter(row => row && typeof row === 'object' && !Array.isArray(row));
+    // Invalid record shapes make the scan incomplete, but are still returned
+    // observations. Keep them for display instead of silently discarding them.
+    const observed = records;
     const raw = observed.length || Object.keys(scanFacts).length || data.truncated === true ? {
       records: observed, scanFacts, partial: true,
       ...(typeof data.coverage === 'string' && data.coverage.trim() ? { coverage: data.coverage } : {}),
