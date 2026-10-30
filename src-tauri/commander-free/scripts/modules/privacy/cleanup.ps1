@@ -4029,23 +4029,34 @@ function Get-EditorHistoryInfo {
 function Get-GitActivityInfo {
     try {
         $files = @()
-        $targets = @{}
-        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-            $text = ([string]$line).Trim()
-            if ($text -match '(?i)target=(.+)$') {
-                $target = $Matches[1].Trim()
-                if ($target -match '(?i)git:') { $targets[$target] = $true }
+        $credentialVerified = $true
+        $configVerified = $true
+        try {
+            if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+            . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
+            foreach ($credential in @(Get-WCScheduledCredentials)) {
+                if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+                if (([string]$credential.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase)) {
+                    $files += @{ name = "Git credential target: $($credential.Name)"; target = [string]$credential.Name; credentialType = [uint32]$credential.Type; username = $credential.UserName; sizeKB = 0; modified = '' }
+                }
             }
-        }
-        foreach ($target in $targets.Keys | Sort-Object) { $files += @{ name = "Git credential target: $target"; sizeKB = 0; modified = '' } }
-        $gitConfig = Join-Path $env:USERPROFILE '.gitconfig'
-        if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) {
+        } catch { $credentialVerified = $false }
+        try {
+            # Git may read the XDG global configuration even when .gitconfig
+            # is absent. Ask Git directly rather than inferring its sources
+            # from one particular file path.
             $safeDirectories = @(& git.exe config --global --get-all safe.directory 2>$null)
-            foreach ($directory in $safeDirectories) {
-                $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
+            if ($LASTEXITCODE -notin @(0, 1)) { throw 'Git configuration could not be checked.' }
+            if ($LASTEXITCODE -eq 1 -and $safeDirectories.Count -gt 0) { throw 'Git configuration output could not be verified.' }
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($directory in $safeDirectories) {
+                    $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
+                }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+        } catch { $configVerified = $false }
+        # Credential enumeration does not include other applications' Vaults.
+        $message = if (-not $credentialVerified -and -not $configVerified) { 'Git credential identities and configuration could not be checked; other Vault entries are not inspected.' } elseif (-not $credentialVerified) { 'Git credential identities could not be checked; other Vault entries are not inspected.' } elseif (-not $configVerified) { 'Git configuration could not be checked; other Vault entries are not inspected.' } else { 'Other applications'' Windows Vault entries were not inspected.' }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities and global Git safe directories only'; message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4054,11 +4065,14 @@ function Get-SSHStateInfo {
     try {
         $files = @()
         $agentVerified = $true
+        $hostsVerified = $true
         $knownHosts = Join-Path $env:USERPROFILE '.ssh\\known_hosts'
-        if (Test-Path $knownHosts -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction SilentlyContinue
-            if ($item) { $files += @{ name = 'SSH known_hosts'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } }
-        }
+        try {
+            $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction Stop
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'SSH known-hosts metadata is unavailable.' }
+            $files += @{ name = 'SSH known_hosts'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { $hostsVerified = $false }
         try {
             $agentStatus = Invoke-WCSshAdd -Option '-l'
             if ($agentStatus -eq 0) {
@@ -4066,7 +4080,8 @@ function Get-SSHStateInfo {
             } elseif ($agentStatus -ne 1) { $agentVerified = $false }
         } catch { $agentVerified = $false }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $agentVerified); status = if ($agentVerified) { 'complete' } else { 'partial' }; message = if ($agentVerified) { $null } else { 'SSH agent state could not be checked.' } }
+        $complete = $agentVerified -and $hostsVerified
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $complete); status = if ($complete) { 'complete' } else { 'partial' }; message = if (-not $agentVerified -and -not $hostsVerified) { 'SSH agent state and known-hosts metadata could not be checked.' } elseif (-not $agentVerified) { 'SSH agent state could not be checked.' } elseif (-not $hostsVerified) { 'SSH known-hosts metadata could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }

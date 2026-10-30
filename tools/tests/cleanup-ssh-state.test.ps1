@@ -11,13 +11,20 @@ foreach ($name in @('Get-SSHStateInfo', 'Invoke-CleanupClearForUser')) {
 
 # Calls are fixtures; no real SSH agent or known-hosts file is read or changed.
 $script:agentDenied = $false
+$script:agentStatus = 1
 $script:toolAvailable = $true
 $script:knownHostsRemain = $false
+$script:knownHostsDenied = $false
 $script:attemptedClear = $false
-function Invoke-WCSshAdd { param([string]$Option) if (-not $script:toolAvailable) { throw 'Synthetic missing Windows OpenSSH.' }; if ($script:agentDenied) { return 2 }; if ($Option -eq '-D') { return 0 }; return 1 }
+function Invoke-WCSshAdd { param([string]$Option) if (-not $script:toolAvailable) { throw 'Synthetic missing Windows OpenSSH.' }; if ($script:agentDenied) { return 2 }; if ($Option -eq '-D') { return 0 }; return $script:agentStatus }
 function Get-Command { throw 'PATH-based command search is forbidden.' }
 function Test-Path { param([Alias('Path')][string]$LiteralPath, [string]$PathType, $ErrorAction) return $script:knownHostsRemain }
-function Get-Item { param([string]$LiteralPath, [switch]$Force, $ErrorAction) return [pscustomobject]@{ Length = 1024; LastWriteTime = [DateTime]'2026-01-01' } }
+function Get-Item {
+    param([string]$LiteralPath, [switch]$Force, $ErrorAction)
+    if ($script:knownHostsDenied) { throw [UnauthorizedAccessException]::new('Synthetic access denied') }
+    if (-not $script:knownHostsRemain) { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic missing item') }
+    return [pscustomobject]@{ FullName=$LiteralPath; Length=1024; LastWriteTime=[DateTime]'2026-01-01'; PSIsContainer=$false; Attributes=0 }
+}
 function Remove-ItemSecure { param([string]$Path) $script:attemptedClear = $true }
 function Assert-CleanupCategoriesAllowed { param([string[]]$CategoryIds, [switch]$AllowDefaultExcluded) }
 
@@ -25,6 +32,12 @@ $profile = [Environment]::GetFolderPath('UserProfile')
 if (-not $profile) { throw 'The fixture requires a Windows user profile identity.' }
 $scan = Get-SSHStateInfo
 if ($scan.error -or $scan.total -ne 0) { throw 'An empty agent fixture should scan successfully.' }
+$script:knownHostsDenied = $true
+$script:agentStatus = 0
+$scan = Get-SSHStateInfo
+if (-not $scan.partial -or $scan.status -ne 'partial' -or $scan.message -notmatch 'known-hosts' -or $scan.total -ne 1 -or $scan.files[0].name -ne 'SSH agent identities loaded') { throw 'Denied known-hosts metadata must not hide observed SSH agent state or be reported complete.' }
+$script:knownHostsDenied = $false
+$script:agentStatus = 1
 $result = Invoke-CleanupClearForUser -UserProfilePath $profile -CategoryIds @('sshState') -AllowDefaultExcluded $true
 if ($result.sshState -ne 'cleaned' -or -not $script:attemptedClear) { throw 'Verified current-user SSH cleanup was not reported.' }
 
@@ -42,7 +55,7 @@ if ($result.sshState -ne 'failed') { throw 'Missing Windows OpenSSH must not rep
 
 $script:knownHostsRemain = $true
 $scan = Get-SSHStateInfo
-if (-not $scan.partial -or $scan.total -ne 1 -or $scan.files[0].name -ne 'SSH known_hosts') { throw 'Known hosts should remain visible even when the SSH agent cannot be checked.' }
+if (-not $scan.partial -or $scan.total -ne 1 -or $scan.files[0].name -ne 'SSH known_hosts' -or -not $scan.files[0].path) { throw 'Known hosts and path should remain visible even when the SSH agent cannot be checked.' }
 $script:knownHostsRemain = $false
 
 $script:toolAvailable = $true; $script:attemptedClear = $false
