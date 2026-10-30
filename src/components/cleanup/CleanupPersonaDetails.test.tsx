@@ -4,7 +4,7 @@ import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider, cleanupModeForPersona, useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
-import { assembleCleanupRecordChunks, ClipboardImage, ClipboardItemDetails, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, readClipboardDetailChunk, parseClipboardDetailBytes, clipboardEmptyMessage, clipboardRefreshNotice, preserveClipboardScanAfterFailedRefresh, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
+import { assembleCleanupObservationChunks, assembleCleanupRecordChunks, ClipboardImage, ClipboardItemDetails, ClipboardStorageDetails, clipboardDetailRecord, readClipboardImageChunk, readClipboardDetailChunk, parseClipboardDetailBytes, clipboardEmptyMessage, clipboardRefreshNotice, preserveClipboardScanAfterFailedRefresh, decodeCleanupRecordChunk, getSafeCleanupPreview, mergeExpandedCleanupPage, readExpandedCleanupSummary, shouldLoadCurrentUserDetails, wifiPasswordForProfile } from "./CleanupRecordPreview";
 
 const amcache = ALL_CATEGORIES.find(category => category.id === "amcache")!;
 const raw = { total: 2, entries: [{ category: "InventoryApplication", count: 2, sample: [{ name: "Synthetic App", path: "C:\\Private\\file.txt", password: "secret-value" }] }] };
@@ -15,6 +15,16 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("decodes chunked partial observations without accepting them as complete records", () => {
+    for (const value of ["x".repeat(4096), [1, 2], null]) {
+      const bytes = new TextEncoder().encode(JSON.stringify(value));
+      const split = Math.floor(bytes.length / 2);
+      const parts = [bytes.slice(0, split), bytes.slice(split)];
+      expect(assembleCleanupObservationChunks(parts, bytes.length)).toEqual({ value });
+      expect(assembleCleanupRecordChunks(parts, bytes.length)).toBeNull();
+      expect(assembleCleanupObservationChunks(parts, bytes.length + 1)).toBeNull();
+    }
+  });
   test("loads bounded clipboard content without mixing items or snapshots", async () => {
     const html = renderToStaticMarkup(<ClipboardItemDetails itemId="item-1" load={async () => ({ success: false })} />);
     expect(html).toContain("Load details");

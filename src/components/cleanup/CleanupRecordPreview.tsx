@@ -467,15 +467,20 @@ export function decodeCleanupRecordChunk(chunk: CleanupRecordChunk, expectedOffs
   } catch { return null; }
 }
 
-export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: number): RecordObject | null {
+export function assembleCleanupObservationChunks(parts: Uint8Array[], totalBytes: number): { value: unknown } | null {
   if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0 || parts.reduce((sum, part) => sum + part.length, 0) !== totalBytes) return null;
   try {
     const bytes = new Uint8Array(totalBytes);
     let position = 0;
     for (const part of parts) { bytes.set(part, position); position += part.length; }
     const record: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    return isObject(record) ? record : null;
+    return { value: record };
   } catch { return null; }
+}
+
+export function assembleCleanupRecordChunks(parts: Uint8Array[], totalBytes: number): RecordObject | null {
+  const result = assembleCleanupObservationChunks(parts, totalBytes);
+  return result && isObject(result.value) ? result.value : null;
 }
 
 export function readExpandedCleanupSummary(data: { error?: boolean; users?: Array<{ username: string; sid?: string; categories: Array<{ id: string; count: number; items: string[]; records?: Array<Record<string, unknown>>; sampleCount?: number; previewLimit?: number; truncated?: boolean; sourceTruncated?: boolean; recordChunk?: CleanupRecordChunk; snapshotHash?: string; nextOffset?: number | null; totalRows?: number; status?: string; partial?: boolean; complete?: boolean; message?: string; error?: boolean; sourceFailed?: boolean }> }> } | undefined, accountName: string, categoryId: string, offset = 0, expectedHash = "", chunkOffset = 0) {
@@ -630,9 +635,10 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           parts.push(next.chunkBytes);
           byteOffset = next.recordChunk.nextByteOffset;
         }
-        const record = assembleCleanupRecordChunks(parts, firstChunk.totalBytes);
-        if (!record || !isObject(first.raw)) throw new Error("Invalid account detail record.");
-        summary = { ...first, raw: { ...first.raw, records: [record], sampleCount: 1, truncated: first.sourceTruncated || first.nextOffset !== null, ...(categoryId === "ntUserTraces" && Object.hasOwn(record, "count") ? { expectedActivityCount: first.count } : {}) } };
+        const decoded = assembleCleanupObservationChunks(parts, firstChunk.totalBytes);
+        if (!decoded || (!first.partial && !isObject(decoded.value)) || !isObject(first.raw)) throw new Error("Invalid account detail record.");
+        const record = decoded.value;
+        summary = { ...first, raw: { ...first.raw, records: [record], sampleCount: 1, truncated: first.sourceTruncated || first.nextOffset !== null, ...(categoryId === "ntUserTraces" && isObject(record) && Object.hasOwn(record, "count") && !first.sourceFailed ? { expectedActivityCount: first.count } : {}) } };
       }
       const merged = mergeExpandedCleanupPage(expandedRaw, summary.raw, offset);
       if (!merged) { setExpandedNotice("Account details changed. Close and reopen to rescan."); return; }
