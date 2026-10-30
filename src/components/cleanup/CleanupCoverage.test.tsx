@@ -11,6 +11,34 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("a failed activity scan retains the captured category counts without claiming a complete total", () => {
+    const activity = ALL_CATEGORIES.find(item => item.id === "ntUserTraces")!;
+    const raw = { error: true, message: "A later registry source was unavailable.", sections: [
+      { name: "RunMRU", count: 0, entries: [] },
+      { name: "TypedPaths", count: 1, entries: [{ key: "url1", value: "C:\\Example" }] },
+    ] };
+    const result = readCleanupScanResult(activity, { success: true, data: raw });
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={activity} mode="advanced" count={result.count} items={result.items} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Run history");
+    expect(html).toContain("Typed folder paths");
+    expect(html).toContain("C:\\Example");
+    expect(html).toContain("overall total is unknown");
+    expect(html).toContain("disabled");
+  });
+  test("a failed combined-account activity scan preserves each captured category summary", () => {
+    const activity = ALL_CATEGORIES.find(item => item.id === "ntUserTraces")!;
+    const result = readCleanupUserSummary({ id: "ntUserTraces", count: -1, error: true, message: "A later registry source was unavailable.", records: [
+      { name: "RunMRU", count: 0, entries: [] },
+      { name: "TypedPaths", count: 1, entries: [{ key: "url1", value: "C:\\Example" }] },
+    ] });
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={activity} mode="advanced" count={-1} items={[]} groupedItems={[{ title: "Other account", count: result.count, items: result.items, rawData: result.raw, error: result.error }]} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Other account captured categories");
+    expect(html).toContain("Run history");
+    expect(html).toContain("Typed folder paths");
+    expect(html).toContain("C:\\Example");
+    expect(html).toContain("this account&#x27;s total is unknown");
+    expect(html).toContain("disabled");
+  });
   test("an empty developer-cache inventory with limited coverage is not shown as clean", () => {
     const cache = ALL_CATEGORIES.find(item => item.id === "developerCaches")!;
     const raw = { files: [], total: 0, coverage: "limited" };

@@ -122,22 +122,24 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
               <div><dt>Verification</dt><dd>{receipt}{verifiedAt ? ` ${verifiedAt}` : ""}</dd></div>
               <div><dt>Preview</dt><dd>{summary.sampleCount === null ? "Not reported" : <>{summary.sampleCount} {category.id === "amcache" ? (summary.sampleCount === 1 ? "sample" : "samples") : (summary.sampleCount === 1 ? "row" : "rows")}{summary.previewLimited ? `; limited${summary.previewLimit !== null ? ` to ${summary.previewLimit}` : ""}` : " reported"}</>}</dd></div>
             </dl></details>
-            {summary.categories.length && ["found", "empty", "inconsistent"].includes(summary.state) ? <section aria-label="Record categories"><h3>Record categories</h3>
+            {summary.categories.length && ["found", "empty", "inconsistent", "partial", "error"].includes(summary.state) ? <section aria-label="Record categories"><h3>Record categories</h3>
               <div className="cleanup-readable-detail__table"><table><thead><tr><th>Category</th><th>Records</th><th>Preview samples</th></tr></thead><tbody>
                 {summary.categories.map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples ?? "Not reported"}</td></tr>)}
-              </tbody></table></div><p>Preview samples are a selection and may be fewer than the full record count.</p></section> : null}
+              </tbody></table></div><p>{summary.state === "partial" || summary.state === "error" ? "Only categories returned by the scan are shown; the overall total is unknown." : "Preview samples are a selection and may be fewer than the full record count."}</p></section> : null}
             {!summary.categories.length && summary.datasets.length ? <section aria-label="Reported datasets"><h3>Reported datasets</h3><ul>{summary.datasets.map(dataset => <li key={dataset.label}>{dataset.label}: {dataset.rows} preview {dataset.rows === 1 ? "row" : "rows"}</li>)}</ul><p>Preview rows can be fewer than the total found.</p></section> : null}
             <p className="cleanup-readable-detail__privacy">Record details are based on the data returned by this scan.</p>
           </> : null}
           {groupedItems?.length ? <section aria-label="Account breakdown"><h3>Account breakdown</h3><p>Only reported accounts are shown.</p>
             {groupedItems.map((group, index) => {
-              const failed = group.count < 0 || summarizeCleanupResult({ id: category.id, count: group.count, items: group.items, raw: group.rawData }).state === "error";
+              const groupSummary = summarizeCleanupResult({ id: category.id, count: group.count, items: group.items, raw: group.rawData });
+              const failed = group.count < 0 || groupSummary.state === "error";
               const facts = getCleanupScanFacts(group.rawData, failed);
               const truncated = !!group.rawData && typeof group.rawData === "object" && !Array.isArray(group.rawData) && (group.rawData as Record<string, unknown>).truncated === true;
               const hasRawPreview = getSafeCleanupPreview(category.id, group.rawData).length > 0 || truncated;
               return <div className="cleanup-readable-detail__account" key={`${group.title}-${index}`}><h4>{group.title}: {group.count >= 0 ? `${group.count} reported` : "Unavailable"}</h4>
               {facts.length ? <dl className="cleanup-readable-detail__facts">{facts.map((fact, factIndex) => <div key={`${fact.label}-${factIndex}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl> : null}
               {group.count < 0 ? <p>{group.error?.trim() || "This account could not be checked completely."}</p> : null}
+              {group.count < 0 && groupSummary.categories.length ? <section aria-label={`${group.title} captured categories`}><p>Only categories returned by the scan are shown; this account's total is unknown.</p><div className="cleanup-readable-detail__table"><table><thead><tr><th>Category</th><th>Records</th><th>Preview samples</th></tr></thead><tbody>{groupSummary.categories.map((row, rowIndex) => <tr key={`${row.label}-${rowIndex}`}><td>{row.label}</td><td>{row.count < 0 ? "Unavailable" : row.count}</td><td>{row.samples ?? "Not reported"}</td></tr>)}</tbody></table></div></section> : null}
               {hasRawPreview || group.items.length > 0 ? <CleanupRecordPreview categoryId={category.id} rawData={hasRawPreview ? group.rawData : { records: group.items }} mode={mode} accountLabel={group.title} accountName={group.username} /> : group.count > 0 ? <p>Preview details are unavailable for this account.</p> : null}
             </div>})}
           </section> : null}
