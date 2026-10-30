@@ -87,6 +87,18 @@ export function cleanupCountUnit(id: string, count: number): string {
   return count === 1 ? one : many;
 }
 
+/** The number of returned process rows, not a claim that enumeration was complete. */
+export function observedProcessRows(id: string, raw: unknown): number | null {
+  if (id !== "processIntel" || !object(raw) || raw.error || raw.status !== "partial" || raw.partial !== true || !Array.isArray(raw.processes)) return null;
+  const seen = new Set<number>();
+  for (const row of raw.processes) {
+    if (!object(row) || !Number.isSafeInteger(row.pid) || (row.pid as number) <= 0 ||
+        typeof row.name !== "string" || !row.name.trim() || seen.has(row.pid as number)) return null;
+    seen.add(row.pid as number);
+  }
+  return seen.size;
+}
+
 export function cleanupVerificationText(receipt?: CleanupVerification): string {
   switch (receipt?.status) {
     case "cleared": return "A fresh scan found no remaining items.";
@@ -175,7 +187,10 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.loading) return { ...base, state: "scanning", count: null, message: "Scan in progress", nextStep: "Wait for the scan to finish." };
   if (raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (raw?.status === "unavailable") return { ...base, state: "unavailable", count: null, message: "Scan unavailable", nextStep: "Try again when the source is available." };
-  if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) return { ...base, state: "partial", count: null, message: "Scan incomplete", nextStep: "Review coverage and scan again." };
+  if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
+    const observed = observedProcessRows(input.id, raw);
+    return { ...base, state: "partial", count: null, message: observed === null ? "Scan incomplete" : `${observed} ${observed === 1 ? "process" : "processes"} observed`, nextStep: observed === null ? "Review coverage and scan again." : "Some process details or processes could not be checked." };
+  }
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };

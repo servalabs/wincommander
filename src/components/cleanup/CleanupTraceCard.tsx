@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import { hasLimitedCleanupCoverage, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import RunOnceButton from "./RunOnceButton";
@@ -151,6 +151,7 @@ export default function CleanupTraceCard({
     ((!!scheduleMinutes || !!scheduleExists) && !!onClearSchedule) || !!scheduleDisabled;
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
+  const observedProcesses = observedProcessRows(category.id, rawData);
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
@@ -180,7 +181,9 @@ export default function CleanupTraceCard({
           ? "clean"
           : "not-scanned";
   const band = BAND[bandState];
-  const accessibleStatus = bandState === "has"
+  const accessibleStatus = bandState === "incomplete" && observedProcesses !== null
+    ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed; scan incomplete`
+    : bandState === "has"
     ? `${count} ${countUnit} found`
     : band.label;
   // Unlike a Popover, Tooltip does not restore focus to a card action that
@@ -564,7 +567,7 @@ export default function CleanupTraceCard({
             </div>
           )}
           {!loading && limited && count === 0 && <span>No items found in the checked locations.</span>}
-          {error && !loading && (
+          {(error || (incomplete && observedProcesses !== null)) && !loading && (
             <div
               className="font-mono line-clamp-2"
               role="alert"
@@ -577,7 +580,7 @@ export default function CleanupTraceCard({
                 color: "var(--color-danger)",
               }}
             >
-              {incomplete ? "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
+              {incomplete ? observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at
