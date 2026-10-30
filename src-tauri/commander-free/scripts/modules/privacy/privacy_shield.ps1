@@ -153,8 +153,19 @@ function Get-PrivacyShieldPidFromMarker {
         if ($candidatePid -gt 0) {
             $candidate = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
             if ($candidate -and $candidate.SessionId -eq [System.Diagnostics.Process]::GetCurrentProcess().SessionId) {
-                return $candidatePid
+                # PID markers are only hints: Windows can reuse the PID for an
+                # unrelated process. Verify its identity before reporting or
+                # stopping it. Unreadable identity is unknown, not stopped.
+                try {
+                    $details = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$candidatePid" -ErrorAction Stop
+                    if ($null -eq $details -or [string]::IsNullOrWhiteSpace($details.CommandLine)) { return -1 }
+                    if ($details.SessionId -eq $candidate.SessionId -and
+                        $details.Name -in @('python.exe', 'pythonw.exe') -and
+                        $details.CommandLine -match '(?:^|\s)--wc-privacy-shield(?=\s|$)') { return $candidatePid }
+                } catch { return -1 }
+                return $null
             }
+            if ($candidate) { return $null }
         }
     } catch {}
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -216,7 +227,6 @@ function Get-PrivacyShieldNativeOptions {
 
 function Get-PrivacyShieldStatus {
     try {
-        $shieldProcessMarker = "--wc-privacy-shield"
         $running = $false
         $processId = $null
         $activeMode = $null
@@ -243,7 +253,7 @@ function Get-PrivacyShieldStatus {
             $procs = @()
         }
         foreach ($proc in $procs) {
-            if ($proc.SessionId -eq $currentSessionId -and $proc.CommandLine -like "*$shieldProcessMarker*") {
+            if ($proc.SessionId -eq $currentSessionId -and $proc.CommandLine -match '(?:^|\s)--wc-privacy-shield(?=\s|$)') {
                 $running = $true
                 $processId = $proc.ProcessId
                 # The process arguments are the detector's applied state.
@@ -280,16 +290,17 @@ function Get-PrivacyShieldStatus {
             }
         }
 
-        # CommandLine is unavailable for some elevated or cross-integrity
-        # Python processes. The detector writes its own PID marker, which lets
-        # status and Stop remain correct without guessing at unrelated Python.
+        # A marker is only a hint. If process identity cannot be read, report
+        # unknown instead of guessing from a PID that Windows may have reused.
         if (-not $running) {
             $markerPid = Get-PrivacyShieldPidFromMarker
+            if ($markerPid -eq -1) {
+                return @{ error = $true; message = 'Privacy Shield process identity could not be verified.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
+            }
             if ($markerPid) {
                 $running = $true
                 $processId = $markerPid
-                # A protected/elevated process can hide CommandLine. Its mode
-                # is intentionally unknown rather than guessed from cache.
+                # Mode is intentionally unknown rather than guessed from cache.
             }
         }
         if ($cimUnavailable -and -not $running) {
@@ -1315,13 +1326,20 @@ if __name__ == "__main__":
 
 function Stop-PrivacyShield {
     try {
-        $shieldProcessMarker = "--wc-privacy-shield"
         $status = Get-PrivacyShieldStatus
-        if ($status.running) {
-            Stop-Process -Id $status.processId -Force -ErrorAction SilentlyContinue
+        if ($status -isnot [System.Collections.IDictionary] -or $status['error'] -eq $true -or $status['running'] -isnot [bool]) {
+            return @{ error = $true; message = 'Privacy Shield status could not be verified.' }
         }
-        Clear-PrivacyShieldPidMarker
-
+        if ($status['running'] -eq $true) {
+            Stop-Process -Id $status['processId'] -Force -ErrorAction Stop
+            Wait-Process -Id $status['processId'] -Timeout 5 -ErrorAction SilentlyContinue
+            $after = Get-PrivacyShieldStatus
+            if ($after -isnot [System.Collections.IDictionary] -or $after['error'] -eq $true -or $after['running'] -ne $false) {
+                return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' }
+            }
+        }
+        # Status removes stale markers itself. Do not remove a marker for a
+        # detector still running in another session of the same profile.
         return @{ success = $true; message = "Stopped." }
     }
     catch {

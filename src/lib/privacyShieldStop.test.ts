@@ -18,5 +18,7 @@ describe("Privacy Shield Stop results", () => {
     expect(privacyShieldStopVerificationError({ success: true, data: { running: true } })).toContain("could not be confirmed");
     expect(privacyShieldStopVerificationError({ success: false })).toContain("could not be confirmed");
     expect(privacyShieldStopVerificationError({ success: true, data: {} })).toContain("could not be confirmed");
+    expect(privacyShieldStopVerificationError({ success: true, data: { running: false, error: true } })).toContain("could not be confirmed");
+    expect(privacyShieldStopError({ success: true, data: { success: true, error: true } })).toContain("could not be stopped");
   });
 });

@@ -1726,11 +1726,10 @@ pub fn run() {
                         // here stalls the OS message pump and hangs the window.
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = backend::kill_privacy_shield_process(app.clone()).await;
-                            // Shield is being torn down from the tray — the
-                            // in-app reader won't run to restore the camera,
-                            // so restore it here before exiting.
-                            backend::restore_shield_webcam_access(app.clone()).await;
+                            if backend::kill_privacy_shield_process(app.clone()).await.is_ok() {
+                                // Restore only after the detector has actually stopped.
+                                backend::restore_shield_webcam_access(app.clone()).await;
+                            }
                             app.exit(0);
                         });
                     }
@@ -1749,7 +1748,7 @@ pub fn run() {
                     }
                     "shield_toggle" => {
                         if let Some(state) = app.try_state::<TrayShieldState>() {
-                            if let Ok(mut running) = state.running.lock() {
+                            if let Ok(running) = state.running.lock() {
                                 if *running {
                                     let fleet_owns_shield = settings::cached_settings()
                                         .map(|s| s.app.fleet.privacy_shield_session_owned)
@@ -1761,18 +1760,17 @@ pub fn run() {
                                         let _ = app.emit("fleet-privacy-shield-control-denied", ());
                                         return;
                                     }
-                                    // Flip state + update menu text while the lock is
-                                    // held, then drop it before spawning the async kill
-                                    // so we never block the callback.
-                                    *running = false;
-                                    let _ = state.menu_item.set_text("Enable Privacy Shield");
+                                    // Retain the current state until the native stop
+                                    // is independently confirmed by the backend.
                                     let app = app.clone();
                                     tauri::async_runtime::spawn(async move {
-                                        let _ = backend::kill_privacy_shield_process(app.clone()).await;
-                                        // Restore the camera the shield denied
-                                        // on look-away — the reader can't (its
-                                        // process is being killed here).
-                                        backend::restore_shield_webcam_access(app).await;
+                                        match backend::kill_privacy_shield_process(app.clone()).await {
+                                            Ok(()) => {
+                                                set_tray_shield_running(&app, false);
+                                                backend::restore_shield_webcam_access(app).await;
+                                            }
+                                            Err(_) => { let _ = app.emit("privacy-shield-stop-unconfirmed", ()); }
+                                        }
                                     });
                                 } else {
                                     let _ = app.emit("tray-shield-toggle-requested", ());

@@ -64,6 +64,7 @@ mod reconciler;
 mod diagnostics;
 mod policy_store;
 mod fleet_machine_policy;
+mod shield_journal;
 mod vault_access;
 
 #[cfg(windows)]

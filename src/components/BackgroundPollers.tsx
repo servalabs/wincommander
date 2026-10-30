@@ -528,6 +528,9 @@ export default function BackgroundPollers({
         context: { state: "fleet_managed" } });
       showWarning("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
     });
+    const unlistenShieldStopUnconfirmed = listen("privacy-shield-stop-unconfirmed", () => {
+      showWarning("Privacy Shield could not be confirmed stopped. Check its status and try again.");
+    });
     // The Fleet master policy sends only an alarm class and small counters —
     // never a clipboard pattern, process/tool name, path, peer, SSID, or
     // device name. Pro validates this closed shape again before queueing.
@@ -971,7 +974,7 @@ export default function BackgroundPollers({
     return () => {
       window.removeEventListener("apps-install-missing", handleAppsInstallMissing as EventListener);
       window.removeEventListener("apps-open-package-updates", handleOpenPackageUpdates);
-      for (const p of [unlistenShred, unlistenTrayShield, unlistenFleetShieldDenied, unlistenPasteMonitor, unlistenDecoy,
+      for (const p of [unlistenShred, unlistenTrayShield, unlistenFleetShieldDenied, unlistenShieldStopUnconfirmed, unlistenPasteMonitor, unlistenDecoy,
         unlistenRansomware, unlistenCoercion,
         unlistenTriggerTest, unlistenRemoteAccess, unlistenScreenCapture, unlistenDriverProblem,
         unlistenWifiGuard, unlistenNetworkHoneypot]) {

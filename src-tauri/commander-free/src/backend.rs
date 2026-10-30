@@ -2971,6 +2971,13 @@ fn load_module(module_name: &str) -> Result<String, String> {
 // Called after every successful run_backend_script execution.
 // ═══════════════════════════════════════════════════════════════════════
 
+fn privacy_shield_stop_succeeded(result: Option<&serde_json::Value>) -> bool {
+    result.is_some_and(|value| {
+        value.get("success").and_then(serde_json::Value::as_bool) == Some(true)
+            && matches!(value.get("error"), None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false)))
+    })
+}
+
 fn get_settings_sync_patch(
     command: &str,
     params: &HashMap<String, String>,
@@ -3156,7 +3163,10 @@ fn get_settings_sync_patch(
         // ── Privacy: Protection & Shield ─────────────────────────────
         "Enable-PrivacyProtection" => Some(json!({"privacy":{"privacyProtectionEnabled": true}})),
         "Disable-PrivacyProtection" => Some(json!({"privacy":{"privacyProtectionEnabled": false}})),
-        "Stop-PrivacyShield" => Some(json!({"privacy":{"privacyShield":{"shieldRunning": false}}})),
+        "Stop-PrivacyShield" if privacy_shield_stop_succeeded(result) => {
+            Some(json!({"privacy":{"privacyShield":{"shieldRunning": false}}}))
+        }
+        "Stop-PrivacyShield" => None,
 
         // ── Tweaks: Security ─────────────────────────────────────────
         "Enable-WindowsDefender" => {
@@ -5481,7 +5491,7 @@ pub(crate) async fn run_backend_script_with_timeout(
     //   3. Phase 6b moves the actual paid handler implementations into
     //      commander-pro; until then Pro returns "feature_unknown" for
     //      unmigrated commands.
-    // Arm/cancel locally before either the paid sidecar OR the local
+    // Arm locally before either the paid sidecar OR the local
     // PowerShell path runs. Privacy Shield is currently executed locally in
     // this build, so doing this only in the paid branch attached too late.
     if command == "Start-PrivacyShield" {
@@ -5494,9 +5504,6 @@ pub(crate) async fn run_backend_script_with_timeout(
             let _ = std::fs::write(sidecar, "");
         }
         spawn_shield_event_reader(app.clone(), 0, false);
-    } else if command == "Stop-PrivacyShield" {
-        SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
-        crate::native_notify::clear_pending_notifications(&app);
     }
 
     if get_command_tier(&command) == "paid" {
@@ -5522,7 +5529,9 @@ pub(crate) async fn run_backend_script_with_timeout(
         // even if the Pro sidecar reports an error after it has already
         // stopped its Python process. Otherwise the next renderer-ready event
         // can replay the previous protection session.
-        if command == "Stop-PrivacyShield" {
+        if command == "Stop-PrivacyShield"
+            && privacy_shield_stop_succeeded(result.as_ref().ok())
+        {
             SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
             crate::native_notify::clear_pending_notifications(&app);
         }
@@ -5930,7 +5939,9 @@ pub(crate) async fn run_backend_script_with_timeout(
         }
     }
     // Any explicit stop of the shield clears the reader's run flag so it exits.
-    if command == "Stop-PrivacyShield" {
+    if command == "Stop-PrivacyShield"
+        && privacy_shield_stop_succeeded(result.as_ref().ok())
+    {
         SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::native_notify::clear_pending_notifications(&app);
     }
@@ -7523,97 +7534,147 @@ pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
     .map_err(|error| format!("Shield stop worker failed: {error}"))?
 }
 
-async fn kill_privacy_shield_process_unlocked(app: AppHandle) -> Result<(), String> {
-    // Clear the reader run-flag so the look-state reader exits with the shield.
-    SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
-    // The UI uses this direct path when the normal Stop command reports an
-    // error, and the tray uses it too. It is a real Shield stop, so discard
-    // any alert belonging to that session before terminating its process.
-    crate::native_notify::clear_pending_notifications(&app);
-    crate::log_message(
-        "info",
-        "[PrivacyShield] Attempting to kill Privacy Shield process...",
-    );
-    let script = r#"
-        $markerRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
-        $markerPath = Join-Path $markerRoot "WinCommander\logs\privacy_shield.pid"
-        $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
-        $target = $null
-        if (Test-Path -LiteralPath $markerPath) {
-            try {
-                $candidatePid = [int](Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim()
-                $candidate = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
-                if ($candidate -and $candidate.SessionId -eq $currentSessionId) { $target = $candidate }
-            } catch {}
+const FORCE_STOP_PRIVACY_SHIELD_SCRIPT: &str = r#"
+        $ErrorActionPreference = 'Stop'
+        try {
+            $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            $markerRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+            $markerPath = Join-Path $markerRoot "WinCommander\logs\privacy_shield.pid"
+            $candidates = @(Get-CimInstance -ClassName Win32_Process `
+                -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop)
+            if (Test-Path -LiteralPath $markerPath) {
+                $markerPid = 0
+                $rawMarker = (Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim()
+                if ([int]::TryParse($rawMarker, [ref]$markerPid) -and $markerPid -gt 0) {
+                    $marked = $candidates | Where-Object { $_.ProcessId -eq $markerPid -and $_.SessionId -eq $currentSessionId } | Select-Object -First 1
+                    if ($marked -and [string]::IsNullOrWhiteSpace($marked.CommandLine)) {
+                        throw 'Detector identity unavailable'
+                    }
+                }
+            }
+            $targets = @($candidates | Where-Object {
+                $_.SessionId -eq $currentSessionId -and $_.CommandLine -match '(?:^|\s)--wc-privacy-shield(?=\s|$)'
+            })
+            foreach ($target in $targets) {
+                $verified = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $target.ProcessId) -ErrorAction Stop
+                if (-not $verified -or $verified.SessionId -ne $currentSessionId -or
+                    $verified.Name -notin @('python.exe', 'pythonw.exe') -or
+                    $verified.CommandLine -notmatch '(?:^|\s)--wc-privacy-shield(?=\s|$)') {
+                    throw 'Detector identity changed before stop'
+                }
+                Stop-Process -Id $verified.ProcessId -Force -ErrorAction Stop
+                Wait-Process -Id $verified.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
+            }
+            $remaining = @(Get-CimInstance -ClassName Win32_Process `
+                -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction Stop | Where-Object {
+                    $_.SessionId -eq $currentSessionId -and $_.CommandLine -match '(?:^|\s)--wc-privacy-shield(?=\s|$)'
+                })
+            if ($remaining.Count -ne 0) { throw 'Detector stop unconfirmed' }
+            if ($targets.Count -gt 0 -and (Test-Path -LiteralPath $markerPath)) {
+                $markerPid = 0
+                $rawMarker = (Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim()
+                if ([int]::TryParse($rawMarker, [ref]$markerPid) -and
+                    @($targets | Where-Object { $_.ProcessId -eq $markerPid }).Count -gt 0) {
+                    Remove-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+                }
+            }
+            Write-Output 'confirmed_stopped'
+        } catch {
+            Write-Output 'stop_unconfirmed'
+            exit 1
         }
-        if (-not $target) {
-            $target = Get-CimInstance -ClassName Win32_Process `
-                -Filter "Name='python.exe' OR Name='pythonw.exe'" `
-                -ErrorAction SilentlyContinue |
-                Where-Object { $_.SessionId -eq $currentSessionId -and $_.CommandLine -like "*--wc-privacy-shield*" } |
-                Select-Object -First 1
-        }
-        if ($target) {
-            Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
-            Write-Output "killed"
-        }
-        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
     "#;
 
-    let (mut cmd, ps_exe) = build_powershell_command();
+#[cfg(all(test, windows))]
+mod shield_force_stop_safety_tests {
+    use std::os::windows::process::CommandExt;
 
-    let mut child = cmd.spawn().map_err(|e| {
-        crate::log_message(
-            "error",
-            &format!(
-                "[PrivacyShield] Failed to spawn PowerShell ({}): {}",
-                ps_exe, e
-            ),
+    fn run_fixture(include_local: bool, deny_stop: bool, cim_error: bool) -> std::process::Output {
+        let fixture = format!(r#"
+            $sid = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+            $global:items = @(
+              [pscustomobject]@{{ Name='python.exe'; SessionId=$sid; CommandLine='unrelated.py'; ProcessId=9001 }}
+              [pscustomobject]@{{ Name='pythonw.exe'; SessionId=($sid + 1); CommandLine='--wc-privacy-shield'; ProcessId=9003 }}
+              [pscustomobject]@{{ Name='pythonw.exe'; SessionId=$sid; CommandLine='--wc-privacy-shield-unrelated'; ProcessId=9004 }}
+              if ({}) {{ [pscustomobject]@{{ Name='pythonw.exe'; SessionId=$sid; CommandLine='--wc-privacy-shield'; ProcessId=9002 }} }}
+            )
+            $global:stopped = @()
+            function Test-Path {{ [CmdletBinding()] param($LiteralPath) return $false }}
+            function Get-CimInstance {{ [CmdletBinding()] param($ClassName,$Filter)
+              if ({}) {{ throw 'CIM unavailable' }}
+              if ($Filter -match '^ProcessId=(\d+)$') {{ return @($global:items | Where-Object {{ $_.ProcessId -eq [int]$Matches[1] }}) }}
+              return $global:items
+            }}
+            function Stop-Process {{ [CmdletBinding()] param($Id,[switch]$Force)
+              if ({}) {{ throw 'access denied' }}
+              $global:stopped += $Id
+              $global:items = @($global:items | Where-Object {{ $_.ProcessId -ne $Id }})
+            }}
+            function Wait-Process {{ [CmdletBinding()] param($Id,$Timeout) }}
+            {}
+            Write-Output ('selected:' + ($global:stopped -join ','))
+        "#,
+            if include_local { "$true" } else { "$false" },
+            if cim_error { "$true" } else { "$false" },
+            if deny_stop { "$true" } else { "$false" },
+            super::FORCE_STOP_PRIVACY_SHIELD_SCRIPT,
         );
-        format!("Failed to spawn PowerShell ({}): {}", ps_exe, e)
-    })?;
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &fixture])
+            .creation_flags(0x08000000)
+            .output().expect("PowerShell fixture must run")
+    }
 
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(script.as_bytes()) {
-            crate::log_message(
-                "error",
-                &format!("[PrivacyShield] Failed to write to stdin: {}", e),
-            );
-            return Err(format!("Failed to write to stdin: {}", e));
+    #[test]
+    fn force_stop_only_targets_identified_detector_in_current_session() {
+        let result = run_fixture(true, false, false);
+        assert!(result.status.success());
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(stdout.contains("confirmed_stopped"));
+        assert!(stdout.contains("selected:9002"));
+        assert!(!stdout.contains("selected:9001"));
+        assert!(!stdout.contains("selected:9003"));
+        assert!(!stdout.contains("9004"));
+        let absent = run_fixture(false, false, false);
+        assert!(absent.status.success());
+        assert!(String::from_utf8_lossy(&absent.stdout).contains("selected:"));
+    }
+
+    #[test]
+    fn force_stop_reports_process_or_status_errors() {
+        for result in [run_fixture(true, true, false), run_fixture(true, false, true)] {
+            assert!(!result.status.success());
+            assert!(String::from_utf8_lossy(&result.stdout).contains("stop_unconfirmed"));
         }
     }
 
-    let output = child.wait_with_output().map_err(|e| {
-        crate::log_message(
-            "error",
-            &format!("[PrivacyShield] Failed to read output: {}", e),
-        );
-        format!("Failed to read output: {}", e)
-    })?;
-
-    if !output.status.success() {
-        crate::log_message(
-            "warn",
-            &format!(
-                "[PrivacyShield] PowerShell returned exit code {:?}",
-                output.status.code()
-            ),
-        );
+    #[test]
+    fn failed_stop_does_not_write_stopped_settings() {
+        use std::collections::HashMap;
+        for value in [serde_json::json!({"error":true}), serde_json::json!({"success":false}), serde_json::json!({"success":true,"error":true}), serde_json::Value::Null] {
+            assert!(super::get_settings_sync_patch("Stop-PrivacyShield", &HashMap::new(), Some(&value)).is_none());
+        }
+        assert!(super::get_settings_sync_patch("Stop-PrivacyShield", &HashMap::new(), Some(&serde_json::json!({"success":true}))).is_some());
     }
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.contains("killed") {
-        crate::log_message(
-            "info",
-            "[PrivacyShield] Successfully killed Privacy Shield process.",
-        );
-    } else {
-        crate::log_message(
-            "info",
-            "[PrivacyShield] No Privacy Shield process found to kill.",
-        );
+async fn kill_privacy_shield_process_unlocked(app: AppHandle) -> Result<(), String> {
+    // A PID file can outlive its process and Windows may reuse that PID. Only
+    // terminate an identified detector in this Windows session; never treat a
+    // marker alone or an unreadable process list as proof of identity.
+    let (mut cmd, ps_exe) = build_powershell_command();
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn PowerShell ({ps_exe}): {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(FORCE_STOP_PRIVACY_SHIELD_SCRIPT.as_bytes()).map_err(|e| format!("Failed to write to stdin: {e}"))?;
     }
-
+    let output = child.wait_with_output().map_err(|e| format!("Failed to read output: {e}"))?;
+    let confirmed = output.status.success()
+        && String::from_utf8_lossy(&output.stdout).lines().any(|line| line.trim() == "confirmed_stopped");
+    if !confirmed {
+        return Err("Privacy Shield stop could not be confirmed; check its status and try again".into());
+    }
+    SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::native_notify::clear_pending_notifications(&app);
     Ok(())
 }
 
