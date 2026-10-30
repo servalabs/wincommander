@@ -1226,7 +1226,7 @@ function Get-FleetForensicProjection {
 
             'peer_distribution_cache' {
                 $result = Get-BranchCacheInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read peer-distribution summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read peer-distribution summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Peer distribution cache'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -4238,32 +4238,26 @@ function Get-NotificationDatabaseInfo {
 }
 
 function Get-BranchCacheInfo {
-    # Returns BranchCache publication cache (PeerDistPub) + hosted-cache reply data (PeerDistRep) file listing
-    try {
-        $sources = @(
-            @{ label = 'PeerDistRep'; path = "$env:SystemRoot\System32\PeerDistRep" },
-            @{ label = 'PeerDistPub'; path = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            # PeerDistPub lives under the NetworkService profile whose ACL denies
-            # even elevated reads on some systems; -EA SilentlyContinue keeps the
-            # access-denied error (a non-terminating error try/catch won't trap)
-            # out of the router's output stream.
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $src.path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
+    # Each source is independent: a denied NetworkService folder must not
+    # make the device look empty or erase records already found elsewhere.
+    $sources = @(
+        @{ label = 'PeerDistRep'; path = "$env:SystemRoot\System32\PeerDistRep" },
+        @{ label = 'PeerDistPub'; path = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub" }
+    )
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($src in $sources) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer) { throw 'BranchCache location is not a directory.' }
+            Get-ChildItem -LiteralPath $src.path -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some BranchCache locations could not be checked.' } else { $null } }
 }
 
 # --- Phase E: system diagnostic / servicing / defender-history viewers (read-only) ---

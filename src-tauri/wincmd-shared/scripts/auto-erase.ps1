@@ -2693,11 +2693,18 @@ function Set-MultiUserAutoEraseSchedule {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
     } else { @() }
 
-    if ($targetArr.Count -eq 0) {
+    if (-not $RunAsSystem -and $targetArr.Count -eq 0) {
         $sysDrive = $env:SystemDrive
-        $targetArr = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
-            Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
-            ForEach-Object { Split-Path $_.LocalPath -Leaf }
+        try {
+            $targetArr = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
+                Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
+                ForEach-Object { Split-Path $_.LocalPath -Leaf })
+        } catch {
+            return @{ error = $true; status = 'failed'; message = 'Windows user profiles could not be enumerated; no schedules were created.'; results = @(); total = 0 }
+        }
+        if ($targetArr.Count -eq 0) {
+            return @{ error = $true; status = 'failed'; message = 'No supported Windows user profiles were found; no schedules were created.'; results = @(); total = 0 }
+        }
     }
 
     # SYSTEM-context categories are machine-wide. Registering one task per

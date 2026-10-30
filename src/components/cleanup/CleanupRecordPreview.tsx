@@ -38,7 +38,9 @@ const artifactNames: Record<string, string> = {
 
 function sizeLabel(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return value >= 1024 ? `${(value / 1024).toFixed(1)} MB` : `${value.toFixed(value < 100 ? 1 : 0)} KB`;
+  // Keep the value reported by the scan visible even when showing a more
+  // readable MB approximation. Rounding alone can change a reported size.
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} MB (${value} KB)` : `${Number.isInteger(value) && value < 100 ? value.toFixed(1) : value} KB`;
 }
 
 function visibleText(value: unknown): string | null {
@@ -111,7 +113,7 @@ function metadata(row: RecordObject, categoryId: string): string[] {
   const sizeMB = field("sizeMB");
   const mb = typeof sizeMB === "number" ? sizeMB * 1024 : undefined;
   const kb = sizeLabel(field("sizeKB") ?? bytes ?? mb);
-  if (kb) { facts.push(`Size: ${kb}`); for (const key of ["sizekb", "sizebytes", "sizemb"]) if (values.has(key)) used.add(key); }
+  if (kb) { facts.push(`Size: ${kb}`); if (typeof field("sizeKB") === "number") used.add("sizekb"); }
   for (const [key, label] of [["pid", "PID"], ["count", "Count"], ["ttl", "TTL"], ["recordTypeRaw", "Type code"], ["dataLength", "Data length"], ["timeStamp", "Timestamp"]] as const) {
     const value = field(key);
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) { facts.push(`${label}: ${value}`); used.add(key.toLowerCase()); }

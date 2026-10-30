@@ -15,6 +15,15 @@ function PersonaDetail() {
 }
 
 describe("System Cleanup persona details", () => {
+  test("preserves the size reported by a scan when formatting units", () => {
+    const rows = getSafeCleanupPreview("webCache", { files: [
+      { name: "A", sizeKB: 100.6 },
+      { name: "B", sizeKB: 1537.2, sizeBytes: 1574092 },
+    ] });
+    expect(rows[0].facts).toContain("Size: 100.6 KB");
+    expect(rows[1].facts).toContain("Size: 1.5 MB (1537.2 KB)");
+    expect(rows[1].facts).toContain("Size Bytes: 1574092");
+  });
   test("explains when clipboard details come from a newer or incomplete read", () => {
     const scan = { historyReadStatus: "complete", historyItems: [{}, {}] };
     expect(clipboardRefreshNotice(scan, { historyReadStatus: "complete", historyItems: [] })).toContain("changed since the scan");

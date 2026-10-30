@@ -48,4 +48,23 @@ if (-not $bulkMulti.error -or $script:writes -ne $before) { throw 'Managed multi
 $script:expectManaged = $false
 $manualMulti = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -TargetUsers 'SyntheticUser,OtherUser'
 if (-not $manualMulti.error -or $manualMulti.status -ne 'failed' -or $manualMulti.total -ne 2) { throw 'A partial multi-user failure was reported as success.' }
+$script:profileMode = 'failed'
+function Get-CimInstance {
+    [CmdletBinding()] param([string]$ClassName)
+    if ($script:profileMode -eq 'failed') { throw 'Synthetic profile access failure' }
+    if ($script:profileMode -eq 'present') { [pscustomobject]@{ Special=$false; SID='S-1-5-21-2'; LocalPath="$env:SystemDrive\Users\SyntheticUser" } }
+}
+$before = $script:writes
+$failedDiscovery = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if (-not $failedDiscovery.error -or $failedDiscovery.status -ne 'failed' -or $failedDiscovery.total -ne 0 -or $script:writes -ne $before) { throw 'Failed profile enumeration was reported as successful or created a task.' }
+$script:profileMode = 'empty'
+$noProfiles = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if (-not $noProfiles.error -or $noProfiles.status -ne 'failed' -or $noProfiles.total -ne 0 -or $script:writes -ne $before) { throw 'Empty profile enumeration was reported as successful or created a task.' }
+$script:profileMode = 'present'
+$oneProfile = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60
+if ($oneProfile.error -or $oneProfile.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'A discovered profile did not receive its individual schedule.' }
+$script:profileMode = 'failed'
+$before = $script:writes
+$system = Set-MultiUserAutoEraseSchedule -CategoryId dnsCache -IntervalMinutes 60 -RunAsSystem $true
+if ($system.error -or $system.total -ne 1 -or $script:writes -ne ($before + 1)) { throw 'A system schedule incorrectly depended on profile enumeration.' }
 Write-Output 'Passed: managed setup preserves both owner scopes, disabled tasks, and rejects ambiguous or unknown state.'
