@@ -38,6 +38,7 @@ try {
     $script:fixtureTask.Triggers[0] | Add-Member -NotePropertyName StartBoundary -NotePropertyValue ($firstDue.ToString('o'))
     $present = Get-AutoEraseSchedules
     if ($present.error -or -not $present.schedules[0].payloadVerified) { throw 'A generated cleanup payload should be verified.' }
+    if ($present.schedules[0].ownerSid -ne $sid) { throw 'Readback must identify the scheduled Windows account by SID.' }
     # A valid script path does not prove the action will run it: -Command can
     # alter PowerShell's invocation even when the -File argument remains.
     $script:fixtureTask.Actions[0].Arguments = '-Command "Write-Output skipped" ' + $argument
@@ -54,7 +55,7 @@ try {
     $unknown = Get-AutoEraseSchedules
     $unknownRows = @($unknown.schedules | Where-Object { $_.scope -eq 'unknown' })
     if ($unknown.error -or $unknown.total -ne 2 -or $unknownRows.Count -ne 1 -or $unknownRows[0].payloadVerified -or
-        -not $unknownRows[0].requiresTaskSchedulerRepair -or $null -ne $unknownRows[0].targetUser -or $null -ne $unknownRows[0].cleanupOutcome) {
+        -not $unknownRows[0].requiresTaskSchedulerRepair -or $null -ne $unknownRows[0].targetUser -or $null -ne $unknownRows[0].ownerSid -or $null -ne $unknownRows[0].cleanupOutcome) {
         throw 'An attributable task with an unresolved owner must remain visible as unknown and require Scheduler review.'
     }
     $strictFailed = $false

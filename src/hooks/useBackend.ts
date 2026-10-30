@@ -1614,6 +1614,7 @@ export function useBackend(retainCleanupScanErrors = false) {
           scope?: "system" | "current-user" | "other-user" | "unknown";
           intervalMinutes: number;
           targetUser: string | null;
+          ownerSid?: string | null;
           ownerAccount?: string | null;
           managedByAutoSet?: boolean;
           payloadVerified?: boolean;
@@ -1718,6 +1719,7 @@ export function useBackend(retainCleanupScanErrors = false) {
       intervalMinutes: number,
       targetUsers: string[],
       runAsSystem = false,
+      allowDefaultExcluded = false,
     ) =>
       execute<{ status: string; results: unknown[]; total: number }>(
         "Set-MultiUserAutoEraseSchedule",
@@ -1725,6 +1727,7 @@ export function useBackend(retainCleanupScanErrors = false) {
           CategoryId: categoryId,
           IntervalMinutes: intervalMinutes,
           RunAsSystem: runAsSystem,
+          AllowDefaultExcluded: allowDefaultExcluded,
           TargetUsers: targetUsers.join(','),
         },
       ),

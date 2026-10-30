@@ -3037,6 +3037,7 @@ function Get-AutoEraseSchedules {
                 intervalMinutes  = $minutes
                 targetUser       = if ($identity.ownerUnknown) { $null } elseif ($identity.ownerSid -notin @($currentSid, 'S-1-5-18')) { [string]$t.Principal.UserId } else { $null }
                 scope            = if ($identity.ownerUnknown) { 'unknown' } elseif ($identity.ownerSid -eq 'S-1-5-18') { 'system' } elseif ($identity.ownerSid -eq $currentSid) { 'current-user' } else { 'other-user' }
+                ownerSid         = if ($identity.ownerUnknown) { $null } else { [string]$identity.ownerSid }
                 ownerAccount     = $t.Principal.UserId
                 managedByAutoSet = (Test-AutoEraseManagedTask $t)
                 lastRun          = if ($info) { ConvertTo-AutoEraseTimestamp $info.LastRunTime } else { $null }
