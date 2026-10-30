@@ -4048,6 +4048,7 @@ function Get-GitActivityInfo {
             $safeDirectories = @(& git.exe config --global --get-all safe.directory 2>$null)
             if ($LASTEXITCODE -notin @(0, 1)) { throw 'Git configuration could not be checked.' }
             if ($LASTEXITCODE -eq 1 -and $safeDirectories.Count -gt 0) { throw 'Git configuration output could not be verified.' }
+            if ($LASTEXITCODE -eq 0 -and $safeDirectories.Count -eq 0) { throw 'Git configuration output could not be verified.' }
             if ($LASTEXITCODE -eq 0) {
                 foreach ($directory in $safeDirectories) {
                     $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
@@ -5018,6 +5019,46 @@ function Assert-CleanupCategoriesAllowed {
     }
 }
 
+function Invoke-CleanupCurrentUserGitActivity {
+    # This reader lists identities only; credential blobs remain untouched.
+    # Other applications' Vault entries are outside its coverage, so even a
+    # verified removal must remain partial.
+    try {
+        if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+        . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
+        $identities = @(Get-WCScheduledCredentials)
+        foreach ($credential in $identities) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+        }
+        $before = @($identities | Where-Object { ([string]$_.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase) })
+        $git = Get-Command git.exe -ErrorAction SilentlyContinue
+        if (-not $git) { throw 'Git configuration cannot be checked.' }
+        $safe = @(& $git.Source config --global --get-all safe.directory 2>$null)
+        if ($LASTEXITCODE -notin @(0, 1) -or ($LASTEXITCODE -eq 1 -and $safe.Count) -or ($LASTEXITCODE -eq 0 -and -not $safe.Count)) { throw 'Git configuration could not be verified.' }
+        $failed = $false
+        foreach ($credential in $before) {
+            try { Remove-WCScheduledCredential $credential.Name $credential.Type $credential.UserName }
+            catch { $failed = $true }
+        }
+        $remainingIdentities = @(Get-WCScheduledCredentials)
+        foreach ($credential in $remainingIdentities) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+        }
+        $after = @($remainingIdentities | Where-Object { ([string]$_.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase) })
+        if ($after.Count -gt 0) { $failed = $true }
+        if ($safe.Count) {
+            & $git.Source config --global --unset-all safe.directory 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+            else {
+                $remaining = @(& $git.Source config --global --get-all safe.directory 2>$null)
+                if ($LASTEXITCODE -ne 1 -or $remaining.Count) { $failed = $true }
+            }
+        }
+        if ($failed) { return 'failed' }
+        return 'partial'
+    } catch { return 'failed' }
+}
+
 function Invoke-CleanupClearForUser {
     param(
         [Parameter(Mandatory)] [string]$UserProfilePath,
@@ -5708,25 +5749,11 @@ function Invoke-CleanupClearForUser {
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
                 }
                 'gitActivity' {
-                    $gitConfig = Join-Path $UserProfilePath '.gitconfig'
                     $currentProfile = [Environment]::GetFolderPath('UserProfile')
                     $isCurrentProfile = $currentProfile -and ($UserProfilePath.TrimEnd('\\') -eq $currentProfile.TrimEnd('\\'))
-                    if ($isCurrentProfile) {
-                        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-                            $text = ([string]$line).Trim()
-                            if ($text -match '(?i)target=(.+)$' -and $Matches[1].Trim() -match '(?i)git:') {
-                                & cmdkey.exe ("/delete:{0}" -f $Matches[1].Trim()) 2>$null | Out-Null
-                            }
-                        }
-                    }
-                    if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) { & git.exe config --file $gitConfig --unset-all safe.directory 2>$null | Out-Null }
-                    $leftover = if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) {
-                        @(& git.exe config --file $gitConfig --get-all safe.directory 2>$null).Count
-                    } else { 0 }
-                    if ($isCurrentProfile) {
-                        $leftover += @(& cmdkey.exe /list 2>$null | Where-Object { ([string]$_).Trim() -match '(?i)target=.*git:' }).Count
-                    }
-                    $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
+                    # A different user's credential provider and Git global
+                    # configuration cannot be verified in this session.
+                    $catResults[$cat] = if ($isCurrentProfile) { Invoke-CleanupCurrentUserGitActivity } else { 'failed' }
                 }
                 'sshState' {
                     $knownHosts = Join-Path $UserProfilePath '.ssh\\known_hosts'

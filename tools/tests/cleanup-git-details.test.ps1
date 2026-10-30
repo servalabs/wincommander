@@ -23,6 +23,7 @@ function git.exe {
     if ($script:gitMode -in @('failed', 'denied')) { $global:LASTEXITCODE = 128; return }
     if ($script:gitMode -in @('empty', 'missing')) { $global:LASTEXITCODE = 1; return }
     if ($script:gitMode -eq 'inconsistent') { $global:LASTEXITCODE = 1; 'C:\Fixture\Unverified'; return }
+    if ($script:gitMode -eq 'empty-success') { $global:LASTEXITCODE = 0; return }
     if ($script:gitMode -eq 'xdg') { $global:LASTEXITCODE = 0; 'D:\Fixture\XDG'; return }
     $global:LASTEXITCODE = 0; 'C:\Fixture\One'; 'D:\Fixture\Two'
 }
@@ -37,7 +38,7 @@ $script:credentialMode = 'denied'
 $result = Get-GitActivityInfo
 if ($result.error -or -not $result.partial -or $result.total -ne 2 -or $result.message -notmatch 'credential identities') { throw 'A credential failure must preserve known Git configuration and report incomplete coverage.' }
 $script:credentialMode = 'success'
-foreach ($mode in @('failed','denied','inconsistent')) {
+foreach ($mode in @('failed','denied','inconsistent','empty-success')) {
     $script:gitMode = $mode; $result = Get-GitActivityInfo
     if ($result.error -or -not $result.partial -or $result.total -ne 2 -or $result.message -notmatch 'configuration') { throw "A $mode configuration must preserve the Git credentials and report incomplete coverage." }
 }
