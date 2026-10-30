@@ -28,8 +28,17 @@ try {
     $runPath = $Matches[1]
     & powershell -NoProfile -ExecutionPolicy Bypass -File $runPath
     if ($LASTEXITCODE -ne 0) { throw 'Synthetic scheduled payload failed.' }
-    $result = Get-Content -LiteralPath (Join-Path $stateRoot 'dnsCache.user-test.result.json') -Raw | ConvertFrom-Json
+    if ($runPath -notmatch '\.g([0-9a-f]{32})\.ps1$') { throw 'Generation not found.' }
+    $generation = $Matches[1]
+    $resultPath = Join-Path $stateRoot "dnsCache.user-test.g$generation.result.json"
+    $currentMarker = Join-Path $stateRoot "dnsCache.user-test.g$generation.state.json"
+    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     if ($result.removed -ne 1 -or $runPath -notmatch ('\.g' + $result.payloadGeneration + '\.ps1$')) { throw 'The current payload did not run and bind its result to its generation.' }
+    # Simulate a stale run overwriting the old shared marker after a successful run.
+    @{ payloadGeneration=('b' * 32); intervalMinutes=60; nextDueUtc=[DateTime]::UtcNow.AddDays(-1).ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $marker
+    $before = [IO.File]::ReadAllText($currentMarker)
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $runPath
+    if ($LASTEXITCODE -ne 0 -or [IO.File]::ReadAllText($currentMarker) -ne $before) { throw 'An old marker caused an early repeat.' }
     Write-Output 'Passed: replacement payloads are staged separately without modifying the existing task payload.'
 } finally {
     $env:LOCALAPPDATA = $oldLocalAppData

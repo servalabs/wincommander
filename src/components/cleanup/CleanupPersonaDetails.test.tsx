@@ -263,6 +263,15 @@ describe("System Cleanup persona details", () => {
     expect(rows[0].facts.join(" ")).toContain("C:\\Reports");
   });
 
+  test("keeps source identifiers and extra fields on grouped records", () => {
+    const [application] = getSafeCleanupPreview("amcache", { entries: [{ category: "NewInventoryType", count: 1, location: "inventory-key", sample: [{ name: "example" }] }] });
+    expect(application.facts.join(" ")).toContain("Category source: NewInventoryType");
+    expect(application.facts.join(" ")).toContain("inventory-key");
+    const [activity] = getSafeCleanupPreview("ntUserTraces", { sections: [{ name: "NewActivityType", count: 1, sourcePath: "activity-key", entries: [{ value: "example" }] }] });
+    expect(activity.facts.join(" ")).toContain("Section source: NewActivityType");
+    expect(activity.facts.join(" ")).toContain("activity-key");
+  });
+
   test("shows the actual USB, RDP, deleted-file and volume reader fields", () => {
     // Field names mirror Get-USBDeviceHistory, Get-RDPHistory,
     // Get-RecycleBinInfo, Get-ShadowCopies and Get-NTFSJournals.

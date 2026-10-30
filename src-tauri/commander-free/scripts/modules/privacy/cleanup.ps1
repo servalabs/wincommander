@@ -4089,84 +4089,51 @@ function Get-CellularHistoryInfo {
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
-function Get-WebCacheInfo {
-    # Returns WebCacheV*.dat (ESE database — WebCacheV01.dat historically, WebCacheV24.dat
-    # on newer builds) + rotating V01*.log transaction logs
+function Get-CleanupCacheFileInventory {
+    param([string]$Root, [string[]]$Patterns, [string]$ExtraDirectory = '')
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $webCacheDir = "$env:LOCALAPPDATA\Microsoft\Windows\WebCache"
-        $files = @()
-        if (Test-Path $webCacheDir) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $webCacheDir 'WebCacheV*.dat') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $webCacheDir 'V01*.log') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+        try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
+        if ($rootItem) {
+            if (-not $rootItem.PSIsContainer) { throw 'Cache location is not a directory.' }
+            foreach ($pattern in $Patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $Root -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    }
+                } catch { $partial = $true }
+            }
+            if ($ExtraDirectory) {
+                try {
+                    $extra = Join-Path $Root $ExtraDirectory
+                    try { $extraItem = Get-Item -LiteralPath $extra -Force -ErrorAction Stop }
+                    catch [System.Management.Automation.ItemNotFoundException] { $extraItem = $null }
+                    if ($extraItem) {
+                        if (-not $extraItem.PSIsContainer) { throw 'Cache location is not a directory.' }
+                        Get-ChildItem -LiteralPath $extra -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ source=$ExtraDirectory; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        }
+                    }
+                } catch { $partial = $true }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some cache locations could not be checked.' } else { $null } }
+}
+
+function Get-WebCacheInfo {
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WebCache') -Patterns @('WebCacheV*.dat', 'V01*.log')
 }
 
 function Get-ThumbnailCacheInfo {
-    # Returns Explorer thumbnail + icon cache database file listing
-    try {
-        $explorerDir = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        $files = @()
-        if (Test-Path $explorerDir) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $explorerDir 'thumbcache_*.db') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $explorerDir 'iconcache_*.db') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Explorer') -Patterns @('thumbcache_*.db', 'iconcache_*.db')
 }
 
 function Get-NotificationDatabaseInfo {
-    # Returns the WPN (Windows Push Notification) database + its WAL/SHM sidecar files
-    try {
-        $notifDir = "$env:LOCALAPPDATA\Microsoft\Windows\Notifications"
-        $files = @()
-        if (Test-Path $notifDir -ErrorAction SilentlyContinue) {
-            foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
-                $p = Join-Path $notifDir $name
-                if (Test-Path $p -ErrorAction SilentlyContinue) {
-                    $f = Get-Item -Path $p -Force -ErrorAction SilentlyContinue
-                    if ($f) {
-                        $files += @{
-                            name     = $f.Name
-                            sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                            modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                        }
-                    }
-                }
-            }
-        }
-        # Also cover wpnidm — per-app notification icon/data cache alongside wpndatabase.db.
-        $wpnidmDir = Join-Path $notifDir 'wpnidm'
-        if (Test-Path $wpnidmDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $wpnidmDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'wpnidm'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications') -Patterns @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm') -ExtraDirectory 'wpnidm'
 }
 
 function Get-BranchCacheInfo {

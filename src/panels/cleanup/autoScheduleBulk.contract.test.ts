@@ -68,6 +68,6 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain('AUTO_SCHEDULE_TRIM_ID,');
     expect(scheduler).toContain("'maintenanceTrim'");
     expect(scheduler).toContain('Optimize-Volume -DriveLetter $drive -ReTrim');
-    expect(scheduler).toContain("'System Maintenance scheduled cleanup v17 (managed)'");
+    expect(scheduler).toContain("'System Maintenance scheduled cleanup v18 (managed)'");
   });
 });

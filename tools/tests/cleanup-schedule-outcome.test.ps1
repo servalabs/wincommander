@@ -34,6 +34,13 @@ try {
     $result.payloadGeneration = 'a' * 32
     [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
     if (-not (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60)) { throw 'A generation-specific payload must retain its outcome.' }
+    # Current payloads write separate receipts so older generations cannot erase them.
+    [IO.File]::AppendAllText($generated, "# .g`$payloadGeneration.result.json`n")
+    $generatedReceipt = Join-Path $state ('dnsCache.user-test.g' + ('a' * 32) + '.result.json')
+    [IO.File]::WriteAllText($generatedReceipt, ($result | ConvertTo-Json -Compress))
+    $result.payloadGeneration = 'b' * 32
+    [IO.File]::WriteAllText($receipt, ($result | ConvertTo-Json -Compress))
+    if (-not (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60)) { throw 'An old shared receipt must not hide a current generation result.' }
     $task.Actions[0].Arguments = "-NoProfile -File `"$payload`""
     if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-2' 60) { throw 'Another user must not receive this outcome.' }
     if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 30) { throw 'An outcome from a different cadence must not be returned.' }

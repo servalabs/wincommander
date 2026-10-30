@@ -150,9 +150,10 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return input.entries.filter(isObject).flatMap((category) => {
       if (!Array.isArray(category.sample)) return [];
       const categoryName = typeof category.category === "string" ? amcacheLabels[category.category] ?? "Record" : "Record";
+      const { category: sourceCategory, count: _count, sample: _sample, ...categoryDetails } = category;
       return category.sample.filter(isObject).map((sample, index) => ({
         label: `${categoryName} ${index + 1}`,
-        facts: metadata(sample, id),
+        facts: [...(typeof sourceCategory === "string" ? [`Category source: ${sourceCategory}`] : []), ...metadata(categoryDetails, id), ...metadata(sample, id)],
       }));
     });
   }
@@ -162,7 +163,8 @@ export function getSafeCleanupPreview(id: string, input: unknown): PreviewRow[] 
     return activitySections.filter(isObject).flatMap((section) => {
       if (!Array.isArray(section.entries)) return [];
       const label = typeof section.name === "string" ? sectionNames[section.name] ?? "Activity record" : "Activity record";
-      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []) }));
+      const { name: sourceSection, count: _count, entries: _entries, ...sectionDetails } = section;
+      return section.entries.map((entry, index) => ({ label: `${label} ${index + 1}`, facts: [...(typeof sourceSection === "string" ? [`Section source: ${sourceSection}`] : []), ...metadata(sectionDetails, id), ...(isObject(entry) ? metadata(activityEntry(section.name, entry), id) : (visibleText(entry) ? [`Value: ${visibleText(entry)}`] : []))] }));
     });
   }
   if (id === "wlanProfiles" && (Array.isArray(input.profiles) || Array.isArray(input.additionalProfiles))) {
