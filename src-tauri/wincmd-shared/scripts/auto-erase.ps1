@@ -336,7 +336,7 @@ function Assert-WCWlanSnapshot {
         $id = [Guid]::Empty
         if (-not [Guid]::TryParse([string]$profile.InterfaceId, [ref]$id) -or $id -eq [Guid]::Empty -or
             [string]::IsNullOrWhiteSpace([string]$profile.Name) -or ([string]$profile.Name).Length -gt 255 -or
-            $null -eq $profile.Flags -or [int64]$profile.Flags -notin @(0,1,2) -or -not $adapterIds.Contains($id.ToString('D'))) { throw 'Wi-Fi profile identity is invalid.' }
+            $null -eq $profile.Flags -or [int64]$profile.Flags -notin @(0,1,2,3) -or -not $adapterIds.Contains($id.ToString('D'))) { throw 'Wi-Fi profile identity is invalid.' }
     }
 }
 function Invoke-WCWlanClear {

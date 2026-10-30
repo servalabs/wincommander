@@ -95,6 +95,12 @@ $result = Invoke-WCWlanClear
 Check (-not $result.ok -and $script:removed.Count -eq 0) 'Enumeration failure allowed deletion.'
 
 Reset-Fixture
+$script:profiles += [pscustomobject]@{ InterfaceId=$adapterA; Name='Combined policy user'; Flags=3 }
+$result = Invoke-WCWlanClear
+Check ($result.ok -and $result.removed -eq 2 -and $result.coverageIncomplete) 'Combined documented profile flags did not preserve limited coverage.'
+Check (@($script:profiles | Where-Object { $_.Flags -eq 3 }).Count -eq 1) 'Combined policy and user profile was deleted.'
+
+Reset-Fixture
 $script:profiles += [pscustomobject]@{ InterfaceId=$adapterA; Name='Unknown profile type'; Flags=4 }
 $result = Invoke-WCWlanClear
 Check (-not $result.ok -and $script:removed.Count -eq 0) 'An unknown profile type allowed deletion.'
