@@ -149,7 +149,11 @@ export function summarizeCleanupGroups(count: number, groups: Array<{ count: num
 export function summarizeCleanupResult(input: { id: string; count: number; items?: string[]; raw?: unknown; error?: string; loading?: boolean }): CleanupDisplaySummary {
   const raw = object(input.raw) ? input.raw : undefined;
   const groupedKey = input.id === "amcache" ? "entries" : input.id === "ntUserTraces" ? "sections" : null;
-  const groupedValue = groupedKey && raw ? raw[groupedKey] : undefined;
+  // Per-account summaries use `records` instead of the current-user scan's
+  // `sections`. They may contain either grouped sections or flat records.
+  const accountRecords = raw && Array.isArray(raw.records) ? raw.records : undefined;
+  const accountActivity = input.id === "ntUserTraces" && raw && !Array.isArray(raw.sections) && accountRecords !== undefined;
+  const groupedValue = groupedKey && raw ? (accountActivity && accountRecords?.some(row => object(row) && Array.isArray(row.entries)) ? accountRecords : raw[groupedKey]) : undefined;
   const rows = Array.isArray(groupedValue) ? groupedValue.filter(object) : [];
   const categories = rows.map(row => ({
     label: input.id === "amcache"
@@ -175,13 +179,13 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
-  if (groupedKey) {
+  if (groupedKey && (!accountActivity || Array.isArray(groupedValue))) {
     // Only compare counts that the producer defines in the same units.
     // An absent or malformed breakdown is unknown, not evidence of zero.
-    if (!Array.isArray(groupedValue) || rows.length !== groupedValue.length || typeof raw.total !== "number" || !Number.isInteger(raw.total) || raw.total < 0 || categories.some(row => row.count < 0) || categories.length === 0) {
+    if (!Array.isArray(groupedValue) || rows.length !== groupedValue.length || (!accountActivity && (typeof raw.total !== "number" || !Number.isInteger(raw.total) || raw.total < 0)) || categories.some(row => row.count < 0) || categories.length === 0) {
       return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
     }
-    if (raw.total !== input.count || categories.reduce((sum, row) => sum + row.count, 0) !== input.count) {
+    if ((!accountActivity && raw.total !== input.count) || categories.reduce((sum, row) => sum + row.count, 0) !== input.count) {
       return { ...base, state: "inconsistent", count: null, message: "Counts do not agree", nextStep: "Scan again before clearing." };
     }
   }

@@ -75,4 +75,17 @@ describe("cleanup coverage presentation", () => {
     expect(summarizeCleanupGroups(3, [{ count: 3, items: ["one"], rawData: { records: [{}, {}] } }]).sampleCount).toBe(2);
     expect(summarizeCleanupGroups(3, [{ count: 3, items: ["one"] }]).sampleCount).toBeNull();
   });
+
+  test("selected account activity records are recognized without a current-user sections field", () => {
+    const history = ALL_CATEGORIES.find(item => item.id === "ntUserTraces")!;
+    const flat = { records: [{ entry: "TypedPaths: C:\\Example" }], truncated: false };
+    expect(summarizeCleanupResult({ id: history.id, count: 1, raw: flat }).state).toBe("found");
+    const detail = renderToStaticMarkup(<CleanupDisplayDetails category={history} mode="advanced" count={1} items={[]} rawData={flat} accountLabel="Alice" clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(detail).toContain("C:\\Example");
+    expect(detail).not.toContain("Scan details unavailable");
+    const grouped = { records: [{ name: "TypedPaths", count: 1, entries: [{ value: "C:\\Example" }] }], truncated: false };
+    expect(summarizeCleanupResult({ id: history.id, count: 1, raw: grouped }).state).toBe("found");
+    expect(summarizeCleanupResult({ id: history.id, count: 2, raw: grouped }).state).toBe("inconsistent");
+    expect(summarizeCleanupResult({ id: history.id, count: 0, raw: { records: [] } }).state).toBe("empty");
+  });
 });

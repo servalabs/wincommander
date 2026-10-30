@@ -2546,8 +2546,14 @@ function Set-AutoEraseScheduleCore {
         $savedActions = @($saved.Actions)
         $savedTimeTriggers = @($saved.Triggers | Where-Object { $_.Repetition.Interval })
         $savedIntervals = @($savedTimeTriggers | ForEach-Object { $_.Repetition.Interval })
+        $savedCatchUpTriggers = @($saved.Triggers | Where-Object { $_.CimClass.CimClassName -eq $(if ($RunAsSystem) { 'MSFT_TaskBootTrigger' } else { 'MSFT_TaskLogonTrigger' }) })
+        $catchUpMatches = $savedCatchUpTriggers.Count -eq 1 -and $savedCatchUpTriggers[0].Enabled -eq $true
+        if ($catchUpMatches -and -not $RunAsSystem) {
+            $catchUpMatches = [bool]$savedCatchUpTriggers[0].UserId -and (Resolve-AutoEraseSid ([string]$savedCatchUpTriggers[0].UserId)) -eq $ownerSid
+        }
         $savedStart = [DateTimeOffset]::MinValue
-        $startMatches = $savedTimeTriggers.Count -eq 1 -and
+        $startMatches = $savedTimeTriggers.Count -eq 1 -and $savedTimeTriggers[0].Enabled -eq $true -and
+            $savedTimeTriggers[0].CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and
             [DateTimeOffset]::TryParse([string]$savedTimeTriggers[0].StartBoundary, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeLocal, [ref]$savedStart) -and
             $savedStart.UtcDateTime -eq $firstDue
         if (-not $savedIdentity -or $savedIdentity.categoryId -ne $CategoryId -or $savedIdentity.ownerSid -ne $ownerSid -or
@@ -2555,7 +2561,7 @@ function Set-AutoEraseScheduleCore {
             $savedActions.Count -ne 1 -or [string]$savedActions[0].Execute -ne 'powershell.exe' -or
             [string]$savedActions[0].Arguments -ne $argument -or [string]$saved.Description -ne $description -or
             [string]$saved.Principal.LogonType -ne $expectedLogonType -or (-not $RunAsSystem -and [string]$saved.Principal.RunLevel -ne 'Highest') -or
-            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
+            -not (Test-AutoEraseTaskEnabled ([string]$saved.State)) -or -not $catchUpMatches -or -not $startMatches -or $savedIntervals.Count -ne 1 -or
             [Xml.XmlConvert]::ToTimeSpan([string]$savedIntervals[0]) -ne (New-TimeSpan -Minutes $IntervalMinutes)) {
             throw 'The saved schedule could not be verified in Task Scheduler. Refresh schedules before trying again.'
         }

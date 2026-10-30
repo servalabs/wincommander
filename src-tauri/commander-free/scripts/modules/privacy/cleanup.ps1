@@ -1435,9 +1435,10 @@ function Get-ProcessIntelligence {
 }
 
 function Get-ExecutionCache {
+    $entries = @()
+    $seen = @{}
+    $partial = $false
     try {
-        $entries = @()
-        $seen = @{}
         $storePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store'
         $persistPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Persisted'
         $userAssistRoot = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\UserAssist'
@@ -1457,9 +1458,10 @@ function Get-ExecutionCache {
         }
 
         foreach ($path in @($storePath, $persistPath)) {
-            if (Test-Path $path) {
+            try {
+            if (Test-Path -LiteralPath $path -ErrorAction Stop) {
                 # Add logic to handle different registry structures if needed
-                $props = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue 
+                $props = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
                 if ($props) {
                     $props.PSObject.Properties | ForEach-Object {
                         if ($_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) {
@@ -1468,16 +1470,19 @@ function Get-ExecutionCache {
                     }
                 }
             }
+            } catch { $partial = $true }
         }
 
         # BAM omitted: kernel-protected, cannot be cleared; only clearable sources shown so Clear leaves list empty
         # if (Test-Path $bamRoot) { ... }
 
-        if (Test-Path $userAssistRoot) {
-            Get-ChildItem $userAssistRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path -LiteralPath $userAssistRoot -ErrorAction Stop) {
+            Get-ChildItem -LiteralPath $userAssistRoot -ErrorAction Stop | ForEach-Object {
+                try {
                 $countPath = Join-Path $_.PSPath 'Count'
-                if (Test-Path $countPath) {
-                    $props = Get-ItemProperty -Path $countPath -ErrorAction SilentlyContinue | Select-Object -Property *
+                if (Test-Path -LiteralPath $countPath -ErrorAction Stop) {
+                    $props = Get-ItemProperty -LiteralPath $countPath -ErrorAction Stop | Select-Object -Property *
                     $props.PSObject.Properties | ForEach-Object {
                         if ($_.Name -notmatch '^PS(.*)') {
                             $decoded = ($_.Name.ToCharArray() | ForEach-Object {
@@ -1491,35 +1496,45 @@ function Get-ExecutionCache {
                         }
                     }
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
 
-        if (Test-Path $muiCachePath) {
-            $props = Get-ItemProperty -Path $muiCachePath -ErrorAction SilentlyContinue | Select-Object -Property *
+        try {
+        if (Test-Path -LiteralPath $muiCachePath -ErrorAction Stop) {
+            $props = Get-ItemProperty -LiteralPath $muiCachePath -ErrorAction Stop | Select-Object -Property *
             $props.PSObject.Properties | ForEach-Object {
                 if ($_.Name -notmatch '^PS(.*)' -and $_.Name -ne 'LangID') {
                     . $addEntry $_.Name 'MuiCache'
                 }
             }
         }
+        } catch { $partial = $true }
 
-        if (Test-Path $recentAppsPath) {
-            Get-ChildItem $recentAppsPath -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path -LiteralPath $recentAppsPath -ErrorAction Stop) {
+            Get-ChildItem -LiteralPath $recentAppsPath -ErrorAction Stop | ForEach-Object {
+                try {
                 $appPath = $_.GetValue('AppPath')
                 if ($appPath) { . $addEntry $appPath 'RecentApps' }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         
         # Check ShimCache (AppCompatCache) existence (just counting as one entry if present, or listing size)
         $shimCachePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache'
-        if (Test-Path $shimCachePath) {
-            $shimData = Get-ItemProperty -Path $shimCachePath -Name 'AppCompatCache' -ErrorAction SilentlyContinue
+        try {
+        if (Test-Path -LiteralPath $shimCachePath -ErrorAction Stop) {
+            $shimData = Get-ItemProperty -LiteralPath $shimCachePath -ErrorAction Stop
             if ($shimData -and $shimData.AppCompatCache) {
                 . $addEntry "ShimCache (Binary Blob - $($shimData.AppCompatCache.Length) bytes)" "ShimCache"
             }
         }
+        } catch { $partial = $true }
 
-        @{ entries = $entries }
+        @{ entries = $entries; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some execution history sources could not be checked.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to read execution cache: $($_.Exception.Message)" }

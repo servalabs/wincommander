@@ -144,7 +144,7 @@ function New-ScheduledTaskPrincipal { param($UserId,$LogonType,$RunLevel) @{ use
 function Register-ScheduledTask {
     [CmdletBinding()] param($TaskPath,$TaskName,$Action,$Trigger,$Principal,$Settings,$Description,[switch]$Force)
     $script:registrations += @{ principal=$Principal; description=$Description; triggers=$Trigger }
-    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }); Description=$Description; State='Ready' }
+    $script:savedTask = [pscustomobject]@{ TaskPath=$TaskPath; TaskName=$TaskName; Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }; Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument }); Triggers=@([pscustomobject]@{ CimClass=[pscustomobject]@{ CimClassName='MSFT_TaskTimeTrigger' }; Enabled=$true; StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }, [pscustomobject]@{ CimClass=[pscustomobject]@{ CimClassName='MSFT_TaskBootTrigger' }; Enabled=$true; Repetition=$null }); Description=$Description; State='Ready' }
 }
 $script:registrations=@()
 $catalog = Get-AutoEraseSupportedCategories

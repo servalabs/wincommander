@@ -27,6 +27,10 @@ function Get-ScheduledTask {
         if ($script:readbackMode -eq 'missingStart') { $saved.Triggers[0].StartBoundary = '' }
         if ($script:readbackMode -eq 'wrongLogon') { $saved.Principal.LogonType = 'S4U' }
         if ($script:readbackMode -eq 'wrongRunLevel') { $saved.Principal.RunLevel = 'Limited' }
+        if ($script:readbackMode -eq 'missingCatchUp') { $saved.Triggers = @($saved.Triggers[0]) }
+        if ($script:readbackMode -eq 'disabledCatchUp') { $saved.Triggers[1].Enabled = $false }
+        if ($script:readbackMode -eq 'wrongCatchUpUser') { $saved.Triggers[1].UserId = 'SYSTEM' }
+        if ($script:readbackMode -eq 'disabledTime') { $saved.Triggers[0].Enabled = $false }
         return $saved
     }
     if ($script:existing) { [pscustomobject]@{ TaskPath=$script:SystemMaintenanceTaskPath; TaskName=(Get-AutoEraseTaskName 'dnsCache' 'S-1-5-21-1-2-3-1001'); State='Ready'; CategoryId='dnsCache'; OwnerSid='S-1-5-21-1-2-3-1001' } }
@@ -46,7 +50,7 @@ function Register-ScheduledTask {
         TaskPath=$TaskPath; TaskName=$TaskName; CategoryId=$category; OwnerSid=(Resolve-AutoEraseSid $Principal.user)
         Actions=@([pscustomobject]@{ Execute=$Action.execute; Arguments=$Action.argument })
         Principal=[pscustomobject]@{ LogonType=$Principal.logon; RunLevel=$Principal.level }
-        Triggers=@([pscustomobject]@{ StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } })
+        Triggers=@([pscustomobject]@{ CimClass=[pscustomobject]@{ CimClassName='MSFT_TaskTimeTrigger' }; Enabled=$true; StartBoundary=$Trigger[0].at.ToString('s'); Repetition=[pscustomobject]@{ Interval=[Xml.XmlConvert]::ToString($Trigger[0].interval) } }, [pscustomobject]@{ CimClass=[pscustomobject]@{ CimClassName=$(if ($Trigger[1].startup) { 'MSFT_TaskBootTrigger' } else { 'MSFT_TaskLogonTrigger' }) }; Enabled=$true; UserId=$Trigger[1].user; Repetition=$null })
         Description=$Description; State='Ready'
     }
     $script:readbackPending = $true
@@ -91,12 +95,12 @@ foreach ($id in $script:AutoEraseHourlyCategories) {
 }
 if (-not (Set-AutoEraseSchedule -CategoryId 'recentFiles' -IntervalMinutes 60 -RunAsSystem $true).error) { throw 'A user category accepted SYSTEM context.' }
 if ($script:registered.Count -ne $before) { throw 'Rejected policy requests created a task.' }
-foreach ($mode in @('registerFailure','missing','wrongAction','disabled','wrongInterval','wrongStart','missingStart')) {
+foreach ($mode in @('registerFailure','missing','wrongAction','disabled','wrongInterval','wrongStart','missingStart','missingCatchUp','disabledCatchUp','disabledTime')) {
     $script:readbackMode = $mode
     $result = Set-IndividualAutoEraseSchedule -CategoryId 'dnsCache' -IntervalMinutes 60
     if (-not $result.error -or $result.status -eq 'enabled') { throw "Registration incorrectly succeeded with $mode readback." }
 }
-foreach ($mode in @('wrongLogon','wrongRunLevel')) {
+foreach ($mode in @('wrongLogon','wrongRunLevel','wrongCatchUpUser')) {
     $script:readbackMode = $mode
     $result = Set-IndividualAutoEraseSchedule -CategoryId 'wslData' -IntervalMinutes 60 -AllowDefaultExcluded
     if (-not $result.error -or $result.status -eq 'enabled') { throw "Registration incorrectly succeeded with $mode readback." }
