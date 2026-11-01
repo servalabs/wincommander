@@ -42,7 +42,7 @@ try { Invoke-CleanupClearAllUsers -CategoryIds 'browserFootprints' -AllowDefault
 if (-not $blocked) { throw 'String true bypassed typed individual confirmation.' }
 $reachedProfiles = $false
 try { Invoke-CleanupClearAllUsers -CategoryIds 'browserFootprints' -AllowDefaultExcluded $true } catch {
-    $reachedProfiles = $_.Exception.Message -like '*Protected request reached profile enumeration*'
+    $reachedProfiles = $_.Exception.Message -like '*Windows user profiles could not be read*'
 }
 if (-not $reachedProfiles) { throw 'Explicit single-category confirmation did not reach the next boundary.' }
 Write-Output 'Passed: ten exclusions block default and mixed requests; explicit single-category confirmation reaches only the mocked next boundary.'

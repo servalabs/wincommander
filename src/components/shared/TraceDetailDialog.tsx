@@ -12,19 +12,33 @@ import {
   type TraceTableRow,
 } from "./traceTable";
 import { showError, showSuccess } from "../../utils/toast";
+import { useCleanupDisplay } from "../../panels/cleanup/cleanupDisplay";
+import CleanupDisplayDetails from "../cleanup/CleanupDisplayDetails";
+import type { CleanupScheduleRecord } from "../../panels/cleanup/cleanupScheduleReadback";
+import type { CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import "./TraceDetailDialog.css";
 
 interface TraceDetailDialogProps {
   category: Pick<CleanupCategory,
     "label" | "description" | "icon" | "severity" | "scopeAware" | "systemWide" |
     "id" | "schedulable" | "minIntervalMinutes" | "schedulerRunAsSystem" | "regeneratesNote" |
-    "clearDataKey"
+    "clearDataKey" | "confirmMessage"
   >;
   isOpen: boolean;
   count: number;
   items: string[];
   rawData?: unknown;
-  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
+  error?: string;
+  verification?: CleanupVerification;
+  scheduleState?: "checking" | "verified" | "unavailable";
+  scheduleMinutes?: number | null;
+  scheduleDisabled?: boolean;
+  scheduleRecord?: CleanupScheduleRecord;
+  excludedFromBulk?: boolean;
+  scopeLabel?: string;
+  accountLabel?: string;
+  accountName?: string;
+  groupedItems?: Array<{ title: string; username?: string; count: number; items: string[]; rawData?: unknown; error?: string }>;
   clearing: boolean;
   onClose: () => void;
   onClear?: () => void;
@@ -38,6 +52,16 @@ export default function TraceDetailDialog({
   count,
   items,
   rawData,
+  error,
+  verification,
+  scheduleState,
+  scheduleMinutes,
+  scheduleDisabled,
+  scheduleRecord,
+  excludedFromBulk = false,
+  scopeLabel,
+  accountLabel,
+  accountName,
   groupedItems,
   clearing,
   onClose,
@@ -46,6 +70,7 @@ export default function TraceDetailDialog({
   clearLabel = "Clear",
 }: TraceDetailDialogProps) {
   const [query, setQuery] = useState("");
+  const displayMode = useCleanupDisplay();
   const view = useMemo(() => buildTraceView(rawData, items), [rawData, items]);
   const isPreviewTruncated = !!(
     rawData &&
@@ -66,6 +91,12 @@ export default function TraceDetailDialog({
 
   if (!isOpen) {
     return null;
+  }
+
+  if (displayMode) {
+    return <CleanupDisplayDetails category={category} mode={displayMode} count={count} items={items} rawData={rawData} groupedItems={groupedItems} excludedFromBulk={excludedFromBulk}
+      error={error} clearing={clearing} clearDisabled={clearDisabled} clearLabel={clearLabel} onClose={onClose} onClear={onClear}
+      scheduleState={scheduleState} scheduleMinutes={scheduleMinutes} scheduleDisabled={scheduleDisabled} scheduleRecord={scheduleRecord} verification={verification} scopeLabel={scopeLabel} accountLabel={accountLabel} accountName={accountName} />;
   }
 
   const datasetCount = groupedViews.length

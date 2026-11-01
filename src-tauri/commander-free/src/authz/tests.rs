@@ -229,6 +229,32 @@ fn backend_dispatch_keeps_read_only_commands_available() {
 }
 
 #[test]
+fn cleanup_schedule_commands_are_authorized_without_opening_unknown_commands() {
+    for command in [
+        "Set-AutoEraseSchedule",
+        "Set-IndividualAutoEraseSchedule",
+        "Set-ManagedAutoEraseSchedule",
+        "Remove-AutoEraseSchedule",
+        "Remove-ManagedAutoEraseSchedule",
+    ] {
+        let mut params = HashMap::new();
+        assert_eq!(
+            backend_dispatch_policy(command),
+            BackendDispatchPolicy::Ordinary,
+            "{command}"
+        );
+        assert!(
+            authorize_backend_dispatch(command, &mut params).is_ok(),
+            "{command}"
+        );
+    }
+    assert_eq!(
+        backend_dispatch_policy("Set-UnregisteredAutoEraseSchedule"),
+        BackendDispatchPolicy::InternalOnly
+    );
+}
+
+#[test]
 fn backend_dispatch_refuses_lockdown_only_feature_ids() {
     for command in [
         "run_destruct_step",

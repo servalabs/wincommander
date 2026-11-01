@@ -6,6 +6,10 @@ interface CleanupScheduleControlProps {
   categoryLabel: string;
   minInterval: number;
   scheduleMinutes?: number | null;
+  scheduleExists?: boolean;
+  scheduleDisabled?: boolean;
+  schedulePayloadVerified?: boolean | null;
+  scheduleRequiresTaskSchedulerRepair?: boolean;
   scheduleBusy?: boolean;
   scheduleState?: "checking" | "verified" | "unavailable";
   onRefreshSchedule?: () => void;
@@ -35,6 +39,10 @@ export default function CleanupScheduleControl({
   categoryLabel,
   minInterval,
   scheduleMinutes,
+  scheduleExists = false,
+  scheduleDisabled = false,
+  schedulePayloadVerified,
+  scheduleRequiresTaskSchedulerRepair = false,
   scheduleBusy = false,
   scheduleState = "verified",
   onRefreshSchedule,
@@ -53,7 +61,9 @@ export default function CleanupScheduleControl({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceId = useId();
-  const isScheduled = scheduleState === "verified" && typeof scheduleMinutes === "number" && scheduleMinutes > 0;
+  const isScheduled = scheduleState === "verified" && !scheduleDisabled && (scheduleExists || (typeof scheduleMinutes === "number" && scheduleMinutes > 0));
+  const isDisabled = scheduleState === "verified" && scheduleDisabled;
+  const payloadUnverified = (isScheduled || isDisabled) && (schedulePayloadVerified !== true || (isScheduled && !(typeof scheduleMinutes === "number" && scheduleMinutes > 0)));
   const portalTarget = triggerRef.current
     ?.closest<HTMLElement>('[data-cleanup-panel-root="true"]')
     ?.querySelector<HTMLElement>('[data-cleanup-overlay-root="true"]');
@@ -123,8 +133,11 @@ export default function CleanupScheduleControl({
     };
   }, [closeAndReturnFocus, isOpen, updatePosition]);
 
-  if (!onSetSchedule) {
-    if (!onRequestScheduleAccess) return null;
+  if (scheduleRequiresTaskSchedulerRepair && scheduleState === "verified") {
+    return <span role="status" title="Review this task in Windows Task Scheduler. WinCommander cannot safely change or remove it." aria-label={`${categoryLabel} schedule requires review in Windows Task Scheduler`}>Review in Task Scheduler</span>;
+  }
+  if (!onSetSchedule && !((isScheduled || isDisabled) && onClearSchedule)) {
+    if (!onRequestScheduleAccess) return isDisabled ? <span aria-label={`${categoryLabel} scheduled wipe is disabled`} title="Scheduled wipe is disabled">OFF</span> : null;
     return (
       <button
         type="button"
@@ -132,9 +145,9 @@ export default function CleanupScheduleControl({
         className="flex h-[22px] min-w-[22px] flex-shrink-0 items-center gap-0.5 rounded px-1.5 transition-colors"
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
-        data-active={isScheduled ? "true" : "false"}
-        aria-label={isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
-        title={isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
+        data-active={isScheduled && !payloadUnverified ? "true" : "false"}
+        aria-label={payloadUnverified ? `${categoryLabel} scheduled wipe script or task settings not verified` : isDisabled ? `${categoryLabel} scheduled wipe is disabled` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
+        title={payloadUnverified ? "Task exists, but its cleanup script or Windows task settings could not be verified · Pro required to change" : isDisabled ? "Scheduled wipe is disabled · Pro required to change" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
         onClick={event => {
           event.preventDefault();
           event.stopPropagation();
@@ -142,7 +155,8 @@ export default function CleanupScheduleControl({
         }}
       >
         <Icon icon="time" size={14} />
-        {isScheduled && <span className="text-[8.5px] font-extrabold">{formatInterval(scheduleMinutes!)}</span>}
+        {isScheduled && <span className="text-[8.5px] font-extrabold">{payloadUnverified ? "?" : formatInterval(scheduleMinutes!)}</span>}
+        {isDisabled && <span className="text-[8.5px] font-extrabold">OFF</span>}
         <Icon icon="lock" size={9} />
       </button>
     );
@@ -150,6 +164,7 @@ export default function CleanupScheduleControl({
 
   const applySchedule = async (minutes: number) => {
     try {
+      if (!onSetSchedule) return;
       const succeeded = await onSetSchedule(Math.max(minInterval, minutes));
       if (succeeded) {
         setCustomMinutes("");
@@ -178,10 +193,10 @@ export default function CleanupScheduleControl({
         className="flex h-[22px] min-w-[22px] flex-shrink-0 items-center gap-0.5 rounded px-1.5 transition-colors"
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
-        data-active={isScheduled ? "true" : "false"}
-        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
+        data-active={isScheduled && !payloadUnverified ? "true" : "false"}
+        aria-label={scheduleState === "unavailable" ? `Retry checking ${categoryLabel} scheduled wipe` : scheduleState === "checking" ? `Checking ${categoryLabel} scheduled wipe` : payloadUnverified ? `Manage ${categoryLabel} scheduled wipe; script or task settings not verified` : isDisabled ? `Manage disabled ${categoryLabel} scheduled wipe` : isScheduled ? `${onSetSchedule ? "Change" : "Manage"} ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
         disabled={scheduleState === "checking" || scheduleBusy}
-        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
+        title={scheduleState === "checking" ? "Checking Task Scheduler…" : scheduleState === "unavailable" ? "Schedule status unavailable — click to retry" : payloadUnverified ? "Task exists, but its cleanup script or Windows task settings could not be verified. Remove and recreate this schedule." : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={isOpen ? surfaceId : undefined}
@@ -193,7 +208,8 @@ export default function CleanupScheduleControl({
         }}
       >
         <Icon icon="time" size={14} />
-        {isScheduled && <span className="text-[8.5px] font-extrabold">{formatInterval(scheduleMinutes!)}</span>}
+        {isScheduled && <span className="text-[8.5px] font-extrabold">{payloadUnverified ? "?" : formatInterval(scheduleMinutes!)}</span>}
+        {isDisabled && <span className="text-[8.5px] font-extrabold">OFF</span>}
       </button>
 
       {isOpen && portalTarget && createPortal(
@@ -221,8 +237,8 @@ export default function CleanupScheduleControl({
           onClick={event => event.stopPropagation()}
         >
           <Menu>
-            <MenuDivider title={isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
-            {PRESET_INTERVALS.filter(preset => preset.minutes >= minInterval).map(preset => (
+            <MenuDivider title={payloadUnverified ? "Task exists; script or task settings not verified" : isDisabled ? "Scheduled wipe is disabled" : isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
+            {onSetSchedule && PRESET_INTERVALS.filter(preset => preset.minutes >= minInterval).map(preset => (
               <MenuItem
                 key={preset.minutes}
                 icon={isScheduled && scheduleMinutes === preset.minutes ? "tick" : "blank"}
@@ -231,7 +247,7 @@ export default function CleanupScheduleControl({
                 onClick={() => void applySchedule(preset.minutes)}
               />
             ))}
-            <MenuDivider />
+            {onSetSchedule && <><MenuDivider />
             <li className="bp5-menu-item-custom" style={{ padding: "6px 8px" }}>
               <div className="flex items-center gap-1">
                 <InputGroup
@@ -261,13 +277,13 @@ export default function CleanupScheduleControl({
                 />
               </div>
               <div className="mt-1 text-[9px] text-[var(--color-text-muted)]">minutes · min {minInterval}</div>
-            </li>
-            {isScheduled && onClearSchedule && (
+            </li></>}
+            {(isScheduled || isDisabled) && onClearSchedule && (
               <>
                 <MenuDivider />
                 <MenuItem
                   icon="cross"
-                  text="Turn off scheduled wipe"
+                  text={isDisabled ? "Remove disabled schedule" : "Turn off scheduled wipe"}
                   intent="danger"
                   disabled={scheduleBusy}
                   onClick={() => void clearSchedule()}

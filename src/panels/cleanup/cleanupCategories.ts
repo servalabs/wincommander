@@ -250,6 +250,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'clipboardHistory',
     label: 'Clipboard History',
+    countUnits: { singular: 'clipboard item', plural: 'clipboard items' },
     description: 'Windows clipboard & cloud sync history status',
     icon: 'clipboard',
     color: '#4b5563',
@@ -313,7 +314,8 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'wlanProfiles',
     label: 'Wi-Fi Profiles',
-    description: 'Saved network profiles',
+    countUnits: { singular: 'Wi-Fi profile', plural: 'Wi-Fi profiles' },
+    description: 'Saved Wi-Fi profiles on available adapters; cleanup removes all-user profiles',
     icon: 'feed',
     color: '#10b981',
     severity: 'warning',
@@ -493,6 +495,7 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'browserFootprints',
     label: 'Browser Audit',
+    countUnits: { singular: 'browser', plural: 'browsers' },
     description: 'Footprint sizes per browser',
     icon: 'globe',
     color: '#06b6d4',
@@ -1570,7 +1573,7 @@ const legacyViewOnlyCategories: LegacyCleanupCategory[] = [
   {
     id: 'processIntel',
     label: 'Process Review',
-    description: 'Unsigned/elevated running processes',
+    description: 'Running processes, their signatures and elevation status',
     icon: 'diagnosis',
     color: '#f97316',
     severity: 'warning',
@@ -1602,12 +1605,6 @@ export const VIEW_ONLY_CATEGORIES = exposeCleanupCategories(legacyViewOnlyCatego
 // roundtrip. If you add a new erase script in the shared module, add
 // the id here too.
 const SCHEDULE_UNAVAILABLE_REASONS: Record<string, string> = {
-  wlanProfiles: 'Saved Wi-Fi profiles require an interactive manual clear; a verified scheduled action is not available.',
-  browserFootprints: 'Browser footprints require an interactive manual clear; a verified scheduled action is not available.',
-  wslData: 'A verified standalone scheduled wipe for Linux distributions is not available.',
-  dockerDesktopData: 'A verified standalone scheduled wipe for Docker storage is not available.',
-  virtualMachineArtifacts: 'A verified standalone scheduled wipe for virtual machines is not available.',
-  credentialManager: 'Saved credentials require an interactive manual clear.',
   cloudPlaceholders: 'Cloud placeholders require an interactive manual clear to verify file hydration.',
   inactiveUserProtectionMetadata: "Removing another user's encryption protection requires an interactive manual decision.",
   cellularHistory: 'Mobile-profile scheduling needs a verified reader for this Windows language.',
@@ -1646,7 +1643,7 @@ export function getCleanupScheduleUnavailableReason(category: CleanupCategory): 
 // aren't in SUPPORTED_AUTOERASE_IDS yet because their inline erase scripts
 // are non-trivial — but if they are added later, flag them here.
 const SYSTEM_CONTEXT_IDS = new Set<string>([
-  'eventLogs', 'searchIndex', 'amcache', 'branchCache',
+  'wlanProfiles', 'eventLogs', 'searchIndex', 'amcache', 'branchCache',
   'connectivityHistory', 'shadowCopies', 'srumData', 'neighborCache', 'netbiosCache', 'bitsQueue',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
   'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory', 'defenderHistory',

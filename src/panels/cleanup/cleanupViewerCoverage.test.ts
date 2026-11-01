@@ -59,6 +59,15 @@ describe("complete cleanup forensic viewer coverage", () => {
     expect(ALL_CATEGORIES.filter((category) => category.getDataKey && !category.clearDataKey).map((category) => category.id)).toEqual(["processIntel"]);
   });
 
+  test("describes Process Review as the full running-process inventory", () => {
+    const process = VIEW_ONLY_CATEGORIES.find((category) => category.id === "processIntel");
+    expect(process?.description).toBe("Running processes, their signatures and elevation status");
+    expect(process?.extractPreview({ processes: [
+      { name: "signed.exe", signed: "Valid", elevated: "No" },
+      { name: "unknown.exe", signed: "Unknown", elevated: "Unknown" },
+    ] }).count).toBe(2);
+  });
+
   test("renders every scannable artifact as a multi-column forensic dataset", () => {
     const scannable = ALL_CATEGORIES.filter((category) => category.getDataKey);
 

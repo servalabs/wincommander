@@ -8,6 +8,7 @@ foreach ($name in @('Get-AutoEraseFiles', 'Get-AutoEraseDirectories')) {
     Invoke-Expression $node.Extent.Text
 }
 $script:paths = @(); $script:erased = @(); $script:denied = $false; $script:missing = $false
+function Assert-AutoEraseAncestors { param($Path) }
 function Get-Item {
     [CmdletBinding()] param($LiteralPath, [switch]$Force)
     if ($script:denied) { throw [UnauthorizedAccessException]::new('Synthetic access denial') }

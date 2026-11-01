@@ -26,7 +26,243 @@ function Clear-Clipboard {
     }
 }
 
+function Convert-CleanupClipboardHistoryResult {
+    param($Result, [scriptblock]$ReadPreview)
+    if ($null -eq $Result) { return @{ status = 'unavailable'; items = @() } }
+    $status = [string]$Result.Status
+    if ($status -eq 'ClipboardHistoryDisabled') { return @{ status = 'disabled'; items = @() } }
+    if ($status -ne 'Success' -or $null -eq $Result.Items) { return @{ status = 'unavailable'; items = @() } }
+    $items = @($Result.Items | ForEach-Object {
+        $item = @{ type = 'item'; preview = '[Clipboard item]'; charCount = 0 }
+        if ($ReadPreview) {
+            try {
+                $detail = & $ReadPreview $_
+                if ($detail) { $item = $detail }
+            } catch { $item = @{ type = 'item'; preview = '[Content unavailable]'; charCount = 0 } }
+        }
+        $item
+    })
+    return @{ status = 'complete'; items = $items }
+}
+
+function Convert-CleanupClipboardItemDetails {
+    param($Item, [hashtable]$FormatNames, [scriptblock]$ReadTextFormat)
+    $formats = @($Item.Content.AvailableFormats | ForEach-Object { [string]$_ })
+    $details = @{ type = 'item'; formats = $formats; id = [string]$Item.Id; timestamp = [string]$Item.Timestamp; charCount = 0 }
+    $unavailable = [Collections.Generic.List[string]]::new()
+    foreach ($name in @('text', 'html', 'rtf', 'webLink', 'applicationLink', 'storageItems')) {
+        $format = [string]$FormatNames[$name]
+        if (-not $format -or $format -notin $formats) { continue }
+        try {
+            $value = & $ReadTextFormat $Item $name
+            if ($null -eq $value) { throw 'Clipboard content unavailable.' }
+            if ($name -eq 'storageItems') { $details[$name] = @($value) }
+            else { $details[$name] = [string]$value }
+            if ($name -eq 'text') { $details.type = 'text'; $details.preview = [string]$value; $details.charCount = ([string]$value).Length }
+        } catch { $unavailable.Add($format) }
+    }
+    if ($unavailable.Count) { $details.unavailableFormats = @($unavailable.ToArray()) }
+    # Do not suggest a separate viewer is needed when the returned HTML/RTF
+    # is already present or the bitmap can be loaded by the local image view.
+    if (-not $details.ContainsKey('preview')) {
+        if ($details.ContainsKey('html') -or $details.ContainsKey('rtf')) { $details.type = 'rich text' }
+        elseif ($formats -contains 'Bitmap') { $details.type = 'image' }
+        elseif ($details.ContainsKey('webLink') -or $details.ContainsKey('applicationLink')) { $details.type = 'link' }
+        elseif ($details.ContainsKey('storageItems')) { $details.type = 'files' }
+        else { $details.contentStatus = 'Content unavailable for the available formats.' }
+    }
+    return $details
+}
+
+function Get-CleanupClipboardItemDetails {
+    param($Item, $AsTask)
+            $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.IStorageItem, Windows.Storage, ContentType=WindowsRuntime]
+            $null = [Windows.Storage.StorageItemTypes, Windows.Storage, ContentType=WindowsRuntime]
+                $formats = @{ text = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text; html = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Html; rtf = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Rtf; webLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::WebLink; applicationLink = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::ApplicationLink; storageItems = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::StorageItems }
+                $readText = {
+                    param($entry, $format)
+                    $operation = switch ($format) { 'text' { $entry.Content.GetTextAsync() } 'html' { $entry.Content.GetHtmlFormatAsync() } 'rtf' { $entry.Content.GetRtfAsync() } 'webLink' { $entry.Content.GetWebLinkAsync() } 'applicationLink' { $entry.Content.GetApplicationLinkAsync() } 'storageItems' { $entry.Content.GetStorageItemsAsync() } }
+                    $resultType = if ($format -in @('webLink', 'applicationLink')) { [Uri] } elseif ($format -eq 'storageItems') { [System.Collections.Generic.IReadOnlyList[Windows.Storage.IStorageItem]] } else { [string] }
+                    $textTask = $AsTask.MakeGenericMethod($resultType).Invoke($null, @($operation))
+                    if (-not $textTask.Wait(2000)) { throw 'Clipboard content timed out.' }
+                    if ($format -eq 'storageItems') {
+                        $entries = @($textTask.Result | ForEach-Object {
+                            @{ name = [string]$_.Name; path = [string]$_.Path; type = if ($_.IsOfType([Windows.Storage.StorageItemTypes]::File)) { 'File' } elseif ($_.IsOfType([Windows.Storage.StorageItemTypes]::Folder)) { 'Folder' } else { 'Unknown' } }
+                        })
+                        return ,$entries
+                    }
+                    return [string]$textTask.Result
+                }
+                return (Convert-CleanupClipboardItemDetails -Item $Item -FormatNames $formats -ReadTextFormat $readText)
+}
+
+function Get-CleanupClipboardHistory {
+    param([bool]$IncludePreviews = $false)
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable'; items = @() } }
+        $asyncOp = [Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()
+        $resultTy = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]
+        $task = $asTask.MakeGenericMethod($resultTy).Invoke($null, @($asyncOp))
+        if (-not $task.Wait(2000)) { return @{ status = 'unavailable'; items = @() } }
+        $readPreview = $null
+        if ($IncludePreviews) {
+            # The list is metadata only. Content is fetched per item in bounded
+            # chunks, preventing large history entries from exceeding IPC limits.
+            $readPreview = {
+                param($item)
+                $metadata = @{ type = 'item'; id = [string]$item.Id; timestamp = [string]$item.Timestamp; detailAvailable = $true }
+                try { $metadata.formats = @($item.Content.AvailableFormats | ForEach-Object { [string]$_ }) }
+                catch { $metadata.formats = @(); $metadata.metadataStatus = 'Clipboard formats could not be read.' }
+                $metadata
+            }
+        }
+        return (Convert-CleanupClipboardHistoryResult -Result $task.Result -ReadPreview $readPreview)
+    } catch {
+        return @{ status = 'unavailable'; items = @() }
+    }
+}
+
+# Encode one item's complete detail as UTF-8 JSON and return only a bounded
+# slice. The hash binds continuation requests to the same complete value.
+function Convert-CleanupClipboardCanonicalValue {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($Value.Keys | Sort-Object -CaseSensitive)) { $ordered[[string]$key] = Convert-CleanupClipboardCanonicalValue $Value[$key] }
+        return $ordered
+    }
+    if ($Value -is [array]) {
+        $items = @($Value | ForEach-Object { Convert-CleanupClipboardCanonicalValue $_ })
+        return ,$items
+    }
+    return $Value
+}
+
+function Convert-CleanupClipboardDetailChunk {
+    param($Detail, [long]$Offset = 0, [string]$ExpectedHash = '')
+    $chunkSize = 262144
+    if ($null -eq $Detail -or $Offset -lt 0 -or ($Offset % $chunkSize) -ne 0 -or ($Offset -gt 0 -and $ExpectedHash -notmatch '^[0-9a-f]{64}$') -or ($ExpectedHash -and $ExpectedHash -notmatch '^[0-9a-f]{64}$')) { return @{ status = 'unavailable' } }
+    try {
+        $canonical = Convert-CleanupClipboardCanonicalValue $Detail
+        $json = ConvertTo-Json -InputObject $canonical -Depth 32 -Compress -ErrorAction Stop
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        if ($bytes.LongLength -gt 67108864) { return @{ status = 'too-large' } }
+        if ($Offset -ge $bytes.LongLength) { return @{ status = 'unavailable' } }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+        if ($ExpectedHash -and $hash -ne $ExpectedHash) { return @{ status = 'changed' } }
+        $length = [int][Math]::Min($chunkSize, $bytes.LongLength - $Offset)
+        $slice = New-Object byte[] $length
+        [Array]::Copy($bytes, $Offset, $slice, 0, $length)
+        $next = $Offset + $length
+        return @{ status = 'complete'; detailBase64 = [Convert]::ToBase64String($slice); offset = $Offset; totalBytes = $bytes.LongLength; nextOffset = if ($next -lt $bytes.LongLength) { $next } else { $null }; snapshotHash = $hash }
+    } catch { return @{ status = 'unavailable' } }
+}
+
+function Get-CleanupClipboardDetail {
+    param([string]$ItemId, [long]$Offset = 0, [string]$ExpectedHash = '')
+    if ([string]::IsNullOrWhiteSpace($ItemId) -or $ItemId.Length -gt 256) { return @{ status = 'unavailable' } }
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $resultType = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable' } }
+        $task = $asTask.MakeGenericMethod($resultType).Invoke($null, @([Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()))
+        if (-not $task.Wait(2000) -or [string]$task.Result.Status -ne 'Success') { return @{ status = 'unavailable' } }
+        $matches = @($task.Result.Items | Where-Object { [string]$_.Id -ceq $ItemId })
+        if ($matches.Count -ne 1) { return @{ status = 'unavailable' } }
+        $detail = Get-CleanupClipboardItemDetails -Item $matches[0] -AsTask $asTask
+        return (Convert-CleanupClipboardDetailChunk -Detail $detail -Offset $Offset -ExpectedHash $ExpectedHash)
+    } catch { return @{ status = 'unavailable' } }
+}
+
+# Read one selected image at a time. A bounded response avoids placing every
+# clipboard image in one backend reply; no temporary file is written.
+function Convert-CleanupClipboardImageStream {
+    param([System.IO.Stream]$Stream, [long]$Offset = 0, [string]$ExpectedHash = '', [long]$MaxBytes = 67108864)
+    $chunkSize = 262144
+    if (-not $Stream -or $MaxBytes -lt 1 -or $MaxBytes -gt 67108864 -or $Offset -lt 0 -or ($Offset % $chunkSize) -ne 0 -or ($Offset -gt 0 -and $ExpectedHash -notmatch '^[0-9a-f]{64}$') -or ($ExpectedHash -and $ExpectedHash -notmatch '^[0-9a-f]{64}$')) { return @{ status = 'unavailable' } }
+    $buffer = New-Object byte[] 65536
+    $chunk = [IO.MemoryStream]::new(); $header = [IO.MemoryStream]::new()
+    $hasher = [Security.Cryptography.IncrementalHash]::CreateHash([Security.Cryptography.HashAlgorithmName]::SHA256)
+    $total = [long]0
+    try {
+        while ($true) {
+            $read = $Stream.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) { break }
+            if ($total + $read -gt $MaxBytes) { return @{ status = 'too-large' } }
+            $hasher.AppendData($buffer, 0, $read)
+            if ($header.Length -lt 12) { $header.Write($buffer, 0, [Math]::Min($read, 12 - [int]$header.Length)) }
+            $start = [Math]::Max($Offset, $total); $end = [Math]::Min($Offset + $chunkSize, $total + $read)
+            if ($end -gt $start) { $chunk.Write($buffer, [int]($start - $total), [int]($end - $start)) }
+            $total += $read
+        }
+        if ($Offset -ge $total) { return @{ status = 'unavailable' } }
+        $hash = [BitConverter]::ToString($hasher.GetHashAndReset()).Replace('-', '').ToLowerInvariant()
+        if ($ExpectedHash -and $hash -ne $ExpectedHash) { return @{ status = 'changed' } }
+        $bytes = $header.ToArray()
+        $mime = $null
+        if ($bytes.Length -ge 8 -and [BitConverter]::ToString($bytes, 0, 8) -eq '89-50-4E-47-0D-0A-1A-0A') { $mime = 'image/png' }
+        elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 0xff -and $bytes[1] -eq 0xd8 -and $bytes[2] -eq 0xff) { $mime = 'image/jpeg' }
+        elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0x42 -and $bytes[1] -eq 0x4d) { $mime = 'image/bmp' }
+        elseif ($bytes.Length -ge 6 -and [Text.Encoding]::ASCII.GetString($bytes, 0, 6) -in @('GIF87a','GIF89a')) { $mime = 'image/gif' }
+        elseif ($bytes.Length -ge 12 -and [Text.Encoding]::ASCII.GetString($bytes, 0, 4) -eq 'RIFF' -and [Text.Encoding]::ASCII.GetString($bytes, 8, 4) -eq 'WEBP') { $mime = 'image/webp' }
+        if (-not $mime) { return @{ status = 'unsupported' } }
+        $next = $Offset + $chunk.Length
+        return @{ status = 'complete'; imageMime = $mime; imageBase64 = [Convert]::ToBase64String($chunk.ToArray()); offset = $Offset; totalBytes = $total; nextOffset = if ($next -lt $total) { $next } else { $null }; snapshotHash = $hash }
+    } catch { return @{ status = 'unavailable' } }
+    finally { $chunk.Dispose(); $header.Dispose(); $hasher.Dispose() }
+}
+
+function Get-CleanupClipboardImage {
+    param([string]$ItemId, [long]$Offset = 0, [string]$ExpectedHash = '')
+    if ([string]::IsNullOrWhiteSpace($ItemId) -or $ItemId.Length -gt 256) { return @{ status = 'unavailable' } }
+    $stream = $null; $randomStream = $null
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
+        $referenceType = [Windows.Storage.Streams.RandomAccessStreamReference, Windows.Storage.Streams, ContentType=WindowsRuntime]
+        $streamType = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType=WindowsRuntime]
+        $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
+        } | Select-Object -First 1
+        if (-not $asTask) { return @{ status = 'unavailable' } }
+        $historyTask = $asTask.MakeGenericMethod([Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]).Invoke($null, @([Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()))
+        if (-not $historyTask.Wait(2000) -or [string]$historyTask.Result.Status -ne 'Success') { return @{ status = 'unavailable' } }
+        $matches = @($historyTask.Result.Items | Where-Object { [string]$_.Id -ceq $ItemId })
+        if ($matches.Count -ne 1 -or -not $matches[0].Content.Contains([Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Bitmap)) { return @{ status = 'unavailable' } }
+        $bitmapTask = $asTask.MakeGenericMethod($referenceType).Invoke($null, @($matches[0].Content.GetBitmapAsync()))
+        if (-not $bitmapTask.Wait(2000) -or -not $bitmapTask.Result) { return @{ status = 'unavailable' } }
+        $openTask = $asTask.MakeGenericMethod($streamType).Invoke($null, @($bitmapTask.Result.OpenReadAsync()))
+        if (-not $openTask.Wait(2000) -or -not $openTask.Result) { return @{ status = 'unavailable' } }
+        $randomStream = $openTask.Result
+        if ($randomStream.Size -gt 67108864) { return @{ status = 'too-large' } }
+        $stream = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($randomStream)
+        return (Convert-CleanupClipboardImageStream -Stream $stream -Offset $Offset -ExpectedHash $ExpectedHash)
+    } catch { return @{ status = 'unavailable' } }
+    finally {
+        if ($stream) { try { $stream.Dispose() } catch { } }
+        if ($randomStream) { try { $randomStream.Dispose() } catch { } }
+    }
+}
+
 function Get-ClipboardHistoryStatus {
+    param([bool]$IncludePreviews = $false, [string]$ImageItemId = '', [long]$ImageOffset = 0, [string]$ImageSnapshot = '', [string]$DetailItemId = '', [long]$DetailOffset = 0, [string]$DetailSnapshot = '')
+    if ($PSBoundParameters.ContainsKey('ImageItemId')) { return (Get-CleanupClipboardImage -ItemId $ImageItemId -Offset $ImageOffset -ExpectedHash $ImageSnapshot) }
+    if ($PSBoundParameters.ContainsKey('DetailItemId')) { return (Get-CleanupClipboardDetail -ItemId $DetailItemId -Offset $DetailOffset -ExpectedHash $DetailSnapshot) }
     try {
         $cb    = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Clipboard" -EA SilentlyContinue
         # Also detect if an external policy (GPO/MDM we didn't set) is blocking things.
@@ -36,52 +272,18 @@ function Get-ClipboardHistoryStatus {
         $histDisabled  = ($cb.EnableClipboardHistory -eq 0 -or $polH.AllowClipboardHistory    -eq 0)
         $cloudDisabled = ($cb.EnableCloudClipboard   -eq 0 -or $polC.AllowCrossDeviceClipboard -eq 0)
 
-        # Enumerate actual clipboard history items via WinRT (Windows 10 1809+).
-        # Falls back to an empty array gracefully if the API is unavailable.
-        $historyItems = @()
-        if (-not $histDisabled) {
-            try {
-                Add-Type -AssemblyName System.Runtime.WindowsRuntime -EA SilentlyContinue
-                $null = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-                $null = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-                $null = [Windows.ApplicationModel.DataTransfer.StandardDataFormats, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime]
-
-                $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-                    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.IsGenericType
-                } | Select-Object -First 1
-
-                if ($asTask) {
-                    $asyncOp   = [Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync()
-                    $resultTy  = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult]
-                    $task      = $asTask.MakeGenericMethod($resultTy).Invoke($null, @($asyncOp))
-
-                    if ($task.Wait(2000) -and $task.Result -and $task.Result.Items) {
-                        $sdfText = [Windows.ApplicationModel.DataTransfer.StandardDataFormats]::Text
-                        foreach ($item in $task.Result.Items) {
-                            try {
-                                $dpv = $item.Content
-                                if ($dpv.Contains($sdfText)) {
-                                    $textTask = $asTask.MakeGenericMethod([string]).Invoke($null, @($dpv.GetTextAsync()))
-                                    if ($textTask.Wait(500)) {
-                                        $raw     = $textTask.Result
-                                        $preview = ($raw -replace '[\r\n\t]+', ' ').Trim()
-                                        if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + '…' }
-                                        $historyItems += @{ type = 'text'; preview = $preview; charCount = $raw.Length }
-                                    }
-                                } else {
-                                    $historyItems += @{ type = 'other'; preview = '[Image or other content]'; charCount = 0 }
-                                }
-                            } catch {}
-                        }
-                    }
-                }
-            } catch {}
-        }
+        # A disabled setting alone does not establish whether stored history is
+        # empty. Only a successful inventory can establish the record count.
+        $history = Get-CleanupClipboardHistory -IncludePreviews $IncludePreviews
+        if ($history.status -eq 'disabled') { $histDisabled = $true }
 
         @{
             clipboardHistoryDisabled = $histDisabled
             cloudClipboardDisabled   = $cloudDisabled
-            historyItems             = $historyItems
+            historyItems             = @($history.items)
+            historyReadStatus        = $history.status
+            partial                  = ($history.status -ne 'complete')
+            message                  = if ($history.status -eq 'disabled') { 'Clipboard history is disabled and stored history could not be read.' } elseif ($history.status -ne 'complete') { 'Clipboard history could not be read.' } else { '' }
         }
     }
     catch {
@@ -179,17 +381,16 @@ function Get-PSHistory {
         catch [System.Management.Automation.ItemNotFoundException] { }
         $commands = @()
         if ($null -ne $historyFile) {
-            $commands = @(Get-Content -LiteralPath $historyPath -ErrorAction Stop | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+            $commands = @(Get-Content -LiteralPath $historyPath -ErrorAction Stop | Where-Object { $_ -is [string] -and $_.Trim() -ne '' })
         }
-        $entries = @()
-        $first = [math]::Max(0, $commands.Count - 300)
-        for ($index = $commands.Count - 1; $index -ge $first; $index--) {
-            $entries += @{ id = $index; command = $commands[$index] }
+        $entries = [Collections.Generic.List[object]]::new()
+        for ($index = $commands.Count - 1; $index -ge 0; $index--) {
+            $entries.Add(@{ id = $index; command = $commands[$index] })
         }
         @{
-            entries = $entries; total = $commands.Count; fileTotal = $commands.Count
-            sampleCount = $entries.Count; previewLimit = 300; countUnit = 'command lines'
-            coverage = 'Total non-empty command lines. Details show up to 300 newest lines; multi-line commands can span several lines.'
+            entries = @($entries.ToArray()); total = $commands.Count; fileTotal = $commands.Count
+            sampleCount = $entries.Count; previewLimit = $entries.Count; truncated = $false; countUnit = 'command lines'
+            coverage = 'Total non-empty command lines; multi-line commands can span several lines.'
         }
     }
     catch {
@@ -258,8 +459,9 @@ function Get-SRUMData {
 }
 
 function Get-ConnectivityHistory {
+    $entries = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $entries = @()
         $roots = @(
             @{
                 source = 'Network Profiles'
@@ -279,17 +481,22 @@ function Get-ConnectivityHistory {
         )
 
         foreach ($root in $roots) {
-            if (!(Test-Path $root.path)) { continue }
-
-            Get-ChildItem -Path $root.path -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+            try { $rootItem = Get-Item -LiteralPath $root.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            Get-ChildItem -LiteralPath $root.path -ErrorAction Stop | ForEach-Object {
                 try {
-                    $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                    $props = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction Stop
                     $name = $props.ProfileName
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $props.Description }
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $props.DnsSuffix }
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.PSChildName }
 
-                    $entries += @{
+                    $values = @{}
+                    foreach ($property in $props.PSObject.Properties) {
+                        if ($property.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { $values[$property.Name] = $property.Value }
+                    }
+                    $entries.Add(@{
                         source      = $root.source
                         type        = $root.type
                         name        = $name
@@ -297,14 +504,20 @@ function Get-ConnectivityHistory {
                         description = $props.Description
                         dnsSuffix   = $props.DnsSuffix
                         category    = $props.Category
-                    }
-                } catch {}
+                        registryPath = $_.PSPath
+                        registryValues = $values
+                    })
+                } catch { $partial = $true }
             }
+            } catch { $partial = $true }
         }
 
         @{
-            entries = $entries
+            entries = @($entries.ToArray())
             total   = $entries.Count
+            partial = $partial
+            status = if ($partial) { 'partial' } else { 'complete' }
+            message = if ($partial) { 'Some network history locations could not be checked.' } else { $null }
         }
     }
     catch {
@@ -354,11 +567,12 @@ function Get-USBDeviceHistory {
 
 
 function Get-DnsCacheEntries {
+    param([switch]$FleetFiltered)
     try {
         $entries = @()
         $blocklistDomains = @{}
         $hostsPath = 'C:\Windows\System32\drivers\etc\hosts'
-        if (Test-Path $hostsPath) {
+        if ($FleetFiltered -and (Test-Path $hostsPath)) {
             $inVaultSection = $false
             Get-Content $hostsPath -ErrorAction SilentlyContinue | ForEach-Object {
                 $line = $_.Trim()
@@ -404,15 +618,15 @@ function Get-DnsCacheEntries {
             9701 = 'Bad Packet'; 9702 = 'No Packet';
         }
 
-        $cache = Get-DnsClientCache -ErrorAction SilentlyContinue
+        $cache = Get-DnsClientCache -ErrorAction Stop
         foreach ($c in $cache) {
             $name = ([string]$c.Entry).Trim()
-            if (& $isBlockedDomain $name) { continue }
+            if ($FleetFiltered -and (& $isBlockedDomain $name)) { continue }
 
-            # Exclude reverse lookups and localhost/null artifacts
-            if ($name.EndsWith(".in-addr.arpa", [System.StringComparison]::InvariantCultureIgnoreCase) -or
+            # Retain the historic Fleet scope; local cleanup displays every DNS record.
+            if ($FleetFiltered -and ($name.EndsWith(".in-addr.arpa", [System.StringComparison]::InvariantCultureIgnoreCase) -or
                 $name -eq "0.0.0.0" -or
-                $name -eq ".") { continue }
+                $name -eq ".")) { continue }
 
             $rtNum = $null
             try { $rtNum = [int]$c.RecordType } catch {}
@@ -664,7 +878,7 @@ function Get-FleetForensicProjection {
     try {
         switch ($Category) {
             'dns_cache' {
-                $result = Get-DnsCacheEntries
+                $result = Get-DnsCacheEntries -FleetFiltered
                 if ($result.error) { return (& $empty 'System Cleanup could not read the DNS cache.') }
 
                 $sourceRows = @($result.entries)
@@ -999,7 +1213,7 @@ function Get-FleetForensicProjection {
 
             'connectivity_history' {
                 $result = Get-ConnectivityHistory
-                if ($result.error) { return (& $empty 'System Cleanup could not read connectivity-history summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete connectivity-history summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
                     @{ source = (& $sanitizeText $_.source 64); type = (& $sanitizeText $_.type 32); category = (& $sanitizeText $_.category 32); network = (& $sanitizeText $_.name 256); key = (& $sanitizeText $_.key 256); description = (& $sanitizeText $_.description 256); dnsSuffix = (& $sanitizeText $_.dnsSuffix 256) }
@@ -1058,8 +1272,8 @@ function Get-FleetForensicProjection {
             }
 
             'amcache' {
-                $result = Get-AmcacheEntries
-                if ($result.error) { return (& $empty 'System Cleanup could not read Amcache summaries.') }
+                $result = Get-AmcacheEntries -FleetProjection
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
                 $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
@@ -1111,7 +1325,7 @@ function Get-FleetForensicProjection {
 
             'crash_dumps' {
                 $result = Get-CrashDumpList
-                if ($result.error) { return (& $empty 'System Cleanup could not read crash-dump summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read crash-dump summaries.') }
                 $sourceRows = @($result.dumps)
                 $records = & $metadataRows $sourceRows 'Crash dump'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -1194,7 +1408,7 @@ function Get-FleetForensicProjection {
 
             'peer_distribution_cache' {
                 $result = Get-BranchCacheInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read peer-distribution summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read peer-distribution summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Peer distribution cache'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -1203,7 +1417,7 @@ function Get-FleetForensicProjection {
 
             'diagnostics_timeline' {
                 $result = Get-EventTranscriptInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read diagnostics-timeline summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read diagnostics-timeline summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Diagnostics timeline'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -1257,7 +1471,7 @@ function Get-FleetForensicProjection {
 
             'protection_history' {
                 $result = Get-DefenderHistoryInfo
-                if ($result.error) { return (& $empty 'System Cleanup could not read protection-history summaries.') }
+                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete protection-history summaries.') }
                 $sourceRows = @($result.files)
                 $records = & $metadataRows $sourceRows 'Protection history'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
@@ -1272,14 +1486,14 @@ function Get-FleetForensicProjection {
             'network_wizard_history' { $result = Get-NetworkWizardHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read network-wizard summaries.') }; return (& $metadataProjection 'network_wizard_history' 'Network wizard history' $result 'Network wizard metadata') }
             'wer_history' { $result = Get-WERHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read WER-history summaries.') }; return (& $metadataProjection 'wer_history' 'Windows Error Reporting history' $result 'WER metadata') }
             'inactive_user_protection_metadata' { $result = Get-InactiveUserProtectionMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read inactive-user protection summaries.') }; return (& $metadataProjection 'inactive_user_protection_metadata' 'Inactive-user protection metadata' $result 'Protection metadata') }
-            'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
-            'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
-            'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
-            'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
-            'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
-            'game_captures' { $result = Get-GameCapturesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
-            'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
-            'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
+            'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
+            'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
+            'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
+            'font_cache' { $result = Get-FontCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
+            'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
+            'game_captures' { $result = Get-GameCapturesInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
+            'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
+            'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
             'communication_caches' { $result = Get-CommunicationCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read communication-cache summaries.') }; return (& $metadataProjection 'communication_caches' 'Communication caches' $result 'Communication cache') }
             'editor_history' { $result = Get-EditorHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read editor-history summaries.') }; return (& $metadataProjection 'editor_history' 'Editor history' $result 'Editor history metadata') }
             'git_activity' { $result = Get-GitActivityInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Git-activity summaries.') }; return (& $metadataProjection 'git_activity' 'Git activity' $result 'Git activity metadata') }
@@ -1287,22 +1501,22 @@ function Get-FleetForensicProjection {
             'remote_access_logs' { $result = Get-RemoteAccessLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read remote-access summaries.') }; return (& $metadataProjection 'remote_access_logs' 'Remote access logs' $result 'Remote access metadata') }
             'password_manager_caches' { $result = Get-PasswordManagerCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read password-manager summaries.') }; return (& $metadataProjection 'password_manager_caches' 'Password-manager caches' $result 'Password-manager metadata') }
             'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-launcher summaries.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
-            'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
+            'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
             'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
-            'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
-            'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
+            'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
+            'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
             'netbios_cache' { $result = Get-NetBIOSCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read NetBIOS-cache summaries.') }; return (& $metadataProjection 'netbios_cache' 'NetBIOS cache' $result 'NetBIOS cache metadata') }
             'geolocation_cache' { $result = Get-GeolocationCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read geolocation-cache summaries.') }; return (& $metadataProjection 'geolocation_cache' 'Geolocation cache' $result 'Geolocation metadata') }
             'vpn_phonebooks' { $result = Get-VPNPhonebooksInfo; if ($result.error) { return (& $empty 'System Cleanup could not read VPN-phonebook summaries.') }; return (& $metadataProjection 'vpn_phonebooks' 'VPN phonebooks' $result 'VPN metadata') }
             'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
-            'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error) { return (& $empty 'System Cleanup could not read BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
-            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
-            'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
+            'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
+            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
+            'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
-            'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
-            'reliability_history' { $result = Get-ReliabilityHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read reliability-history summaries.') }; return (& $metadataProjection 'reliability_history' 'Reliability history' $result 'Reliability metadata') }
+            'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
+            'reliability_history' { $result = Get-ReliabilityHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete reliability-history summaries.') }; return (& $metadataProjection 'reliability_history' 'Reliability history' $result 'Reliability metadata') }
             'explorer_search_history' { $result = Get-ExplorerSearchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Explorer-search-history summaries.') }; return (& $metadataProjection 'explorer_search_history' 'Explorer search metadata' $result 'Explorer search metadata') }
             'search_personalization' { $result = Get-SearchPersonalizationInfo; if ($result.error) { return (& $empty 'System Cleanup could not read search-personalisation summaries.') }; return (& $metadataProjection 'search_personalization' 'Search personalisation' $result 'Search personalisation metadata') }
 
@@ -1323,53 +1537,101 @@ function Get-FleetForensicProjection {
     }
 }
 
-function Get-ProcessIntelligence {
+function Get-CleanupProcessElevation {
+    param([int]$ProcessId)
     try {
-        $entries = @()
-        $procs = Get-Process -ErrorAction Stop | Where-Object { $_.Id -gt 0 }
+        if (-not ('WcCleanup.ProcessElevation' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace WcCleanup {
+    public static class ProcessElevation {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool GetTokenInformation(IntPtr token, int infoClass, out int elevation, int length, out int returnedLength);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+        public static int Read(int processId) {
+            IntPtr process = OpenProcess(0x1000, false, processId); // PROCESS_QUERY_LIMITED_INFORMATION
+            if (process == IntPtr.Zero) return -1;
+            IntPtr token = IntPtr.Zero;
+            try {
+                if (!OpenProcessToken(process, 0x0008, out token)) return -1; // TOKEN_QUERY
+                int elevation, returned;
+                if (!GetTokenInformation(token, 20, out elevation, sizeof(int), out returned) || returned < sizeof(int)) return -1;
+                return elevation == 0 ? 0 : 1; // TokenElevation
+            } finally {
+                if (token != IntPtr.Zero) CloseHandle(token);
+                CloseHandle(process);
+            }
+        }
+    }
+}
+'@ -ErrorAction Stop
+        }
+        $elevation = [WcCleanup.ProcessElevation]::Read($ProcessId)
+        if ($elevation -eq 1) { return 'Yes' }
+        if ($elevation -eq 0) { return 'No' }
+    } catch { }
+    return 'Unknown'
+}
+
+function Get-ProcessIntelligence {
+    $entries = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    try {
+        $procs = @(Get-Process -ErrorAction Stop)
         foreach ($p in $procs) {
+            try {
+            $processId = $p.Id
+            if ($processId -le 0) { $partial = $true; continue }
+            $processName = $p.ProcessName
+            if ([string]::IsNullOrWhiteSpace([string]$processName)) { $partial = $true; continue }
             $path = $null
             $sigStatus = "UnknownError"
             $signer = $null
             try {
                 $path = $p.MainModule.FileName
             }
-            catch {}
+            catch { $partial = $true }
+            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true }
             if ($path -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)) {
                 try {
-                    $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue
+                    $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
                     if ($sig) {
                         $sigStatus = $sig.Status.ToString()
                         if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate) {
                             $signer = $sig.SignerCertificate.Subject
                         }
+                        if ($sigStatus -in @('UnknownError', 'NotSupportedFileFormat', 'Incompatible') -or
+                            ($sigStatus -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$signer))) { $partial = $true }
+                    } else {
+                        $partial = $true
                     }
                 }
                 catch {
                     $sigStatus = "UnknownError"
+                    $partial = $true
                 }
-            }
-            $elevated = "No"
-            try {
-                # Get-WmiObject is gone in PowerShell 7+; Get-CimInstance + Invoke-CimMethod
-                # is the modern path. Silently fallback if neither cooperates.
-                $cimProc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
-                if ($cimProc) {
-                    $owner = Invoke-CimMethod -InputObject $cimProc -MethodName GetOwner -ErrorAction SilentlyContinue
-                    if ($owner -and $owner.User -eq 'SYSTEM') { $elevated = 'Yes' }
-                }
-            }
-            catch {}
-            $entries += @{
-                name     = $p.ProcessName
-                pid      = $p.Id
-                path     = if ($path) { $path } else { "" }
+            } elseif ($path) { $partial = $true }
+            try { $elevated = Get-CleanupProcessElevation -ProcessId $processId }
+            catch { $elevated = 'Unknown'; $partial = $true }
+            if ($elevated -notin @('Yes', 'No')) { $partial = $true }
+            $entries.Add(@{
+                name     = $processName
+                pid      = $processId
+                path     = if ($path) { $path } else { $null }
+                pathStatus = if ($path) { 'available' } else { 'unavailable' }
                 signed   = $sigStatus
                 signer   = $signer
                 elevated = $elevated
-            }
+            })
+            } catch { $partial = $true }
         }
-        @{ processes = $entries }
+        @{ processes = @($entries.ToArray()); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some processes could not be inspected.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to get process intelligence: $($_.Exception.Message)"; processes = @() }
@@ -1377,9 +1639,10 @@ function Get-ProcessIntelligence {
 }
 
 function Get-ExecutionCache {
+    $entries = @()
+    $seen = @{}
+    $partial = $false
     try {
-        $entries = @()
-        $seen = @{}
         $storePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store'
         $persistPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Persisted'
         $userAssistRoot = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\UserAssist'
@@ -1399,9 +1662,10 @@ function Get-ExecutionCache {
         }
 
         foreach ($path in @($storePath, $persistPath)) {
-            if (Test-Path $path) {
+            try {
+            if (Test-Path -LiteralPath $path -ErrorAction Stop) {
                 # Add logic to handle different registry structures if needed
-                $props = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue 
+                $props = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
                 if ($props) {
                     $props.PSObject.Properties | ForEach-Object {
                         if ($_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) {
@@ -1410,16 +1674,19 @@ function Get-ExecutionCache {
                     }
                 }
             }
+            } catch { $partial = $true }
         }
 
         # BAM omitted: kernel-protected, cannot be cleared; only clearable sources shown so Clear leaves list empty
         # if (Test-Path $bamRoot) { ... }
 
-        if (Test-Path $userAssistRoot) {
-            Get-ChildItem $userAssistRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path -LiteralPath $userAssistRoot -ErrorAction Stop) {
+            Get-ChildItem -LiteralPath $userAssistRoot -ErrorAction Stop | ForEach-Object {
+                try {
                 $countPath = Join-Path $_.PSPath 'Count'
-                if (Test-Path $countPath) {
-                    $props = Get-ItemProperty -Path $countPath -ErrorAction SilentlyContinue | Select-Object -Property *
+                if (Test-Path -LiteralPath $countPath -ErrorAction Stop) {
+                    $props = Get-ItemProperty -LiteralPath $countPath -ErrorAction Stop | Select-Object -Property *
                     $props.PSObject.Properties | ForEach-Object {
                         if ($_.Name -notmatch '^PS(.*)') {
                             $decoded = ($_.Name.ToCharArray() | ForEach-Object {
@@ -1433,35 +1700,45 @@ function Get-ExecutionCache {
                         }
                     }
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
 
-        if (Test-Path $muiCachePath) {
-            $props = Get-ItemProperty -Path $muiCachePath -ErrorAction SilentlyContinue | Select-Object -Property *
+        try {
+        if (Test-Path -LiteralPath $muiCachePath -ErrorAction Stop) {
+            $props = Get-ItemProperty -LiteralPath $muiCachePath -ErrorAction Stop | Select-Object -Property *
             $props.PSObject.Properties | ForEach-Object {
                 if ($_.Name -notmatch '^PS(.*)' -and $_.Name -ne 'LangID') {
                     . $addEntry $_.Name 'MuiCache'
                 }
             }
         }
+        } catch { $partial = $true }
 
-        if (Test-Path $recentAppsPath) {
-            Get-ChildItem $recentAppsPath -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path -LiteralPath $recentAppsPath -ErrorAction Stop) {
+            Get-ChildItem -LiteralPath $recentAppsPath -ErrorAction Stop | ForEach-Object {
+                try {
                 $appPath = $_.GetValue('AppPath')
                 if ($appPath) { . $addEntry $appPath 'RecentApps' }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         
         # Check ShimCache (AppCompatCache) existence (just counting as one entry if present, or listing size)
         $shimCachePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache'
-        if (Test-Path $shimCachePath) {
-            $shimData = Get-ItemProperty -Path $shimCachePath -Name 'AppCompatCache' -ErrorAction SilentlyContinue
+        try {
+        if (Test-Path -LiteralPath $shimCachePath -ErrorAction Stop) {
+            $shimData = Get-ItemProperty -LiteralPath $shimCachePath -ErrorAction Stop
             if ($shimData -and $shimData.AppCompatCache) {
                 . $addEntry "ShimCache (Binary Blob - $($shimData.AppCompatCache.Length) bytes)" "ShimCache"
             }
         }
+        } catch { $partial = $true }
 
-        @{ entries = $entries }
+        @{ entries = $entries; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some execution history sources could not be checked.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to read execution cache: $($_.Exception.Message)" }
@@ -1828,34 +2105,33 @@ function Get-ShellBags {
 
 function Get-WlanProfiles {
     param(
-        # The local System Cleanup viewer can request its existing key detail,
-        # but the authenticated Fleet projection must never collect credentials.
-        [bool]$IncludeSecrets = $true
+        # Only the local viewer explicitly requests credentials. Fleet and
+        # normal scans pass false and must never collect them.
+        [bool]$IncludeSecrets = $false
     )
     try {
-        $profiles = @()
-        $netshOutput = netsh wlan show profiles
-        $profileNames = $netshOutput | Select-String "All User Profile" | ForEach-Object { ($_.ToString().Split(':'))[1].Trim() }
-        
-        foreach ($name in $profileNames) {
-            $password = $null
+        $snapshot = Get-WCWlanSnapshot
+        Assert-WCWlanSnapshot $snapshot
+        $allProfiles = @($snapshot.Profiles | ForEach-Object {
+            $flags = [int64]$_.Flags
+            $profile = @{ name = [string]$_.Name; interfaceId = [string]$_.InterfaceId; flags = $flags; profileType = if ($flags -eq 0) { 'All users' } elseif ($flags -band 1) { 'Group policy' } elseif ($flags -band 2) { 'Current user' } else { 'Other' } }
             if ($IncludeSecrets) {
-                $passOutput = netsh wlan show profile name="$name" key=clear
-                $passLine = $passOutput | Select-String "Key Content"
-                if ($passLine) {
-                    $password = ($passLine.ToString().Split(':'))[1].Trim()
-                }
+                $profile.password = $null
+                $profile.passwordStatus = 'unavailable'
+                try {
+                    $key = Get-WCWlanKey -InterfaceId $profile.interfaceId -Name $profile.name
+                    if ($null -ne $key -and $key -ne '') { $profile.password = [string]$key; $profile.passwordStatus = 'available' }
+                } catch { }
             }
-            
-            $profiles += @{
-                name     = $name
-                password = $password
-            }
-        }
-        @{ profiles = $profiles }
+            $profile
+        })
+        $profiles = @($allProfiles | Where-Object { $_.flags -eq 0 })
+        $additionalProfiles = @($allProfiles | Where-Object { $_.flags -ne 0 })
+        @{ profiles = $profiles; additionalProfiles = $additionalProfiles; total = $profiles.Count; adapterCount = [int]$snapshot.InterfaceCount;
+           coverage = 'limited'; coverageNote = 'The cleanup count includes all-user profiles on available Wi-Fi adapters. Current-user and policy profiles are displayed separately and are not removed by this cleanup.' }
     }
     catch {
-        @{ error = $true; message = "Failed to get WLAN profiles: $($_.Exception.Message)" }
+        @{ error = $true; message = 'Wi-Fi profiles could not be inspected. Check the WLAN service and adapter.' }
     }
 }
 
@@ -2225,7 +2501,56 @@ function Get-JumpLists {
     }
 }
 
-function Get-BrowserFootprints {
+function Get-CleanupChromiumProfiles {
+    param($Browser)
+    $root = [string]$Browser.UserDataDir
+    $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+    if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser profile root is a reparse point.' }
+    if ($Browser.Name -in @('Opera', 'Opera GX')) { return @($root) }
+    @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction Stop | Where-Object {
+        $_.Name -eq 'Default' -or $_.Name -match '^Profile [0-9]+$'
+    } | ForEach-Object {
+        if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A browser profile is a reparse point.' }
+        $_.FullName
+    })
+}
+
+function Get-CleanupSummaryBrowserInventory {
+    param([Parameter(Mandatory)][string]$ProfilePath)
+    if (-not $script:BrowserMap) { throw 'Browser inventory is unavailable.' }
+    $targetLocal = Join-Path $ProfilePath 'AppData\Local'
+    $targetRoaming = Join-Path $ProfilePath 'AppData\Roaming'
+    $roots = @(
+        @{ source = $env:LOCALAPPDATA; target = $targetLocal },
+        @{ source = $env:APPDATA; target = $targetRoaming },
+        @{ source = $env:USERPROFILE; target = $ProfilePath }
+    ) | Where-Object { $_.source } | Sort-Object { $_.source.Length } -Descending
+    $mapPath = {
+        param([string]$Path)
+        foreach ($root in $roots) {
+            $prefix = ([string]$root.source).TrimEnd('\')
+            if ($Path -ieq $prefix) { return [string]$root.target }
+            if ($Path.StartsWith($prefix + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                return (Join-Path $root.target $Path.Substring($prefix.Length + 1))
+            }
+        }
+        return $Path
+    }
+    foreach ($browser in $script:BrowserMap) {
+        $dataDir = & $mapPath ([string]$browser.UserDataDir)
+        if (-not $dataDir) { continue }
+        foreach ($exe in @($browser.ExePaths)) {
+            $path = & $mapPath ([string]$exe)
+            if ($path -and (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)) {
+                @{ Name = $browser.Name; Engine = $browser.Engine; UserDataDir = $dataDir }
+                break
+            }
+        }
+    }
+}
+
+function Get-CleanupBrowserFootprints {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Browsers)
     # Uses Get-InstalledBrowsers from the security module (loaded as additional dependency)
     try {
         $chromiumArtifacts = @('History','Cookies','Login Data','Top Sites','Favicons','Web Data','Visited Links','Shortcuts','Cache','Code Cache','IndexedDB','Local Storage','Session Storage','Network','Download Metadata')
@@ -2236,35 +2561,37 @@ function Get-BrowserFootprints {
             $sz = 0
             try {
                 if ((Get-Item $p -Force -ErrorAction Stop).PSIsContainer) {
-                    $sz = (Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
+                    $sz = (Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction Stop | Measure-Object -Property Length -Sum -ErrorAction Stop).Sum
                 } else {
                     $sz = (Get-Item $p -Force -ErrorAction Stop).Length
                 }
-            } catch {}
+            } catch { return $null }
             if (-not $sz) { $sz = 0 }
             return $sz
         }
 
-        $installed = Get-InstalledBrowsers
+        $installed = @($Browsers)
         $browsers  = @()
+        $partial = $false
 
         foreach ($b in $installed) {
             $udd = $b.UserDataDir
-            if (-not $udd -or -not (Test-Path $udd)) { continue }
-
             $artifacts  = @()
             $totalBytes = 0
 
+            # A single inaccessible profile must not discard browser records
+            # already collected from this or an earlier browser.
+            try {
+            if (-not $udd -or -not (Test-Path -LiteralPath $udd -ErrorAction Stop)) { continue }
             if ($b.Engine -eq 'Chromium') {
-                # Chromium: profile is UserDataDir\Default
-                $profileDir = Join-Path $udd 'Default'
-                if (-not (Test-Path $profileDir)) { continue }
-                foreach ($art in $chromiumArtifacts) {
-                    $p = Join-Path $profileDir $art
-                    if (Test-Path $p) {
-                        $sz = & $helper_measurePath $p
-                        $totalBytes += $sz
-                        $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1) }
+                foreach ($profileDir in @(Get-CleanupChromiumProfiles $b)) {
+                    foreach ($art in $chromiumArtifacts) {
+                        $p = Join-Path $profileDir $art
+                        if (Test-Path $p) {
+                            $sz = & $helper_measurePath $p
+                            if ($null -eq $sz) { $partial = $true; $sizeKB = $null } else { $totalBytes += $sz; $sizeKB = [math]::Round($sz / 1KB, 1) }
+                            $artifacts += @{ name = $art; sizeKB = $sizeKB; profilePath = $profileDir }
+                        }
                     }
                 }
             } else {
@@ -2273,7 +2600,8 @@ function Get-BrowserFootprints {
                 $profileDirs = @()
                 $profilesIni = Join-Path $udd 'profiles.ini'
                 if (Test-Path $profilesIni) {
-                    $ini = Get-Content $profilesIni -ErrorAction SilentlyContinue
+                    try { $ini = Get-Content -LiteralPath $profilesIni -ErrorAction Stop }
+                    catch { $partial = $true; $ini = @() }
                     $currentPath = $null
                     $isRelative  = $true
                     foreach ($line in $ini) {
@@ -2296,7 +2624,7 @@ function Get-BrowserFootprints {
                 if ($profileDirs.Count -eq 0) {
                     $pfDir = Join-Path $udd 'Profiles'
                     if (Test-Path $pfDir) {
-                        $profileDirs = Get-ChildItem $pfDir -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+                        $profileDirs = @(Get-ChildItem -LiteralPath $pfDir -Directory -ErrorAction Stop | Select-Object -ExpandProperty FullName)
                     }
                 }
                 if ($profileDirs.Count -eq 0) { continue }
@@ -2306,17 +2634,13 @@ function Get-BrowserFootprints {
                         $p = Join-Path $profDir $art
                         if (Test-Path $p) {
                             $sz = & $helper_measurePath $p
-                            $totalBytes += $sz
-                            $existing = $artifacts | Where-Object { $_.name -eq $art }
-                            if ($existing) {
-                                $existing.sizeKB += [math]::Round($sz / 1KB, 1)
-                            } else {
-                                $artifacts += @{ name = $art; sizeKB = [math]::Round($sz / 1KB, 1) }
-                            }
+                            if ($null -eq $sz) { $partial = $true; $sizeKB = $null } else { $totalBytes += $sz; $sizeKB = [math]::Round($sz / 1KB, 1) }
+                            $artifacts += @{ name = $art; sizeKB = $sizeKB; profilePath = $profDir }
                         }
                     }
                 }
             }
+            } catch { $partial = $true }
 
             if ($artifacts.Count -gt 0) {
                 $browsers += @{
@@ -2328,11 +2652,15 @@ function Get-BrowserFootprints {
             }
         }
 
-        @{ browsers = $browsers; totalBrowsers = $browsers.Count }
+        @{ browsers = $browsers; totalBrowsers = $browsers.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some browser profiles or data sizes could not be checked.' } else { $null } }
     }
     catch {
         @{ error = $true; message = "Failed to get browser footprints: $($_.Exception.Message)" }
     }
+}
+
+function Get-BrowserFootprints {
+    Get-CleanupBrowserFootprints -Browsers @(Get-InstalledBrowsers)
 }
 
 function Clear-BrowserFootprints {
@@ -2408,17 +2736,17 @@ function Clear-BrowserFootprints {
             if (-not $udd -or -not (Test-Path $udd)) { continue }
 
             if ($b.Engine -eq 'Chromium') {
-                $profileDir = Join-Path $udd 'Default'
-                if (-not (Test-Path $profileDir)) { continue }
-                foreach ($art in $chromiumArtifacts) {
-                    $p = Join-Path $profileDir $art
-                    if (-not (Test-Path $p)) { continue }
-                    try {
-                        Remove-ItemSecure -Path $p
-                        $removed += "$($b.Name):$art"
-                    }
-                    catch {
-                        $errors += "$($b.Name):$art"
+                foreach ($profileDir in @(Get-CleanupChromiumProfiles $b)) {
+                    foreach ($art in $chromiumArtifacts) {
+                        $p = Join-Path $profileDir $art
+                        if (-not (Test-Path $p)) { continue }
+                        try {
+                            Remove-ItemSecure -Path $p
+                            $removed += "$($b.Name):$art"
+                        }
+                        catch {
+                            $errors += "$($b.Name):$art"
+                        }
                     }
                 }
             }
@@ -2627,6 +2955,7 @@ function Get-VirtualMemoryStatus {
 # ============================================================================
 
 function Get-AmcacheEntries {
+    param([switch]$FleetProjection)
     # Returns Amcache hive file info + live registry entry counts per category
     try {
         $entries = @()
@@ -2640,6 +2969,12 @@ function Get-AmcacheEntries {
             $hveSize = 0
             $hveExists = $false
         }
+
+        # An existing hive file is not itself a live registry inventory. If
+        # the expected mount is absent, category zeros do not prove it empty.
+        $mountAvailable = $true
+        try { $null = Get-Item -Path 'HKLM:\AppCompatCache\Amcache' -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $mountAvailable = $false }
 
         # Categories accessible as live registry (mounted hive)
         $cats = @(
@@ -2656,23 +2991,38 @@ function Get-AmcacheEntries {
                 $null = Get-Item -Path $cat.path -ErrorAction Stop
                 $children = @(Get-ChildItem -Path $cat.path -ErrorAction Stop)
                 $count = ($children | Measure-Object).Count
-                $sample = $children | Select-Object -First 3 | ForEach-Object {
+                $sample = $children | ForEach-Object {
                     $child = $_
                     $props = Get-ItemProperty $child.PSPath -ErrorAction Stop
                     $name = @($props.Name, $props.ProductName, $props.BinFileVersion) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
                     $path = @($props.LowerCaseLongPath, $props.LongPathHash) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
-                    @{
-                        id   = $child.PSChildName
-                        name = if ($name) { $name } else { '' }
-                        path = if ($path) { $path } else { '' }
+                    $entry = @{ id = $child.PSChildName; name = if ($name) { $name } else { '' }; path = if ($path) { $path } else { '' } }
+                    foreach ($pair in @(@('productName','ProductName'), @('binaryVersion','BinFileVersion'), @('longPath','LowerCaseLongPath'), @('longPathHash','LongPathHash'))) {
+                        $value = $props.($pair[1])
+                        if ($value -is [string] -and $value.Trim()) { $entry[$pair[0]] = $value }
                     }
+                    # Keep every registry value the scan obtained, including
+                    # fields that differ between Windows versions.
+                    if (-not $FleetProjection) {
+                        $registryValues = @{}
+                        foreach ($property in $props.PSObject.Properties) {
+                            if ($property.Name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) { $registryValues[$property.Name] = $property.Value }
+                        }
+                        if ($registryValues.Count) { $entry.registryValues = $registryValues }
+                    }
+                    $entry
                 }
             } catch [System.Management.Automation.ItemNotFoundException] {
                 # This registry category is absent on this Windows build.
             }
             $entries += @{ category = $cat.name; count = $count; sample = $sample }
         }
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = ($entries | Measure-Object -Property count -Sum).Sum }
+        # Windows PowerShell 5.1 resolves a hashtable's Count as its number
+        # of keys. Read the record-count key explicitly instead.
+        $totalCount = 0
+        foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
+        $partial = $hveExists -and -not $mountAvailable
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = $totalCount; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'The Amcache file exists, but its registry inventory is not available.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -2688,15 +3038,20 @@ function Get-RecycleBinInfo {
         $items = @()
         $totalSizeKB = 0.0
         $sidNameCache = @{}
+        $partial = $false
 
         $drives = [System.IO.DriveInfo]::GetDrives() |
             Where-Object { $_.DriveType -in @('Fixed','Removable') -and $_.IsReady }
         foreach ($drv in $drives) {
             $binRoot = Join-Path $drv.RootDirectory.FullName '$Recycle.Bin'
-            if (-not (Test-Path -LiteralPath $binRoot -ErrorAction SilentlyContinue)) { continue }
-
-            $sidDirs = Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction SilentlyContinue
+            try {
+                $rootItem = Get-Item -LiteralPath $binRoot -Force -ErrorAction Stop
+                if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recycle Bin root unavailable.' }
+                $sidDirs = @(Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction Stop)
+            } catch [System.Management.Automation.ItemNotFoundException] { continue }
+            catch { $partial = $true; continue }
             foreach ($sidDir in $sidDirs) {
+                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; continue }
                 $sid = $sidDir.Name
                 if (-not $sidNameCache.ContainsKey($sid)) {
                     $resolved = $sid
@@ -2708,27 +3063,31 @@ function Get-RecycleBinInfo {
                 }
                 $account = $sidNameCache[$sid]
 
-                $iFiles = Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -Force -ErrorAction SilentlyContinue
+                try { $iFiles = @(Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -File -Force -ErrorAction Stop) }
+                catch { $partial = $true; continue }
                 foreach ($iFile in $iFiles) {
                     try {
+                        if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw 'Recycle Bin metadata unavailable.' }
                         $bytes = [System.IO.File]::ReadAllBytes($iFile.FullName)
-                        if ($bytes.Length -lt 24) { continue }
+                        if ($bytes.Length -lt 24) { throw 'Recycle Bin metadata is incomplete.' }
                         $version   = [System.BitConverter]::ToInt64($bytes, 0)
+                        if ($version -notin @(1, 2)) { throw 'Recycle Bin metadata has an unknown format.' }
                         $sizeBytes = [System.BitConverter]::ToInt64($bytes, 8)
+                        if ($sizeBytes -lt 0) { throw 'Recycle Bin metadata has an invalid size.' }
                         $ft        = [System.BitConverter]::ToInt64($bytes, 16)
-                        $deleted   = ''
-                        try { $deleted = [System.DateTime]::FromFileTime($ft).ToString('yyyy-MM-dd HH:mm:ss') } catch {}
+                        $deleted   = [System.DateTime]::FromFileTime($ft).ToString('yyyy-MM-dd HH:mm:ss')
 
                         $origPath = ''
-                        if ($version -eq 2 -and $bytes.Length -ge 28) {
+                        if ($version -eq 2) {
+                            if ($bytes.Length -lt 28) { throw 'Recycle Bin path metadata is incomplete.' }
                             # Win10+: int32 path length (wchars incl. NUL) at 24, UTF-16 path at 28
                             $pathChars = [System.BitConverter]::ToInt32($bytes, 24)
                             $byteLen   = [Math]::Max(0, ($pathChars - 1) * 2)
-                            if ($bytes.Length -ge (28 + $byteLen)) {
-                                $origPath = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteLen)
-                            }
+                            if ($pathChars -lt 1 -or $bytes.Length -lt (28 + $byteLen)) { throw 'Recycle Bin path metadata is incomplete.' }
+                            $origPath = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteLen)
                         } else {
                             # Legacy: fixed 520-byte (260 wchar) UTF-16 path at offset 24
+                            if ($bytes.Length -lt 544) { throw 'Recycle Bin path metadata is incomplete.' }
                             $avail = [Math]::Min(520, $bytes.Length - 24)
                             if ($avail -gt 0) {
                                 $raw = [System.Text.Encoding]::Unicode.GetString($bytes, 24, $avail)
@@ -2748,7 +3107,7 @@ function Get-RecycleBinInfo {
                             sid          = $sid
                             drive        = $drv.Name
                         }
-                    } catch {}
+                    } catch { $partial = $true }
                 }
             }
         }
@@ -2757,6 +3116,9 @@ function Get-RecycleBinInfo {
             items       = $items
             total       = $items.Count
             totalSizeKB = [Math]::Round($totalSizeKB, 1)
+            partial     = $partial
+            status      = if ($partial) { 'partial' } else { 'complete' }
+            message     = if ($partial) { 'Some Recycle Bin records could not be read.' } else { $null }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -2764,28 +3126,35 @@ function Get-RecycleBinInfo {
 
 function Get-NTUserTraces {
     # Returns all RunMRU, TypedPaths, TypedURLs, WordWheelQuery values
+    $sections = @()
+    $runMruOrder = $null
     try {
-        $sections = @()
 
         # RunMRU
         $runMruPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU'
         $runMru = @()
-        if (Test-Path $runMruPath) {
-            $props = Get-ItemProperty $runMruPath -ErrorAction SilentlyContinue
-            $order = $props.MRUList
+        $runMruExists = $true
+        try { $null = Get-Item -Path $runMruPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $runMruExists = $false }
+        if ($runMruExists) {
+            $props = Get-ItemProperty -Path $runMruPath -ErrorAction Stop
+            $runMruOrder = $props.MRUList
             if ($props) {
                 $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^(PS|MRUList)' } | ForEach-Object {
-                    $runMru += @{ key = $_.Name; value = ($_.Value -replace '\\1$','') }
+                    $runMru += @{ key = $_.Name; value = ($_.Value -replace '\\1$',''); rawValue = $_.Value }
                 }
             }
         }
-        $sections += @{ name = 'RunMRU'; count = $runMru.Count; entries = $runMru }
+        $runSection = @{ name = 'RunMRU'; count = $runMru.Count; entries = $runMru }
+        if ($null -ne $runMruOrder) { $runSection.mruOrder = $runMruOrder }
+        $sections += $runSection
 
         # TypedPaths
         $tpPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths'
         $typedPaths = @()
-        if (Test-Path $tpPath) {
-            Get-ItemProperty $tpPath | ForEach-Object {
+        $typedPathsExist = $true
+        try { $null = Get-Item -Path $tpPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $typedPathsExist = $false }
+        if ($typedPathsExist) {
+            Get-ItemProperty -Path $tpPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $typedPaths += @{ key = $_.Name; value = $_.Value }
                 }
@@ -2796,8 +3165,10 @@ function Get-NTUserTraces {
         # TypedURLs (IE/Edge legacy)
         $tuPath = 'HKCU:\Software\Microsoft\Internet Explorer\TypedURLs'
         $typedURLs = @()
-        if (Test-Path $tuPath) {
-            Get-ItemProperty $tuPath | ForEach-Object {
+        $typedUrlsExist = $true
+        try { $null = Get-Item -Path $tuPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $typedUrlsExist = $false }
+        if ($typedUrlsExist) {
+            Get-ItemProperty -Path $tuPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $typedURLs += @{ key = $_.Name; value = $_.Value }
                 }
@@ -2808,8 +3179,10 @@ function Get-NTUserTraces {
         # WordWheelQuery (Start/Explorer search MRU)
         $wwqPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery'
         $wwq = @()
-        if (Test-Path $wwqPath) {
-            Get-ItemProperty $wwqPath | ForEach-Object {
+        $searchHistoryExists = $true
+        try { $null = Get-Item -Path $wwqPath -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { $searchHistoryExists = $false }
+        if ($searchHistoryExists) {
+            Get-ItemProperty -Path $wwqPath -ErrorAction Stop | ForEach-Object {
                 $_.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
                     $wwq += @{ key = $_.Name; value = $_.Value }
                 }
@@ -2817,35 +3190,48 @@ function Get-NTUserTraces {
         }
         $sections += @{ name = 'WordWheelQuery'; count = $wwq.Count; entries = $wwq }
 
-        $totalCount = ($sections | Measure-Object -Property count -Sum).Sum
-        @{ sections = $sections; total = $totalCount }
+        $totalCount = 0
+        foreach ($section in $sections) { $totalCount += [int]$section['count'] }
+        $result = @{ sections = $sections; total = $totalCount }
+        if ($null -ne $runMruOrder) { $result.runMruOrder = $runMruOrder }
+        $result
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch {
+        $result = @{ error = $true; message = $_.Exception.Message; sections = $sections }
+        if ($null -ne $runMruOrder) { $result.runMruOrder = $runMruOrder }
+        $result
+    }
 }
 
 function Get-NotepadStateFiles {
-    # Returns Notepad tab state file listing with sizes
+    $files = @()
     try {
-        $files = @()
-        $notepadPkg = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsNotepad_*' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-        $packageFound = $notepadPkg -ne $null
-        if ($notepadPkg) {
-            $tabDir = Join-Path $notepadPkg.FullName 'LocalState\TabState'
-            if (Test-Path $tabDir) {
-                Get-ChildItem -Path $tabDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $packageRoot = Join-Path $env:LOCALAPPDATA 'Packages'
+        $packages = @()
+        try {
+            $rootItem = Get-Item -LiteralPath $packageRoot -Force -ErrorAction Stop
+            if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad package coverage is unavailable.' }
+            $packages = @(Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -ErrorAction Stop)
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        foreach ($package in $packages) {
+            if ($package.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Notepad package coverage is unavailable.' }
+            $tabDir = Join-Path $package.FullName 'LocalState\TabState'
+            try {
+                $tabItem = Get-Item -LiteralPath $tabDir -Force -ErrorAction Stop
+                if (-not $tabItem.PSIsContainer -or ($tabItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad tab-state coverage is unavailable.' }
+                Get-ChildItem -LiteralPath $tabDir -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
                     $files += @{
                         name    = $_.Name
+                        path    = $_.FullName
                         sizeKB  = [math]::Round($_.Length / 1KB, 1)
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                     }
                 }
-            }
+            } catch [System.Management.Automation.ItemNotFoundException] { }
         }
-        # Also check legacy Notepad recent (non-packaged)
-        $legacyPath = "$env:APPDATA\Microsoft\Windows\Recent"
-        @{ files = $files; total = $files.Count; packageFound = $packageFound; totalSizeKB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum, 1) }
+        @{ files = $files; total = $files.Count; packageFound = ($packages.Count -gt 0); totalSizeKB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum, 1) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    catch { @{ error = $true; message = $_.Exception.Message; files = $files } }
 }
 
 function Get-PCAInfo {
@@ -2873,56 +3259,71 @@ function Get-PCAInfo {
 
 function Get-CrashDumpList {
     # Returns all crash dump files with size, name, and age
-    try {
-        $dumps = @()
-        $sources = @(
+    $dumps = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $sources = @(
             @{ label = 'Minidump';           path = "$env:SystemRoot\Minidump" },
             @{ label = 'CrashDumps';         path = "$env:LOCALAPPDATA\CrashDumps" },
             @{ label = 'WER ReportArchive';  path = "$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportArchive" },
             @{ label = 'WER ReportQueue';    path = "$env:LOCALAPPDATA\Microsoft\Windows\WER\ReportQueue" }
         )
-        $memDmpPath = "$env:SystemRoot\MEMORY.DMP"
-        if (Test-Path $memDmpPath) {
-            $f = Get-Item $memDmpPath
-            $dumps += @{ source = 'FullDump'; name = 'MEMORY.DMP'; sizeKB = [math]::Round($f.Length/1KB,1); modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    $memDmpPath = "$env:SystemRoot\MEMORY.DMP"
+    try {
+        try { $f = Get-Item -LiteralPath $memDmpPath -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $f = $null }
+        if ($f) {
+            if ($f.PSIsContainer) { throw 'Crash dump path is not a file.' }
+            $dumps.Add(@{ source = 'FullDump'; name = $f.Name; path = $f.FullName; sizeKB = [math]::Round($f.Length/1KB,1); modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
         }
-        foreach ($src in $sources) {
-            if (Test-Path $src.path) {
-                Get-ChildItem -Path $src.path -Recurse -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | ForEach-Object {
-                    $dumps += @{
+    } catch { $partial = $true }
+    foreach ($src in $sources) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+                if (-not $root.PSIsContainer) { throw 'Crash dump location is not a directory.' }
+                Get-ChildItem -LiteralPath $src.path -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    $dumps.Add(@{
                         source   = $src.label
                         name     = $_.Name
+                        path     = $_.FullName
                         sizeKB   = [math]::Round($_.Length/1KB,1)
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
+                    })
                 }
             }
-        }
-        @{ dumps = $dumps; total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    @{ dumps = @($dumps.ToArray()); total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some crash dump locations could not be checked.' } else { $null } }
 }
 
 function Get-SQLiteWALList {
-    # Returns all .wal/.shm files found in LOCALAPPDATA / APPDATA (max 100)
+    # Returns all .wal/.shm files found in the stated app-data scope.
     # Uses -Depth 5 to avoid extremely deep recursive scans that can time out
     try {
-        $found = @()
+        $found = [Collections.Generic.List[object]]::new()
         $roots = @($env:LOCALAPPDATA, $env:APPDATA)
         foreach ($root in $roots) {
-            if (-not (Test-Path $root)) { continue }
-            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -Force -ErrorAction SilentlyContinue |
-                Select-Object -First 100 |
+            try { $null = Get-Item -LiteralPath $root -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -File -Force -ErrorAction Stop |
                 ForEach-Object {
-                    $found += @{
+                    $found.Add(@{
                         name     = $_.Name
+                        path     = $_.FullName
                         sizeKB   = [math]::Round($_.Length/1KB,1)
                         dir      = Split-Path $_.FullName -Parent | Split-Path -Leaf
                         modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
+                    })
                 }
         }
-        @{ files = $found; total = $found.Count; totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        @{
+            files = @($found.ToArray()); total = $found.Count
+            totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
+            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5.'
+            partial = $false; truncated = $false
+            message = 'This count covers the stated depth-limited scope.'
+        }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -2930,7 +3331,7 @@ function Get-SQLiteWALList {
 function Get-RecallDatabaseInfo {
     # Returns Recall/Timeline/notification DB file listing
     try {
-        $dbs = @()
+        $dbs = [Collections.Generic.List[object]]::new()
         $sources = @(
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\CoreAIPlatform.00" },
             @{ label = 'Recall';    path = "$env:LOCALAPPDATA\Microsoft\Windows\Recall" },
@@ -2938,20 +3339,26 @@ function Get-RecallDatabaseInfo {
             @{ label = 'ActionCenter'; path = "$env:LOCALAPPDATA\Microsoft\Windows\ActionCenter" }
         )
         foreach ($src in $sources) {
-            if (Test-Path $src.path) {
-                Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -Force -ErrorAction SilentlyContinue |
-                    Select-Object -First 100 |
-                    ForEach-Object {
-                        $dbs += @{
-                            source   = $src.label
-                            name     = $_.Name
-                            sizeKB   = [math]::Round($_.Length/1KB,1)
-                            modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                        }
-                    }
-            }
+            try { $null = Get-Item -LiteralPath $src.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            Get-ChildItem -Path $src.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -File -Force -ErrorAction Stop |
+                ForEach-Object {
+                    $dbs.Add(@{
+                        source   = $src.label
+                        name     = $_.Name
+                        path     = $_.FullName
+                        sizeKB   = [math]::Round($_.Length/1KB,1)
+                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                    })
+                }
         }
-        @{ databases = $dbs; total = $dbs.Count; totalSizeMB = [math]::Round(($dbs | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        @{
+            databases = @($dbs.ToArray()); total = $dbs.Count
+            totalSizeMB = [math]::Round(($dbs | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
+            coverage = 'limited'; coverageNote = 'Scans four specified Recall, Timeline and notification locations.'
+            partial = $false; truncated = $false
+            message = 'This count covers the stated locations only.'
+        }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -3040,37 +3447,44 @@ function Get-WSLDataInfo {
     try {
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $registeredDistros = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $distrosWithDisk = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $seenVhdx = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+        if (Test-Path $packagesRoot -ErrorAction Stop) {
+            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                try {
                 $vhdx = Join-Path $_.FullName 'LocalState\ext4.vhdx'
-                if (Test-Path $vhdx -PathType Leaf -ErrorAction SilentlyContinue) {
-                    $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+                if (Test-Path $vhdx -PathType Leaf -ErrorAction Stop) {
+                    $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction Stop
                     if ($item -and $seenVhdx.Add($item.FullName)) {
-                        $files += @{ name = "Store WSL: $($_.Name)\\LocalState\\ext4.vhdx"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                        $files += @{ name = "Store WSL: $($_.Name)\\LocalState\\ext4.vhdx"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                         $totalBytes += $item.Length
                     }
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         # Imported and Microsoft Store distributions use different locations.
         # The former is recorded in Lxss\<GUID>\BasePath, so only walking the
         # Store package folder made a real distribution look like a zero-size
         # registration in the cleanup card.
         $lxssRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
-        if (Test-Path $lxssRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $lxssRoot -ErrorAction SilentlyContinue | ForEach-Object {
-                $distro = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+        try {
+        if (Test-Path $lxssRoot -ErrorAction Stop) {
+            Get-ChildItem -Path $lxssRoot -ErrorAction Stop | ForEach-Object {
+                try {
+                $distro = Get-ItemProperty -Path $_.PSPath -ErrorAction Stop
                 $name = ([string]$distro.DistributionName).Trim()
                 $basePath = ([string]$distro.BasePath).Trim()
                 if ($basePath.StartsWith('\\?\')) { $basePath = $basePath.Substring(4) }
                 if (-not $basePath) { return }
                 $vhdx = Join-Path $basePath 'ext4.vhdx'
-                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction SilentlyContinue)) { return }
-                $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction Stop)) { return }
+                $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction Stop
                 if (-not $item) { return }
                 if ($name) {
                     $null = $registeredDistros.Add($name)
@@ -3078,18 +3492,23 @@ function Get-WSLDataInfo {
                 }
                 if ($seenVhdx.Add($item.FullName)) {
                     $label = if ($name) { "WSL: $name\\ext4.vhdx" } else { "WSL: $($_.PSChildName)\\ext4.vhdx" }
-                    $files += @{ name = $label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $files += @{ name = $label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                     $totalBytes += $item.Length
                 }
+                } catch { $partial = $true }
             }
         }
+        } catch { $partial = $true }
         $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
         if ($wsl) {
+            try {
             # `--list --quiet` reports imported distros as well as Store-backed
             # ones. They can live outside LocalAppData, so treating the VHDX
             # walk as the only source incorrectly reports a real WSL setup as
             # empty. This query is read-only and does not start a distro.
-            foreach ($distro in @(& $wsl.Source -l -q 2>$null)) {
+            $quietResult = @(& $wsl.Source -l -q 2>$null)
+            if ($LASTEXITCODE -ne 0) { $partial = $true }
+            foreach ($distro in $quietResult) {
                 # wsl.exe can emit UTF-16LE through the legacy PowerShell host;
                 # strip its NUL separators before comparing it to Lxss names.
                 $name = ([string]$distro).Replace([string][char]0, '').Trim()
@@ -3101,7 +3520,9 @@ function Get-WSLDataInfo {
             # in a non-interactive PowerShell host. Parse the verbose listing
             # as a read-only fallback so the card does not show a false zero.
             if ($registeredDistros.Count -eq 0) {
-                foreach ($line in @(& $wsl.Source -l -v 2>$null)) {
+                $verboseResult = @(& $wsl.Source -l -v 2>$null)
+                if ($LASTEXITCODE -ne 0) { $partial = $true }
+                foreach ($line in $verboseResult) {
                     $name = ([string]$line).Replace([string][char]0, '').Trim() -replace '^\*\s*', '' -replace '\s{2,}.*$', ''
                     if ($name -and $name -notmatch '^(NAME|There are no installed distributions)') {
                         if ($registeredDistros.Add($name) -and -not $distrosWithDisk.Contains($name)) {
@@ -3110,157 +3531,225 @@ function Get-WSLDataInfo {
                     }
                 }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+            } catch { $partial = $true }
+        } else { $partial = $true }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-DockerDesktopDataInfo {
-    # Docker Desktop stores both WSL distributions below LocalAppData and its desktop log in AppData.
-    try {
+    # Docker documents these default paths; customized disk locations require separate verification.
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $dockerWsl = Join-Path $env:LOCALAPPDATA 'Docker\wsl'
-        if (Test-Path $dockerWsl -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $dockerWsl -Recurse -File -Filter '*.vhdx' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Docker WSL: $($_.FullName.Substring($dockerWsl.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                $totalBytes += $_.Length
-            }
-        }
-        $dockerLog = Join-Path $env:APPDATA 'Docker\log.txt'
-        if (Test-Path $dockerLog -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $dockerLog -Force -ErrorAction SilentlyContinue
-            if ($item) {
-                $files += @{ name = 'Docker: log.txt'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        $root = $null
+        try {
+        try { $root = Get-Item -LiteralPath $dockerWsl -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($root) {
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker WSL disk inventory is unavailable.' }
+            Get-ChildItem -LiteralPath $dockerWsl -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                $item = $_
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Docker WSL disk inventory contains a reparse point.' }
+                if ($item.PSIsContainer -or $item.Name -notlike '*.vhdx') { return }
+                $files += @{ name = "Docker WSL: $($item.Name)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $item.Length
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+        } catch { $partial = $true }
+        foreach ($disk in @(
+            @{ name = 'Docker Hyper-V disk'; path = (Join-Path $env:ProgramData 'DockerDesktop\vm-data\DockerDesktop.vhdx') },
+            @{ name = 'Docker VMM disk'; path = (Join-Path $env:LOCALAPPDATA 'Docker\vm-data\DockerDesktop.vhdx') }
+        )) {
+            try {
+            $item = $null
+            try { $item = Get-Item -LiteralPath $disk.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { }
+            if (-not $item) { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker disk inventory is unavailable.' }
+            $files += @{ name = $disk.name; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $totalBytes += $item.Length
+            } catch { $partial = $true }
+        }
+        $dockerLog = Join-Path $env:APPDATA 'Docker\log.txt'
+        $item = $null
+        try {
+        try { $item = Get-Item -LiteralPath $dockerLog -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($item) {
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Docker log inventory is unavailable.' }
+            $files += @{ name = 'Docker: log.txt'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $totalBytes += $item.Length
+        }
+        } catch { $partial = $true }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks documented default Docker disk and log locations. Customized disk locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Docker locations could not be checked.' } else { $null } }
 }
 
 function Get-VirtualMachineArtifactsInfo {
-    # This intentionally inventories only snapshot, log, and recent-item artefacts; it never starts or stops a VM.
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
-        if (Test-Path $vmwareRoot -ErrorAction SilentlyContinue) {
-            foreach ($pattern in @('*-0000*.vmdk','*.vmsn','vmware*.log')) {
-                Get-ChildItem -Path $vmwareRoot -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ name = "VMware: $($_.FullName.Substring($vmwareRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $_.Length
-                }
-            }
-        }
-        $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
-        if (Test-Path $virtualBoxRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $virtualBoxRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Snapshots' } | ForEach-Object {
-                foreach ($pattern in @('*.vdi','*.vbox-prev')) {
-                    Get-ChildItem -Path $_.FullName -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "VirtualBox snapshot: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    # Inventory each source independently so an inaccessible directory does not
+    # erase records already found or turn a partial scan into a false zero.
+    $files = [System.Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $vmwareRoot = Join-Path $env:USERPROFILE 'Documents\Virtual Machines'
+    $virtualBoxRoot = Join-Path $env:USERPROFILE 'VirtualBox VMs'
+    foreach ($source in @(
+        @{ root=$vmwareRoot; patterns=@('*-0000*.vmdk','*.vmsn','vmware*.log'); label='VMware' },
+        @{ root=$virtualBoxRoot; patterns=@('VBox.log','VBoxSVC.log'); label='VirtualBox log' }
+    )) {
+        try {
+            try { $root = Get-Item -LiteralPath $source.root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The VM inventory root is unavailable.' }
+            foreach ($pattern in $source.patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $source.root -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ name = "$($source.label): $($_.FullName.Substring($source.root.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                         $totalBytes += $_.Length
                     }
-                }
+                } catch { $partial = $true }
             }
-            foreach ($pattern in @('VBox.log','VBoxSVC.log')) {
-                Get-ChildItem -Path $virtualBoxRoot -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ name = "VirtualBox log: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $_.Length
-                }
-            }
-        }
-        foreach ($hostLog in @(
-            (Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'),
-            (Join-Path $env:ProgramData 'VMware\vmnetnat.log'),
-            (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml')
-        )) {
-            if (Test-Path $hostLog -PathType Leaf -ErrorAction SilentlyContinue) {
-                $item = Get-Item -LiteralPath $hostLog -Force -ErrorAction SilentlyContinue
-                if ($item) {
-                    $files += @{ name = "VM configuration/log: $($item.FullName)"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                    $totalBytes += $item.Length
-                }
-            }
-        }
-        $vmwareMru = 'HKCU:\Software\VMware, Inc.\VMware Workstation'
-        if (Test-Path $vmwareMru -ErrorAction SilentlyContinue) {
-            $mruProperties = (Get-Item -Path $vmwareMru -ErrorAction SilentlyContinue).Property | Where-Object { $_ -match '(?i)mru|recent' }
-            foreach ($property in @($mruProperties)) {
-                $files += @{ name = "VMware MRU: $property"; sizeKB = 0; modified = '' }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    try {
+        try { $root = Get-Item -LiteralPath $virtualBoxRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The VirtualBox inventory root is unavailable.' }
+            Get-ChildItem -LiteralPath $virtualBoxRoot -Directory -Recurse -Force -ErrorAction Stop | Where-Object { $_.Name -eq 'Snapshots' } | ForEach-Object {
+                if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; return }
+                $snapshotPath = $_.FullName
+                foreach ($pattern in @('*.vdi','*.vbox-prev')) {
+                    try {
+                        Get-ChildItem -LiteralPath $snapshotPath -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ name = "VirtualBox snapshot: $($_.FullName.Substring($virtualBoxRoot.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                            $totalBytes += $_.Length
+                        }
+                    } catch { $partial = $true }
+                }
+            }
+        }
+    } catch { $partial = $true }
+    foreach ($hostLog in @(
+        (Join-Path $env:ProgramData 'VMware\vmnetdhcp.log'),
+        (Join-Path $env:ProgramData 'VMware\vmnetnat.log'),
+        (Join-Path $env:USERPROFILE '.VirtualBox\VirtualBox.xml')
+    )) {
+        try {
+            try { $item = Get-Item -LiteralPath $hostLog -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'A VM configuration or log is unavailable.' }
+            $files.Add(@{ name = "VM configuration/log: $($item.FullName)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+            $totalBytes += $item.Length
+        } catch { $partial = $true }
+    }
+    try {
+        try { $mru = Get-Item -LiteralPath 'HKCU:\Software\VMware, Inc.\VMware Workstation' -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $mru = $null }
+        if ($mru) {
+            foreach ($property in @($mru.Property | Where-Object { $_ -match '(?i)mru|recent' })) {
+                $row = @{ name = "VMware MRU: $property"; registryPath = $mru.PSPath; key = [string]$property; sizeKB = 0; modified = '' }
+                try { $row.value = Get-ItemPropertyValue -LiteralPath $mru.PSPath -Name $property -ErrorAction Stop }
+                catch { $row.readStatus = 'unavailable'; $partial = $true }
+                $files.Add($row)
+            }
+        }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected default VM locations, host logs and VMware recent entries; relocated machines and provider-managed data are not fully inspected.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some virtual-machine locations could not be checked.' } else { $null } }
 }
 
-function Get-DeveloperCachesInfo {
+function Assert-CleanupDeveloperCacheAncestors {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Base)
+    $basePath = [IO.Path]::GetFullPath($Base).TrimEnd('\')
+    $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if (-not $fullPath.StartsWith($basePath + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Developer cache path is outside its selected profile.' }
+    $parent = [IO.Path]::GetDirectoryName($fullPath)
+    while ($parent -and $parent.Length -ge $basePath.Length) {
+        $item = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer cache path contains an unsupported reparse point.' }
+        if ($parent -ieq $basePath) { return }
+        $parent = [IO.Path]::GetDirectoryName($parent)
+    }
+    throw 'Developer cache path could not be verified.'
+}
+
+function Get-CleanupDeveloperCachesInfo {
+    param([string]$AppDataPath, [string]$LocalAppDataPath, [string]$UserProfilePath, [int]$previewLimit)
     # Configuration files are surfaced by presence only; token contents are never read or returned.
     # A developer cache can contain millions of files. Keep complete count/size
     # aggregation while returning only a fixed preview so the IPC payload and
     # trace-detail dialog cannot allocate one UI row per file.
     try {
-        $previewLimit = 200
         $files = [System.Collections.Generic.List[object]]::new()
         $total = [int64]0
         $totalBytes = [int64]0
+        $partial = $false
         $cacheDirs = @(
-            @{ label = 'npm cache'; path = (Join-Path $env:APPDATA 'npm-cache') },
-            @{ label = 'npm cache'; path = (Join-Path $env:LOCALAPPDATA 'npm-cache') },
-            @{ label = 'pip cache'; path = (Join-Path $env:LOCALAPPDATA 'pip\Cache') },
-            @{ label = 'cargo registry cache'; path = (Join-Path $env:USERPROFILE '.cargo\registry\cache') },
-            @{ label = 'cargo registry source'; path = (Join-Path $env:USERPROFILE '.cargo\registry\src') }
+            @{ label = 'npm cache'; path = (Join-Path $AppDataPath 'npm-cache'); base = $AppDataPath },
+            @{ label = 'npm cache'; path = (Join-Path $LocalAppDataPath 'npm-cache'); base = $LocalAppDataPath },
+            @{ label = 'pip cache'; path = (Join-Path $LocalAppDataPath 'pip\Cache'); base = $LocalAppDataPath },
+            @{ label = 'cargo registry cache'; path = (Join-Path $UserProfilePath '.cargo\registry\cache'); base = $UserProfilePath },
+            @{ label = 'cargo registry source'; path = (Join-Path $UserProfilePath '.cargo\registry\src'); base = $UserProfilePath }
         )
         foreach ($cache in $cacheDirs) {
-            if (-not (Test-Path $cache.path -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $cache.path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+          try {
+            try { $root = Get-Item -LiteralPath $cache.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer cache root is not a regular directory.' }
+            Assert-CleanupDeveloperCacheAncestors -Path $cache.path -Base $cache.base
+            Get-ChildItem -LiteralPath $cache.path -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Developer cache inventory contains a reparse point.' }
+                if ($_.PSIsContainer) { return }
                 $total++
                 if ($files.Count -lt $previewLimit) {
-                    [void]$files.Add(@{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    [void]$files.Add(@{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 }
                 $totalBytes += $_.Length
             }
+          } catch { $partial = $true }
         }
         foreach ($config in @(
-            @{ label = 'npm token configuration present'; path = (Join-Path $env:USERPROFILE '.npmrc') },
-            @{ label = 'cargo configuration present'; path = (Join-Path $env:USERPROFILE '.cargo\config.toml') },
-            @{ label = 'cargo credentials present'; path = (Join-Path $env:USERPROFILE '.cargo\credentials.toml') }
+            @{ label = 'npm token configuration present'; path = (Join-Path $UserProfilePath '.npmrc') },
+            @{ label = 'cargo configuration present'; path = (Join-Path $UserProfilePath '.cargo\config.toml') },
+            @{ label = 'cargo credentials present'; path = (Join-Path $UserProfilePath '.cargo\credentials.toml') }
         )) {
-            if (Test-Path $config.path -PathType Leaf -ErrorAction SilentlyContinue) {
-                $item = Get-Item -LiteralPath $config.path -Force -ErrorAction SilentlyContinue
-                if ($item) {
-                    $total++
-                    if ($files.Count -lt $previewLimit) {
-                        [void]$files.Add(@{ name = $config.label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
-                    }
-                    $totalBytes += $item.Length
-                }
+          try {
+            try { $item = Get-Item -LiteralPath $config.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Developer configuration path is not a regular file.' }
+            Assert-CleanupDeveloperCacheAncestors -Path $config.path -Base $UserProfilePath
+            $total++
+            if ($files.Count -lt $previewLimit) {
+                [void]$files.Add(@{ name = $config.label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
+            $totalBytes += $item.Length
+          } catch { $partial = $true }
         }
-        @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count) }
+        @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count); coverage = 'limited'; coverageNote = 'Checks selected npm, pip and Cargo cache and configuration locations only; other tools and custom paths are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected developer cache locations could not be checked.' } else { $null } }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = 200; truncated = $false } }
+    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = $previewLimit; truncated = $false } }
+}
+
+function Get-DeveloperCachesInfo {
+    $previewLimit = 200
+    Get-CleanupDeveloperCachesInfo -AppDataPath $env:APPDATA -LocalAppDataPath $env:LOCALAPPDATA -UserProfilePath $env:USERPROFILE -previewLimit $previewLimit
 }
 
 function Get-CredentialManagerInfo {
-    # cmdkey exposes target names only; it never returns credential secret values here.
+    # The shared native reader returns identity metadata only and avoids
+    # parsing cmdkey's localized output. It does not return credential blobs.
     try {
+        if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+        . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
         $files = @()
-        $targets = @{}
-        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-            $text = ([string]$line).Trim()
-            if ($text -match '(?i)target=(.+)$') {
-                $target = $Matches[1].Trim()
-                if ($target) { $targets[$target] = $true }
-            }
+        foreach ($credential in @(Get-WCScheduledCredentials)) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+            $files += @{ name = "Saved credential target: $($credential.Name)"; target = [string]$credential.Name; credentialType = [uint32]$credential.Type; username = $credential.UserName; sizeKB = 0; modified = '' }
         }
-        foreach ($target in $targets.Keys | Sort-Object) {
-            $files += @{ name = "Saved credential target: $target"; sizeKB = 0; modified = '' }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+        # CredEnumerate does not enumerate every application's Windows Vault.
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities only'; message = 'Windows Vault entries from other applications were not inspected.' }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3274,7 +3763,7 @@ function Get-NetworkWizardHistoryInfo {
         catch [System.Management.Automation.ItemNotFoundException] { $exists = $false }
         if ($exists) {
             foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                $files += @{ name = "Network Connection Wizard value: $property"; sizeKB = 0; modified = '' }
+                $files += @{ name = "Network Connection Wizard value: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' }
             }
             Get-ChildItem -LiteralPath $networkWizard -Force -ErrorAction Stop | ForEach-Object {
                 $files += @{ name = "Network Connection Wizard subkey: $($_.PSChildName)"; sizeKB = 0; modified = '' }
@@ -3286,7 +3775,7 @@ function Get-NetworkWizardHistoryInfo {
 }
 
 function Get-WERHistoryInfo {
-    # Values are reported by name only so the viewer doesn't disclose consent or exclusion contents.
+    # Return the locally available value and its type alongside its registry name.
     try {
         $files = @()
         foreach ($root in @('HKCU:\Software\Microsoft\Windows\Windows Error Reporting', 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting')) {
@@ -3295,7 +3784,7 @@ function Get-WERHistoryInfo {
                 try { $item = Get-Item -LiteralPath $path -ErrorAction Stop }
                 catch [System.Management.Automation.ItemNotFoundException] { continue }
                 foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                    $files += @{ name = "$root\\$suffix value: $property"; sizeKB = 0; modified = '' }
+                    $files += @{ name = "$root\\$suffix value: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' }
                 }
                 Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop | ForEach-Object {
                     $files += @{ name = "$root\\$suffix subkey: $($_.PSChildName)"; sizeKB = 0; modified = '' }
@@ -3312,11 +3801,12 @@ function Get-InactiveUserProtectionMetadataInfo {
     try {
         $files = @()
         $totalBytes = [int64]0
+        $partial = $false
         $currentSid = ''
         $currentProfile = [Environment]::GetFolderPath('UserProfile')
         try { $currentSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
         if (-not $currentSid -and -not $currentProfile) { throw 'Current profile identity unavailable; inactive profile scan skipped.' }
-        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+        $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
             Where-Object {
                 -not $_.Special -and -not $_.Loaded -and $_.SID -match '^S-1-5-21-' -and
                 $_.SID -ne $currentSid -and $_.LocalPath -and
@@ -3324,100 +3814,127 @@ function Get-InactiveUserProtectionMetadataInfo {
             })
         foreach ($profile in $profiles) {
             $protectRoot = Join-Path $profile.LocalPath "AppData\Roaming\Microsoft\Protect\$($profile.SID)"
-            if (-not (Test-Path $protectRoot -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $protectRoot -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $relative = $_.FullName.Substring($protectRoot.Length).TrimStart('\\')
-                $files += @{ name = "Inactive user DPAPI metadata: $($profile.SID)\\$relative"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                $totalBytes += $_.Length
-            }
+            try {
+                try { $root = Get-Item -LiteralPath $protectRoot -Force -ErrorAction Stop }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
+                if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Protection metadata location is unavailable.' }
+                Get-ChildItem -LiteralPath $protectRoot -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; return }
+                    $relative = $_.FullName.Substring($protectRoot.Length).TrimStart('\\')
+                    $files += @{ name = "Inactive user DPAPI metadata: $($profile.SID)\\$relative"; path = $_.FullName; userSid = [string]$profile.SID; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $totalBytes += $_.Length
+                }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected protection metadata for inactive profiles only.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some inactive user protection metadata could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-StickyNotesInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.MicrosoftStickyNotes_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try { $root = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'The packages location is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Filter 'Microsoft.MicrosoftStickyNotes_*' -Force -ErrorAction Stop | ForEach-Object {
+                $package = $_
                 foreach ($name in @('plum.sqlite','plum.sqlite-wal','plum.sqlite-shm')) {
-                    $path = Join-Path $_.FullName "LocalState\\$name"
-                    if (Test-Path $path -PathType Leaf -ErrorAction SilentlyContinue) {
-                        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-                        if ($item) {
-                            $files += @{ name = "Sticky Notes: $name"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                            $totalBytes += $item.Length
-                        }
-                    }
+                    $path = Join-Path $package.FullName "LocalState\$name"
+                    try {
+                        try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+                        catch [System.Management.Automation.ItemNotFoundException] { continue }
+                        if ($item.PSIsContainer) { throw 'The Sticky Notes database changed type.' }
+                        $files.Add(@{ name = "Sticky Notes: $name"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        $totalBytes += $item.Length
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Sticky Notes locations could not be checked.' } else { $null } }
 }
 
 function Get-OneDriveMetadataInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $settingsRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $settingsRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\settings'
-        $exists = $true
-        try { $settingsRoot = (Get-Item -LiteralPath $settingsRoot -Force -ErrorAction Stop).FullName }
-        catch [System.Management.Automation.ItemNotFoundException] { $exists = $false }
-        if ($exists) {
+        try { $root = Get-Item -LiteralPath $settingsRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'OneDrive metadata root is not a directory.' }
+            $settingsRoot = $root.FullName
             Get-ChildItem -LiteralPath $settingsRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                $folder = $_
                 foreach ($pattern in @('*.dat','*.db')) {
-                    Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
-                        $files += @{ name = "OneDrive metadata: $($_.FullName.Substring($settingsRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                        $totalBytes += $_.Length
-                    }
+                    try {
+                        Get-ChildItem -LiteralPath $folder.FullName -Recurse -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ name = "OneDrive metadata: $($_.FullName.Substring($settingsRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                            $totalBytes += $_.Length
+                        }
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some OneDrive metadata locations could not be checked.' } else { $null } }
+}
+
+function Get-CleanupPackageCacheInventory {
+    param([string[]]$PackagePatterns, [string]$RelativeRoot, [string]$Label, [switch]$NameOnly)
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [long]0
+    $partial = $false
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
+    try {
+        try { $root = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Package inventory root is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
+                $package = $_
+                if (-not @($PackagePatterns | Where-Object { $package.Name -like $_ }).Count) { return }
+                $cacheRoot = Join-Path $package.FullName $RelativeRoot
+                try {
+                    try { $cache = Get-Item -LiteralPath $cacheRoot -Force -ErrorAction Stop }
+                    catch [Management.Automation.ItemNotFoundException] { return }
+                    if (-not $cache.PSIsContainer) { throw 'Package cache root is not a directory.' }
+                    Get-ChildItem -LiteralPath $cacheRoot -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                        $name = if ($NameOnly) { $_.Name } else { $_.FullName.Substring($cacheRoot.Length).TrimStart('\\') }
+                        $files.Add(@{ name = "${Label}: $name"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        $totalBytes += $_.Length
+                    }
+                } catch { $partial = $true }
+            }
+        }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some package cache locations could not be checked.' } else { $null } }
 }
 
 function Get-SpotlightCacheInfo {
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.Windows.ContentDeliveryManager_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $assets = Join-Path $_.FullName 'LocalState\\Assets'
-                if (Test-Path $assets -ErrorAction SilentlyContinue) {
-                    Get-ChildItem -Path $assets -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "Spotlight asset: $($_.Name)"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                        $totalBytes += $_.Length
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.Windows.ContentDeliveryManager_*') -RelativeRoot 'LocalState\Assets' -Label 'Spotlight asset' -NameOnly
 }
 
 function Get-FontCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
     try {
-        $files = @()
-        $totalBytes = [int64]0
         $root = Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache'
         try { $null = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { return @{ files = @(); total = 0; totalSizeMB = 0 } }
         Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.dat' -Force -ErrorAction Stop | ForEach-Object {
-            $files += @{ name = "Font cache: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            $files.Add(@{ name = "Font cache: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             $totalBytes += $_.Length
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some font cache locations could not be checked.' } else { $null } }
 }
 
 function Get-LegacyIconCacheInfo {
@@ -3425,10 +3942,13 @@ function Get-LegacyIconCacheInfo {
         $files = @()
         $totalBytes = [int64]0
         $path = Join-Path $env:LOCALAPPDATA 'IconCache.db'
-        if (Test-Path $path -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        $item = $null
+        try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($item) {
+            if ($item.PSIsContainer) { throw 'Icon cache path is not a file.' }
             if ($item) {
-                $files += @{ name = 'IconCache.db'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files += @{ name = 'IconCache.db'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                 $totalBytes += $item.Length
             }
         }
@@ -3438,74 +3958,45 @@ function Get-LegacyIconCacheInfo {
 }
 
 function Get-GameCapturesInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $roots = @((Join-Path $env:USERPROFILE 'Videos\Captures'))
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $roots = @((Join-Path $env:USERPROFILE 'Videos\\Captures'))
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue |
+        try { $packages = Get-Item -LiteralPath $packagesRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $packages = $null }
+        if ($packages) {
+            if (-not $packages.PSIsContainer) { throw 'Package location is not a directory.' }
+            Get-ChildItem -LiteralPath $packagesRoot -Directory -Force -ErrorAction Stop |
                 Where-Object { $_.Name -like 'Microsoft.XboxGamingOverlay_*' -or $_.Name -like 'Microsoft.GamingApp_*' } |
                 ForEach-Object { $roots += Join-Path $_.FullName 'LocalState' }
         }
-        foreach ($root in $roots) {
-            if (-not (Test-Path $root -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $root -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Game capture: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+    } catch { $partial = $true }
+    foreach ($root in $roots) {
+        try {
+            try { $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $rootItem.PSIsContainer) { throw 'Capture location is not a directory.' }
+            Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ name = "Game capture: $($_.FullName.Substring($root.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some game capture locations could not be checked.' } else { $null } }
 }
 
 function Get-PhotosCacheInfo {
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Filter 'Microsoft.Windows.Photos_*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $localState = Join-Path $_.FullName 'LocalState'
-                if (Test-Path $localState -ErrorAction SilentlyContinue) {
-                    Get-ChildItem -Path $localState -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                        $files += @{ name = "Photos cache: $($_.FullName.Substring($localState.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                        $totalBytes += $_.Length
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.Windows.Photos_*') -RelativeRoot 'LocalState' -Label 'Photos cache'
 }
 
 function Get-XboxCacheInfo {
-    try {
-        $files = @()
-        $totalBytes = [int64]0
-        $packagesRoot = Join-Path $env:LOCALAPPDATA 'Packages'
-        if (Test-Path $packagesRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $packagesRoot -Directory -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'Microsoft.GamingApp_*' -or $_.Name -like 'Microsoft.XboxApp_*' } |
-                ForEach-Object {
-                    $localState = Join-Path $_.FullName 'LocalState'
-                    if (Test-Path $localState -ErrorAction SilentlyContinue) {
-                        Get-ChildItem -Path $localState -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                            $files += @{ name = "Xbox cache: $($_.FullName.Substring($localState.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
-                            $totalBytes += $_.Length
-                        }
-                    }
-                }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    Get-CleanupPackageCacheInventory -PackagePatterns @('Microsoft.GamingApp_*', 'Microsoft.XboxApp_*') -RelativeRoot 'LocalState' -Label 'Xbox cache'
 }
 
 function Get-CleanupArtifactFiles {
-    param([Parameter(Mandatory)] [array]$Sources)
+    param([Parameter(Mandatory)] [array]$Sources, [Collections.Generic.List[object]]$Collector = $null)
     $files = @()
     foreach ($source in $Sources) {
         try { $sourcePath = (Get-Item -LiteralPath $source.path -Force -ErrorAction Stop).FullName }
@@ -3513,16 +4004,29 @@ function Get-CleanupArtifactFiles {
         foreach ($pattern in $source.patterns) {
             Get-ChildItem -LiteralPath $sourcePath -Recurse:($source.recurse -ne $false) -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
                 $relative = $_.FullName.Substring($sourcePath.Length).TrimStart('\\')
-                $files += @{ name = "$($source.label): $relative"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $row = @{ name = "$($source.label): $relative"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                if ($null -ne $Collector) { $Collector.Add($row) } else { $files += $row }
             }
         }
     }
-    @($files)
+    if ($null -eq $Collector) { @($files) }
+}
+
+function Get-CleanupArtifactInventory {
+    param([Parameter(Mandatory)] [array]$Sources, [Parameter(Mandatory)] [string]$CoverageNote)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($source in $Sources) {
+        try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
+        catch { $partial = $true }
+    }
+    $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = $CoverageNote; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected locations could not be checked.' } else { $null } }
 }
 
 function Get-CommunicationCachesInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected Teams, Slack and Discord cache locations only.' -Sources @(
             @{ label = 'Teams'; path = (Join-Path $env:APPDATA 'Microsoft\\Teams\\Cache'); patterns = @('*') },
             @{ label = 'Teams'; path = (Join-Path $env:APPDATA 'Microsoft\\Teams\\IndexedDB'); patterns = @('*') },
             @{ label = 'Slack'; path = (Join-Path $env:APPDATA 'Slack\\Cache'); patterns = @('*') },
@@ -3531,9 +4035,7 @@ function Get-CommunicationCachesInfo {
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\Cache'); patterns = @('*') },
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\IndexedDB'); patterns = @('*') },
             @{ label = 'Discord'; path = (Join-Path $env:APPDATA 'discord\\Local Storage\\leveldb'); patterns = @('*') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3545,15 +4047,20 @@ function Get-EditorHistoryInfo {
             @{ label = 'VS Code local history'; path = (Join-Path $env:APPDATA 'Code\\User\\History'); patterns = @('*') }
         )
         $jetBrainsRoot = Join-Path $env:APPDATA 'JetBrains'
-        if (Test-Path $jetBrainsRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $jetBrainsRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $discoveryIncomplete = $false
+        try {
+            try { $root = Get-Item -LiteralPath $jetBrainsRoot -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+            Get-ChildItem -LiteralPath $jetBrainsRoot -Directory -Force -ErrorAction Stop | ForEach-Object {
                 $sources += @{ label = 'JetBrains recent projects'; path = (Join-Path $_.FullName 'options'); patterns = @('recentProjects.xml') }
                 $sources += @{ label = 'JetBrains local history'; path = (Join-Path $env:LOCALAPPDATA ("JetBrains\\{0}\\LocalHistory" -f $_.Name)); patterns = @('*') }
             }
-        }
-        $files = @(Get-CleanupArtifactFiles -Sources $sources)
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+            }
+        } catch { $discoveryIncomplete = $true }
+        $result = Get-CleanupArtifactInventory -Sources $sources -CoverageNote 'Checks selected VS Code and JetBrains history locations only.'
+        if ($discoveryIncomplete) { $result.partial = $true; $result.status = 'partial'; $result.message = 'Some editor history locations could not be checked.' }
+        $result
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3561,21 +4068,35 @@ function Get-EditorHistoryInfo {
 function Get-GitActivityInfo {
     try {
         $files = @()
-        $targets = @{}
-        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-            $text = ([string]$line).Trim()
-            if ($text -match '(?i)target=(.+)$') {
-                $target = $Matches[1].Trim()
-                if ($target -match '(?i)git:') { $targets[$target] = $true }
+        $credentialVerified = $true
+        $configVerified = $true
+        try {
+            if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+            . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
+            foreach ($credential in @(Get-WCScheduledCredentials)) {
+                if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+                if (([string]$credential.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase)) {
+                    $files += @{ name = "Git credential target: $($credential.Name)"; target = [string]$credential.Name; credentialType = [uint32]$credential.Type; username = $credential.UserName; sizeKB = 0; modified = '' }
+                }
             }
-        }
-        foreach ($target in $targets.Keys | Sort-Object) { $files += @{ name = "Git credential target: $target"; sizeKB = 0; modified = '' } }
-        $gitConfig = Join-Path $env:USERPROFILE '.gitconfig'
-        if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) {
+        } catch { $credentialVerified = $false }
+        try {
+            # Git may read the XDG global configuration even when .gitconfig
+            # is absent. Ask Git directly rather than inferring its sources
+            # from one particular file path.
             $safeDirectories = @(& git.exe config --global --get-all safe.directory 2>$null)
-            if ($safeDirectories.Count -gt 0) { $files += @{ name = 'Global git safe.directory entries present'; sizeKB = 0; modified = '' } }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+            if ($LASTEXITCODE -notin @(0, 1)) { throw 'Git configuration could not be checked.' }
+            if ($LASTEXITCODE -eq 1 -and $safeDirectories.Count -gt 0) { throw 'Git configuration output could not be verified.' }
+            if ($LASTEXITCODE -eq 0 -and $safeDirectories.Count -eq 0) { throw 'Git configuration output could not be verified.' }
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($directory in $safeDirectories) {
+                    $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
+                }
+            }
+        } catch { $configVerified = $false }
+        # Credential enumeration does not include other applications' Vaults.
+        $message = if (-not $credentialVerified -and -not $configVerified) { 'Git credential identities and configuration could not be checked; other Vault entries are not inspected.' } elseif (-not $credentialVerified) { 'Git credential identities could not be checked; other Vault entries are not inspected.' } elseif (-not $configVerified) { 'Git configuration could not be checked; other Vault entries are not inspected.' } else { 'Other applications'' Windows Vault entries were not inspected.' }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities and global Git safe directories only'; message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3583,41 +4104,44 @@ function Get-GitActivityInfo {
 function Get-SSHStateInfo {
     try {
         $files = @()
+        $agentVerified = $true
+        $hostsVerified = $true
         $knownHosts = Join-Path $env:USERPROFILE '.ssh\\known_hosts'
-        if (Test-Path $knownHosts -PathType Leaf -ErrorAction SilentlyContinue) {
-            $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction SilentlyContinue
-            if ($item) { $files += @{ name = 'SSH known_hosts'; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } }
-        }
-        $sshAdd = Get-Command ssh-add.exe -ErrorAction SilentlyContinue
-        if (-not $sshAdd) { throw 'SSH agent state could not be checked: ssh-add is unavailable.' }
-        $null = & $sshAdd.Source -l 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $files += @{ name = 'SSH agent identities loaded'; sizeKB = 0; modified = '' }
-        } elseif ($LASTEXITCODE -ne 1) { throw 'SSH agent state could not be checked.' }
+        try {
+            $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction Stop
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'SSH known-hosts metadata is unavailable.' }
+            $files += @{ name = 'SSH known_hosts'; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { $hostsVerified = $false }
+        try {
+            $agentStatus = Invoke-WCSshAdd -Option '-l'
+            if ($agentStatus -eq 0) {
+                $files += @{ name = 'SSH agent identities loaded'; sizeKB = 0; modified = '' }
+            } elseif ($agentStatus -ne 1) { $agentVerified = $false }
+        } catch { $agentVerified = $false }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        $complete = $agentVerified -and $hostsVerified
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $complete); status = if ($complete) { 'complete' } else { 'partial' }; message = if (-not $agentVerified -and -not $hostsVerified) { 'SSH agent state and known-hosts metadata could not be checked.' } elseif (-not $agentVerified) { 'SSH agent state could not be checked.' } elseif (-not $hostsVerified) { 'SSH known-hosts metadata could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-RemoteAccessLogsInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected TeamViewer, AnyDesk, VNC and Chrome Remote Desktop log locations only.' -Sources @(
             @{ label = 'TeamViewer'; path = (Join-Path $env:APPDATA 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'AnyDesk'; path = (Join-Path $env:APPDATA 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'AnyDesk'; path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'VNC'; path = (Join-Path $env:APPDATA 'RealVNC'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'Chrome Remote Desktop'; path = (Join-Path $env:LOCALAPPDATA 'Google\\Chrome Remote Desktop'); patterns = @('Connections*.txt','*.trace','*.log') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-PasswordManagerCachesInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        $sources = @(
             @{ label = '1Password'; path = (Join-Path $env:LOCALAPPDATA '1Password\\Cache'); patterns = @('*') },
             @{ label = '1Password'; path = (Join-Path $env:LOCALAPPDATA '1Password\\Local Storage\\leveldb'); patterns = @('*') },
             @{ label = 'Bitwarden'; path = (Join-Path $env:APPDATA 'Bitwarden\\Cache'); patterns = @('*') },
@@ -3626,52 +4150,61 @@ function Get-PasswordManagerCachesInfo {
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Cache'); patterns = @('*') },
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Local Storage\\leveldb'); patterns = @('*') },
             @{ label = 'LastPass'; path = (Join-Path $env:APPDATA 'LastPass\\Session Storage'); patterns = @('*') }
-        ))
+        )
+        $files = [Collections.Generic.List[object]]::new(); $partial = $false
+        foreach ($source in $sources) {
+            try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
+            catch { $partial = $true }
+        }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected 1Password, Bitwarden and LastPass cache locations only; other password managers and custom locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected password-manager cache locations could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-GameLauncherLogsInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected Steam, Epic Games and Battle.net log locations only.' -Sources @(
             @{ label = 'Steam log'; path = (Join-Path ${env:ProgramFiles(x86)} 'Steam\\logs'); patterns = @('*') },
             @{ label = 'Epic Games Launcher'; path = (Join-Path $env:LOCALAPPDATA 'EpicGamesLauncher\\Saved\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:APPDATA 'Battle.net\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:ProgramData 'Battle.net\\Logs'); patterns = @('*') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-AdobeRecentInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $readerRoot = 'HKCU:\Software\Adobe\Acrobat Reader'
     try {
-        $files = @()
-        $readerRoot = 'HKCU:\Software\Adobe\Acrobat Reader'
-        if (Test-Path $readerRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $readerRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                foreach ($suffix in @('AVGeneral\\cRecentFiles','AVGeneral\\cDigitalSignatures')) {
-                    $path = Join-Path $_.PSPath $suffix
-                    if (Test-Path $path -ErrorAction SilentlyContinue) {
-                        $item = Get-Item -Path $path -ErrorAction SilentlyContinue
+        try { $root = Get-Item -LiteralPath $readerRoot -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            Get-ChildItem -LiteralPath $readerRoot -Force -ErrorAction Stop | ForEach-Object {
+                $version = $_
+                foreach ($suffix in @('AVGeneral\cRecentFiles','AVGeneral\cDigitalSignatures')) {
+                    $path = Join-Path $version.PSPath $suffix
+                    try {
+                        try { $item = Get-Item -LiteralPath $path -ErrorAction Stop }
+                        catch [System.Management.Automation.ItemNotFoundException] { continue }
                         foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
-                            $files += @{ name = "Adobe $suffix value: $property"; sizeKB = 0; modified = '' }
+                            try {
+                                $files.Add(@{ name = "Adobe $suffix value: $property"; path = $path; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' })
+                            } catch { $partial = $true }
                         }
-                    }
+                    } catch { $partial = $true }
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Adobe recent history could not be checked.' } else { $null } }
 }
 
 function Get-OfficeTempFilesInfo {
     try {
-        $files = @()
+        $files = [Collections.Generic.List[object]]::new()
         $totalBytes = [int64]0
         $roots = @(
             (Join-Path $env:USERPROFILE 'Documents'),
@@ -3679,21 +4212,27 @@ function Get-OfficeTempFilesInfo {
             (Join-Path $env:USERPROFILE 'Downloads')
         )
         foreach ($root in $roots) {
-            if (-not (Test-Path $root -ErrorAction SilentlyContinue)) { continue }
-            Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            try { $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
+            Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
         }
         $tempRoot = $env:TEMP
-        if (Test-Path $tempRoot -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending | Select-Object -First 500 | ForEach-Object {
-                    $files += @{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        $tempItem = $null
+        try { $tempItem = Get-Item -LiteralPath $tempRoot -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($tempItem) {
+            if (-not $tempItem.PSIsContainer -or ($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
+            Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop |
+                Sort-Object LastWriteTime -Descending | ForEach-Object {
+                    $files.Add(@{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                     $totalBytes += $_.Length
                 }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3734,11 +4273,13 @@ function Get-WCCloudPlaceholderFiles {
 }
 
 function Get-FirewallLogInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
     try {
-        $files = @()
-        $totalBytes = [int64]0
         $seenPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($profile in @(Get-NetFirewallProfile -ErrorAction Stop)) {
+            try {
             $path = [Environment]::ExpandEnvironmentVariables([string]$profile.LogFileName)
             if ($path -match '%[^%]+%') { throw 'Firewall log path contains an unresolved environment variable.' }
             if (-not $path -or -not $seenPaths.Add($path)) { continue }
@@ -3747,90 +4288,113 @@ function Get-FirewallLogInfo {
             catch [System.Management.Automation.ItemNotFoundException] { continue }
             if ($item.PSIsContainer) { throw 'Firewall log configuration points to a folder instead of a file.' }
             if ($item) {
-                $files += @{ name = "Firewall $($profile.Name) log: $($item.Name)"; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files.Add(@{ name = "Firewall $($profile.Name) log: $($item.Name)"; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $item.Length
             }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some firewall logs could not be checked.' } else { $null } }
 }
 
 function Get-NeighborCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
         Get-NetNeighbor -ErrorAction Stop | Where-Object { $_.State -ne 'Permanent' } | ForEach-Object {
-            $files += @{ name = "Neighbor: $($_.InterfaceAlias) $($_.IPAddress) ($($_.State))"; sizeKB = 0; modified = '' }
+            $files.Add(@{ name = "Neighbor: $($_.InterfaceAlias) $($_.IPAddress) ($($_.State))"; interfaceAlias = [string]$_.InterfaceAlias; interfaceIndex = $_.InterfaceIndex; address = [string]$_.IPAddress; linkLayerAddress = [string]$_.LinkLayerAddress; state = [string]$_.State; addressFamily = [string]$_.AddressFamily; sizeKB = 0; modified = '' })
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some neighbor-cache entries could not be checked.' } else { $null } }
 }
 
 function Get-NetBIOSCacheInfo {
+    $files = @()
     try {
-        $files = @()
-        foreach ($line in @(& nbtstat.exe -c 2>$null)) {
+        $LASTEXITCODE = 0
+        $output = @(& nbtstat.exe -c 2>$null)
+        $exitCode = $LASTEXITCODE
+        foreach ($line in $output) {
             $text = ([string]$line).Trim()
             if ($text -match '<[0-9A-F]{2}>' -and $text -notmatch 'NetBIOS Remote Cache') {
                 $files += @{ name = "NetBIOS cache: $text"; sizeKB = 0; modified = '' }
             }
         }
+        if ($exitCode -ne 0) { throw 'NetBIOS cache could not be checked.' }
         @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    catch { @{ error = $true; message = 'NetBIOS cache could not be checked.'; files = @($files); total = @($files).Count; totalSizeMB = 0 } }
 }
 
 function Get-GeolocationCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $totalBytes = [int64]0
+    $partial = $false
+    $lfSvc = 'C:\ProgramData\Microsoft\Windows\LfSvc'
     try {
-        $files = @()
-        $totalBytes = [int64]0
-        $lfSvc = 'C:\ProgramData\Microsoft\Windows\LfSvc'
-        if (Test-Path $lfSvc -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $lfSvc -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Geolocation cache: $($_.FullName.Substring($lfSvc.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        try { $root = Get-Item -LiteralPath $lfSvc -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Location cache is not a directory.' }
+            Get-ChildItem -LiteralPath $lfSvc -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ name = "Geolocation cache: $($_.FullName.Substring($lfSvc.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
         }
-        $locationConsent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
-        if (Test-Path $locationConsent -ErrorAction SilentlyContinue) {
-            (Get-Item -Path $locationConsent -ErrorAction SilentlyContinue).Property | Where-Object { $_ -notmatch '^PS' } | ForEach-Object {
-                $files += @{ name = "Location consent metadata: $_"; sizeKB = 0; modified = '' }
+    } catch { $partial = $true }
+    $locationConsent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
+    try {
+        try { $root = Get-Item -LiteralPath $locationConsent -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            foreach ($name in @($root.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $files.Add(@{ name = "Location consent metadata: $name"; path = $locationConsent; value = $root.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$root.GetValueKind($name); sizeKB = 0; modified = '' })
+                } catch { $partial = $true }
             }
-            Get-ChildItem -Path $locationConsent -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "Location consent usage metadata: $($_.PSChildName)"; sizeKB = 0; modified = '' }
-            }
+            try {
+                Get-ChildItem -LiteralPath $locationConsent -Recurse -Force -ErrorAction Stop | ForEach-Object {
+                    $key = $_
+                    $values = @{}
+                    foreach ($name in @($key.Property | Where-Object { $_ -notmatch '^PS' })) {
+                        try { $values[$name] = @{ value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); type = [string]$key.GetValueKind($name) } }
+                        catch { $partial = $true }
+                    }
+                    $files.Add(@{ name = "Location consent usage metadata: $($key.PSChildName)"; path = $key.PSPath; values = $values; sizeKB = 0; modified = '' })
+                }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some geolocation sources could not be checked.' } else { $null } }
 }
 
 function Get-VPNPhonebooksInfo {
     try {
-        $files = @(Get-CleanupArtifactFiles -Sources @(
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected user and system VPN phonebook and log locations only.' -Sources @(
             @{ label = 'User VPN'; path = (Join-Path $env:APPDATA 'Microsoft\\Network\\Connections\\Pbk'); patterns = @('rasphone.pbk','*.log','*.etl') },
             @{ label = 'User VPN'; path = (Join-Path $env:LOCALAPPDATA 'Microsoft\\Network\\Connections'); patterns = @('rasphone.pbk','*.log','*.etl') },
             @{ label = 'System VPN'; path = (Join-Path $env:ProgramData 'Microsoft\\Network\\Connections\\Pbk'); patterns = @('rasphone.pbk','*.log','*.etl') }
-        ))
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        )
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
 function Get-ProxyCacheInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $connections = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
     try {
-        $files = @()
-        $connections = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
-        if (Test-Path $connections -ErrorAction SilentlyContinue) {
-            (Get-Item -Path $connections -ErrorAction SilentlyContinue).Property | Where-Object { $_ -notmatch '^PS' } | ForEach-Object {
-                $files += @{ name = "Proxy connection metadata: $_"; sizeKB = 0; modified = '' }
+        try { $item = Get-Item -LiteralPath $connections -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $item = $null }
+        if ($item) {
+            foreach ($property in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $files.Add(@{ name = "Proxy connection metadata: $property"; value = $item.GetValue($property, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$item.GetValueKind($property); sizeKB = 0; modified = '' })
+                } catch { $partial = $true }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    } catch { $partial = $true }
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some proxy connection metadata could not be checked.' } else { $null } }
 }
 
 function Get-CloudPlaceholdersInfo {
@@ -3849,28 +4413,33 @@ function Get-CloudPlaceholdersInfo {
 }
 
 function Get-BITSQueueInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
-        $transfers = @(Get-BitsTransfer -AllUsers -ErrorAction Stop)
-        foreach ($transfer in $transfers) {
-            $files += @{ name = "BITS job: $($transfer.DisplayName) ($($transfer.JobState))"; sizeKB = 0; modified = '' }
+        Get-BitsTransfer -AllUsers -ErrorAction Stop | ForEach-Object {
+            $transfer = $_
+            $files.Add(@{ name = "BITS job: $($transfer.DisplayName) ($($transfer.JobState))"; jobId = [string]$transfer.JobId; state = [string]$transfer.JobState; owner = [string]$transfer.OwnerAccount; bytesTransferred = $transfer.BytesTransferred; bytesTotal = $transfer.BytesTotal; sizeKB = 0; modified = '' })
         }
-        $downloader = Join-Path $env:ProgramData 'Microsoft\\Network\\Downloader'
-        try {
-            $null = Get-Item -LiteralPath $downloader -Force -ErrorAction Stop
+    } catch { $partial = $true }
+    $downloader = Join-Path $env:ProgramData 'Microsoft\\Network\\Downloader'
+    try {
+        try { $root = Get-Item -LiteralPath $downloader -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'BITS queue location is not a directory.' }
             Get-ChildItem -LiteralPath $downloader -File -Filter 'qmgr*.dat' -Force -ErrorAction Stop | ForEach-Object {
-                $files += @{ name = "BITS queue database: $($_.Name)"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $files.Add(@{ name = "BITS queue database: $($_.Name)"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
-        } catch [System.Management.Automation.ItemNotFoundException] {}
-        $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+        }
+    } catch { $partial = $true }
+    $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some BITS queue sources could not be checked.' } else { $null } }
 }
 
 function Get-CellularHistoryInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
         $interfaces = @(& netsh.exe mbn show interfaces 2>$null)
         if ($LASTEXITCODE -ne 0) { throw 'Cellular interfaces could not be read.' }
         $interfaceNames = @()
@@ -3881,127 +4450,91 @@ function Get-CellularHistoryInfo {
             }
         }
         foreach ($interface in $interfaceNames) {
-            $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
-            if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
-            foreach ($line in $profiles) {
-                $text = ([string]$line).Trim()
-                if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
-                    $files += @{ name = "Cellular profile ($interface): $($Matches[2].Trim())"; sizeKB = 0; modified = '' }
+            try {
+                $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
+                if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
+                foreach ($line in $profiles) {
+                    $text = ([string]$line).Trim()
+                    if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
+                        $profileName = $Matches[2].Trim()
+                        $files.Add(@{ name = "Cellular profile ($interface): $profileName"; profileName = $profileName; interface = $interface; source = 'Cellular profile'; sizeKB = 0; modified = '' })
+                    }
                 }
-            }
+            } catch { $partial = $true }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count }
+        @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some cellular profiles could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
 
-function Get-WebCacheInfo {
-    # Returns WebCacheV*.dat (ESE database — WebCacheV01.dat historically, WebCacheV24.dat
-    # on newer builds) + rotating V01*.log transaction logs
+function Get-CleanupCacheFileInventory {
+    param([string]$Root, [string[]]$Patterns, [string]$ExtraDirectory = '')
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $webCacheDir = "$env:LOCALAPPDATA\Microsoft\Windows\WebCache"
-        $files = @()
-        if (Test-Path $webCacheDir) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $webCacheDir 'WebCacheV*.dat') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $webCacheDir 'V01*.log') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+        try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
+        if ($rootItem) {
+            if (-not $rootItem.PSIsContainer) { throw 'Cache location is not a directory.' }
+            foreach ($pattern in $Patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $Root -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    }
+                } catch { $partial = $true }
+            }
+            if ($ExtraDirectory) {
+                try {
+                    $extra = Join-Path $Root $ExtraDirectory
+                    try { $extraItem = Get-Item -LiteralPath $extra -Force -ErrorAction Stop }
+                    catch [System.Management.Automation.ItemNotFoundException] { $extraItem = $null }
+                    if ($extraItem) {
+                        if (-not $extraItem.PSIsContainer) { throw 'Cache location is not a directory.' }
+                        Get-ChildItem -LiteralPath $extra -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                            $files.Add(@{ source=$ExtraDirectory; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        }
+                    }
+                } catch { $partial = $true }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some cache locations could not be checked.' } else { $null } }
+}
+
+function Get-WebCacheInfo {
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\WebCache') -Patterns @('WebCacheV*.dat', 'V01*.log')
 }
 
 function Get-ThumbnailCacheInfo {
-    # Returns Explorer thumbnail + icon cache database file listing
-    try {
-        $explorerDir = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        $files = @()
-        if (Test-Path $explorerDir) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $explorerDir 'thumbcache_*.db') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $explorerDir 'iconcache_*.db') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Explorer') -Patterns @('thumbcache_*.db', 'iconcache_*.db')
 }
 
 function Get-NotificationDatabaseInfo {
-    # Returns the WPN (Windows Push Notification) database + its WAL/SHM sidecar files
-    try {
-        $notifDir = "$env:LOCALAPPDATA\Microsoft\Windows\Notifications"
-        $files = @()
-        if (Test-Path $notifDir -ErrorAction SilentlyContinue) {
-            foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
-                $p = Join-Path $notifDir $name
-                if (Test-Path $p -ErrorAction SilentlyContinue) {
-                    $f = Get-Item -Path $p -Force -ErrorAction SilentlyContinue
-                    if ($f) {
-                        $files += @{
-                            name     = $f.Name
-                            sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                            modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                        }
-                    }
-                }
-            }
-        }
-        # Also cover wpnidm — per-app notification icon/data cache alongside wpndatabase.db.
-        $wpnidmDir = Join-Path $notifDir 'wpnidm'
-        if (Test-Path $wpnidmDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $wpnidmDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'wpnidm'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications') -Patterns @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm') -ExtraDirectory 'wpnidm'
 }
 
 function Get-BranchCacheInfo {
-    # Returns BranchCache publication cache (PeerDistPub) + hosted-cache reply data (PeerDistRep) file listing
-    try {
-        $sources = @(
-            @{ label = 'PeerDistRep'; path = "$env:SystemRoot\System32\PeerDistRep" },
-            @{ label = 'PeerDistPub'; path = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            # PeerDistPub lives under the NetworkService profile whose ACL denies
-            # even elevated reads on some systems; -EA SilentlyContinue keeps the
-            # access-denied error (a non-terminating error try/catch won't trap)
-            # out of the router's output stream.
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $src.path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
+    # Each source is independent: a denied NetworkService folder must not
+    # make the device look empty or erase records already found elsewhere.
+    $sources = @(
+        @{ label = 'PeerDistRep'; path = "$env:SystemRoot\System32\PeerDistRep" },
+        @{ label = 'PeerDistPub'; path = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub" }
+    )
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($src in $sources) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer) { throw 'BranchCache location is not a directory.' }
+            Get-ChildItem -LiteralPath $src.path -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some BranchCache locations could not be checked.' } else { $null } }
 }
 
 # --- Phase E: system diagnostic / servicing / defender-history viewers (read-only) ---
@@ -4009,214 +4542,179 @@ function Get-BranchCacheInfo {
 function Get-EventTranscriptInfo {
     # Returns the Diagnostic Data Viewer's EventTranscript.db + its rotating
     # ESE transaction logs (*.jrs / *.rbs). System-wide (ProgramData), not per-user.
-    try {
-        $etDir = "$env:ProgramData\Microsoft\Diagnosis\EventTranscript"
-        $files = @()
-        if (Test-Path $etDir -ErrorAction SilentlyContinue) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $etDir 'EventTranscript.db') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $etDir '*.jrs') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $etDir '*.rbs') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'EventTranscript'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($src in @(
+        @{ label = 'EventTranscript'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\EventTranscript'); patterns = @('EventTranscript.db', '*.jrs', '*.rbs'); recursive = $false },
+        @{ label = 'ETLLogs'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\ETLLogs'); patterns = @('*.etl'); recursive = $true }
+    )) {
+        try {
+            try { $root = Get-Item -LiteralPath $src.root -Force -ErrorAction Stop }
+            catch [Management.Automation.ItemNotFoundException] { continue }
+            if (-not $root.PSIsContainer) { throw 'Diagnostics location is not a directory.' }
+            foreach ($pattern in $src.patterns) {
+                try {
+                    Get-ChildItem -LiteralPath $src.root -Filter $pattern -Recurse:$src.recursive -File -Force -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    }
+                } catch { $partial = $true }
             }
-        }
-        # Also cover the raw ETW trace logs (AutoLogger etc.) DiagTrack rotates
-        # under ETLLogs — same diagnostics pipeline as EventTranscript.db.
-        $etlDir = "$env:ProgramData\Microsoft\Diagnosis\ETLLogs"
-        if (Test-Path $etlDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $etlDir -Recurse -Filter '*.etl' -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'ETLLogs'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some diagnostics locations could not be checked.' } else { $null } }
 }
 
 function Get-ActivitiesTimelineInfo {
     # Returns Windows Timeline / Activities History database (ActivitiesCache.db)
     # + its WAL/SHM sidecars, recursed across every per-identity subfolder
     # under ConnectedDevicesPlatform.
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    $cdpDir = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
     try {
-        $cdpDir = "$env:LOCALAPPDATA\ConnectedDevicesPlatform"
-        $files = @()
-        if (Test-Path $cdpDir -ErrorAction SilentlyContinue) {
-            $targets = @(Get-ChildItem -Path $cdpDir -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'ConnectedDevicesPlatform'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+        try { $root = Get-Item -LiteralPath $cdpDir -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Activity location is not a directory.' }
+            Get-ChildItem -LiteralPath $cdpDir -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source='ConnectedDevicesPlatform'; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some activity locations could not be checked.' } else { $null } }
 }
 
 function Get-RdpBitmapCacheInfo {
     # Returns RDP client bitmap-cache tile files (thumbnails cached from past
     # outgoing RDP sessions).
-    try {
-        $rdpCacheDir = "$env:LOCALAPPDATA\Microsoft\Terminal Server Client\Cache"
-        $files = @()
-        if (Test-Path $rdpCacheDir -ErrorAction SilentlyContinue) {
-            $targets  = @(Get-ChildItem -Path (Join-Path $rdpCacheDir '*.bin') -Force -ErrorAction SilentlyContinue)
-            $targets += @(Get-ChildItem -Path (Join-Path $rdpCacheDir '*.bmc') -Force -ErrorAction SilentlyContinue)
-            foreach ($f in $targets) {
-                $files += @{
-                    source   = 'Terminal Server Client\Cache'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+    $result = Get-CleanupCacheFileInventory -Root (Join-Path $env:LOCALAPPDATA 'Microsoft\Terminal Server Client\Cache') -Patterns @('*.bin', '*.bmc')
+    foreach ($file in $result.files) { $file.source = 'Terminal Server Client\Cache' }
+    $result
+}
+
+function Get-CleanupMultiSourceFileInventory {
+    param([object[]]$Sources)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    foreach ($source in $Sources) {
+        $result = Get-CleanupCacheFileInventory -Root $source.path -Patterns $source.patterns
+        if ($result.partial) { $partial = $true }
+        foreach ($file in $result.files) { $file.source = $source.label; $files.Add($file) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some log locations could not be checked.' } else { $null } }
 }
 
 function Get-ServicingLogsInfo {
-    # Returns Windows servicing log files: CBS (Component-Based Servicing) + DISM.
-    # System paths — Test-Path is guarded because ACLs can deny access on some builds.
-    try {
-        $sources = @(
-            @{ label = 'CBS';  path = "$env:SystemRoot\Logs\CBS" },
-            @{ label = 'DISM'; path = "$env:SystemRoot\Logs\DISM" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $src.path -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='CBS'; path=(Join-Path $env:SystemRoot 'Logs\CBS'); patterns=@('*') },
+        @{ label='DISM'; path=(Join-Path $env:SystemRoot 'Logs\DISM'); patterns=@('*') }
+    )
 }
 
 function Get-DeviceInstallLogsInfo {
-    # Returns device-installation setup logs (setupapi.dev.log, setupapi.app.log, etc.)
-    try {
-        $infDir = "$env:SystemRoot\INF"
-        $files = @()
-        if (Test-Path $infDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path (Join-Path $infDir 'setupapi.*.log') -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'INF'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='INF'; path=(Join-Path $env:SystemRoot 'INF'); patterns=@('setupapi.*.log') }
+    )
 }
 
 function Get-UsageTraceLogsInfo {
-    # Returns ETW trace logs: SleepStudy (modern-standby diagnostics) + WDI
-    # (Windows Diagnostic Infrastructure) + WMI trace logs.
-    try {
-        $sources = @(
-            @{ label = 'SleepStudy'; path = "$env:SystemRoot\System32\SleepStudy" },
-            @{ label = 'WDI';        path = "$env:SystemRoot\System32\WDI\LogFiles" },
-            @{ label = 'WMI';        path = "$env:SystemRoot\System32\LogFiles\WMI" }
-        )
-        $files = @()
-        foreach ($src in $sources) {
-            if (Test-Path $src.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path (Join-Path $src.path '*.etl') -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{
-                        source   = $src.label
-                        name     = $_.Name
-                        sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupMultiSourceFileInventory -Sources @(
+        @{ label='SleepStudy'; path=(Join-Path $env:SystemRoot 'System32\SleepStudy'); patterns=@('*.etl') },
+        @{ label='WDI'; path=(Join-Path $env:SystemRoot 'System32\WDI\LogFiles'); patterns=@('*.etl') },
+        @{ label='WMI'; path=(Join-Path $env:SystemRoot 'System32\LogFiles\WMI'); patterns=@('*.etl') }
+    )
 }
 
 function Get-DefenderHistoryInfo {
     # Returns Windows Defender scan-history records + the MpCmdRun.log support log.
     # System path (ProgramData) — ACL-guarded like the other Phase E system viewers.
+    $history = Get-CleanupRecursiveFileInventory -Root (Join-Path $env:ProgramData 'Microsoft\Windows Defender\Scans\History\Service') -Source 'ScanHistory'
+    $files = [Collections.Generic.List[object]]::new()
+    foreach ($file in $history.files) { $files.Add($file) }
+    $partial = [bool]$history.partial
+    $mpLog = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Support\MpCmdRun.log'
     try {
-        $files = @()
-        $historyDir = "$env:ProgramData\Microsoft\Windows Defender\Scans\History\Service"
-        if (Test-Path $historyDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $historyDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'ScanHistory'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
+        try { $f = Get-Item -LiteralPath $mpLog -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $f = $null }
+        if ($f) {
+            if ($f.PSIsContainer) { throw 'The Defender support log is not a file.' }
+            $files.Add(@{ source='Support'; name=$f.Name; path=$f.FullName; sizeKB=[math]::Round($f.Length / 1KB, 1); modified=$f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
         }
-        $mpLog = "$env:ProgramData\Microsoft\Windows Defender\Support\MpCmdRun.log"
-        if (Test-Path $mpLog -ErrorAction SilentlyContinue) {
-            $f = Get-Item -Path $mpLog -Force -ErrorAction SilentlyContinue
-            if ($f) {
-                $files += @{
-                    source   = 'Support'
-                    name     = $f.Name
-                    sizeKB   = [math]::Round($f.Length / 1KB, 1)
-                    modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some protection history locations could not be checked.' } else { $null } }
 }
 
 # --- Additional system/app usage viewers (read-only, no admin required) ---
 
 function Get-AppLaunchHistoryInfo {
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
         $bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
         $root = $null
         try { $root = Get-Item -LiteralPath $bamRoot -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { }
-        $files = @()
         if ($null -ne $root) {
-            foreach ($sid in @(Get-ChildItem -LiteralPath $bamRoot -ErrorAction Stop)) {
-                $key = Get-Item -LiteralPath $sid.PSPath -ErrorAction Stop
-                foreach ($name in @($key.Property)) {
-                    # BAM also stores control values; only executable values are launch records.
-                    if ($name -in @('Version', 'SequenceNumber')) { continue }
-                    $files += @{ source = 'BAM'; name = $name; userSid = $sid.PSChildName }
+            try {
+                Get-ChildItem -LiteralPath $bamRoot -ErrorAction Stop | ForEach-Object {
+                    $sid = $_
+                    try {
+                        $key = Get-Item -LiteralPath $sid.PSPath -ErrorAction Stop
+                        foreach ($name in @($key.Property)) {
+                            # BAM also stores control values; only executable values are launch records.
+                            if ($name -in @('Version', 'SequenceNumber')) { continue }
+                            try {
+                                $value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                                if ($null -eq $value) { throw 'The app launch value could not be read.' }
+                                $row = @{ source = 'BAM'; name = $name; userSid = $sid.PSChildName; value = $value; valueType = [string]$key.GetValueKind($name) }
+                                if ($value -is [byte[]] -and $value.Length -ge 8) {
+                                    try {
+                                        $fileTime = [BitConverter]::ToInt64($value, 0)
+                                        if ($fileTime -gt 0) { $row.lastRun = [DateTime]::FromFileTimeUtc($fileTime).ToString('o') }
+                                    } catch { }
+                                }
+                                $files.Add($row)
+                            } catch { $partial = $true; $files.Add(@{ source = 'BAM'; name = $name; userSid = $sid.PSChildName }) }
+                        }
+                    } catch { $partial = $true }
                 }
-            }
+            } catch { $partial = $true }
         }
-        @{ files = $files; total = $files.Count; countUnit = 'tracked programs' }
+        @{ files = @($files.ToArray()); total = $files.Count; countUnit = 'tracked programs'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some app launch history could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = "Failed to read app launch history: $($_.Exception.Message)" } }
+}
+
+function Get-CleanupOfficeMruInventory {
+    param([string]$RegistryRoot, [int]$PreviewLimit = [int]::MaxValue)
+    $files = [Collections.Generic.List[object]]::new()
+    $count = 0
+    $partial = $false
+    foreach ($suffix in @('*\*\File MRU', '*\*\Place MRU', '*\*\Security\Trusted Documents\TrustRecords')) {
+        $pattern = "$RegistryRoot\Software\Microsoft\Office\$suffix"
+        try {
+            Get-Item -Path $pattern -ErrorAction Stop | ForEach-Object {
+                $key = $_
+                try {
+                    $keyLeaf = Split-Path $key.Name -Leaf
+                    $appLeaf = Split-Path (Split-Path $key.Name -Parent) -Leaf
+                    $props = Get-ItemProperty -Path $key.PSPath -ErrorAction Stop
+                    foreach ($property in @($props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') })) {
+                        $count++
+                        if ($files.Count -lt $PreviewLimit) {
+                            $files.Add(@{ source = "$appLeaf\$keyLeaf"; name = (Split-Path $property.Name -Leaf); key = $property.Name; path = $key.PSPath; value = $property.Value; sizeKB = 0; modified = '' })
+                        }
+                    }
+                } catch { $partial = $true }
+            }
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { $partial = $true }
+    }
+    @{ files = @($files.ToArray()); total = $count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some Office history locations could not be checked.' } else { $null } }
 }
 
 function Get-OfficeMruInfo {
@@ -4231,33 +4729,7 @@ function Get-OfficeMruInfo {
     # document's path, so Split-Path -Leaf yields the filename; for File/Place
     # MRU the value name is already a plain label ("Item 1") and Split-Path
     # is a harmless no-op.
-    try {
-        $patterns = @(
-            'HKCU:\Software\Microsoft\Office\*\*\File MRU',
-            'HKCU:\Software\Microsoft\Office\*\*\Place MRU',
-            'HKCU:\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords'
-        )
-        $files = @()
-        foreach ($pattern in $patterns) {
-            Get-Item -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
-                $keyLeaf = Split-Path $_.Name -Leaf
-                $appLeaf = Split-Path (Split-Path $_.Name -Parent) -Leaf
-                $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{
-                            source   = "$appLeaf\$keyLeaf"
-                            name     = (Split-Path $_.Name -Leaf)
-                            sizeKB   = 0
-                            modified = ''
-                        }
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupOfficeMruInventory -RegistryRoot 'HKCU:'
 }
 
 function Get-EmbeddedWebCacheInfo {
@@ -4265,64 +4737,85 @@ function Get-EmbeddedWebCacheInfo {
     # embed a Chromium WebView2 runtime whose per-app profile cache lives under
     # a nested "EBWebView" folder somewhere below LOCALAPPDATA. -Depth 4 caps
     # the walk so this stays a bounded scan, not a slow full-profile crawl.
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
     try {
-        $files = @()
-        if (Test-Path $env:LOCALAPPDATA -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction SilentlyContinue | ForEach-Object {
-                $sizeBytes = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-                if (-not $sizeBytes) { $sizeBytes = 0 }
-                $files += @{
-                    source   = Split-Path (Split-Path $_.FullName -Parent) -Leaf
-                    name     = 'EBWebView'
-                    sizeKB   = [math]::Round($sizeBytes / 1KB, 1)
-                    modified = ''
-                }
+        try { $root = Get-Item -LiteralPath $env:LOCALAPPDATA -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+        if ($root) {
+            if (-not $root.PSIsContainer) { throw 'Application data location is not a directory.' }
+            Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction Stop | ForEach-Object {
+                $directory = $_
+                $sizeBytes = [long]0
+                try {
+                    Get-ChildItem -LiteralPath $directory.FullName -Recurse -File -Force -ErrorAction Stop | ForEach-Object { $sizeBytes += $_.Length }
+                } catch { $partial = $true }
+                $files.Add(@{ source=(Split-Path (Split-Path $directory.FullName -Parent) -Leaf); name='EBWebView'; path=$directory.FullName; sizeKB=[math]::Round($sizeBytes / 1KB, 1); modified=$directory.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); coverage='limited'; coverageNote='Checks application data to depth 4 for WebView folders.'; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some WebView cache locations could not be checked.' } else { $null } }
+}
+
+function Get-CleanupRecursiveFileInventory {
+    param([string]$Root, [string]$Source)
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
+    try {
+        try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
+        if ($rootItem) {
+            if (-not $rootItem.PSIsContainer) { throw 'Inventory location is not a directory.' }
+            Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                $files.Add(@{ source=$Source; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+            }
+        }
+    } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some locations could not be checked.' } else { $null } }
 }
 
 function Get-P2PUpdateCacheInfo {
-    # Returns Delivery Optimization's peer-to-peer Windows Update cache files (DoSvc).
-    try {
-        $doDir = "$env:SystemRoot\SoftwareDistribution\DeliveryOptimization"
-        $files = @()
-        if (Test-Path $doDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $doDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'DeliveryOptimization'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupRecursiveFileInventory -Root (Join-Path $env:SystemRoot 'SoftwareDistribution\DeliveryOptimization') -Source 'DeliveryOptimization'
 }
 
 function Get-ReliabilityHistoryInfo {
-    # Returns Reliability Monitor's cached scoring data (RAC StateData). Not
-    # present on all machines/builds — guarded like the other Phase E viewers.
-    try {
-        $racDir = "$env:ProgramData\Microsoft\RAC\StateData"
-        $files = @()
-        if (Test-Path $racDir -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $racDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{
-                    source   = 'RAC'
-                    name     = $_.Name
-                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
-                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                }
+    Get-CleanupRecursiveFileInventory -Root (Join-Path $env:ProgramData 'Microsoft\RAC\StateData') -Source 'RAC'
+}
+
+function Get-CleanupExplorerSearchInventory {
+    param([string]$RegistryRoot, [int]$PreviewLimit = [int]::MaxValue)
+    $files = [Collections.Generic.List[object]]::new()
+    $count = 0
+    $partial = $false
+    foreach ($source in @(
+        @{ label='WordWheelQuery'; path="$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery" },
+        @{ label='TypedPaths'; path="$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths" }
+    )) {
+        try {
+            try { $item = Get-Item -LiteralPath $source.path -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { continue }
+            foreach ($name in @($item.Property | Where-Object { $_ -notmatch '^PS' })) {
+                try {
+                    $value = $item.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    $type = [string]$item.GetValueKind($name)
+                    $count++
+                    if ($files.Count -lt $PreviewLimit) {
+                        $record = @{ source=$source.label; name=$name; key=$name; path=$source.path; value=$value; valueType=$type; sizeKB=0; modified='' }
+                        if ($source.label -eq 'WordWheelQuery' -and $name -match '^\d+$' -and $value -is [byte[]] -and $value.Length % 2 -eq 0) {
+                            try {
+                                $text = [System.Text.UnicodeEncoding]::new($false, $false, $true).GetString($value).TrimEnd([char]0)
+                                if ($text -and $text -notmatch '[\x00-\x08\x0b\x0c\x0e-\x1f]') { $record.text = $text }
+                            } catch { }
+                        }
+                        $files.Add($record)
+                    }
+                } catch { $partial = $true }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+        } catch { $partial = $true }
     }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    @{ files=@($files.ToArray()); total=$count; totalSizeMB=0; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some Explorer search history could not be checked.' } else { $null } }
 }
 
 function Get-ExplorerSearchHistoryInfo {
@@ -4330,25 +4823,7 @@ function Get-ExplorerSearchHistoryInfo {
     # WordWheelQuery is present on all supported Windows versions; its
     # TypedPaths sibling can be absent depending on build — guarded
     # independently so a missing one doesn't blank out the other.
-    try {
-        $roots = @(
-            @{ label = 'WordWheelQuery'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery' },
-            @{ label = 'TypedPaths';     path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths' }
-        )
-        $files = @()
-        foreach ($root in $roots) {
-            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
-                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
-                    }
-                }
-            }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+    Get-CleanupExplorerSearchInventory -RegistryRoot 'HKCU:'
 }
 
 function Get-SearchPersonalizationInfo {
@@ -4358,34 +4833,41 @@ function Get-SearchPersonalizationInfo {
     # plus the inking/typing personalization store used to tailor search
     # suggestions. Cloud-synced query history tied to a Microsoft Account
     # lives server-side and cannot be reached from local tools.
-    try {
-        $files = @()
+    $files = [Collections.Generic.List[object]]::new()
+    $partial = $false
         $searchRoots = @(
             @{ label = 'JumplistData'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData' },
             @{ label = 'Launch';       path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\Launch' }
         )
         foreach ($root in $searchRoots) {
-            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
-                Get-ChildItem -Path $root.path -ErrorAction SilentlyContinue | ForEach-Object {
-                    $files += @{ source = $root.label; name = $_.PSChildName; sizeKB = 0; modified = '' }
-                }
-                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
-                if ($props) {
-                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
+            try {
+                try { $key = Get-Item -LiteralPath $root.path -ErrorAction Stop }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
+                try {
+                    Get-ChildItem -LiteralPath $root.path -ErrorAction Stop | ForEach-Object {
+                        $files.Add(@{ source = $root.label; name = $_.PSChildName; path = $_.PSPath; sizeKB = 0; modified = '' })
                     }
+                } catch { $partial = $true }
+                foreach ($name in @($key.Property)) {
+                    try {
+                        $files.Add(@{ source = $root.label; name = $name; path = $root.path; value = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); valueType = [string]$key.GetValueKind($name); sizeKB = 0; modified = '' })
+                    } catch { $partial = $true }
                 }
-            }
+            } catch { $partial = $true }
         }
         $trainedDataStore = "$env:LOCALAPPDATA\Microsoft\InputPersonalization\TrainedDataStore"
-        if (Test-Path $trainedDataStore -ErrorAction SilentlyContinue) {
-            Get-ChildItem -Path $trainedDataStore -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ source = 'TrainedDataStore'; name = $_.Name; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+        try {
+            try { $root = Get-Item -LiteralPath $trainedDataStore -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
+            if ($root) {
+                if (-not $root.PSIsContainer) { throw 'Search personalization location is not a directory.' }
+                Get-ChildItem -LiteralPath $trainedDataStore -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
+                    $files.Add(@{ source = 'TrainedDataStore'; name = $_.Name; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                }
             }
-        }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round((($files | ForEach-Object { $_.sizeKB }) | Measure-Object -Sum).Sum / 1KB, 2) }
-    }
-    catch { @{ error = $true; message = $_.Exception.Message } }
+        } catch { $partial = $true }
+    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($size / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some search personalization locations could not be checked.' } else { $null } }
 }
 
 function Get-PreviousWindowsInstallInfo {
@@ -4420,23 +4902,18 @@ function Get-PreviousWindowsInstallInfo {
 #   Invoke-CleanupClearAllUsers — orchestrate across all/selected accounts
 # ============================================================================
 
-# Returns true for real, user-facing profile folders. Excludes Windows
-# defaults plus automation/sandbox profiles that can have S-1-5-21 SIDs but
-# are not meaningful accounts for per-user cleanup.
+# Exclude only Windows' known default and utility profiles. Real accounts can
+# contain words such as "sandbox" in their name or profile path; callers also
+# check Win32_UserProfile.Special, SID and supported profile location.
 function Test-WCVisibleUserProfile {
     param(
         [string]$Name,
         [string]$DisplayName,
         [string]$Path
     )
-    $hiddenExact = @('Default', 'Default User', 'defaultuser0', 'Public', 'All Users', 'Sandbox', 'WDAGUtilityAccount')
-    $hiddenFragments = @('sandbox', 'codex', 'defaultuser', 'wdagutilityaccount')
+    $hiddenExact = @('Default', 'Default User', 'defaultuser0', 'Public', 'All Users', 'WDAGUtilityAccount')
     if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
     if ($hiddenExact -contains $Name -or $hiddenExact -contains $DisplayName) { return $false }
-    $probe = "$Name $DisplayName $Path".ToLowerInvariant()
-    foreach ($fragment in $hiddenFragments) {
-        if ($probe.Contains($fragment)) { return $false }
-    }
     return $true
 }
 
@@ -4455,7 +4932,8 @@ function Get-UserProfiles {
     $mySid = ''
     try { $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
 
-    $profiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+    try {
+    $profiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
         Where-Object {
             -not $_.Special -and
             $_.SID -match '^S-1-5-21-' -and
@@ -4472,6 +4950,9 @@ function Get-UserProfiles {
                 @{ name = $leaf; displayName = $display; path = $_.LocalPath; sid = $_.SID; isCurrent = ($_.SID -eq $mySid) }
             }
         }
+    } catch {
+        return @{ error = $true; message = 'Windows user profiles could not be read.'; profiles = @(); total = 0; currentUser = ''; currentSid = $mySid; isAdmin = [bool](Test-IsAdmin) }
+    }
     # currentUser is the current SID's profile FOLDER name (so it matches the
     # `name` keys the UI uses), not $env:USERNAME — otherwise selecting your own
     # account would be treated as "another user".
@@ -4522,7 +5003,7 @@ function Invoke-WithUserHive {
     )
     $username  = Split-Path $UserProfilePath -Leaf
     $ntuser    = Join-Path $UserProfilePath 'NTUSER.DAT'
-    $mountName = "WC_TempHive_$username"
+    $mountName = "WC_TempHive_$([guid]::NewGuid().ToString('N'))"
     $mountPath = "HKEY_USERS\$mountName"
 
     if (-not (Test-Path $ntuser)) {
@@ -4532,6 +5013,7 @@ function Invoke-WithUserHive {
 
     # Check the hive isn't already loaded (e.g. user partially logged off)
     $alreadyLoaded = Test-Path "Registry::$mountPath"
+    if ($alreadyLoaded) { throw 'Temporary profile hive name already exists; refusing to reuse it.' }
     if (-not $alreadyLoaded) {
         $loadOut = & reg load $mountPath $ntuser 2>&1
         $loadOk  = ($LASTEXITCODE -eq 0) -and (Test-Path "Registry::$mountPath")
@@ -4573,6 +5055,46 @@ function Assert-CleanupCategoriesAllowed {
             throw 'This category is protected from cleanup unless individually confirmed.'
         }
     }
+}
+
+function Invoke-CleanupCurrentUserGitActivity {
+    # This reader lists identities only; credential blobs remain untouched.
+    # Other applications' Vault entries are outside its coverage, so even a
+    # verified removal must remain partial.
+    try {
+        if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
+        . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
+        $identities = @(Get-WCScheduledCredentials)
+        foreach ($credential in $identities) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+        }
+        $before = @($identities | Where-Object { ([string]$_.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase) })
+        $git = Get-Command git.exe -ErrorAction SilentlyContinue
+        if (-not $git) { throw 'Git configuration cannot be checked.' }
+        $safe = @(& $git.Source config --global --get-all safe.directory 2>$null)
+        if ($LASTEXITCODE -notin @(0, 1) -or ($LASTEXITCODE -eq 1 -and $safe.Count) -or ($LASTEXITCODE -eq 0 -and -not $safe.Count)) { throw 'Git configuration could not be verified.' }
+        $failed = $false
+        foreach ($credential in $before) {
+            try { Remove-WCScheduledCredential $credential.Name $credential.Type $credential.UserName }
+            catch { $failed = $true }
+        }
+        $remainingIdentities = @(Get-WCScheduledCredentials)
+        foreach ($credential in $remainingIdentities) {
+            if ([string]::IsNullOrWhiteSpace([string]$credential.Name) -or [uint32]$credential.Type -eq 0) { throw 'Windows returned an invalid credential identity.' }
+        }
+        $after = @($remainingIdentities | Where-Object { ([string]$_.Name).StartsWith('git:', [StringComparison]::OrdinalIgnoreCase) })
+        if ($after.Count -gt 0) { $failed = $true }
+        if ($safe.Count) {
+            & $git.Source config --global --unset-all safe.directory 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+            else {
+                $remaining = @(& $git.Source config --global --get-all safe.directory 2>$null)
+                if ($LASTEXITCODE -ne 1 -or $remaining.Count) { $failed = $true }
+            }
+        }
+        if ($failed) { return 'failed' }
+        return 'partial'
+    } catch { return 'failed' }
 }
 
 function Invoke-CleanupClearForUser {
@@ -5265,35 +5787,24 @@ function Invoke-CleanupClearForUser {
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
                 }
                 'gitActivity' {
-                    $gitConfig = Join-Path $UserProfilePath '.gitconfig'
                     $currentProfile = [Environment]::GetFolderPath('UserProfile')
                     $isCurrentProfile = $currentProfile -and ($UserProfilePath.TrimEnd('\\') -eq $currentProfile.TrimEnd('\\'))
-                    if ($isCurrentProfile) {
-                        foreach ($line in @(& cmdkey.exe /list 2>$null)) {
-                            $text = ([string]$line).Trim()
-                            if ($text -match '(?i)target=(.+)$' -and $Matches[1].Trim() -match '(?i)git:') {
-                                & cmdkey.exe ("/delete:{0}" -f $Matches[1].Trim()) 2>$null | Out-Null
-                            }
-                        }
-                    }
-                    if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) { & git.exe config --file $gitConfig --unset-all safe.directory 2>$null | Out-Null }
-                    $leftover = if (Test-Path $gitConfig -PathType Leaf -ErrorAction SilentlyContinue) {
-                        @(& git.exe config --file $gitConfig --get-all safe.directory 2>$null).Count
-                    } else { 0 }
-                    if ($isCurrentProfile) {
-                        $leftover += @(& cmdkey.exe /list 2>$null | Where-Object { ([string]$_).Trim() -match '(?i)target=.*git:' }).Count
-                    }
-                    $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
+                    # A different user's credential provider and Git global
+                    # configuration cannot be verified in this session.
+                    $catResults[$cat] = if ($isCurrentProfile) { Invoke-CleanupCurrentUserGitActivity } else { 'failed' }
                 }
                 'sshState' {
                     $knownHosts = Join-Path $UserProfilePath '.ssh\\known_hosts'
                     Erase-OneFile $knownHosts
                     $currentProfile = [Environment]::GetFolderPath('UserProfile')
+                    $agentVerified = $false
                     if ($currentProfile -and ($UserProfilePath.TrimEnd('\\') -eq $currentProfile.TrimEnd('\\'))) {
-                        $sshAdd = Get-Command ssh-add.exe -ErrorAction SilentlyContinue
-                        if ($sshAdd) { & $sshAdd.Source -D 2>$null | Out-Null }
+                        try {
+                            if ((Invoke-WCSshAdd -Option '-D') -ne 0) { throw 'SSH agent identities could not be removed.' }
+                            $agentVerified = (Invoke-WCSshAdd -Option '-l') -eq 1
+                        } catch { $agentVerified = $false }
                     }
-                    $catResults[$cat] = if (Test-Path $knownHosts -PathType Leaf -ErrorAction SilentlyContinue) { 'failed' } else { 'cleaned' }
+                    $catResults[$cat] = if ($agentVerified -and -not (Test-Path -LiteralPath $knownHosts -PathType Leaf -ErrorAction Stop)) { 'cleaned' } else { 'failed' }
                 }
                 'remoteAccessLogs' {
                     $targets = @(Get-CleanupTargetFiles @(
@@ -5347,19 +5858,22 @@ function Invoke-CleanupClearForUser {
                 }
                 'officeTempFiles' {
                     $roots = @((Join-Path $docs ''), (Join-Path $UserProfilePath 'Desktop'), (Join-Path $UserProfilePath 'Downloads'))
-                    $targets = @()
-                    foreach ($root in $roots) {
-                        if (Test-Path $root -ErrorAction SilentlyContinue) {
-                            $targets += @(Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+                    $tempRoot = Join-Path $localApp 'Temp'
+                    $readTargets = {
+                        foreach ($root in @($roots) + @($tempRoot)) {
+                            try { $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
+                            catch [System.Management.Automation.ItemNotFoundException] { continue }
+                            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
+                            if ($root -eq $tempRoot) {
+                                Get-ChildItem -LiteralPath $root -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop | ForEach-Object { $_.FullName }
+                            } else {
+                                Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object { $_.FullName }
+                            }
                         }
                     }
-                    $tempRoot = Join-Path $localApp 'Temp'
-                    if (Test-Path $tempRoot -ErrorAction SilentlyContinue) {
-                        $targets += @(Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction SilentlyContinue |
-                            Sort-Object LastWriteTime -Descending | Select-Object -First 500 | ForEach-Object { $_.FullName })
-                    }
+                    $targets = @(& $readTargets)
                     foreach ($target in $targets) { Erase-OneFile $target }
-                    $leftover = @($targets | Where-Object { Test-Path $_ -PathType Leaf -ErrorAction SilentlyContinue }).Count
+                    $leftover = @(& $readTargets).Count
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
                 }
                 'vpnPhonebooks' {
@@ -5421,9 +5935,11 @@ function Invoke-CleanupClearAllUsers {
     $categoryArr = $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
     if (@($categoryArr).Count -eq 0) { throw 'At least one cleanup category is required.' }
     Assert-CleanupCategoriesAllowed $categoryArr -AllowDefaultExcluded:($AllowDefaultExcluded -is [bool] -and $AllowDefaultExcluded)
-    $targetArr   = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
+    $hasTargetUsers = $TargetUsers -and $TargetUsers.Trim() -ne ''
+    $targetArr   = @(if ($hasTargetUsers) {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-    } else { @() }
+    })
+    if ($hasTargetUsers -and $targetArr.Count -eq 0) { throw 'No valid user profiles were specified; no cleanup was performed.' }
 
     # Filter to only scope-aware categories
     $scopeAwareIds = @(
@@ -5454,7 +5970,8 @@ function Invoke-CleanupClearAllUsers {
 
     # Enumerate target profiles — S-1-5-21-* SIDs only (real user accounts)
     $sysDrive    = $env:SystemDrive
-    $allProfiles = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
+    try {
+    $allProfiles = @(Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop |
         Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
         ForEach-Object {
             $leaf = Split-Path $_.LocalPath -Leaf
@@ -5463,19 +5980,29 @@ function Invoke-CleanupClearAllUsers {
             if (Test-WCVisibleUserProfile -Name $leaf -DisplayName $display -Path $_.LocalPath) {
                 [pscustomobject]@{ Name = $leaf; FullName = $_.LocalPath; SID = $_.SID }
             }
-        }
+        })
+    } catch { throw 'Windows user profiles could not be read; no cleanup was performed.' }
 
     # Privilege gate — clearing another user's traces requires loading their
     # offline NTUSER.DAT hive and writing under their profile, both of which
-    # need Administrator. A non-admin caller is constrained (by SID) to their
-    # OWN account so the operation degrades safely instead of erroring or
-    # touching accounts it has no right to.
+    # need Administrator. A non-admin caller may explicitly target only their
+    # own account; an all-users request is rejected rather than misreported.
     $isAdmin = Test-IsAdmin
-    $profiles = if (-not $isAdmin) {
-        $allProfiles | Where-Object { $_.SID -eq $mySid }
-    } elseif ($targetArr.Count -gt 0) {
-        $allProfiles | Where-Object { $targetArr -contains $_.Name }
-    } else { $allProfiles }
+    if (-not $isAdmin -and $targetArr.Count -eq 0) {
+        throw 'Administrator access is required to clean all user profiles; no cleanup was performed.'
+    }
+    $profiles = @($allProfiles | Where-Object {
+        ($isAdmin -or $_.SID -eq $mySid) -and ($targetArr.Count -eq 0 -or $targetArr -contains $_.SID -or $targetArr -contains $_.Name)
+    })
+    if ($targetArr.Count -gt 0) {
+        foreach ($target in $targetArr) {
+            if (@($profiles | Where-Object { $_.SID -eq $target -or $_.Name -eq $target }).Count -ne 1) {
+                throw 'A selected user profile is unavailable, ambiguous or not authorized; no cleanup was performed.'
+            }
+        }
+    } elseif ($profiles.Count -eq 0) {
+        throw 'No supported user profiles were found; no cleanup was performed.'
+    }
 
     $loggedIn = (Get-LoggedInUsers).users
     $results  = @()
@@ -5483,7 +6010,7 @@ function Invoke-CleanupClearAllUsers {
     foreach ($prof in $profiles) {
         $username      = $prof.Name
         $isCurrentUser = ($prof.SID -eq $mySid)
-        $isLoggedIn    = ($loggedIn -contains $username)
+        $isLoggedIn    = (($loggedIn -contains $username) -or (Test-Path -LiteralPath "Registry::HKEY_USERS\$($prof.SID)"))
 
         if ($isCurrentUser) {
             $catResults = Invoke-CleanupClearForUser -UserProfilePath $prof.FullName `
@@ -5589,6 +6116,200 @@ function Invoke-CleanupClearAllUsers {
 # Invoke-WithUserHive for offline users (requires admin).
 # ============================================================================
 
+function Convert-CleanupSummaryHistory {
+    param([string[]]$Lines, [int]$PreviewMax)
+    $nonEmpty = @($Lines | Where-Object { $_ -is [string] -and $_.Trim() -ne '' })
+    $items = [Collections.Generic.List[string]]::new(); $records = [Collections.Generic.List[object]]::new()
+    $start = [Math]::Max(0, $nonEmpty.Count - $PreviewMax)
+    for ($index = $nonEmpty.Count - 1; $index -ge $start; $index--) {
+        $items.Add($nonEmpty[$index])
+        $records.Add(@{ id = $index; command = $nonEmpty[$index] })
+    }
+    return @{ count = $nonEmpty.Count; items = @($items.ToArray()); records = @($records.ToArray()) }
+}
+
+function Test-CleanupSummaryDetailSize {
+    param($Records, $Items)
+    $json = ConvertTo-Json -InputObject @{ records = @($Records); items = @($Items) } -Depth 30 -Compress
+    return [Text.Encoding]::UTF8.GetByteCount($json) -le 8MB
+}
+
+function ConvertTo-CleanupCanonicalJson {
+    param($Value)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [System.Collections.IDictionary] -or $Value.GetType().FullName -eq 'System.Management.Automation.PSCustomObject') {
+        [string[]]$keys = @(if ($Value -is [System.Collections.IDictionary]) { $Value.Keys | ForEach-Object { [string]$_ } } else { $Value.PSObject.Properties.Name })
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        $parts = foreach ($key in $keys) {
+            $child = if ($Value -is [System.Collections.IDictionary]) { $Value[$key] } else { $Value.PSObject.Properties[$key].Value }
+            $script:CleanupJsonSerializer.Serialize($key) + ':' + (ConvertTo-CleanupCanonicalJson $child)
+        }
+        return '{' + ($parts -join ',') + '}'
+    }
+    if ($Value -is [System.Collections.IList] -or $Value -is [array]) {
+        $parts = foreach ($item in $Value) { ConvertTo-CleanupCanonicalJson $item }
+        return '[' + ($parts -join ',') + ']'
+    }
+    return $script:CleanupJsonSerializer.Serialize($Value)
+}
+
+function Get-CleanupSummaryPage {
+    param([object[]]$Records, [int]$Count, [string]$Category, [string]$ProfileSid, [int]$Offset, [string]$ExpectedSnapshot, [int]$ChunkOffset = 0, [string]$SourceFailure = '')
+    if ($Offset -lt 0 -or $ChunkOffset -lt 0 -or (($Offset -gt 0 -or $ChunkOffset -gt 0) -and $ExpectedSnapshot -notmatch '^sha256:[0-9a-f]{64}$') -or ($Offset -eq 0 -and $ChunkOffset -eq 0 -and $ExpectedSnapshot)) {
+        throw 'The account detail page request is invalid.'
+    }
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+    $script:CleanupJsonSerializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    $script:CleanupJsonSerializer.MaxJsonLength = [int]::MaxValue
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        # Length-framed records preserve identity and order without constructing
+        # a second serialized copy of the whole account snapshot in memory.
+        $hashText = {
+            param([string]$Text)
+            $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+            $length = [BitConverter]::GetBytes([int64]$bytes.Length)
+            $null = $sha.TransformBlock($length, 0, $length.Length, $length, 0)
+            if ($bytes.Length) { $null = $sha.TransformBlock($bytes, 0, $bytes.Length, $bytes, 0) }
+        }
+        $header = @{ version=2; category=$Category; sid=$ProfileSid; count=$Count; rows=$Records.Count }
+        if ($SourceFailure) { $header.sourceFailure = $SourceFailure }
+        & $hashText (ConvertTo-CleanupCanonicalJson $header)
+        foreach ($record in $Records) { & $hashText (ConvertTo-CleanupCanonicalJson $record) }
+        $null = $sha.TransformFinalBlock([byte[]]@(), 0, 0)
+        $snapshot = 'sha256:' + [BitConverter]::ToString($sha.Hash).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+    if ($ExpectedSnapshot -and $ExpectedSnapshot -cne $snapshot) { throw 'Account details changed while loading. Rescan before trying again.' }
+    if ($Offset -gt $Records.Count -or ($ChunkOffset -gt 0 -and $Offset -ge $Records.Count)) { throw 'The account detail page offset is invalid.' }
+    $pageSize = 5000
+    $pageBudget = 8MB - 1024
+    $pageBytes = 0
+    $pageRows = [Collections.Generic.List[object]]::new()
+    for ($index = $Offset; $index -lt $Records.Count -and $pageRows.Count -lt $pageSize; $index++) {
+        $json = ConvertTo-Json -InputObject $Records[$index] -Depth 30 -Compress
+        $rowBytes = [Text.Encoding]::UTF8.GetByteCount($json) + 1
+        if ($rowBytes -gt $pageBudget) {
+            if ($pageRows.Count -eq 0) {
+                $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+                if ($ChunkOffset -ge $bytes.Length) { throw 'The account detail chunk offset is invalid.' }
+                $chunkLength = [Math]::Min(3145728, $bytes.Length - $ChunkOffset)
+                $chunk = [Convert]::ToBase64String($bytes, $ChunkOffset, $chunkLength)
+                $nextChunk = $ChunkOffset + $chunkLength
+                $nextRecord = $Offset + 1
+                return @{ records=@(); snapshotHash=$snapshot; nextOffset=if ($nextRecord -lt $Records.Count) { $nextRecord } else { $null }; totalRows=$Records.Count; recordChunk=@{ offset=$ChunkOffset; totalBytes=$bytes.Length; data=$chunk; nextByteOffset=if ($nextChunk -lt $bytes.Length) { $nextChunk } else { $null } } }
+            }
+            break
+        }
+        if ($ChunkOffset -gt 0) { throw 'The account detail chunk request is invalid.' }
+        if ($pageBytes + $rowBytes -gt $pageBudget) { break }
+        $pageRows.Add($Records[$index])
+        $pageBytes += $rowBytes
+    }
+    $page = @($pageRows.ToArray())
+    while (-not (Test-CleanupSummaryDetailSize -Records $page -Items @())) {
+        if ($page.Count -le 1) { throw 'One account detail record exceeds the size limit.' }
+        $pageSize = [Math]::Max(1, [int][Math]::Floor($page.Count / 2))
+        $page = @($Records | Select-Object -Skip $Offset -First $pageSize)
+    }
+    $next = $Offset + $page.Count
+    return @{ records=$page; snapshotHash=$snapshot; nextOffset=if ($next -lt $Records.Count) { $next } else { $null }; totalRows=$Records.Count }
+}
+
+function New-CleanupSummaryCategoryRecord {
+    param([string]$Category, [int]$Count, $items, $records, [string]$ScanError, [int]$previewMax)
+    # Both delegated current-user scans and direct other-user scans are scoped
+    # for these categories, even when they find no entries in that scope.
+    $limited = $Category -in @('walFiles', 'recallDb')
+    $returned = @($records | Select-Object -First $previewMax)
+    $visibleCount = $returned.Count
+    if ($Category -eq 'ntUserTraces' -and $returned.Count -and @($returned | Where-Object { $null -eq $_.entries }).Count -eq 0) {
+        $visibleCount = 0
+        foreach ($section in $returned) { $visibleCount += @($section.entries).Count }
+    }
+    $record = @{
+        id = $Category; count = $Count
+        items = @($items | Select-Object -First $previewMax)
+        records = $returned
+        status = if ($ScanError) { 'error' } elseif ($limited) { 'scoped' } else { 'complete' }
+        error = [bool]$ScanError; message = $ScanError
+        sampleCount = $returned.Count
+        previewLimit = $previewMax
+        truncated = (-not $ScanError -and $Count -gt $visibleCount)
+    }
+    # A failed scan cannot establish whether its preview is complete. Offer a
+    # fresh detail scan if it captured anything, without inventing a total.
+    if ($ScanError -and $returned.Count -gt 0) { $record.detailRefreshAvailable = $true }
+    if ($limited) { $record.coverage = 'limited' }
+    return $record
+}
+
+function Get-CleanupOtherUserVmInventory {
+    param([string]$ProfilePath, [string]$HiveRoot, [bool]$HiveAvailable, [int]$PreviewLimit)
+    # Metadata only. Never open an MRU destination or invoke a VM provider.
+    $parent = Get-Item -LiteralPath (Split-Path -Parent $ProfilePath) -Force -ErrorAction Stop
+    $root = Get-Item -LiteralPath $ProfilePath -Force -ErrorAction Stop
+    foreach ($ancestor in @($parent, $root)) {
+        if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+    }
+    $records = @(); $items = @(); $total = 0; $unavailable = -not $HiveAvailable
+    $sources = @(
+        @{ label='VMware'; relative='Documents\Virtual Machines'; tree=$true },
+        @{ label='VirtualBox'; relative='VirtualBox VMs'; tree=$true },
+        @{ label='VirtualBox configuration'; relative='.VirtualBox\VirtualBox.xml'; tree=$false }
+    )
+    foreach ($source in $sources) {
+        $path = $ProfilePath; $available = $true; $item = $null
+        $components = @($source.relative -split '\\')
+        for ($i = 0; $i -lt $components.Count; $i++) {
+            $path = Join-Path $path $components[$i]
+            try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+            catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+            catch { $available = $false; $unavailable = $true; break }
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (($i -lt $components.Count - 1 -or $source.tree) -and -not $item.PSIsContainer) -or ($i -eq $components.Count - 1 -and -not $source.tree -and $item.PSIsContainer)) { $available = $false; $unavailable = $true; break }
+        }
+        if (-not $available) { continue }
+        $queue = [Collections.Generic.Queue[object]]::new(); $queue.Enqueue($item)
+        while ($queue.Count -gt 0) {
+            $candidate = $queue.Dequeue()
+            if ($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) { $unavailable = $true; continue }
+            if ($candidate.PSIsContainer) {
+                try {
+                    $directory = Get-Item -LiteralPath $candidate.FullName -Force -ErrorAction Stop
+                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $unavailable = $true; continue }
+                    foreach ($child in @(Get-ChildItem -LiteralPath $candidate.FullName -Force -ErrorAction Stop)) { $queue.Enqueue($child) }
+                } catch { $unavailable = $true }
+                continue
+            }
+            $includeFile = if ($source.label -eq 'VMware') { $candidate.Name -like '*-0000*.vmdk' -or $candidate.Name -like '*.vmsn' -or $candidate.Name -like 'vmware*.log' }
+                elseif ($source.label -eq 'VirtualBox') { $candidate.Name -in @('VBox.log','VBoxSVC.log') -or ($candidate.FullName -match '(?i)\\Snapshots\\' -and ($candidate.Name -like '*.vdi' -or $candidate.Name -like '*.vbox-prev')) }
+                else { $true }
+            if (-not $includeFile) { continue }
+            $total++
+            if ($records.Count -lt $PreviewLimit) {
+                $records += @{ name="$($source.label): $($candidate.Name)"; path=$candidate.FullName; sizeKB=[math]::Round($candidate.Length / 1KB, 1); modified=$candidate.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $items += "$($source.label): $($candidate.Name)"
+            }
+        }
+    }
+    if ($HiveAvailable) {
+        $mruPath = "$HiveRoot\Software\VMware, Inc.\VMware Workstation"
+        try {
+            if (Test-CleanupSummaryPath $mruPath) {
+                $mru = Get-Item -LiteralPath $mruPath -ErrorAction Stop
+                foreach ($property in @($mru.Property | Where-Object { $_ -match '(?i)mru|recent' })) {
+                    $total++
+                    if ($records.Count -ge $PreviewLimit) { continue }
+                    $row = @{ name="VMware recent: $property"; registryPath=$mruPath; key=[string]$property }
+                    try { $row.value = Get-ItemPropertyValue -LiteralPath $mruPath -Name $property -ErrorAction Stop }
+                    catch { $row.readStatus = 'unavailable'; $unavailable = $true }
+                    $records += $row; $items += "VMware recent: $property"
+                }
+            }
+        } catch { $unavailable = $true }
+    }
+    @{ total=$total; records=$records; items=$items; unavailable=$unavailable }
+}
+
 function Get-CleanupSummaryAllUsers {
     [CmdletBinding()]
     param(
@@ -5597,7 +6318,11 @@ function Get-CleanupSummaryAllUsers {
         # Comma-separated list of usernames to scan; empty = every account.
         # The UI scans one user at a time (the user switcher), so it normally
         # passes a single name here to avoid the cost of loading every hive.
-        [string]$TargetUsers = ''
+        [string]$TargetUsers = '',
+        [bool]$FullDetail = $false,
+        [int]$DetailOffset = 0,
+        [string]$SnapshotHash = '',
+        [int]$DetailChunkOffset = 0
     )
 
     function Test-CleanupSummaryPath {
@@ -5611,16 +6336,23 @@ function Get-CleanupSummaryAllUsers {
     $allCats = @('rdpHistory','recentFiles','jumpLists','psHistory','browserFootprints',
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
-                 'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory')
+                 'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory','developerCaches')
+    $supportedCats = @($allCats) + @('sshState', 'passwordManagerCaches', 'wslData', 'dockerDesktopData', 'virtualMachineArtifacts', 'credentialManager')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
-        $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $allCats }
+        $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $supportedCats }
     } else { $allCats }
 
     if (@($requestedCats).Count -eq 0) { return @{ error = $true; status = 'error'; message = 'No supported per-user cleanup categories were requested.'; users = @(); userCount = 0 } }
 
-    $targetArr = if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
+    $targetArr = @(if ($TargetUsers -and $TargetUsers.Trim() -ne '') {
         $TargetUsers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-    } else { @() }
+    })
+    if ($FullDetail -and ($requestedCats.Count -ne 1 -or $targetArr.Count -ne 1)) {
+        return @{ error = $true; status = 'error'; message = 'Full details require exactly one category and one user.'; users = @(); userCount = 0 }
+    }
+    if ((-not $FullDetail -and ($DetailOffset -ne 0 -or $DetailChunkOffset -ne 0 -or $SnapshotHash)) -or $DetailOffset -lt 0 -or $DetailChunkOffset -lt 0 -or (($DetailOffset -gt 0 -or $DetailChunkOffset -gt 0) -and $SnapshotHash -notmatch '^sha256:[0-9a-f]{64}$') -or ($DetailOffset -eq 0 -and $DetailChunkOffset -eq 0 -and $SnapshotHash)) {
+        return @{ error = $true; status = 'error'; message = 'The account detail page request is invalid.'; users = @(); userCount = 0 }
+    }
 
     # Current account identified by SID (stable across renames), not name.
     $mySid = ''
@@ -5644,10 +6376,17 @@ function Get-CleanupSummaryAllUsers {
     # Administrator. A non-admin caller can only ever see their own account
     # (matched by SID), regardless of what was requested.
     $isAdmin = Test-IsAdmin
-    if (-not $isAdmin) {
-        $allProfiles = $allProfiles | Where-Object { $_.SID -eq $mySid }
-    } elseif ($targetArr.Count -gt 0) {
-        $allProfiles = $allProfiles | Where-Object { $targetArr -contains $_.Name }
+    $allProfiles = @($allProfiles | Where-Object {
+        ($isAdmin -or $_.SID -eq $mySid) -and
+        ($targetArr.Count -eq 0 -or $targetArr -contains $_.SID -or $targetArr -contains $_.Name)
+    })
+    foreach ($target in $targetArr) {
+        if (@($allProfiles | Where-Object { $_.SID -eq $target -or $_.Name -eq $target }).Count -ne 1) {
+            return @{ error = $true; status = 'error'; message = 'The selected user profile is unavailable, ambiguous or not authorized.'; users = @(); userCount = 0 }
+        }
+    }
+    if ($FullDetail -and @($allProfiles).Count -ne 1) {
+        return @{ error = $true; status = 'error'; message = 'The selected user profile is unavailable or not authorized.'; users = @(); userCount = 0 }
     }
 
     $loggedIn = (Get-LoggedInUsers).users
@@ -5665,11 +6404,11 @@ function Get-CleanupSummaryAllUsers {
         $hiveLoaded    = $false
         $hiveAvailable = $true     # false when reg load failed or hive unreachable
         $hiveError     = $null     # surfaced to UI as a warning
-        $mountName     = "WC_TempHive_$username"
+        $mountName     = "WC_TempHive_$([guid]::NewGuid().ToString('N'))"
         $mountPath     = "HKEY_USERS\$mountName"
 
         try {
-        if (-not $isCurrentUser) {
+        if (-not $isCurrentUser -and @($requestedCats | Where-Object { $_ -notin @('sshState','passwordManagerCaches','dockerDesktopData','credentialManager') }).Count -gt 0) {
             # Strategy: try the live SID path in HKEY_USERS FIRST — this works for
             # any user who is logged in (interactive, RDP, disconnected session, etc.)
             # without needing reg load. Only fall back to reg load for truly offline users.
@@ -5687,7 +6426,7 @@ function Get-CleanupSummaryAllUsers {
                         $loadOut = & reg load $mountPath $ntuser 2>&1
                         $loadOk  = ($LASTEXITCODE -eq 0) -and (Test-CleanupSummaryPath "Registry::$mountPath")
                     } else {
-                        $loadOk = $true
+                        $loadOk = $false
                     }
                     if ($loadOk) {
                         $hiveRoot   = "Registry::$mountPath"
@@ -5711,18 +6450,27 @@ function Get-CleanupSummaryAllUsers {
 
         # The card grid only shows the first few items, but detail dialogs need
         # enough rows to audit common high-count traces without hiding records.
-        $previewMax = 500
+        $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $extraScanFacts = @{}; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
             try {
-                if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory')) { throw $hiveError }
+                if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
                 # For the current user delegate to the same per-category functions the
                 # main cleanup panel uses — counts will always be identical.
                 # For other users fall through to the file-system + offline-hive path.
                 $delegated = $false
-                if ($isCurrentUser) {
+                if ($cat -eq 'developerCaches') {
+                    $profileApp = if ($isCurrentUser) { $env:APPDATA } else { $appData }
+                    $profileLocal = if ($isCurrentUser) { $env:LOCALAPPDATA } else { $localApp }
+                    $profileRoot = if ($isCurrentUser) { $env:USERPROFILE } else { $prof.FullName }
+                    $r = Get-CleanupDeveloperCachesInfo -AppDataPath $profileApp -LocalAppDataPath $profileLocal -UserProfilePath $profileRoot -previewLimit $previewMax
+                    $delegated = $true
+                    $count = if ($r.total) { [int]$r.total } else { 0 }
+                    $records = @($r.files)
+                    $items = @($r.files | ForEach-Object { $_.name })
+                } elseif ($isCurrentUser) {
                     $delegated = $true
                     switch ($cat) {
                         'recentFiles' {
@@ -5778,6 +6526,42 @@ function Get-CleanupSummaryAllUsers {
                             $count = if ($r.total) { [int]$r.total } else { 0 }
                             $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                        }
+                        'sshState' {
+                            $r = Get-SSHStateInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'passwordManagerCaches' {
+                            $r = Get-PasswordManagerCachesInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'credentialManager' {
+                            $r = Get-CredentialManagerInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'wslData' {
+                            $r = Get-WSLDataInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'dockerDesktopData' {
+                            $r = Get-DockerDesktopDataInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
+                        }
+                        'virtualMachineArtifacts' {
+                            $r = Get-VirtualMachineArtifactsInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                         'crashDumps' {
                             $r = Get-CrashDumpList
@@ -5848,32 +6632,230 @@ function Get-CleanupSummaryAllUsers {
                         default { $delegated = $false }
                     }
                 }
-                if ($delegated -and ($null -eq $r -or $r.error -eq $true -or $r.partial -eq $true -or $r.complete -eq $false)) {
+                if ($delegated -and ($null -eq $r -or $r.error -eq $true)) {
                     throw $(if ($r.message) { [string]$r.message } else { 'The category scan failed or was incomplete.' })
                 }
                 if (-not $delegated) {
                 # Other-users path (file-system + offline-hive scanning)
                 switch ($cat) {
+                    'credentialManager' {
+                        # Inspect only file metadata in fixed profile locations.
+                        # File counts are not credential counts; contents and
+                        # another user's credential provider are never opened.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='Roaming credential storage'; relative='AppData\Roaming\Microsoft\Credentials' },
+                            @{ label='Local credential storage'; relative='AppData\Local\Microsoft\Credentials' },
+                            @{ label='Windows Vault storage'; relative='AppData\Local\Microsoft\Vault' }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName; $available = $true
+                            foreach ($component in ($source.relative -split '\\')) {
+                                $sourcePath = Join-Path $sourcePath $component
+                                try { $directory = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $credentialUnavailable = $true; break }
+                                if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $available = $false; $credentialUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[string]]::new(); $queue.Enqueue($sourcePath)
+                            while ($queue.Count -gt 0) {
+                                $directoryPath = $queue.Dequeue()
+                                try {
+                                    $directory = Get-Item -LiteralPath $directoryPath -Force -ErrorAction Stop
+                                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $credentialUnavailable = $true; continue }
+                                    $children = @(Get-ChildItem -LiteralPath $directoryPath -Force -ErrorAction Stop)
+                                } catch { $credentialUnavailable = $true; continue }
+                                foreach ($child in $children) {
+                                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $credentialUnavailable = $true; continue }
+                                    if ($child.PSIsContainer) { $queue.Enqueue([string]$child.FullName); continue }
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ name = "$($source.label): $($child.Name)"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                        $items += "$($source.label): $($child.Name)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    'virtualMachineArtifacts' {
+                        $categoryPartial = $true
+                        $inventory = Get-CleanupOtherUserVmInventory -ProfilePath $prof.FullName -HiveRoot $hiveRoot -HiveAvailable $hiveAvailable -PreviewLimit $previewMax
+                        $count = $inventory.total; $records = @($inventory.records); $items = @($inventory.items); $vmUnavailable = [bool]$inventory.unavailable
+                    }
+                    'dockerDesktopData' {
+                        # This is read-only metadata for selected profile defaults.
+                        # System-wide and custom disks and engine state are excluded.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='Docker WSL disk'; relative='AppData\Local\Docker\wsl'; tree=$true },
+                            @{ label='Docker VMM disk'; relative='AppData\Local\Docker\vm-data\DockerDesktop.vhdx'; tree=$false },
+                            @{ label='Docker log'; relative='AppData\Roaming\Docker\log.txt'; tree=$false }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName; $available = $true; $sourceItem = $null
+                            $components = @($source.relative -split '\\')
+                            for ($i = 0; $i -lt $components.Count; $i++) {
+                                $sourcePath = Join-Path $sourcePath $components[$i]
+                                try { $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $dockerUnavailable = $true; break }
+                                if (($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (($i -lt $components.Count - 1 -or $source.tree) -and -not $sourceItem.PSIsContainer) -or ($i -eq $components.Count - 1 -and -not $source.tree -and $sourceItem.PSIsContainer)) { $available = $false; $dockerUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[object]]::new()
+                            $queue.Enqueue($sourceItem)
+                            while ($queue.Count -gt 0) {
+                                $candidate = $queue.Dequeue()
+                                if ($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) { $dockerUnavailable = $true; continue }
+                                if ($candidate.PSIsContainer) {
+                                    try {
+                                        $directory = Get-Item -LiteralPath $candidate.FullName -Force -ErrorAction Stop
+                                        if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $dockerUnavailable = $true; continue }
+                                        foreach ($child in @(Get-ChildItem -LiteralPath $candidate.FullName -Force -ErrorAction Stop)) { $queue.Enqueue($child) }
+                                    } catch { $dockerUnavailable = $true }
+                                    continue
+                                }
+                                if ($source.tree -and $candidate.Name -notlike '*.vhdx') { continue }
+                                $count++
+                                if ($records.Count -lt $previewMax) {
+                                    $records += @{ name="$($source.label): $($candidate.Name)"; path=$candidate.FullName; sizeKB=[math]::Round($candidate.Length / 1KB, 1); modified=$candidate.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                    $items += "$($source.label): $($candidate.Name)"
+                                }
+                            }
+                        }
+                    }
+                    'wslData' {
+                        # Inspect the selected SID's registration only. Do not
+                        # invoke wsl.exe in the operator's account, and do not
+                        # follow imported BasePath locations or open disks.
+                        $categoryPartial = $true
+                        $lxssPath = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Lxss"
+                        if (Test-CleanupSummaryPath $lxssPath) {
+                            foreach ($registration in @(Get-ChildItem -LiteralPath $lxssPath -ErrorAction Stop)) {
+                                $count++
+                                if ($records.Count -ge $previewMax) { continue }
+                                $row = @{ registrationId = [string]$registration.PSChildName; registryPath = [string]$registration.PSPath; registryValues = @{} }
+                                try {
+                                    foreach ($name in @($registration.Property)) {
+                                        $row.registryValues[[string]$name] = Get-ItemPropertyValue -LiteralPath $registration.PSPath -Name $name -ErrorAction Stop
+                                    }
+                                } catch { $row.readStatus = 'unavailable' }
+                                $records += $row
+                                $items += [string]$registration.PSChildName
+                            }
+                        }
+                    }
+                    'passwordManagerCaches' {
+                        # Read only fixed cache locations. Other vendors and
+                        # custom paths remain outside this partial inventory.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        foreach ($ancestor in @($parent, $root)) {
+                            if (-not $ancestor.PSIsContainer -or ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path cannot be checked safely.' }
+                        }
+                        $sources = @(
+                            @{ label='1Password'; relative='AppData\Local\1Password\Cache' },
+                            @{ label='1Password'; relative='AppData\Local\1Password\Local Storage\leveldb' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Cache' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Local Storage\leveldb' },
+                            @{ label='Bitwarden'; relative='AppData\Roaming\Bitwarden\Session Storage' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Cache' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Local Storage\leveldb' },
+                            @{ label='LastPass'; relative='AppData\Roaming\LastPass\Session Storage' }
+                        )
+                        foreach ($source in $sources) {
+                            $sourcePath = $prof.FullName
+                            $available = $true
+                            foreach ($component in ($source.relative -split '\\')) {
+                                $sourcePath = Join-Path $sourcePath $component
+                                try { $directory = Get-Item -LiteralPath $sourcePath -Force -ErrorAction Stop }
+                                catch [System.Management.Automation.ItemNotFoundException] { $available = $false; break }
+                                catch { $available = $false; $cacheUnavailable = $true; break }
+                                if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $available = $false; $cacheUnavailable = $true; break }
+                            }
+                            if (-not $available) { continue }
+                            $queue = [Collections.Generic.Queue[string]]::new()
+                            $queue.Enqueue($sourcePath)
+                            while ($queue.Count -gt 0) {
+                                $directoryPath = $queue.Dequeue()
+                                try {
+                                    $directory = Get-Item -LiteralPath $directoryPath -Force -ErrorAction Stop
+                                    if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $cacheUnavailable = $true; continue }
+                                    $children = @(Get-ChildItem -LiteralPath $directoryPath -Force -ErrorAction Stop)
+                                } catch { $cacheUnavailable = $true; continue }
+                                foreach ($child in $children) {
+                                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $cacheUnavailable = $true; continue }
+                                    if ($child.PSIsContainer) { $queue.Enqueue([string]$child.FullName); continue }
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $relativeName = $child.FullName.Substring($sourcePath.Length).TrimStart('\\')
+                                        $records += @{ name = "$($source.label): $relativeName"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                                        $items += "$($source.label): $relativeName"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    'sshState' {
+                        # The other account's agent is unavailable in this
+                        # session. Inspect known_hosts metadata only.
+                        $categoryPartial = $true
+                        $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
+                        if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The Windows users folder cannot be checked safely.' }
+                        $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
+                        if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The selected profile path is unavailable.' }
+                        $sshPath = Join-Path $prof.FullName '.ssh'
+                        if (Test-CleanupSummaryPath $sshPath) {
+                            $ssh = Get-Item -LiteralPath $sshPath -Force -ErrorAction Stop
+                            if (-not $ssh.PSIsContainer -or ($ssh.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The SSH folder cannot be checked safely.' }
+                            $knownHosts = Join-Path $sshPath 'known_hosts'
+                            if (Test-CleanupSummaryPath $knownHosts) {
+                                $file = Get-Item -LiteralPath $knownHosts -Force -ErrorAction Stop
+                                if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The SSH known-hosts file cannot be checked safely.' }
+                                $count = 1
+                                $records = @(@{ name='SSH known_hosts'; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                $items = @('SSH known_hosts')
+                            }
+                        }
+                    }
                     'recentFiles' {
                         $p = Join-Path $appData 'Microsoft\Windows\Recent'
                         if (Test-CleanupSummaryPath $p) {
-                            $files = Get-ChildItem $p -File -Force -EA Stop
+                            $files = @(Get-ChildItem -LiteralPath $p -File -Force -EA Stop)
                             $count = $files.Count
-                            $items = $files | Select-Object -First $previewMax | ForEach-Object { $_.BaseName }
+                            $shell = $null
+                            $records = @($files | Select-Object -First $previewMax | ForEach-Object {
+                                $target = $null
+                                if ($_.Extension -ieq '.lnk') {
+                                    try {
+                                        if (-not $shell) { $shell = New-Object -ComObject WScript.Shell }
+                                        $target = $shell.CreateShortcut($_.FullName).TargetPath
+                                    } catch { }
+                                }
+                                @{ name=$_.BaseName; path=$_.FullName; extension=$_.Extension; target=$target; lastModified=$_.LastWriteTime.ToString('o'); sizeBytes=$_.Length }
+                            })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'psHistory' {
                         $p = Join-Path $appData 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
                         if (Test-CleanupSummaryPath $p) {
-                            # Match Get-PSHistory exactly: filter empty lines, return last 300.
+                            # Keep the original command text for the selected user's bounded preview.
                             $lines = [System.IO.File]::ReadAllLines($p)
-                            $nonEmpty = @($lines | Where-Object { $_.Trim() -ne '' })
-                            $count = $nonEmpty.Count
-                            $start = [Math]::Max(0, $nonEmpty.Count - $previewMax)
-                            $items = if ($nonEmpty.Count -gt 0) {
-                                $nonEmpty[$start..($nonEmpty.Count - 1)] |
-                                    ForEach-Object { $_.Substring(0, [Math]::Min($_.Length, 80)) }
-                            } else { @() }
+                            $history = Convert-CleanupSummaryHistory -Lines $lines -PreviewMax $previewMax
+                            $count = $history.count; $items = $history.items; $records = $history.records
                         }
                     }
                     'jumpLists' {
@@ -5881,76 +6863,66 @@ function Get-CleanupSummaryAllUsers {
                         $cust = Join-Path $appData 'Microsoft\Windows\Recent\CustomDestinations'
                         $f1 = if (Test-CleanupSummaryPath $auto) { @(Get-ChildItem $auto -File -Force -EA Stop) } else { @() }
                         $f2 = if (Test-CleanupSummaryPath $cust) { @(Get-ChildItem $cust -File -Force -EA Stop) } else { @() }
-                        $count = $f1.Count + $f2.Count
-                        $items = @($f1 + $f2) | Select-Object -First $previewMax | ForEach-Object { $_.BaseName }
+                        $count = @($f1).Count + @($f2).Count
+                        $allRecords = @(foreach ($group in @(@{ type='Automatic'; files=$f1 }, @{ type='Custom'; files=$f2 })) {
+                            foreach ($file in @($group.files)) {
+                                @{ name=$file.Name; path=$file.FullName; type=$group.type; sizeKB=[math]::Round($file.Length / 1KB, 1); lastModified=$file.LastWriteTime.ToString('o') }
+                            }
+                        })
+                        $records = @($allRecords | Select-Object -First $previewMax)
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'browserFootprints' {
-                        # Count actual artifact files per browser — not just "browser installed".
-                        # Matches Get-BrowserFootprints per-category function behaviour.
-                        $artifactNames = @('History','Cookies','Login Data','Top Sites','Favicons',
-                                           'Web Data','Visited Links','Shortcuts','Download Metadata')
-                        $chromiumRoots = @(
-                            @{n='Chrome'; p=Join-Path $localApp 'Google\Chrome\User Data'},
-                            @{n='Edge';   p=Join-Path $localApp 'Microsoft\Edge\User Data'},
-                            @{n='Brave';  p=Join-Path $localApp 'BraveSoftware\Brave-Browser\User Data'},
-                            @{n='Opera';  p=Join-Path $appData  'Opera Software\Opera Stable'},
-                            @{n='Vivaldi';p=Join-Path $localApp 'Vivaldi\User Data'}
-                        )
-                        foreach ($r in $chromiumRoots) {
-                            if (-not (Test-CleanupSummaryPath $r.p)) { continue }
-                            # Walk all profile directories (Default + Profile 1, 2, …)
-                            $profileDirs = @(Get-ChildItem $r.p -Directory -Force -EA Stop |
-                                Where-Object { $_.Name -eq 'Default' -or $_.Name -match '^Profile \d+$' })
-                            foreach ($pd in $profileDirs) {
-                                foreach ($a in $artifactNames) {
-                                    $f = Join-Path $pd.FullName $a
-                                    if (Test-CleanupSummaryPath $f -PathType Leaf) {
-                                        $count++
-                                        $items += "$($r.n): $a"
-                                    }
-                                }
-                            }
-                        }
-                        # Firefox — count places.sqlite (history+bookmarks) and cookies.sqlite per profile
-                        $ffRoot = Join-Path $appData 'Mozilla\Firefox\Profiles'
-                        if (Test-CleanupSummaryPath $ffRoot) {
-                            Get-ChildItem $ffRoot -Directory -Force -EA Stop | ForEach-Object {
-                                foreach ($db in @('places.sqlite','cookies.sqlite','formhistory.sqlite','logins.json')) {
-                                    if (Test-CleanupSummaryPath (Join-Path $_.FullName $db)) {
-                                        $count++
-                                        $items += "Firefox: $db"
-                                    }
-                                }
-                            }
-                        }
+                        $inventory = @(Get-CleanupSummaryBrowserInventory -ProfilePath $prof.FullName)
+                        $r = Get-CleanupBrowserFootprints -Browsers $inventory
+                        if ($r.error -or $r.partial -or $r.complete -eq $false) { throw 'The browser scan failed or was incomplete.' }
+                        $count = [int]$r.totalBrowsers
+                        $records = @($r.browsers | Select-Object -First $previewMax)
+                        $items = @($records | ForEach-Object { "$($_.browser): $($_.totalSizeKB) KB" })
                     }
                     'notepadState' {
                         $packageRoot = Join-Path $localApp 'Packages'
-                        $pkg = if (Test-CleanupSummaryPath $packageRoot) { Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -EA Stop | Select-Object -First 1 } else { $null }
-                        if ($pkg) {
+                        $packages = @()
+                        if (Test-CleanupSummaryPath $packageRoot) {
+                            $rootItem = Get-Item -LiteralPath $packageRoot -Force -ErrorAction Stop
+                            if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad package coverage is unavailable.' }
+                            $packages = @(Get-ChildItem -LiteralPath $packageRoot -Filter 'Microsoft.WindowsNotepad_*' -Directory -Force -EA Stop)
+                        }
+                        $files = @()
+                        foreach ($pkg in $packages) {
+                            if ($pkg.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A Notepad package path is a reparse point.' }
                             $tab = Join-Path $pkg.FullName 'LocalState\TabState'
                             if (Test-CleanupSummaryPath $tab) {
-                                $files = Get-ChildItem $tab -File -Force -EA Stop
-                                $count = $files.Count
-                                $items = $files | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                                $tabItem = Get-Item -LiteralPath $tab -Force -ErrorAction Stop
+                                if (-not $tabItem.PSIsContainer -or ($tabItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Notepad tab-state coverage is unavailable.' }
+                                $files += @(Get-ChildItem -LiteralPath $tab -File -Recurse -Force -ErrorAction Stop)
                             }
                         }
+                        $count = $files.Count
+                        $records = @($files | Select-Object -First $previewMax | ForEach-Object { @{ name = $_.Name; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('o') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'crashDumps' {
                         # Match Get-CrashDumpList: CrashDumps + Minidump + WER ReportArchive + ReportQueue
                         $dirs = @(
-                            Join-Path $localApp 'CrashDumps',
-                            "$env:SystemRoot\Minidump",
-                            Join-Path $localApp 'Microsoft\Windows\WER\ReportArchive',
-                            Join-Path $localApp 'Microsoft\Windows\WER\ReportQueue'
+                            @{ label='CrashDumps'; path=(Join-Path $localApp 'CrashDumps') },
+                            @{ label='Minidump'; path="$env:SystemRoot\Minidump" },
+                            @{ label='WER ReportArchive'; path=(Join-Path $localApp 'Microsoft\Windows\WER\ReportArchive') },
+                            @{ label='WER ReportQueue'; path=(Join-Path $localApp 'Microsoft\Windows\WER\ReportQueue') }
                         )
-                        foreach ($d in $dirs) {
-                            if (Test-CleanupSummaryPath $d) {
-                                $f = Get-ChildItem $d -Recurse -File -Force -EA Stop
+                        $dumpRows = [Collections.Generic.List[object]]::new()
+                        foreach ($source in $dirs) {
+                            if (Test-CleanupSummaryPath $source.path) {
+                                $f = @(Get-ChildItem -LiteralPath $source.path -Recurse -File -Force -EA Stop)
                                 $count += $f.Count
-                                $items += $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                                foreach ($file in $f) {
+                                    if ($dumpRows.Count -ge $previewMax) { break }
+                                    $dumpRows.Add(@{ source=$source.label; name=$file.Name; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                }
                             }
                         }
+                        $records = @($dumpRows.ToArray())
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'walFiles' {
                         # Match per-category function: *.wal, *.db-wal, *.sqlite-wal, *.shm, *.db-shm
@@ -5960,24 +6932,30 @@ function Get-CleanupSummaryAllUsers {
                             -Include '*.wal','*.db-wal','*.sqlite-wal','*.shm','*.db-shm' `
                             -Recurse -Depth 5 -File -Force -EA Stop } else { @() }
                         $count = @($f).Count
-                        $items = @($f) | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                        $records = @(@($f) | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); dir=(Split-Path (Split-Path $_.FullName -Parent) -Leaf); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'recallDb' {
-                        # Match Get-RecallDatabaseInfo: Recall + alternate + Timeline + ActionCenter
+                        # Match the four recursive locations in Get-RecallDatabaseInfo.
                         $dirs = @(
-                            Join-Path $localApp 'CoreAIPlatform.00\UKP',
-                            Join-Path $localApp 'CoreAIPlatform.00',
-                            Join-Path $localApp 'ConnectedDevicesPlatform',
-                            Join-Path $localApp 'Microsoft\Windows\ActionCenterCache'
+                            @{ label='Recall'; path=(Join-Path $localApp 'CoreAIPlatform.00') },
+                            @{ label='Recall'; path=(Join-Path $localApp 'Microsoft\Windows\Recall') },
+                            @{ label='Timeline'; path=(Join-Path $localApp 'ConnectedDevicesPlatform') },
+                            @{ label='ActionCenter'; path=(Join-Path $localApp 'Microsoft\Windows\ActionCenter') }
                         )
-                        foreach ($d in $dirs) {
-                            if (Test-CleanupSummaryPath $d) {
-                                $f = Get-ChildItem $d -File -Force -EA Stop |
-                                    Where-Object { $_.Extension -in @('.db','.db-wal','.db-shm','.db-journal','.edb') }
-                                $count += $f.Count
-                                $items += $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                        $recallRows = [Collections.Generic.List[object]]::new()
+                        foreach ($source in $dirs) {
+                            if (Test-CleanupSummaryPath $source.path) {
+                                $files = @(Get-ChildItem -Path $source.path -Include '*.db','*.db-wal','*.db-shm','*.db-journal','*.edb' -Recurse -File -Force -EA Stop)
+                                $count += $files.Count
+                                foreach ($file in $files) {
+                                    if ($recallRows.Count -ge $previewMax) { break }
+                                    $recallRows.Add(@{ source=$source.label; name=$file.Name; path=$file.FullName; sizeKB=[math]::Round($file.Length / 1KB, 1); modified=$file.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                                }
                             }
                         }
+                        $records = @($recallRows.ToArray())
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'webCache' {
                         # Match Get-WebCacheInfo: WebCacheV*.dat (V01 historically, V24 on newer builds) + rotating V01*.log
@@ -5986,7 +6964,8 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter 'WebCacheV*.dat' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter 'V01*.log' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'thumbnailDb' {
@@ -5996,27 +6975,32 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter 'thumbcache_*.db' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter 'iconcache_*.db' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'notificationDb' {
                         # Match Get-NotificationDatabaseInfo: wpndatabase.db + -wal + -shm
                         $p = Join-Path $localApp 'Microsoft\Windows\Notifications'
+                        $f = @()
                         foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
-                            $f = Join-Path $p $name
-                            if (Test-CleanupSummaryPath $f) {
-                                $count++
-                                $items += $name
-                            }
+                            $filePath = Join-Path $p $name
+                            if (Test-CleanupSummaryPath $filePath -PathType Leaf) { $f += Get-Item -LiteralPath $filePath -Force -EA Stop }
                         }
+                        $wpnidm = Join-Path $p 'wpnidm'
+                        if (Test-CleanupSummaryPath $wpnidm) { $f += @(Get-ChildItem -LiteralPath $wpnidm -Recurse -File -Force -EA Stop) }
+                        $count = @($f).Count
+                        $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                        $items = @($records | ForEach-Object { $_.name })
                     }
                     'activitiesTimeline' {
                         # Match Get-ActivitiesTimelineInfo: ActivitiesCache.db + -wal/-shm sidecars
                         $p = Join-Path $localApp 'ConnectedDevicesPlatform'
                         if (Test-CleanupSummaryPath $p) {
-                            $f = Get-ChildItem -Path $p -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -Force -EA Stop
+                            $f = Get-ChildItem -Path $p -Include 'ActivitiesCache.db','*.db-wal','*.db-shm' -Recurse -File -Force -EA Stop
                             $count = @($f).Count
-                            $items = @($f) | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @(@($f) | Select-Object -First $previewMax | ForEach-Object { @{ source='ConnectedDevicesPlatform'; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'rdpBitmapCache' {
@@ -6026,14 +7010,20 @@ function Get-CleanupSummaryAllUsers {
                             $f  = @(Get-ChildItem -LiteralPath $p -File -Filter '*.bin' -Force -EA Stop)
                             $f += @(Get-ChildItem -LiteralPath $p -File -Filter '*.bmc' -Force -EA Stop)
                             $count = $f.Count
-                            $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                            $records = @($f | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+                            $items = @($records | ForEach-Object { $_.name })
                         }
                     }
                     'embeddedWebCache' {
                         # Match Get-EmbeddedWebCacheInfo: EBWebView folders under LOCALAPPDATA, depth-capped
                         $dirs = if (Test-CleanupSummaryPath $localApp) { @(Get-ChildItem -LiteralPath $localApp -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -EA Stop) } else { @() }
-                        $count = $dirs.Count
-                        $items = $dirs | Select-Object -First $previewMax | ForEach-Object { Split-Path (Split-Path $_.FullName -Parent) -Leaf }
+                        $count = @($dirs).Count
+                        $records = @($dirs | Select-Object -First $previewMax | ForEach-Object {
+                            $dir = $_
+                            $size = (Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -EA Stop | Measure-Object -Property Length -Sum).Sum
+                            @{ source=(Split-Path (Split-Path $dir.FullName -Parent) -Leaf); name='EBWebView'; path=$dir.FullName; sizeKB=[math]::Round(([long]$size) / 1KB, 1); modified=$dir.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                        })
+                        $items = @($records | ForEach-Object { $_.source })
                     }
                     'rdpHistory' {
                         if ($hiveAvailable) {
@@ -6041,40 +7031,65 @@ function Get-CleanupSummaryAllUsers {
                             $defaultK = "$hiveRoot\Software\Microsoft\Terminal Server Client\Default"
                             if (Test-CleanupSummaryPath $defaultK) {
                                 $props = (Get-Item $defaultK -EA Stop).Property |
-                                    Where-Object { $_ -like 'MR*' }
-                                $count += @($props).Count
-                                $items += @($props) | Select-Object -First $previewMax |
-                                    ForEach-Object { (Get-ItemPropertyValue $defaultK $_ -EA Stop) }
+                                    Where-Object { $_ -match '^MRU\d+$' }
+                                foreach ($property in @($props)) {
+                                    $hostValue = Get-ItemPropertyValue -LiteralPath $defaultK -Name $property -EA Stop
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ type='MRU'; host=$hostValue; key=$property }
+                                        $items += [string]$hostValue
+                                    }
+                                }
                             }
                             $serversK = "$hiveRoot\Software\Microsoft\Terminal Server Client\Servers"
                             if (Test-CleanupSummaryPath $serversK) {
-                                $servers = Get-ChildItem $serversK -EA Stop
-                                $count  += @($servers).Count
-                                $items  += @($servers) | Select-Object -First $previewMax |
-                                    ForEach-Object { $_.PSChildName }
+                                $servers = Get-ChildItem -LiteralPath $serversK -EA Stop
+                                foreach ($server in @($servers)) {
+                                    $serverProps = Get-ItemProperty -LiteralPath $server.PSPath -EA Stop
+                                    $count++
+                                    if ($records.Count -lt $previewMax) {
+                                        $records += @{ type='Server'; host=$server.PSChildName; username=$serverProps.UsernameHint; key=$server.PSPath }
+                                        $items += $server.PSChildName
+                                    }
+                                }
                             }
                             # Default.rdp file (profile-relative)
                             $defaultRdp = Join-Path (Split-Path $appData -Parent | Split-Path -Parent) 'Documents\Default.rdp'
-                            if (Test-CleanupSummaryPath $defaultRdp) { $count++ ; $items += 'Default.rdp' }
+                            if (Test-CleanupSummaryPath $defaultRdp) {
+                                $file = Get-Item -LiteralPath $defaultRdp -Force -EA Stop
+                                $count++
+                                if ($records.Count -lt $previewMax) {
+                                    $records += @{ type='DefaultRDP'; host='Default.rdp'; key=$defaultRdp; lastModified=$file.LastWriteTime.ToString('o') }
+                                    $items += 'Default.rdp'
+                                }
+                            }
                         } else { $items = @("[registry unavailable]") }
                     }
                     'shellBags' {
                         if ($hiveAvailable) {
-                            # BagMRU stores binary PIDL data — actual folder paths cannot
-                            # be decoded from an offline hive without shell COM APIs.
-                            # Count the subkeys (each = one folder view slot) and surface
-                            # the NodeSlot depth as a minimal indicator of activity.
-                            $totalBags = 0
+                            # Preserve each observed registry slot and its values. PIDL
+                            # bytes are not necessarily a decodable filesystem path.
                             foreach ($bagRoot in @(
                                 "$hiveRoot\Software\Microsoft\Windows\Shell\BagMRU",
                                 "$hiveRoot\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU"
                             )) {
-                                if (Test-CleanupSummaryPath $bagRoot) {
-                                    $totalBags += @(Get-ChildItem $bagRoot -Recurse -EA Stop).Count
-                                }
+                                try {
+                                    if (Test-CleanupSummaryPath $bagRoot) {
+                                        Get-ChildItem -LiteralPath $bagRoot -Recurse -EA Stop | ForEach-Object {
+                                            $bag = $_; $count++
+                                            if ($records.Count -lt $previewMax) {
+                                                $values = @{}
+                                                foreach ($name in @($bag.Property)) {
+                                                    try { $values[$name] = Get-ItemPropertyValue -LiteralPath $bag.PSPath -Name $name -EA Stop }
+                                                    catch { $categoryPartial = $true }
+                                                }
+                                                $records += @{ path = $bag.PSPath; source = 'ShellBags'; registryValues = $values }
+                                                $items += [string]$bag.PSPath
+                                            }
+                                        }
+                                    }
+                                } catch { $categoryPartial = $true }
                             }
-                            $count = $totalBags
-                            if ($totalBags -gt 0) { $items = @("$totalBags folder view slots recorded") }
                         } else { $items = @("[registry unavailable]") }
                     }
                     'execCache' {
@@ -6083,26 +7098,38 @@ function Get-CleanupSummaryAllUsers {
                             # UserAssist ROT13 decoded paths + MuiCache exe keys + RecentApps.
                             # Deduplicate across all sources the same way.
                             $seen = @{}
+                            $addExecutionEntry = {
+                                param([string]$EntryPath, [string]$EntrySource)
+                                if (-not [string]::IsNullOrWhiteSpace($EntryPath) -and -not $seen.ContainsKey($EntryPath)) {
+                                    $seen[$EntryPath] = $true
+                                    $items += $EntryPath
+                                    $records += @{ path = $EntryPath; source = $EntrySource }
+                                }
+                            }
 
                             # HKLM AppCompat Store + Persisted (same for every user, no hive needed)
                             foreach ($hklmP in @(
                                 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store',
                                 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Persisted'
                             )) {
+                                try {
                                 if (Test-CleanupSummaryPath $hklmP) {
                                     $p = Get-ItemProperty $hklmP -EA Stop
                                     if ($p) {
                                         $p.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
-                                            if ($_.Name -and -not $seen.ContainsKey($_.Name)) { $seen[$_.Name] = $true; $items += $_.Name }
+                                            . $addExecutionEntry $_.Name (Split-Path -Leaf $hklmP)
                                         }
                                     }
                                 }
+                                } catch { $categoryPartial = $true }
                             }
 
                             # UserAssist — ROT13 decode property names under each GUID\Count subkey
                             $uaK = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                            try {
                             if (Test-CleanupSummaryPath $uaK) {
                                 Get-ChildItem $uaK -EA Stop | ForEach-Object {
+                                    try {
                                     $cK = "$($_.PSPath)\Count"
                                     if (Test-CleanupSummaryPath $cK) {
                                         $p = Get-ItemProperty $cK -EA Stop | Select-Object -Property *
@@ -6115,61 +7142,85 @@ function Get-CleanupSummaryAllUsers {
                                                     else { [char]$c }
                                                 }) -join ''
                                                 $d = $d -replace '^\\\?\\', ''
-                                                if ($d -and -not $seen.ContainsKey($d)) { $seen[$d] = $true; $items += $d }
+                                                . $addExecutionEntry $d 'UserAssist'
                                             }
                                         }
                                     }
+                                    } catch { $categoryPartial = $true }
                                 }
                             }
+                            } catch { $categoryPartial = $true }
 
                             # MuiCache — property NAME is the exe path (same logic as Get-ExecutionCache)
                             $muiK = "$hiveRoot\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache"
+                            try {
                             if (Test-CleanupSummaryPath $muiK) {
                                 (Get-Item $muiK -EA Stop).Property |
                                     Where-Object { $_ -notmatch '^PS' -and $_ -ne 'LangID' } |
-                                    ForEach-Object { if (-not $seen.ContainsKey($_)) { $seen[$_] = $true; $items += $_ } }
+                                    ForEach-Object { . $addExecutionEntry $_ 'MuiCache' }
                             }
+                            } catch { $categoryPartial = $true }
 
-                            # RecentApps — AppId property under each subkey
+                            # Match the current-user scanner: the executable path is AppPath.
                             $raK = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Search\RecentApps"
+                            try {
                             if (Test-CleanupSummaryPath $raK) {
                                 Get-ChildItem $raK -EA Stop | ForEach-Object {
+                                    try {
                                     $p2 = Get-ItemProperty $_.PSPath -EA Stop
-                                    if ($p2 -and $p2.AppId -and -not $seen.ContainsKey($p2.AppId)) {
-                                        $seen[$p2.AppId] = $true
-                                        $items += $p2.AppId
-                                    }
+                                    if ($p2 -and $p2.AppPath) { . $addExecutionEntry $p2.AppPath 'RecentApps' }
+                                    } catch { $categoryPartial = $true }
                                 }
                             }
+                            } catch { $categoryPartial = $true }
+
+                            $shimCachePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache'
+                            try {
+                            if (Test-CleanupSummaryPath $shimCachePath) {
+                                $shimData = Get-ItemProperty -LiteralPath $shimCachePath -ErrorAction Stop
+                                if ($shimData -and $shimData.AppCompatCache) {
+                                    . $addExecutionEntry "ShimCache (Binary Blob - $($shimData.AppCompatCache.Length) bytes)" 'ShimCache'
+                                }
+                            }
+                            } catch { $categoryPartial = $true }
 
                             $count = $seen.Count
                         } else { $items = @("[registry unavailable]") }
                     }
                     'ntUserTraces' {
                         if ($hiveAvailable) {
-                            # Match Get-NTUserTraces: RunMRU + TypedPaths + TypedURLs + WordWheelQuery + ComDlg32
-                            $traceSuffixes = @(
-                                'RunMRU',
-                                'TypedPaths',
-                                'TypedURLs',
-                                'WordWheelQuery',
-                                'ComDlg32\OpenSavePidlMRU',
-                                'ComDlg32\LastVisitedPidlMRU'
+                            # TypedURLs lives under Internet Explorer, not Explorer.
+                            $traceSources = @(
+                                @{ section='RunMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" },
+                                @{ section='TypedPaths'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths" },
+                                @{ section='TypedURLs'; path="$hiveRoot\Software\Microsoft\Internet Explorer\TypedURLs" },
+                                @{ section='WordWheelQuery'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery" },
+                                @{ section='ComDlg32\OpenSavePidlMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU" },
+                                @{ section='ComDlg32\LastVisitedPidlMRU'; path="$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU" }
                             )
-                            foreach ($kSuffix in $traceSuffixes) {
-                                $k = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\$kSuffix"
-                                if (Test-CleanupSummaryPath $k) {
-                                    $props = (Get-Item $k -EA Stop).Property |
-                                        Where-Object { $_ -ne '(default)' -and $_ -notmatch '^MRU' }
-                                    $count += @($props).Count
-                                    foreach ($prop in @($props) | Select-Object -First $previewMax) {
-                                        $raw = Get-ItemPropertyValue $k $prop -EA Stop
-                                        # WordWheelQuery (and some ComDlg32 entries) store
-                                        # search terms as REG_BINARY null-terminated Unicode.
-                                        if ($raw -is [byte[]]) {
-                                            try { $raw = [System.Text.Encoding]::Unicode.GetString($raw).TrimEnd([char]0) } catch { $raw = $null }
+                            foreach ($source in $traceSources) {
+                                if (Test-CleanupSummaryPath $source.path) {
+                                    $allProps = @((Get-Item -LiteralPath $source.path -EA Stop).Property)
+                                    if ($source.section -eq 'RunMRU' -and $allProps -contains 'MRUList') {
+                                        try { $extraScanFacts.runMruOrder = Get-ItemPropertyValue -LiteralPath $source.path -Name 'MRUList' -EA Stop }
+                                        catch { $categoryPartial = $true }
+                                    }
+                                    $props = $allProps | Where-Object { $_ -ne '(default)' -and -not ($source.section -eq 'RunMRU' -and $_ -eq 'MRUList') }
+                                    foreach ($prop in @($props)) {
+                                        $raw = Get-ItemPropertyValue -LiteralPath $source.path -Name $prop -EA Stop
+                                        $original = $raw
+                                        if ($source.section -eq 'RunMRU' -and $raw -is [string]) { $raw = $raw -replace '\\1$', '' }
+                                        $count++
+                                        if ($records.Count -lt $previewMax) {
+                                            # Preserve binary bytes and empty values; display may decode text separately.
+                                            $record = @{ section=$source.section; key=$prop; value=$raw }
+                                            if ($source.section -eq 'RunMRU') {
+                                                $record.rawValue = $original
+                                                if ($extraScanFacts.ContainsKey('runMruOrder')) { $record.mruOrder = $extraScanFacts.runMruOrder }
+                                            }
+                                            $records += $record
+                                            $items += "$($source.section)\$prop"
                                         }
-                                        if ($raw) { $items += "$kSuffix\$prop`: $raw" }
                                     }
                                 }
                             }
@@ -6179,52 +7230,41 @@ function Get-CleanupSummaryAllUsers {
                         if ($hiveAvailable) {
                             $k = "$hiveRoot\Network"
                             if (Test-CleanupSummaryPath $k) {
-                                $drives = Get-ChildItem $k -EA Stop
+                                $drives = @(Get-ChildItem -LiteralPath $k -EA Stop)
                                 $count = @($drives).Count
-                                $items = @($drives) | Select-Object -First $previewMax | ForEach-Object { $_.PSChildName }
+                                foreach ($drive in $drives) {
+                                    if ($records.Count -ge $previewMax) { break }
+                                    $row = @{ name = [string]$drive.PSChildName; path = [string]$drive.PSPath }
+                                    try {
+                                        $mapping = Get-ItemProperty -LiteralPath $drive.PSPath -ErrorAction Stop
+                                        foreach ($property in @($mapping.PSObject.Properties)) {
+                                            if ($property.Name -in @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')) { continue }
+                                            $row[$property.Name] = $property.Value
+                                        }
+                                        if ($null -ne $mapping.RemotePath) { $row.DisplayRoot = $mapping.RemotePath }
+                                    } catch { $categoryPartial = $true; $row.readStatus = 'unavailable' }
+                                    $records += $row
+                                    $items += [string]$drive.PSChildName
+                                }
                             }
                         } else { $items = @("[registry unavailable]") }
                     }
                     'officeMru' {
                         if ($hiveAvailable) {
-                            # Match Get-OfficeMruInfo: File MRU / Place MRU / TrustRecords values, version+app wildcarded
-                            $officePatterns = @(
-                                "$hiveRoot\Software\Microsoft\Office\*\*\File MRU",
-                                "$hiveRoot\Software\Microsoft\Office\*\*\Place MRU",
-                                "$hiveRoot\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords"
-                            )
-                            foreach ($pattern in $officePatterns) {
-                                $keys = @()
-                                try { $keys = @(Get-Item -Path $pattern -EA Stop) }
-                                catch [System.Management.Automation.ItemNotFoundException] { }
-                                $keys | ForEach-Object {
-                                    $p2 = Get-ItemProperty -Path $_.PSPath -EA Stop
-                                    if ($p2) {
-                                        $p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
-                                            $count++
-                                            $items += (Split-Path $_.Name -Leaf)
-                                        }
-                                    }
-                                }
-                            }
+                            $office = Get-CleanupOfficeMruInventory -RegistryRoot $hiveRoot -PreviewLimit $previewMax
+                            $count = $office.total
+                            $records = @($office.files)
+                            $items = @($records | ForEach-Object { $_.name })
+                            $categoryPartial = [bool]$office.partial
                         } else { $items = @("[registry unavailable]") }
                     }
                     'explorerSearchHistory' {
                         if ($hiveAvailable) {
-                            # Match Get-ExplorerSearchHistoryInfo: WordWheelQuery + TypedPaths values
-                            foreach ($k in @(
-                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery",
-                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths"
-                            )) {
-                                if (Test-CleanupSummaryPath $k) {
-                                    $p2 = Get-ItemProperty -Path $k -EA Stop
-                                    if ($p2) {
-                                        $vals = @($p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') })
-                                        $count += $vals.Count
-                                        $items += $vals | Select-Object -First $previewMax | ForEach-Object { $_.Name }
-                                    }
-                                }
-                            }
+                            $history = Get-CleanupExplorerSearchInventory -RegistryRoot $hiveRoot -PreviewLimit $previewMax
+                            $count = $history.total
+                            $records = @($history.files)
+                            $items = @($records | ForEach-Object { $_.name })
+                            $categoryPartial = [bool]$history.partial
                         } else { $items = @("[registry unavailable]") }
                     }
                 }
@@ -6232,24 +7272,64 @@ function Get-CleanupSummaryAllUsers {
                 if ($count -lt 0) { throw 'The category scan returned an invalid count.' }
             } catch {
                 $scanError = $_.Exception.Message
-                $count = -1; $items = @(); $records = @()
+                # Keep observations already obtained from this profile and
+                # category. The failed count must remain unknown so they can
+                # be inspected without authorizing a cleanup.
+                $count = -1
             }
             if (@($records).Count -eq 0 -and @($items).Count -gt 0) {
                 $records = @($items | Select-Object -First $previewMax | ForEach-Object {
                     [pscustomobject]@{ entry = [string]$_ }
                 })
             }
-            $categories += @{
-                id      = $cat
-                count   = $count
-                items   = @($items | Select-Object -First $previewMax)
-                records = @($records | Select-Object -First $previewMax)
-                status = if ($scanError) { 'error' } else { 'complete' }
-                error = [bool]$scanError
-                message = $scanError
-                sampleCount = @($records | Select-Object -First $previewMax).Count
-                previewLimit = $previewMax
+            $detailPage = $null
+            if ($FullDetail -and (-not $scanError -or @($records).Count -gt 0)) {
+                try {
+                    $pageArgs = @{ Records=@($records); Count=$count; Category=$cat; ProfileSid=$prof.SID; Offset=$DetailOffset; ExpectedSnapshot=$SnapshotHash; ChunkOffset=$DetailChunkOffset }
+                    if ($scanError) { $pageArgs.SourceFailure = $scanError }
+                    $detailPage = Get-CleanupSummaryPage @pageArgs
+                }
+                catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
+            $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
+            if ($categoryPartial -and -not $scanError) {
+                $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
+                $categoryRecord.message = 'Some sources could not be checked.'
+                if ($cat -eq 'sshState' -and -not $isCurrentUser) { $categoryRecord.message = 'SSH agent state cannot be checked for another account.' }
+                if ($cat -eq 'wslData' -and -not $isCurrentUser) { $categoryRecord.message = 'Only registered WSL distributions for the selected account were checked; disks and provider-managed data were not inspected.'; $categoryRecord.coverage = 'Selected registry registrations only' }
+                if ($cat -eq 'virtualMachineArtifacts' -and -not $isCurrentUser) { $categoryRecord.message = if ($vmUnavailable) { 'Some selected VM locations or recent entries could not be checked; relocated machines, host logs and provider-managed data were not inspected.' } else { 'Only selected profile VM defaults and available recent registrations were checked; relocated machines, host logs and provider-managed data were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
+                if ($cat -eq 'dockerDesktopData' -and -not $isCurrentUser) { $categoryRecord.message = if ($dockerUnavailable) { 'Some default Docker locations could not be checked; custom locations and other engines were not inspected.' } else { 'Only selected profile Docker defaults were checked; custom locations and other engines were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
+                if ($cat -eq 'credentialManager' -and -not $isCurrentUser) { $categoryRecord.message = if ($credentialUnavailable) { 'Some credential storage locations could not be checked. Credential entries and names were not inspected.' } else { 'Only selected credential storage file metadata was checked. Credential entries and names were not inspected.' }; $categoryRecord.coverage = 'Credential storage file metadata only' }
+                if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
+            }
+            if ($delegated -and $r -and -not $scanError) {
+                if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }
+                if ($r.partial -eq $true -or $r.complete -eq $false -or $r.status -eq 'partial' -or $r.coverage -eq 'partial' -or $r.accessDenied -eq $true) {
+                    $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
+                    if ($r.message -is [string] -and $r.message.Trim()) { $categoryRecord.message = $r.message }
+                }
+                $facts = @{}
+                foreach ($key in $r.Keys) {
+                    if ($key -in @('error','message','status','partial','complete','coverage','accessDenied','total','count','sampleCount','previewLimit','truncated','scannedAt','scanTime')) { continue }
+                    $value = $r[$key]
+                    if ($value -is [string] -or $value -is [bool] -or $value -is [ValueType]) { $facts[$key] = $value }
+                }
+                if ($facts.Count) { $categoryRecord.scanFacts = $facts }
+            }
+            if ($cat -eq 'ntUserTraces' -and $delegated -and $r -and $r.ContainsKey('runMruOrder')) { $extraScanFacts.runMruOrder = $r.runMruOrder }
+            if ($extraScanFacts.Count) {
+                if (-not $categoryRecord.scanFacts) { $categoryRecord.scanFacts = @{} }
+                foreach ($key in $extraScanFacts.Keys) { $categoryRecord.scanFacts[$key] = $extraScanFacts[$key] }
+            }
+            if ($detailPage) {
+                $categoryRecord.records = $detailPage.records; $categoryRecord.items = @(); $categoryRecord.sampleCount = @($detailPage.records).Count
+                $categoryRecord.sourceTruncated = $categoryRecord.truncated
+                $categoryRecord.truncated = $categoryRecord.truncated -or ($null -ne $detailPage.nextOffset) -or ($null -ne $detailPage.recordChunk)
+                $categoryRecord.snapshotHash = $detailPage.snapshotHash; $categoryRecord.nextOffset = $detailPage.nextOffset; $categoryRecord.totalRows = $detailPage.totalRows
+                if ($scanError) { $categoryRecord.sourceFailed = $true }
+                if ($detailPage.recordChunk) { $categoryRecord.recordChunk = $detailPage.recordChunk }
+            }
+            $categories += $categoryRecord
         }
 
         # Unload hive if we loaded it
@@ -6260,7 +7340,7 @@ function Get-CleanupSummaryAllUsers {
 
         $knownTotal = [long]0
         foreach ($category in $categories) { if (-not $category.error) { $knownTotal += $category.count } }
-        $isComplete = @($categories | Where-Object { $_.error }).Count -eq 0
+        $isComplete = @($categories | Where-Object { $_.error -or $_.partial }).Count -eq 0
         $totalCount = if ($isComplete) { $knownTotal } else { -1 }
         $entry = @{
             username      = $username

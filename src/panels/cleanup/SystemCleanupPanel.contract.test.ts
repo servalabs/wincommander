@@ -9,6 +9,13 @@ declare const Bun: {
 const read = (path: string) => Bun.file(path).text();
 
 describe("System Cleanup panel reconstruction contracts", () => {
+  test("account inventory failures show a retry without removing the account picker", async () => {
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+    expect(grid).toContain('accountInventoryState === "error"');
+    expect(grid).toContain('Could not load Windows accounts. Other accounts may be missing.');
+    expect(grid).toContain('onClick={() => void refreshAccountInventory()}');
+    expect(grid).toContain("availableUsers.map");
+  });
   test("the cleanup route delegates to the reconstructed panel", async () => {
     const route = await read("src/panels/cleanup/index.tsx");
 
@@ -205,7 +212,8 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
     expect(panel).toContain("handleClearAllCategories");
     expect(panel).toContain("handleAutoSetSchedules");
-    expect(panel).toContain('hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"');
+    expect(panel).toContain('hasScheduledWipes ? "Turn off Auto-set wipes" : "Auto-set scheduled wipes"');
+    expect(panel).toContain("individually configured schedules stay on");
     expect(panel).toContain('data-cleanup-auto-set-schedules="true"');
     expect(panel).toContain("onRequestScheduleAccess?.()");
     expect(panel).not.toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');
@@ -252,10 +260,10 @@ describe("System Cleanup panel reconstruction contracts", () => {
     const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
 
     expect(traceCard).toContain('type BandState = "has" | "clean" | "scanning" | "error"');
-    expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,100}: error[\s\S]{0,100}\? "error"/);
+    expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,100}\? "incomplete"[\s\S]{0,100}\? "error"/);
     expect(traceCard).toContain('label: "Scan failed"');
     expect(traceCard).toContain('role="alert"');
-    expect(traceCard).toContain('preview.length === 0');
+    expect(traceCard).toContain('safePreview.length === 0');
     expect(traceCard).toContain('open details to inspect');
   });
 
@@ -317,7 +325,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(scan).toContain("const requestedIds = categoryIds?.length ? new Set(categoryIds) : null;");
     expect(scan).toContain("if (requestedIds && !requestedIds.has(cat.id)) continue;");
     expect(scan).toContain("MULTI_USER_CLEANUP_IDS.has(cat.id)");
-    expect(scan).toContain("if (s.targetUser) continue;");
+    expect(scan).toContain("readCleanupScheduleSnapshot(res.data.schedules, CLEANUP_SCHEDULE_IDS)");
   });
 
   test("profile and all-users viewers preserve structured records", async () => {
@@ -329,13 +337,14 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
     expect(backendTypes).toContain("records?: Array<Record<string, unknown>>");
     expect(scan).toContain("byId[c.id] = readCleanupUserSummary(c)");
-    expect(scan).toContain("return [c.id, readCleanupUserSummary(c)]");
+    expect(scan).toContain("categories[c.id] = readCleanupUserSummary(c)");
     expect(scan).toContain("count: d?.count ?? -1");
     expect(panel).toContain("rawData={otherUserDataMap[otherDetail.catId]?.raw}");
     expect(panel).toContain("rawData: userData?.raw");
     expect(dialog).toContain("buildTraceView(group.rawData, group.items)");
     expect(cleanupScript).toContain("$count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null");
-    expect(cleanupScript).toContain("records = @($records | Select-Object -First $previewMax)");
+    expect(cleanupScript).toContain("$returned = @($records | Select-Object -First $previewMax)");
+    expect(cleanupScript).toContain("records = $returned");
   });
 
   test("developer-cache viewer aggregates the full scan but bounds its IPC preview", async () => {

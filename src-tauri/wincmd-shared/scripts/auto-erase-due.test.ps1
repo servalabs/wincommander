@@ -28,4 +28,26 @@ foreach ($counts in @(@(1, 0), @(0, 1))) {
 }
 $result = New-AutoEraseResult -CompletedUtc $completed -LastSuccess $previous -IntervalMinutes 60 -Removed 1 -Deferred 0 -Failed 0
 if (-not $result.success -or [DateTime]::Parse($result.lastSuccessfulUtc).ToUniversalTime() -ne $completed) { throw 'A successful clear did not advance the last success.' }
+$limited = New-AutoEraseResult -CompletedUtc $completed -LastSuccess $previous -IntervalMinutes 60 -Removed 1 -Deferred 0 -Failed 0 -CoverageIncomplete $true
+if ($limited.success -or -not $limited.coverageIncomplete -or $limited.failed -ne 0 -or $limited.deferred -ne 0 -or [DateTime]::Parse($limited.lastSuccessfulUtc).ToUniversalTime() -ne $previous) { throw 'Limited coverage must not count as a failed deletion or a complete successful run.' }
+$legacy = [pscustomobject]@{ success=$true; intervalMinutes=60; removed=1; deferred=0; failed=0 }
+if (-not (Test-AutoEraseOutcomeFields $legacy 60)) { throw 'A valid older receipt must remain accepted.' }
+$incomplete = [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete=$true }
+if (-not (Test-AutoEraseOutcomeFields $incomplete 60)) { throw 'A valid limited-coverage receipt must be accepted.' }
+foreach ($bad in @(
+    [pscustomobject]@{ success=$true; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete=$true },
+    [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0; coverageIncomplete='true' },
+    [pscustomobject]@{ success=$false; intervalMinutes=60; removed=1; deferred=0; failed=0 }
+)) { if (Test-AutoEraseOutcomeFields $bad 60) { throw 'A contradictory or malformed receipt must not be accepted.' } }
 Write-Output 'Passed: initial, overdue, failed, interval-change, and duplicate-trigger timing.'
+
+# Completion a few seconds after the slot must not postpone the next scheduled trigger.
+$slot = [DateTime]::Parse('2026-10-05T00:00:00Z').ToUniversalTime()
+$normal = New-AutoEraseResult -CompletedUtc $slot.AddSeconds(2) -ScheduledDueUtc $slot -IntervalMinutes 60 -Removed 0 -Deferred 0 -Failed 0
+if ([DateTime]::Parse($normal.nextDueUtc).ToUniversalTime() -ne $slot.AddHours(1)) { throw 'A short run missed the next Windows trigger.' }
+Assert-Due ([pscustomobject]$normal) 60 '2026-10-05T01:00:00Z'
+# A delayed catch-up advances past missed slots and does not repeat in the same slot.
+$delayed = New-AutoEraseResult -CompletedUtc $slot.AddMinutes(125) -ScheduledDueUtc $slot -IntervalMinutes 60 -Removed 0 -Deferred 0 -Failed 0
+if ([DateTime]::Parse($delayed.nextDueUtc).ToUniversalTime() -ne $slot.AddHours(3)) { throw 'Delayed cleanup did not advance to the next scheduled slot.' }
+Assert-Due ([pscustomobject]$delayed) 60 '2026-10-05T03:00:00Z'
+Write-Output 'Passed: fixed scheduled cadence and delayed catch-up.'

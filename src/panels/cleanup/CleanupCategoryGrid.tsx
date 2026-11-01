@@ -21,6 +21,9 @@ import {
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
 import { PrivacyCleanupReviewDialog, type PrivacyClearReview } from "./PrivacyCleanupReviewDialog";
+import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
+import { cleanupAccountScopeLabel, cleanupProfileKey } from "./cleanupProfileIdentity";
+import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 
 interface Props {
   scan: ReturnType<typeof useCleanupScan>;
@@ -59,11 +62,15 @@ export default function CleanupCategoryGrid({
     clearAllExcludes,
     setClearAllExcludes,
     availableUsers,
+    accountInventoryState,
+    refreshAccountInventory,
     currentUser,
     isAdminUser,
     selectedUser,
     otherUserDataMap,
+    allUsersRaw,
     otherUserLoading,
+    otherUserClearing,
     combinedDataMap,
     isViewingAllUsers,
     isViewingCurrentUser,
@@ -78,9 +85,15 @@ export default function CleanupCategoryGrid({
     handleOtherUserClear,
     handleCardClearAllUsers,
     schedulesById,
+    otherScheduleSnapshot,
+    otherScheduleState,
+    selectedOwnerSid,
+    disabledSchedulesById,
+    scheduleRecordsById,
     scheduleState,
     refreshSchedules,
     scheduleBusyId,
+    autoSetSchedulesBusy,
     handleSetSchedule,
     handleClearSchedule,
   } = scan;
@@ -94,7 +107,7 @@ export default function CleanupCategoryGrid({
   );
   const isClean = (cat: CleanupCategory) => {
     const data = cardDataMap[cat.id];
-    return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error;
+    return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw);
   };
   const orderActiveCards = (categories: CleanupCategory[]) =>
     [...categories].sort((left, right) => {
@@ -125,6 +138,9 @@ export default function CleanupCategoryGrid({
         loading={d.loading}
         clearing={d.clearing}
         error={d.error}
+        rawData={d.raw}
+        verification={(d as typeof d & { verification?: CleanupVerification }).verification}
+        excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
         onClear={() => setClearReview({ category: cat.label, scope: cat.systemWide ? "Machine scope" : "Current process / fixed operation scope", count: d.count, items: d.items, run: () => void handleCardClear(
             cat,
@@ -133,12 +149,14 @@ export default function CleanupCategoryGrid({
         clearDisabled={isInvestigator || d.loading || !!d.error}
         onViewDetails={detailOpenerMap[cat.id]}
         onLoad={() => handleCardLoad(cat)}
-        scheduleMinutes={
-          cat.schedulable ? (schedulesById[cat.id] ?? null) : undefined
-        }
+        scheduleMinutes={scheduleState === "verified" ? (schedulesById[cat.id] ?? null) : undefined}
+        scheduleExists={scheduleState === "verified" && !!scheduleRecordsById[cat.id]?.enabled}
+        scheduleDisabled={scheduleState === "verified" && !!disabledSchedulesById[cat.id]}
+        schedulePayloadVerified={scheduleRecordsById[cat.id]?.payloadVerified}
+        scheduleRequiresTaskSchedulerRepair={scheduleRecordsById[cat.id]?.requiresTaskSchedulerRepair}
         scheduleState={scheduleState}
         onRefreshSchedule={() => void refreshSchedules()}
-        scheduleBusy={cat.schedulable && scheduleBusyId === cat.id}
+        scheduleBusy={autoSetSchedulesBusy || !!scheduleBusyId}
         onSetSchedule={
           cat.schedulable && schedulesEnabled
             ? (m: number) =>
@@ -146,7 +164,7 @@ export default function CleanupCategoryGrid({
             : undefined
         }
         onClearSchedule={
-          cat.schedulable && schedulesEnabled
+          schedulesEnabled && scheduleState === "verified" && !!scheduleRecordsById[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
@@ -173,14 +191,17 @@ export default function CleanupCategoryGrid({
     : isViewingCurrentUser
       ? cardDataMap
       : otherUserDataMap;
-  const userCardsLoading = !isViewingCurrentUser && otherUserLoading;
+  const userCardsLoading = !isViewingCurrentUser && (otherUserLoading || otherUserClearing);
   const userCats = orderedScanCategories.filter(
     (cat) =>
       cat.scopeAware &&
       cat.usabilityTier === tier &&
-      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id)),
+      (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id) || ((isViewingAllUsers || !!selectedOwnerSid) && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)) || isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)),
   );
   const userCardData = (cat: CleanupCategory) => {
+    if (!isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers)) {
+      return { count: -1, items: [], loading: false, clearing: false, error: undefined, raw: undefined };
+    }
     const rawData = userViewMap[cat.id];
     return rawData
       ? { ...rawData, loading: rawData.loading || userCardsLoading }
@@ -188,32 +209,56 @@ export default function CleanupCategoryGrid({
   };
   const isUserClean = (cat: CleanupCategory) => {
     const data = userCardData(cat);
-    return !cat.actionOnly && data.count === 0 && !data.loading && !data.error;
+    return !cat.actionOnly && data.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw) &&
+      !(isViewingAllUsers && allUsersRaw.some(user => hasLimitedCleanupCoverage(cat.id, user.categories[cat.id]?.raw)));
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);
+    const scheduleOnly = !isViewingCurrentUser && isOtherAccountScheduleOnly(cat, selectedOwnerSid, isViewingAllUsers);
+    const readOnly = !isViewingCurrentUser && OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id);
+    const offerAllUsers = canSwitchUsers;
+    const canScheduleSelection = isViewingCurrentUser || (!!selectedOwnerSid && !isViewingAllUsers && !cat.schedulerRunAsSystem);
+    const selectedScheduleState = isViewingCurrentUser ? scheduleState : otherScheduleState;
+    const selectedRecords = isViewingCurrentUser ? scheduleRecordsById : otherScheduleSnapshot?.records;
+    const selectedSchedules = isViewingCurrentUser ? schedulesById : otherScheduleSnapshot?.schedules;
+    const selectedDisabled = isViewingCurrentUser ? disabledSchedulesById : otherScheduleSnapshot?.disabledSchedules;
     return (
       <CleanupTraceCard
         key={cat.id}
         category={cat}
-        count={data.count}
+        count={isViewingAllUsers && allUsersRaw.length === 0 ? -1 : data.count}
         preview={(data.items || []).slice(0, 3)}
         loading={data.loading}
         clearing={data.clearing}
         error={data.error}
+        rawData={data.raw}
+        groupedItems={isViewingAllUsers ? allUsersRaw.map(user => ({
+          title: user.displayName || user.username,
+          count: user.categories[cat.id]?.count ?? -1,
+          items: user.categories[cat.id]?.items ?? [],
+          rawData: user.categories[cat.id]?.raw,
+        })) : undefined}
+        verification={(data as typeof data & { verification?: CleanupVerification }).verification}
+        excludedFromBulk={clearAllExcludes.has(cat.id)}
         compact={compact}
-        onClear={() => setClearReview({ category: cat.label, scope: isViewingAllUsers ? "All authorized user profiles" : selectedDisplay || "Current Windows account", count: data.count, items: data.items, run: () => void (
+        scheduleOnly={scheduleOnly}
+        onClear={scheduleOnly || readOnly ? undefined : () => setClearReview({ category: cat.label, scope: isViewingAllUsers ? "All authorized user profiles" : selectedDisplay || "Current Windows account", count: data.count, items: data.items, run: () => void (
           isViewingAllUsers
             ? handleCardClearAllUsers(cat)
             : isViewingCurrentUser
               ? handleCardClear(cat)
               : handleOtherUserClear(cat)) })}
         clearDisabled={isInvestigator || data.loading || !!data.error}
+        onClearAllUsers={
+          !scheduleOnly && !readOnly && offerAllUsers && !isViewingAllUsers
+            ? () => setClearReview({ category: cat.label, scope: "All authorized user profiles", count: combinedDataMap[cat.id]?.count ?? -1, items: combinedDataMap[cat.id]?.items ?? [], run: () => void handleCardClearAllUsers(cat) })
+            : undefined
+        }
         clearScopeLabel={
           isViewingAllUsers ? "all users" : selectedDisplay || "this user"
         }
         onViewDetails={
-          isViewingAllUsers
+          scheduleOnly ? undefined : isViewingAllUsers
             ? () => onOpenCombinedDetail(cat.id)
             : isViewingCurrentUser
               ? detailOpenerMap[cat.id]
@@ -225,7 +270,7 @@ export default function CleanupCategoryGrid({
                     color: cat.color,
                   })
         }
-        onLoad={() =>
+        onLoad={scheduleOnly ? undefined : () =>
           isViewingAllUsers
             ? loadAllUsersView()
             : isViewingCurrentUser
@@ -233,28 +278,32 @@ export default function CleanupCategoryGrid({
               : loadUserView(selectedUser, [cat.id])
         }
         scheduleMinutes={
-          isViewingCurrentUser && cat.schedulable
-            ? (schedulesById[cat.id] ?? null)
+          canScheduleSelection && selectedScheduleState === "verified"
+            ? (selectedSchedules?.[cat.id] ?? null)
             : undefined
         }
-        scheduleState={scheduleState}
+        scheduleDisabled={canScheduleSelection && selectedScheduleState === "verified" && !!selectedDisabled?.[cat.id]}
+        scheduleExists={canScheduleSelection && selectedScheduleState === "verified" && !!selectedRecords?.[cat.id]?.enabled}
+        schedulePayloadVerified={canScheduleSelection ? selectedRecords?.[cat.id]?.payloadVerified : undefined}
+        scheduleRequiresTaskSchedulerRepair={canScheduleSelection ? selectedRecords?.[cat.id]?.requiresTaskSchedulerRepair : undefined}
+        scheduleState={canScheduleSelection ? selectedScheduleState : undefined}
         onRefreshSchedule={() => void refreshSchedules()}
         scheduleBusy={
-          isViewingCurrentUser && cat.schedulable && scheduleBusyId === cat.id
+          autoSetSchedulesBusy || !!scheduleBusyId
         }
         onSetSchedule={
-          isViewingCurrentUser && cat.schedulable && schedulesEnabled
+          canScheduleSelection && cat.schedulable && schedulesEnabled
             ? (minutes: number) =>
                 handleSetSchedule(cat.id, minutes, !!cat.schedulerRunAsSystem)
             : undefined
         }
         onClearSchedule={
-          isViewingCurrentUser && cat.schedulable && schedulesEnabled
+          canScheduleSelection && schedulesEnabled && selectedScheduleState === "verified" && !!selectedRecords?.[cat.id]
             ? () => handleClearSchedule(cat.id)
             : undefined
         }
         onRequestScheduleAccess={
-          isViewingCurrentUser && cat.schedulable && !schedulesEnabled
+          canScheduleSelection && cat.schedulable && !schedulesEnabled
             ? onRequestScheduleAccess
             : undefined
         }
@@ -316,7 +365,7 @@ export default function CleanupCategoryGrid({
                         return next;
                       })
                     }
-                    title={isDefaultExcludedCleanup(id) ? "Default exclusion from Clear All and Auto-set. An individual clear or schedule requires confirmation." : "Remove from exclusions"}
+                    title={isDefaultExcludedCleanup(id) ? "Default exclusion from Clear All and Auto-set. Available individual actions require confirmation." : "Remove from exclusions"}
                     aria-label={isDefaultExcludedCleanup(id)
                       ? `${orderedScanCategories.find((c) => c.id === id)?.label ?? id} is excluded from bulk cleanup and automatic schedule setup by default`
                       : `Remove ${orderedScanCategories.find((c) => c.id === id)?.label ?? id} from bulk-clear exclusions`}
@@ -455,6 +504,7 @@ export default function CleanupCategoryGrid({
                             icon="people"
                             text="All users"
                             label="Combined"
+                            disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                             active={accountSelectValue === ALL_USERS_KEY}
                             onClick={() => {
                               handleSwitchUser(ALL_USERS_KEY);
@@ -464,13 +514,14 @@ export default function CleanupCategoryGrid({
                         )}
                         {availableUsers.map((u) => (
                           <MenuItem
-                            key={u.path ?? u.name}
+                            key={cleanupProfileKey(u)}
                             icon={u.isCurrent ? "user" : "person"}
+                            disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                             text={u.displayName ?? u.name}
                             label={u.isCurrent ? "You" : u.name}
-                            active={accountSelectValue === u.name}
+                            active={accountSelectValue === cleanupProfileKey(u)}
                             onClick={() => {
-                              handleSwitchUser(u.name);
+                              handleSwitchUser(cleanupProfileKey(u));
                               setAccountPickerOpen(false);
                             }}
                           />
@@ -492,6 +543,8 @@ export default function CleanupCategoryGrid({
                       disabled={
                         !canSwitchUsers ||
                         otherUserLoading ||
+                        otherUserClearing ||
+                        !!scheduleBusyId || autoSetSchedulesBusy ||
                         availableUsers.length === 0
                       }
                       onClick={(e) => {
@@ -503,7 +556,7 @@ export default function CleanupCategoryGrid({
                       <span>
                         {otherUserLoading
                           ? "Loading account..."
-                          : `${selectedDisplay}${isViewingCurrentUser ? " (you)" : ""}`}
+                          : cleanupAccountScopeLabel(selectedDisplay, isViewingCurrentUser, isViewingAllUsers)}
                       </span>
                       <Icon icon="chevron-down" size={13} />
                     </button>
@@ -514,8 +567,12 @@ export default function CleanupCategoryGrid({
                   <Icon icon="user" size={13} />
                   <span>
                     {availableUsers.length === 0
-                      ? "Loading profile..."
-                      : `${selectedDisplay || availableUsers[0]?.displayName || availableUsers[0]?.name || "Current user"} (you)`}
+                      ? accountInventoryState === "loading"
+                        ? "Loading profiles..."
+                        : accountInventoryState === "error"
+                          ? "Profiles unavailable"
+                          : "No profiles found"
+                      : cleanupAccountScopeLabel(selectedDisplay, isViewingCurrentUser, isViewingAllUsers)}
                   </span>
                 </div>
               )}
@@ -527,7 +584,7 @@ export default function CleanupCategoryGrid({
                     icon="refresh"
                     text="Rescan"
                     loading={otherUserLoading}
-                    disabled={otherUserLoading}
+                    disabled={otherUserLoading || otherUserClearing}
                     onClick={() =>
                       isViewingAllUsers
                         ? loadAllUsersView()
@@ -540,12 +597,19 @@ export default function CleanupCategoryGrid({
                     minimal
                     icon="cross"
                     text="Back to you"
+                    disabled={otherUserLoading || otherUserClearing || !!scheduleBusyId || autoSetSchedulesBusy}
                     onClick={() => handleSwitchUser(currentUser)}
                     style={{ fontSize: 10 }}
                   />
                 </>
               )}
-              {!isAdminUser && (
+              {accountInventoryState === "error" && (
+                <div role="alert" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                  <span>Could not load Windows accounts. Other accounts may be missing.</span>
+                  <Button small minimal icon="refresh" text="Retry" onClick={() => void refreshAccountInventory()} />
+                </div>
+              )}
+              {accountInventoryState === "ready" && !isAdminUser && (
                 <div
                   style={{
                     fontSize: 10,

@@ -10,6 +10,7 @@ import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
+import { cleanupScanFailure } from "../panels/cleanup/cleanupScanFailure";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1147,7 +1148,9 @@ export interface ProcessIntelligenceEntry {
 
 export interface WlanProfile {
   name: string;
+  interfaceId?: string;
   password?: string | null;
+  passwordStatus?: 'available' | 'unavailable';
 }
 
 export interface BluetoothDevice {
@@ -1450,7 +1453,7 @@ async function runBackendScriptTracked<T>(
 }
 
 // Hook for executing backend commands
-export function useBackend() {
+export function useBackend(retainCleanupScanErrors = false) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1475,7 +1478,7 @@ export function useBackend() {
       if (isPoshError || isProOkFalse) {
         const errorMsg = getErrorMessage(result);
         setError(errorMsg);
-        return { success: false, error: errorMsg };
+        return cleanupScanFailure<T>(command, result, errorMsg, retainCleanupScanErrors);
       }
 
       // If data property exists (some commands might wrap it, but usually top level is the data)
@@ -1490,7 +1493,7 @@ export function useBackend() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [retainCleanupScanErrors]);
 
   // Convenience methods for common operations
   const backend = useMemo(() => ({
@@ -1590,7 +1593,8 @@ export function useBackend() {
     clearExecutionCache: () => execute(clearCommand("ExecutionCache")),
     invokeDiskCleanup: () => execute("Invoke-DiskCleanup"),
     invokeMasterPrivacyClean: () => execute(invokeCommand("MasterPrivacyClean")),
-    getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles"),
+    getWlanProfiles: () => execute<{ profiles: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: false }),
+    getWlanProfileSecrets: () => execute<{ profiles: WlanProfile[]; additionalProfiles?: WlanProfile[] }>("Get-WlanProfiles", { IncludeSecrets: true }),
     removeWlanProfile: (name: string, allowDefaultExcluded = false) => execute(commandId("Remove-", "Wlan", "Profile"), { Name: name, AllowDefaultExcluded: allowDefaultExcluded }),
     getBluetoothDevices: () => execute<{ devices: BluetoothDevice[] }>("Get-BluetoothDevices"),
     clearBluetoothHistory: () => execute(clearCommand("BluetoothDevices")),
@@ -1600,7 +1604,9 @@ export function useBackend() {
     // Scheduled Clipboard Erase — REMOVED, replaced by setAutoEraseSchedule('clipboard', n)
     disableClipboardHistory: () => execute("Disable-ClipboardHistory"),
     enableClipboardHistory: () => execute("Enable-ClipboardHistory"),
-    getClipboardHistoryStatus: () => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ type: string; preview: string; charCount: number }> }>("Get-ClipboardHistoryStatus"),
+    getClipboardHistoryStatus: (includePreviews = false) => execute<{ clipboardHistoryDisabled: boolean; cloudClipboardDisabled: boolean; historyItems?: Array<{ id?: string; formats?: string[]; type: string; preview?: string; charCount?: number; detailAvailable?: boolean }>; historyReadStatus?: string; partial?: boolean; message?: string }>("Get-ClipboardHistoryStatus", { IncludePreviews: includePreviews }),
+    getClipboardHistoryImage: (itemId: string, offset = 0, snapshot = "") => execute<{ status: string; imageMime?: string; imageBase64?: string; offset?: number; totalBytes?: number; nextOffset?: number | null; snapshotHash?: string }>("Get-ClipboardHistoryStatus", { ImageItemId: itemId, ImageOffset: offset, ImageSnapshot: snapshot }),
+    getClipboardHistoryDetail: (itemId: string, offset = 0, snapshot = "") => execute<{ status: string; detailBase64?: string; offset?: number; totalBytes?: number; nextOffset?: number | null; snapshotHash?: string }>("Get-ClipboardHistoryStatus", { DetailItemId: itemId, DetailOffset: offset, DetailSnapshot: snapshot }),
     disableCloudClipboardSync: () => execute("Disable-CloudClipboardSync"),
     enableCloudClipboardSync: () => execute("Enable-CloudClipboardSync"),
 
@@ -1630,9 +1636,24 @@ export function useBackend() {
           AllowDefaultExcluded: allowDefaultExcluded,
         },
       ),
+    setManagedAutoEraseSchedule: (categoryId: string, intervalMinutes: number, runAsSystem: boolean = false) =>
+      execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean; taskState?: string }>(
+        "Set-ManagedAutoEraseSchedule",
+        { CategoryId: categoryId, IntervalMinutes: intervalMinutes, RunAsSystem: runAsSystem },
+      ),
+    setIndividualAutoEraseSchedule: (categoryId: string, intervalMinutes: number, runAsSystem: boolean = false, allowDefaultExcluded: boolean = false) =>
+      execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean }>(
+        "Set-IndividualAutoEraseSchedule",
+        { CategoryId: categoryId, IntervalMinutes: intervalMinutes, RunAsSystem: runAsSystem, AllowDefaultExcluded: allowDefaultExcluded },
+      ),
     removeAutoEraseSchedule: (categoryId: string) =>
       execute<{ status: string; categoryId: string }>(
         "Remove-AutoEraseSchedule",
+        { CategoryId: categoryId },
+      ),
+    removeManagedAutoEraseSchedule: (categoryId: string) =>
+      execute<{ status: string; categoryId: string; removed: string[] }>(
+        "Remove-ManagedAutoEraseSchedule",
         { CategoryId: categoryId },
       ),
     getAutoEraseSchedules: () =>
@@ -1640,14 +1661,21 @@ export function useBackend() {
         schedules: Array<{
           categoryId: string;
           taskName: string;
+          legacy?: boolean;
           enabled: boolean;
+          state?: string;
+          scope?: "system" | "current-user" | "other-user" | "unknown";
           intervalMinutes: number;
           targetUser: string | null;
+          ownerSid?: string | null;
           ownerAccount?: string | null;
           managedByAutoSet?: boolean;
+          payloadVerified?: boolean;
+          requiresTaskSchedulerRepair?: boolean;
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;
+          cleanupOutcome?: { attemptedUtc: string; success: boolean; removed: number; deferred: number; failed: number; coverageIncomplete?: boolean } | null;
         }>;
         total: number;
       }>("Get-AutoEraseSchedules"),
@@ -1675,9 +1703,11 @@ export function useBackend() {
       }>("Get-FleetAccessUsers"),
     // Scan cleanup traces for users. The UI views one user at a time, so it
     // passes a single targetUsers entry; omit it to scan every account.
-    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[]) =>
+    getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[], fullDetail = false, detailOffset = 0, snapshotHash = "", detailChunkOffset = 0) =>
       execute<{
         status: string;
+        error?: boolean;
+        message?: string;
         userCount: number;
         isAdmin: boolean;
         users: Array<{
@@ -1694,11 +1724,25 @@ export function useBackend() {
             count: number;
             items: string[];
             records?: Array<Record<string, unknown>>;
+            sampleCount?: number;
+            previewLimit?: number;
+            truncated?: boolean;
+            sourceTruncated?: boolean;
+            snapshotHash?: string;
+            nextOffset?: number | null;
+            totalRows?: number;
+            recordChunk?: { offset: number; totalBytes: number; data: string; nextByteOffset: number | null };
+            status?: string;
+            message?: string;
+            error?: boolean;
           }>;
         }>;
       }>("Get-CleanupSummaryAllUsers", {
         ...(categoryIds && categoryIds.length > 0 ? { CategoryIds: categoryIds.join(',') } : {}),
         ...(targetUsers && targetUsers.length > 0 ? { TargetUsers: targetUsers.join(',') } : {}),
+        ...(fullDetail ? { FullDetail: true } : {}),
+        ...(fullDetail && (detailOffset > 0 || detailChunkOffset > 0) ? { DetailOffset: detailOffset, SnapshotHash: snapshotHash } : {}),
+        ...(fullDetail && detailChunkOffset > 0 ? { DetailChunkOffset: detailChunkOffset } : {}),
       }),
     getLoggedInUsers: () =>
       execute<{ users: string[] }>("Get-LoggedInUsers"),
@@ -1728,6 +1772,7 @@ export function useBackend() {
       intervalMinutes: number,
       targetUsers: string[],
       runAsSystem = false,
+      allowDefaultExcluded = false,
     ) =>
       execute<{ status: string; results: unknown[]; total: number }>(
         "Set-MultiUserAutoEraseSchedule",
@@ -1735,6 +1780,7 @@ export function useBackend() {
           CategoryId: categoryId,
           IntervalMinutes: intervalMinutes,
           RunAsSystem: runAsSystem,
+          AllowDefaultExcluded: allowDefaultExcluded,
           TargetUsers: targetUsers.join(','),
         },
       ),

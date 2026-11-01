@@ -85,7 +85,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     const handleEraseAllWlan = async () => {
         const accepted = await requestConfirm({
             title: "Forget all Wi-Fi networks?",
-            description: "Every saved Wi-Fi profile will be removed and the current wireless connection may be lost.",
+            description: "All-user profiles on available Wi-Fi adapters will be removed. Private and policy-managed profiles are excluded; the current connection may be lost.",
             confirmLabel: "Forget all networks",
         });
         if (!accepted) return;
@@ -199,7 +199,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
             >
                 <div className="wc-dialog-body">
                     <div className="mb-3 p-2 bg-blue-500/10 text-blue-400 text-xs rounded border border-blue-500/20">
-                        Passwords are shown in cleartext. Use with caution.
+                        Wi-Fi passwords are not collected or displayed.
                     </div>
                     <div style={{ maxHeight: 360, overflow: "auto", paddingRight: "8px" }}>
                         <table className="wc-table wc-table--striped" style={{ width: "100%" }}>
@@ -221,7 +221,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                                         transition={{ delay: staggerDelay(idx), duration: DURATION_S.fast }}
                                     >
                                         <td className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>{p.name}</td>
-                                        <td className="font-mono text-xs opacity-80" style={{ color: 'var(--color-text-muted)', wordBreak: "break-all" }}>{p.password || "<NO PASS>"}</td>
+                                        <td className="font-mono text-xs opacity-80" style={{ color: 'var(--color-text-muted)' }}>Not displayed</td>
                                         <td>
                                             <Button
                                                 icon="trash"

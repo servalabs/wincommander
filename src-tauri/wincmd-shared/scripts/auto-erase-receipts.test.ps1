@@ -19,13 +19,15 @@ try {
         $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $case.id -IntervalMinutes 60 -Script $case.body -ExecutionScope 'user-test' -FirstDueUtc ([DateTime]::UtcNow.AddMinutes(-1).ToString('o')) -AllowDefaultExcluded ([bool]$case.approved)
         if ($argument -notmatch '-File "([^"]+)"$') { throw 'Generated task did not reference its script.' }
         $scriptPath = $Matches[1]
+        if ([IO.Path]::GetFileName($scriptPath) -notmatch '\.g([0-9a-f]{32})\.ps1$') { throw 'Generated task did not have a generation identifier.' }
+        $generation = $Matches[1]
         # Execute only the synthetic body passed above, never a category's wipe payload.
         $savedPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         $null = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath 2>&1
         $exitCode = $LASTEXITCODE
         $ErrorActionPreference = $savedPreference
-        $statePath = Join-Path $testRoot "WinCommander\auto-erase\$($case.id).user-test.state.json"
+        $statePath = Join-Path $testRoot "WinCommander\auto-erase\$($case.id).user-test.g$generation.state.json"
         if ($case.denied) {
             if ($exitCode -eq 0 -or (Test-Path -LiteralPath $statePath)) { throw 'An unapproved protected payload executed.' }
             continue

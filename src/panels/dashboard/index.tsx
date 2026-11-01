@@ -133,7 +133,8 @@ export default function DashboardPanel() {
     getAppInventory,
     upgradeApp,
     invokeDiskCleanup,
-    setAutoEraseSchedule,
+    setManagedAutoEraseSchedule,
+    getAutoEraseSchedules,
   } = useBackend();
 
 
@@ -613,12 +614,12 @@ export default function DashboardPanel() {
       fn = async () => {
         let summary;
         try {
-          summary = await ensureForensicTraceSchedules(setAutoEraseSchedule);
+          summary = await ensureForensicTraceSchedules(setManagedAutoEraseSchedule, getAutoEraseSchedules);
         } finally {
           // The dashboard radar and Cleanup cards share this schedule cache.
           invalidateDiskCleanupScheduleStatus();
         }
-        const message = `Scheduled trace wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.${summary.firstFailure ? ` First error: ${summary.firstFailure}` : ''}`;
+        const message = `Scheduled trace wipes: ${summary.created} created, ${summary.alreadyConfigured} already active, ${summary.disabledExisting} existing but disabled, ${summary.skipped} skipped, ${summary.failed} failed.${summary.firstFailure ? ` First error: ${summary.firstFailure}` : ''}`;
         if (summary.failed > 0) {
           showError(message);
           throw new Error(message);
@@ -675,7 +676,7 @@ export default function DashboardPanel() {
       }
     }
     return fn ? { label: f.label, fn: wrap(fn) } : null;
-  }, [trackFindingFix, toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setAutoEraseSchedule, pro, setUpdateFlowOpen, changeServices]);
+  }, [trackFindingFix, toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, setManagedAutoEraseSchedule, getAutoEraseSchedules, pro, setUpdateFlowOpen, changeServices]);
 
   // Run a set of findings through the operation overlay, then re-read state so
   // the radar, score, and toggles update. Used by both Fix-all and per-item Fix.
