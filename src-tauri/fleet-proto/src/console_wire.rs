@@ -126,6 +126,9 @@ impl CleanupSelection {
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct CleanupBrowseArtifact {
     pub artifact_id: String,
+    /// False when the collector could not observe the artifact completely.
+    #[serde(default)]
+    pub status_known: bool,
     pub item_count: u64,
     pub size_bytes: u64,
     /// RFC3339 newest write time, when known.
@@ -278,6 +281,7 @@ mod tests {
                 source_id: "chrome".into(),
                 artifacts: vec![CleanupBrowseArtifact {
                     artifact_id: "history".into(),
+                    status_known: true,
                     item_count: 3,
                     size_bytes: 4096,
                     last_write: None,

@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Extend neutral Fleet wire contracts with device-command metadata, detection
+  timing, approved-id cleanup selection and explicit unknown browse status.
+  Sensitive-finding wire support remains an optional, default-off feature.
+
 - Add category/detail maintenance workspaces, developer and AI-cache groups,
   explicit project-folder cache review, duplicate selection preferences, and
   bounded local operation history. Refresh application and privacy review
