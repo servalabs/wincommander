@@ -757,7 +757,11 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         catalog_id: "cleanup.browser_footprints",
         action_class: ActionClass::Irreversible,
         summary: "Erase browser history and cached traces",
-        payload_schema: None,
+        // Optional artifact-level selection (fleet_proto::CleanupSelection).
+        // Absent keeps the whole-browser behaviour.
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"selection":{"type":"object"}}}"#,
+        ),
     },
     // ── Irreversible: data destruction / cannot be undone (top of the ladder) ─
     CommandMeta {
