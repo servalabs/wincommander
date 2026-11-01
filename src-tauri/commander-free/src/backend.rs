@@ -14,6 +14,9 @@ mod backend_paid_args;
 #[path = "backend_fix_scope.rs"]
 mod fix_scope;
 
+#[path = "shield_detection_episodes.rs"]
+mod shield_detection_episodes;
+
 #[path = "vault_inventory.rs"]
 pub(crate) mod vault_inventory;
 
@@ -7270,6 +7273,147 @@ mod fleet_privacy_alert_tests {
     }
 }
 
+fn spawn_shield_fleet_reporter(
+) -> tokio::sync::mpsc::Sender<Vec<shield_detection_episodes::Transition>> {
+    use shield_detection_episodes::Transition;
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<Transition>>(64);
+    tauri::async_runtime::spawn(async move {
+        let mut recorded = std::collections::BTreeMap::new();
+        while let Some(transitions) = receiver.recv().await {
+            for transition in transitions {
+                let (command, payload, class, episode_id, starting) = match transition {
+                    Transition::Start {
+                        class,
+                        episode_id,
+                        started_at_ms,
+                    } => {
+                        recorded.remove(class);
+                        let mode = match fleet_privacy_alert_mode(class).await {
+                            Ok(mode) => mode,
+                            Err(gate) => {
+                                crate::flow_bridge::flow_trace(format!(
+                                    "shield-reader: Fleet attention event not queued: {}",
+                                    gate.reason()
+                                ));
+                                continue;
+                            }
+                        };
+                        let Some(started_at) =
+                            chrono::DateTime::from_timestamp_millis(started_at_ms)
+                        else {
+                            continue;
+                        };
+                        (
+                            "record_privacy_shield_event",
+                            serde_json::json!({
+                                "class": class, "episodeId": episode_id, "mode": mode,
+                                "startedAt": started_at.to_rfc3339(),
+                            }),
+                            class,
+                            episode_id,
+                            true,
+                        )
+                    }
+                    Transition::Finish {
+                        class,
+                        episode_id,
+                        duration_seconds,
+                    } => {
+                        if recorded.get(class) != Some(&episode_id) {
+                            continue;
+                        }
+                        recorded.remove(class);
+                        (
+                            "finish_privacy_shield_event",
+                            serde_json::json!({
+                                "class": class, "episodeId": episode_id, "durationSeconds": duration_seconds,
+                            }),
+                            class,
+                            episode_id,
+                            false,
+                        )
+                    }
+                };
+                // One worker preserves start-before-finish even when IPC is slower than the detector.
+                match crate::sidecar::dispatch_paid_command(command, payload).await {
+                    Ok(result) if result[if starting { "queued" } else { "updated" }] == true => {
+                        if starting {
+                            recorded.insert(class, episode_id);
+                        }
+                    }
+                    _ => crate::flow_bridge::flow_trace(
+                        "shield-reader: Fleet detection receipt not confirmed",
+                    ),
+                }
+            }
+        }
+    });
+    sender
+}
+
+fn queue_shield_transitions(
+    sender: &tokio::sync::mpsc::Sender<Vec<shield_detection_episodes::Transition>>,
+    episodes: &mut shield_detection_episodes::Episodes,
+    classes: &[&'static str],
+    timestamp: Option<f64>,
+) {
+    let transitions = episodes.observe(classes, timestamp, || uuid::Uuid::new_v4().to_string());
+    if !transitions.is_empty() && sender.try_send(transitions).is_err() {
+        episodes.abandon();
+        crate::flow_bridge::flow_trace(
+            "shield-reader: Fleet detection queue unavailable; interval left unknown",
+        );
+    }
+}
+
+#[cfg(test)]
+mod shield_detection_bridge_tests {
+    use super::{
+        queue_shield_transitions,
+        shield_detection_episodes::{Episodes, Transition},
+    };
+
+    #[test]
+    fn a_fast_clear_queues_after_the_matching_start() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let mut episodes = Episodes::default();
+        queue_shield_transitions(&sender, &mut episodes, &["phone_detected"], Some(100.0));
+        queue_shield_transitions(&sender, &mut episodes, &[], Some(102.0));
+        let start = receiver.try_recv().unwrap();
+        let end = receiver.try_recv().unwrap();
+        let Transition::Start {
+            episode_id,
+            started_at_ms,
+            ..
+        } = &start[0]
+        else {
+            panic!()
+        };
+        assert_eq!(*started_at_ms, 100_000);
+        assert!(uuid::Uuid::parse_str(episode_id).is_ok());
+        assert_eq!(
+            end,
+            vec![Transition::Finish {
+                class: "phone_detected",
+                episode_id: episode_id.clone(),
+                duration_seconds: 2,
+            }]
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn queue_overflow_does_not_close_an_interval_at_a_later_unrelated_clear() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let mut episodes = Episodes::default();
+        queue_shield_transitions(&sender, &mut episodes, &["phone_detected"], Some(100.0));
+        queue_shield_transitions(&sender, &mut episodes, &["multiple_faces"], Some(102.0));
+        assert_eq!(receiver.try_recv().unwrap().len(), 1);
+        queue_shield_transitions(&sender, &mut episodes, &[], Some(110.0));
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
 /// Tail the shield's look-state sidecar and forward attention events to the
 /// local flow engine and Fleet. Detection never changes global webcam access.
 /// Lifetime is decoupled from the reported shield pid: the pid the wrapper
@@ -7294,9 +7438,9 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .map(|meta| meta.len())
                 .unwrap_or(0);
         }
-        let mut active_fleet_event_classes = std::collections::BTreeSet::new();
+        let mut fleet_episodes = shield_detection_episodes::Episodes::default();
+        let fleet_reporter = spawn_shield_fleet_reporter();
         let mut active_local_notification_classes = std::collections::BTreeSet::new();
-        let mut fleet_episode_id: Option<String> = None;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
             my_gen,
@@ -7319,21 +7463,31 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 if len < offset {
                     // File truncated/rotated (e.g. a new session) — restart.
                     offset = 0;
+                    fleet_episodes.abandon();
+                    active_local_notification_classes.clear();
                 }
                 if len > offset {
-                    let fresh = String::from_utf8_lossy(&bytes[offset as usize..]).into_owned();
-                    offset = len;
+                    let unread = &bytes[offset as usize..];
+                    // Keep an incomplete NDJSON line for the next read instead of losing an end.
+                    let complete = shield_detection_episodes::complete_prefix_len(unread);
+                    let fresh = String::from_utf8_lossy(&unread[..complete]).into_owned();
+                    offset += complete as u64;
                     last_activity = std::time::Instant::now();
                     for line in fresh.lines() {
+                        if SHIELD_READER_GEN.load(Ordering::SeqCst) != my_gen
+                            || !SHIELD_READER_ACTIVE.load(Ordering::SeqCst)
+                        {
+                            break;
+                        }
                         let line = line.trim();
                         if line.is_empty() {
                             continue;
                         }
                         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-                            crate::flow_bridge::flow_trace(format!(
-                                "shield-reader: unparseable line: {}",
-                                line
-                            ));
+                            fleet_episodes.abandon();
+                            crate::flow_bridge::flow_trace(
+                                "shield-reader: unparseable detector transition",
+                            );
                             continue;
                         };
                         match value.get("event").and_then(|e| e.as_str()) {
@@ -7356,14 +7510,12 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 let event_classes =
                                     privacy_shield_event_classes_from_reason(reason);
                                 if event_classes.is_empty() {
+                                    fleet_episodes.abandon();
                                     crate::flow_bridge::flow_trace(
                                         "shield-reader: no supported Privacy Shield event class",
                                     );
                                     continue;
                                 }
-                                let episode_id = fleet_episode_id
-                                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
-                                    .clone();
                                 crate::flow_bridge::flow_trace(format!(
                                     "shield-reader: look_away read (reason='{}') → emit {} bounded event class(es)",
                                     reason, event_classes.len()
@@ -7413,48 +7565,21 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     });
                                 }
 
-                                // Fleet receives only the detected class. Keep this
-                                // best-effort work off the reader loop: it must never
-                                // delay the protected user's local notification.
-                                for event_class in event_classes {
-                                    if !active_fleet_event_classes.insert(event_class) {
-                                        continue;
-                                    }
-                                    let episode_id = episode_id.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        match fleet_privacy_alert_mode(event_class).await {
-                                            Ok(mode) => {
-                                                if let Err(error) =
-                                                    crate::sidecar::dispatch_paid_command(
-                                                        "record_privacy_shield_event",
-                                                        serde_json::json!({
-                                                            "class": event_class,
-                                                            "episodeId": episode_id,
-                                                            "mode": mode,
-                                                        }),
-                                                    )
-                                                    .await
-                                                {
-                                                    crate::flow_bridge::flow_trace(format!(
-                                                "shield-reader: Fleet attention event not queued: {}",
-                                                error
-                                            ));
-                                                }
-                                            }
-                                            Err(fleet_gate) => {
-                                                crate::flow_bridge::flow_trace(format!(
-                                            "shield-reader: Fleet attention event not queued: {}",
-                                            fleet_gate.reason(),
-                                        ));
-                                            }
-                                        }
-                                    });
-                                }
+                                queue_shield_transitions(
+                                    &fleet_reporter,
+                                    &mut fleet_episodes,
+                                    &event_classes,
+                                    value.get("ts").and_then(|ts| ts.as_f64()),
+                                );
                             }
                             Some("look_back") => {
-                                active_fleet_event_classes.clear();
+                                queue_shield_transitions(
+                                    &fleet_reporter,
+                                    &mut fleet_episodes,
+                                    &[],
+                                    value.get("ts").and_then(|ts| ts.as_f64()),
+                                );
                                 active_local_notification_classes.clear();
-                                fleet_episode_id = None;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(
                                     "privacy-shield-look-state",
@@ -7462,6 +7587,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 );
                             }
                             other => {
+                                fleet_episodes.abandon();
                                 crate::flow_bridge::flow_trace(format!(
                                     "shield-reader: ignored event {:?}",
                                     other
@@ -7513,6 +7639,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
             // delivery effectively concurrent with detector output.
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
+        // Stop/drop is not an observed clear: open Fleet durations remain unknown.
+        fleet_episodes.abandon();
         // Shield stopped — clear the visual look-away state. Camera access was
         // never modified by this reader.
         let _ = app.emit(
