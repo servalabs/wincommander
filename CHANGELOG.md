@@ -5,6 +5,8 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Refresh saved Wi-Fi profiles after failed or partial cleanup and mark results
+  stale when verification fails, instead of leaving an apparently current list.
 - Improve cleanup account scoping, partial scan details, protected recurring
   schedules and independent post-cleanup read-back. Preserve individual schedule
   ownership and require explicit consent for sensitive recurring cleanup.

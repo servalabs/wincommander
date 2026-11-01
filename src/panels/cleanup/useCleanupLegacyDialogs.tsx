@@ -22,12 +22,14 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     const requestConfirm = useAppConfirm();
     const cleanupActionInFlight = useRef(false);
     const browserAuditStale = useRef(false);
+    const wlanAuditStale = useRef(false);
 
     const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
 
     const [wlanDialogOpen, setWlanDialogOpen] = useState(false);
 
     const [wlanProfiles, setWlanProfiles] = useState<WlanProfile[]>([]);
+    const [wlanProfilesError, setWlanProfilesError] = useState<string | null>(null);
 
     const [browserFootprintsDialogOpen, setBrowserFootprintsDialogOpen] = useState(false);
 
@@ -49,10 +51,12 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         cleanupActionInFlight.current = true;
         try {
         const cached = cardDataMap['wlanProfiles']?.raw;
-        if (cached?.profiles) { setWlanProfiles(cached.profiles); setWlanDialogOpen(true); return; }
+        if (!wlanAuditStale.current && Array.isArray(cached?.profiles)) { setWlanProfiles(cached.profiles); setWlanProfilesError(null); setWlanDialogOpen(true); return; }
         await runLocalOnly('wlanProfiles', async () => {
             const res = await getWlanProfiles();
-            if (res.success && res.data?.profiles) {
+            if (isCleanupCommandSuccessful(res) && Array.isArray(res.data?.profiles)) {
+                wlanAuditStale.current = false;
+                setWlanProfilesError(null);
                 setWlanProfiles(res.data.profiles);
                 setWlanDialogOpen(true);
             } else {
@@ -67,11 +71,15 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     const refreshWlanAfterClear = async (): Promise<WlanProfile[] | null> => {
         const fresh = await getWlanProfiles();
         if (!isCleanupCommandSuccessful(fresh) || !Array.isArray(fresh.data?.profiles)) {
+            wlanAuditStale.current = true;
+            setWlanProfilesError('The displayed profiles may be outdated because the latest scan failed.');
             showError('Wi-Fi cleanup could not be verified by a fresh scan.');
             updateCacheEntry('wlanProfiles', { count: -1, items: [], loading: false, clearing: false, error: 'Post-clear scan failed.' });
             return null;
         }
         const profiles = fresh.data.profiles;
+        wlanAuditStale.current = false;
+        setWlanProfilesError(null);
         setWlanProfiles(profiles);
         updateCacheEntry('wlanProfiles', { count: profiles.length, items: profiles.map(profile => profile.name), loading: false, clearing: false, raw: fresh.data });
         return profiles;
@@ -85,8 +93,8 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         if (!accepted) return;
         await runLocalOnly('wlanRemove', async () => {
             const res = await removeWlanProfile(name, true);
+            const fresh = await refreshWlanAfterClear();
             if (isCleanupCommandSuccessful(res)) {
-                const fresh = await refreshWlanAfterClear();
                 if (fresh?.some(profile => profile.name === name)) showError('The Wi-Fi profile is still present after cleanup.');
             } else {
                 showError(res.error || "Failed to remove WLAN profile.");
@@ -109,8 +117,8 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
         if (!accepted) return;
         await runLocalOnly('wlanErase', async () => {
             const res = await removeWlanProfile("", true);
+            const fresh = await refreshWlanAfterClear();
             if (isCleanupCommandSuccessful(res)) {
-                const fresh = await refreshWlanAfterClear();
                 if (fresh?.length === 0) showSuccess('A fresh scan found no saved Wi-Fi profiles.');
                 else if (fresh) showError(`${fresh.length} Wi-Fi profiles remain after cleanup.`);
             } else {
@@ -279,6 +287,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                     <div className="mb-3 p-2 bg-blue-500/10 text-blue-400 text-xs rounded border border-blue-500/20">
                         Wi-Fi passwords are not collected or displayed.
                     </div>
+                    {wlanProfilesError && <div role="alert" className="text-xs">{wlanProfilesError}</div>}
                     <div style={{ maxHeight: 360, overflow: "auto", paddingRight: "8px" }}>
                         <table className="wc-table wc-table--striped" style={{ width: "100%" }}>
                             <thead>

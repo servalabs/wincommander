@@ -8,7 +8,7 @@ declare const Bun: {
   };
 };
 
-test("cleanup viewers confirm actions and refresh actual browser results", async () => {
+test("cleanup viewers confirm actions, refresh failed WLAN removals and recover stale audits", async () => {
   const script = `
     import { mock } from 'bun:test';
     import { strict as assert } from 'node:assert';
@@ -27,12 +27,13 @@ test("cleanup viewers confirm actions and refresh actual browser results", async
     mock.module('./src/components/shared/AnimatedList', () => ({ staggerDelay: () => 0 }));
     mock.module('framer-motion', () => ({ motion: { tr: 'tr' }, AnimatePresence: 'AnimatePresence' }));
     const calls = [], errors = [], successes = [], caches = [];
+    let wlanReads = 0, wlanResult = {success:true}, wlanAudit = {success:true,data:{profiles:[{name:'fixture'}]}};
     let confirmed = false, confirmWait = null, response = { success: true, data: { stdout: 'ok: cleared 1/2 (1 locked, likely still running; legacy=0)' } };
     const row = { browser: 'Chrome', profilePath: 'C:/fixture', totalSizeKB: 1, artifacts: [{name:'History',sizeKB:1}] };
     let audit = { success: true, data: { browsers: [row] } };
     mock.module('./src/hooks/useBackend', () => ({ default: () => ({
-      getWlanProfiles: async () => ({ success: true, data: { profiles: [{ name: 'fixture' }] } }),
-      removeWlanProfile: async (...args) => { calls.push(['wlan', ...args]); return {success:true}; },
+      getWlanProfiles: async () => { wlanReads++; return wlanAudit; },
+      removeWlanProfile: async (...args) => { calls.push(['wlan', ...args]); return wlanResult; },
       getBrowserFootprints: async () => { calls.push(['audit']); return audit; },
       clearBrowserFootprints: async (...args) => { calls.push(['clear', ...args]); return response; },
     }) }));
@@ -55,6 +56,38 @@ test("cleanup viewers confirm actions and refresh actual browser results", async
     assert.deepEqual(calls.shift(), ['wlan', 'fixture', true]);
     assert.equal(caches.at(-1)[1].raw.profiles.length, 1);
     assert.match(errors.at(-1), /still present/);
+    confirmed = true;
+    wlanResult = {success:false,error:'some profiles could not be removed'};
+    wlanAudit = {success:true,data:{profiles:[]}};
+    const beforeFailure = wlanReads;
+    await button.props.onClick();
+    assert.equal(wlanReads, beforeFailure + 1, 'failed removal still requires read-back');
+    assert.deepEqual(caches.at(-1)[1].raw.profiles, []);
+    assert.equal(errors.at(-1), 'some profiles could not be removed');
+    assert.equal(successes.length, 0);
+    wlanAudit = {success:false,error:'scan unavailable'};
+    await button.props.onClick(); ui = render();
+    assert.ok(find(ui.dialogs, e => e.props?.role === 'alert' && e.props?.children?.includes?.('may be outdated')));
+    assert.equal(caches.at(-1)[1].raw, undefined);
+    const staleMap = {wlanProfiles:{raw:{profiles:[{name:'stale'}]}}};
+    const beforeReopenWlan = wlanReads;
+    ui = render(staleMap); await ui.openers.handleWlanProfiles();
+    assert.equal(wlanReads, beforeReopenWlan + 1, 'stale cached profiles must not bypass read-back');
+    wlanAudit = {success:true,data:{profiles:[{name:'fixture'}]}};
+    ui = render(staleMap); await ui.openers.handleWlanProfiles(); ui = render();
+    assert.equal(find(ui.dialogs, e => e.props?.role === 'alert'), undefined);
+    const forgetAll = find(ui.dialogs, e => e.props?.text === 'CLEAR ALL PROFILES');
+    assert.ok(forgetAll);
+    wlanResult = {success:true,data:{ok:false,status:'failed',targeted:2,removed:1,failed:1,coverageIncomplete:false}};
+    const beforePartial = wlanReads;
+    await forgetAll.props.onClick();
+    assert.equal(wlanReads, beforePartial + 1, 'partial native receipt still requires read-back');
+    assert.deepEqual(caches.at(-1)[1].raw.profiles, [{name:'fixture'}]);
+    assert.equal(successes.length, 0);
+    wlanResult = {success:true,data:{ok:true,status:'complete',targeted:1,removed:1,failed:0,coverageIncomplete:false}};
+    wlanAudit = {success:true,data:{profiles:[]}};
+    await forgetAll.props.onClick();
+    assert.equal(successes.pop(), 'A fresh scan found no saved Wi-Fi profiles.');
     ui = render(); await ui.openers.handleBrowserFootprints(); ui = render(); calls.length = 0;
     button = find(ui.dialogs, e => e.props?.text === 'CLEAR THIS BROWSER'); assert.ok(button);
     confirmed = false; await button.props.onClick(); assert.equal(calls.length, 0);
