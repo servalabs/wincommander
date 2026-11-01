@@ -62,7 +62,7 @@ function flowActivityLabel(entry: FlowLogEntry | undefined): string {
 
 export default function FlowsPanel() {
   const { hasPaid } = useEntitlements();
-  const { rules, commands, loading, error, log, saveRule, deleteRule, setEnabled, fireNow } = useFlowsV2(hasPaid);
+  const { rules, commands, loading, error, log, saveRule, deleteRule, setEnabled } = useFlowsV2(hasPaid);
   const { data: settings } = useSettingsQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -157,7 +157,7 @@ export default function FlowsPanel() {
                         <span className={`flow-chip flow-chip--risk-${rule.riskLevel}`}>{rule.riskLevel}</span>
                       )}
                       <span className="flow-card__actions">
-                        <button type="button" title={`Run ${rule.name} now`} aria-label={`Run ${rule.name} now`} onClick={() => void fireNow(rule.id)}>
+                        <button type="button" disabled title="Run now is unavailable. Enabled rules still run from their configured triggers." aria-label={`Run ${rule.name} now (unavailable)`}>
                           <Icon icon="play" size={13} />
                         </button>
                         <button type="button" title={`Edit ${rule.name}`} aria-label={`Edit ${rule.name}`} onClick={() => setEditing(rule)}>

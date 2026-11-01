@@ -101,7 +101,7 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):");
     expect(shield).not.toContain('parts.append("NO FACE")');
     expect(backend).toContain('classes.push("presence_lost")');
-    expect(backend).toContain('"look_away" | "presence_lost" | "phone_detected"');
+    expect(backend).toContain('"look_away" | "presence_lost" | "multiple_faces" | "phone_detected"');
     expect(backend).not.toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
   });
 
@@ -121,7 +121,7 @@ describe("privacy shield device guardrails", () => {
     const optimisticStartPersist =
       /"Start-PrivacyShield"\s*=>\s*Some\(json!\(\{"privacy":\{"privacyShield":\{"shieldRunning": true\}\}\}\)\)/;
     const stoppedStatePersist =
-      /"Stop-PrivacyShield"\s*=>\s*Some\(json!\(\{"privacy":\{"privacyShield":\{"shieldRunning": false\}\}\}\)\)/;
+      /"Stop-PrivacyShield" if privacy_shield_stop_succeeded\(result\)\s*=>\s*\{\s*Some\(json!\(\{"privacy":\{"privacyShield":\{"shieldRunning": false\}\}\}\)\)/;
 
     expect(optimisticStartPersist.test(backend)).toBe(false);
     expect(stoppedStatePersist.test(backend)).toBe(true);
@@ -196,8 +196,8 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain("let fleet_monitoring_selected = shield.fleet_monitoring_enabled == Some(true)");
     expect(backend).toContain("!fleet_session_owned && !fleet_monitoring_selected");
     expect(backend).toContain("selected_fleet_monitor_reports_a_locally_started_shield");
-    expect(backend).toContain('"look_away" | "presence_lost" | "phone_detected"');
-    expect(backend).toContain("match fleet_privacy_alert_mode(event_class).await {");
+    expect(backend).toContain('"look_away" | "presence_lost" | "multiple_faces" | "phone_detected"');
+    expect(backend).toContain("match fleet_privacy_alert_mode(class).await {");
   });
 
   test("Fleet attention alerts wake the heartbeat owner even when detector IPC uses another Pro worker", async () => {

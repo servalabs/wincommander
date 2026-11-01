@@ -228,3 +228,18 @@ test("untracked driver cleanup explains the recovery action without exposing raw
   expect(message).toContain("every signed-in account");
   expect(message).not.toContain("C:\\private");
 });
+
+test("broker and permission failures explain the verified failure without exposing details", () => {
+  for (const [code, text] of [
+    ["vault_broker_unavailable", "broker connection could not be opened"],
+    ["vault_broker_rejected", "service rejected the request"],
+    ["vault_acl_apply_failed", "permissions could not be applied"],
+    ["vault_acl_readback_failed", "permissions could not be verified"],
+  ]) {
+    const message = vaultOperationError(`${code} C:\\private\\container.hc password=secret`);
+    expect(message).toContain(text);
+    expect(message).not.toContain("private");
+    expect(message).not.toContain("secret");
+    expect(message).not.toContain("successfully mounted");
+  }
+});

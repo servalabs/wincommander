@@ -13,6 +13,10 @@ export const DASHBOARD_POLICY_FIELDS: Record<string, string> = {
 export function preserveDashboardPolicyUnknowns(patch: Record<string, unknown>, hardening: object | undefined): Record<string, unknown> {
   if (!hardening) return patch;
   const values = hardening as Record<string, unknown>;
+  if (values.locationTrackingDisabled === null) {
+    const location = getToggleById("location");
+    if (location) setByPath(patch, location.currentPath, null);
+  }
   for (const [toggleId, field] of Object.entries(DASHBOARD_POLICY_FIELDS)) {
     if (values[field] !== null) continue;
     const toggle = getToggleById(toggleId);

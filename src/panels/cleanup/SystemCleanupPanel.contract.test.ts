@@ -297,7 +297,8 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(legacyDialogs).toContain("Auditing browser profiles…");
     expect(legacyDialogs).toContain("Browser audit failed:");
     expect(legacyDialogs).toContain('text="RETRY AUDIT"');
-    expect(legacyDialogs).toContain("No browser profiles detected");
+    expect(legacyDialogs).toContain("No browser artifacts detected in this audit. Additional profiles or locations may not be included.");
+    expect(legacyDialogs).toContain("This audit may omit additional profiles or locations.");
     expect(legacyDialogs).toContain("aria-label={`Forget Wi-Fi profile ${p.name}`}");
     expect(legacyDialogs).toContain("aria-label={`Clear ${b.browser} artifacts for ${b.profilePath}`}");
     expect(legacyDialogs).toContain("disabled={browserFootprints.length === 0 || !!localLoadingMap['browserFootprints']}");

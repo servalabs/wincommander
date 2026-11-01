@@ -10,11 +10,12 @@ import { listen, type Event } from "@tauri-apps/api/event";
 import type { Rule } from "../panels/flows/rules";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 import { createAsyncListenerScope } from "../lib/asyncListeners";
+import { flowExecutionActivity, flowExecutionOutcome } from "../components/flowActivitySummary";
 
 export interface FlowLogEntry {
   id: number;
   at: string;
-  kind: "executed" | "admit" | "refused" | "notify";
+  kind: "executed" | "simulated" | "incomplete" | "unknown" | "admit" | "refused" | "notify";
   ruleId?: string;
   message: string;
 }
@@ -101,8 +102,10 @@ export function useFlowsV2(hasPaid: boolean) {
     if (!hasPaid) return;
     const listeners = createAsyncListenerScope(() => console.warn("Unable to manage Flow activity listener"));
     void (async () => {
-      if (!await listeners.listen<Event<{ ruleId?: string; actionCount?: number }>>((handler) => listen("flow-executed", handler), (e) => {
-        pushLog({ kind: "executed", ruleId: e.payload?.ruleId, message: `ran ${e.payload?.actionCount ?? 0} action(s)` });
+      if (!await listeners.listen<Event<{ ruleId?: string; completed?: boolean | null; failedActionCount?: number; dryRun?: boolean }>>((handler) => listen("flow-executed", handler), (e) => {
+        const receipt = e.payload ?? {};
+        const outcome = flowExecutionOutcome(receipt);
+        pushLog({ kind: outcome === "completed" ? "executed" : outcome, ruleId: receipt.ruleId, message: flowExecutionActivity(receipt) });
       })) return;
       if (!await listeners.listen<Event<{ ruleId?: string; reason?: string; message?: string }>>((handler) => listen("flow-log", handler), (e) => {
         const reason = e.payload?.reason ?? "";

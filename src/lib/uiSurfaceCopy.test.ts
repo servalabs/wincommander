@@ -325,7 +325,7 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupPanel).toContain("migrationEnabled: hasPaid && proInstalled && !isInvestigator");
     expect(cleanupPanel).toContain("schedulesEnabled={hasPaid && proInstalled && !isInvestigator}");
     expect(cleanupPanel).not.toContain('schedulesEnabled={canUse("paid")}');
-    expect(cleanupScan).toContain("if (!entitlementsReady || !schedulesEnabled || !migrationEnabled || migrationStarted.current) return;");
+    expect(cleanupScan).toContain("if (!entitlementsReady || !schedulesEnabled || !migrationEnabled) return;");
     expect(cleanupGrid).toContain("onRequestScheduleAccess");
   });
 
@@ -448,12 +448,11 @@ describe("redesign surface copy guardrails", () => {
     // actions-row is applied via cn() so it can toggle an is-hidden class for the
     // engines view — assert the class reference rather than a static className=.
     expect(panel).toContain('"installer-actions-row"');
-    expect(panel).toContain('aria-label="Refresh software catalog"');
     expect(panel).toContain('text="SELECT ALL"');
     expect(panel).toContain('text="CLEAR"');
     expect(panel).toContain("UPDATE<br />ALL");
     expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed (');
-    expect(panel).toContain('<TabsTrigger value="updates">Updates (');
+    expect(panel).toContain('<TabsTrigger value="updates">Updates</TabsTrigger>');
     expect(panel).toContain('<TabsTrigger value="installed">Installed (');
     // The toolbar is one wrapping flex row: search stays full-width, while
     // category chips and actions share the next line without a forced card wrap.

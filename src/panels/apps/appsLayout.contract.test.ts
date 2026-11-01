@@ -19,6 +19,12 @@ describe("Packages and Apps layout", () => {
     expect(installer).not.toContain('divider-label">FROM THE CATALOG');
     expect(installer).not.toContain('divider-label">OTHER PACKAGES');
     expect(updates).toContain('aria-label="Refresh app and package updates"');
+    expect(updates).toContain('onClick={() => void inspectPackages()} aria-label="Refresh app and package updates"');
+    const refresh = updates.slice(updates.indexOf("  const inspectPackages ="), updates.indexOf("  const applyPackages ="));
+    expect(refresh).toContain("refreshPackageAndAppInventories(");
+    expect(refresh).toContain("await refreshAppInventoryFully()");
+    expect(refresh).toContain("await backendRef.current.packageUpdatesInventory()");
+    expect(updates).toContain("await runAppInventoryScan(true, true)");
     expect(updates).not.toContain("Check for updates");
     expect(updates).not.toContain('aria-label="Package manager check results"');
     expect(updates).not.toContain('divider-label">OTHER PACKAGES');

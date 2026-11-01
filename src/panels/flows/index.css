@@ -312,7 +312,8 @@
 .flows-activity__item--admit .flows-activity__kind {
   color: var(--color-success, #3fb950);
 }
-.flows-activity__item--refused .flows-activity__kind {
+.flows-activity__item--refused .flows-activity__kind,
+.flows-activity__item--incomplete .flows-activity__kind {
   color: #f85149;
 }
 .flows-activity__item--notify .flows-activity__kind {

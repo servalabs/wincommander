@@ -16,6 +16,7 @@ import {
   clipboardActivitySummary,
   flowDecisionSummary,
   flowExecutionSummary,
+  flowExecutionOutcome,
   flowNotifySummary,
 } from "./flowActivitySummary";
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
@@ -94,19 +95,21 @@ export default function FlowActivityLogger() {
       }),
     );
     add(
-      listen<{ flowId?: string; ruleId?: string; completed?: boolean; totalDurationMs?: number }>(
+      listen<{ flowId?: string; ruleId?: string; completed?: boolean | null; failedActionCount?: number; dryRun?: boolean; totalDurationMs?: number }>(
         "flow-executed",
         (e) => {
           log(flowExecutionSummary(e.payload ?? {}));
           const operationId = typeof e.payload?.flowId === "string" && /^[A-Za-z0-9_-]{1,110}$/.test(e.payload.flowId)
             ? `FLOW-${e.payload.flowId}` : newDiagnosticOperationId("flow");
-          const completed = e.payload?.completed === true;
+          const result = flowExecutionOutcome(e.payload ?? {});
+          const completed = result === "completed";
+          const incomplete = result === "incomplete";
           recordDiagnostic({ operationId, feature: "flow", action: "execute", stage: "terminal",
-            lifecycle: "applied", outcome: completed ? "succeeded" : "failed",
-            errorCode: completed ? undefined : "FLW.ACTION.FAILED", severity: completed ? "info" : "error",
-            retryability: completed ? "never" : "manual", suggestedNextAction: completed ? "none" : "review_rule",
+            lifecycle: "acknowledged", outcome: completed ? "succeeded" : incomplete ? "degraded" : "progress",
+            errorCode: incomplete ? "FLW.ACTION.UNCONFIRMED" : undefined, severity: incomplete ? "warn" : "info",
+            retryability: "never", suggestedNextAction: completed || result === "simulated" ? "none" : "review_rule",
             durationMs: typeof e.payload?.totalDurationMs === "number" ? e.payload.totalDurationMs : undefined,
-            privacyClass: "local_sensitive", context: { state: completed ? "completed" : "failed" } });
+            privacyClass: "local_sensitive", context: { state: result } });
         },
       ),
     );

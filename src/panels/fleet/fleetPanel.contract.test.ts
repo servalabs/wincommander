@@ -232,7 +232,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>()");
     expect(vault).not.toContain("invoke(");
     expect(vaultHook).toContain('invoke<VaultOwnerPolicyFragment>("get_vault_access_policy")');
-    expect(vaultHook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment })');
+    expect(vaultHook).toContain('invoke<Status>("apply_vault_owner_policy_fragment", { policy: fragment, diagnosticOperationId: operationId })');
     expect(vaultHook).toContain('invoke<void>("forget_vault_access_entry_policy_only"');
     expect(vaultHook).toContain("diagnosticOperationId: operationId");
     expect(vault.includes("prepareVaultAccessSave(policyToApply, draftBaseRef.current,")).toBe(true);

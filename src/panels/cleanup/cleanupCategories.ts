@@ -1643,7 +1643,7 @@ export function getCleanupScheduleUnavailableReason(category: CleanupCategory): 
 // aren't in SUPPORTED_AUTOERASE_IDS yet because their inline erase scripts
 // are non-trivial — but if they are added later, flag them here.
 const SYSTEM_CONTEXT_IDS = new Set<string>([
-  'wlanProfiles', 'eventLogs', 'searchIndex', 'amcache', 'branchCache',
+  'wlanProfiles', 'firewallLog', 'eventLogs', 'searchIndex', 'amcache', 'branchCache',
   'connectivityHistory', 'shadowCopies', 'srumData', 'neighborCache', 'netbiosCache', 'bitsQueue',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
   'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory', 'defenderHistory',

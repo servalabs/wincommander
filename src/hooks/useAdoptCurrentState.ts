@@ -1,82 +1,47 @@
-// src/hooks/useAdoptCurrentState.ts
-//
-// After every system probe, if current.* is true (a setting is applied in
-// Windows) but ideal.* has never been set (null / undefined — the user never
-// explicitly toggled it in Commander), write ideal.* = true to adopt the
-// current Windows state as the stored preference.
-//
-// This prevents toggles from showing OFF when the setting is actually working,
-// and avoids spurious DRIFT badges on first-detection of an applied setting.
-//
-// Safeguards:
-//   - Only fires when current.* changes (post-probe), not on every render
-//   - Only adopts when ideal.* is null or undefined — never overwrites an
-//     explicit user choice of false (true = already correct, false = user
-//     wants it off, null/undefined = no preference yet → adopt)
-//   - Skips irreversible, capability-key, and action toggles
-//   - Requires firstRunComplete so it does not run while setup is unresolved
-
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSettingsQuery } from "./queries/useSettingsQuery";
 import { useSettingsWriter } from "../context/SettingsWriteContext";
-import { getByPath } from "../types/toggles";
 import { getRadarDriftToggles } from "../registry";
 import { useAuthMode } from "../context/AuthModeContext";
-
-function buildDeepPatch(paths: string[], value: unknown): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const path of paths) {
-    const parts = path.split(".");
-    let cur = result as Record<string, unknown>;
-    for (let i = 0; i < parts.length - 1; i++) {
-      if (!cur[parts[i]] || typeof cur[parts[i]] !== "object") {
-        cur[parts[i]] = {};
-      }
-      cur = cur[parts[i]] as Record<string, unknown>;
-    }
-    cur[parts[parts.length - 1]] = value;
-  }
-  return result;
-}
+import { useAppState } from "../context/AppContext";
+import { readPersonalSettingsStatus } from "../lib/startupHydration";
+import { buildAdoptionPatch, createAdoptionAttempts } from "../lib/settingsAdoption";
 
 export default function useAdoptCurrentState() {
   const { mode: authMode } = useAuthMode();
   const { data: appSettings } = useSettingsQuery();
   const writer = useSettingsWriter();
-  const lastCurrentHashRef = useRef<string>("");
+  const { personalSettingsStatus } = useAppState();
+  const attempts = useRef(createAdoptionAttempts());
+  const mounted = useRef(false);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
-    // KT: decoy guard — adopting real probe data into ideal.* during a coerced
-    // session would write real config back to disk, detectable by a forensic examiner.
-    if (authMode === 'decoy') return;
-    if (!appSettings?.app?.firstRunComplete) return;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+    };
+  }, []);
 
-    const currentHash = JSON.stringify(appSettings.current);
-    if (currentHash === lastCurrentHashRef.current) return;
-    lastCurrentHashRef.current = currentHash;
-
-    const toAdopt: string[] = [];
-
-    for (const toggle of getRadarDriftToggles()) {
-      // Capability-key toggles use string "Deny"/"Allow" semantics — skip
-      if ((toggle as any).capabilityKey) continue;
-
-      const idealRaw = getByPath(appSettings, toggle.settingsPath);
-      // Only adopt when there is no stored preference at all
-      if (idealRaw !== null && idealRaw !== undefined) continue;
-
-      const currentRaw = getByPath(appSettings, toggle.currentPath);
-      // Only adopt when the probe confirmed the setting is applied (boolean true)
-      if (currentRaw !== true) continue;
-
-      toAdopt.push(toggle.settingsPath);
-    }
-
-    if (toAdopt.length === 0) return;
-
-    const patch = buildDeepPatch(toAdopt, true);
-
-    writer.patch(patch)
-      .catch(() => { /* best-effort; probe will re-run shortly */ });
-  }, [authMode, appSettings, writer]);
+  useEffect(() => {
+    if (authMode === "decoy" || !appSettings?.app?.firstRunComplete) return;
+    const status = readPersonalSettingsStatus(appSettings, personalSettingsStatus);
+    if (status?.mode !== "service" || !status.canSave || status.recoveryRequired) return;
+    const patch = buildAdoptionPatch(appSettings, getRadarDriftToggles());
+    if (!patch) return;
+    const key = JSON.stringify({ patch, current: appSettings.current });
+    if (!attempts.current.begin(key)) return;
+    // Only the native conditional receipt acknowledges an adoption attempt.
+    void writer.adopt(patch).then(
+      () => { attempts.current.finish(key, true); },
+      () => { attempts.current.finish(key, false); },
+    ).finally(() => {
+      if (!mounted.current) return;
+      retryTimer.current = setTimeout(() => {
+        if (mounted.current) setGeneration(value => value + 1);
+      }, 1000);
+    });
+  }, [authMode, appSettings, writer, generation, personalSettingsStatus]);
 }

@@ -1291,7 +1291,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 510);
+        assert_eq!(tauri_commands.len(), 519);
         assert!(!tauri_commands
             .iter()
             .any(|entry| entry.name == "apply_admin_config_cmd"));
@@ -1334,7 +1334,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 510 } else { 506 }
+            if cfg!(debug_assertions) { 519 } else { 515 }
         );
     }
 

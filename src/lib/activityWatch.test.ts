@@ -170,11 +170,11 @@ describe("ActivityWatch local-day bounds", () => {
     const previousTimezone = process.env.TZ;
     process.env.TZ = "America/New_York";
     try {
-      const bounds = dayBoundsLocal(new Date(2026, 10, 1));
+      const bounds = dayBoundsLocal(new Date(2025, 10, 2));
       expect(bounds.endMs - bounds.startMs).toBe(25 * 60 * 60 * 1000);
 
       const lateEvent = toActivityTimelineEvents([{
-        timestampMs: new Date(2026, 10, 1, 23, 30).getTime(),
+        timestampMs: new Date(2025, 10, 2, 23, 30).getTime(),
         duration: 60,
         app: "Editor",
         title: "late-day.txt",

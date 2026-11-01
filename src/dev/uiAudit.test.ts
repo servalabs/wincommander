@@ -91,7 +91,7 @@ describe("UI audit fixture", () => {
     for (const category of ALL_CATEGORIES.filter((entry) => entry.getDataKey)) {
       const mappingIndex = backendSource.indexOf(`${category.getDataKey}:`);
       const command = mappingIndex >= 0
-        ? backendSource.slice(mappingIndex, mappingIndex + 320).match(/"(Get-[^"]+)"/)?.[1]
+        ? backendSource.slice(mappingIndex).split(/\r?\n/).slice(0, 2).join("\n").match(/"(Get-[^"]+)"/)?.[1]
         : undefined;
       expect(command).toBeTruthy();
 

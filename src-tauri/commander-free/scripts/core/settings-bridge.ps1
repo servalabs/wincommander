@@ -220,7 +220,7 @@ function Get-WCSystemProbe {
                 powershell7Disabled        = $false
                 copilotDisabled            = $false
                 activityHistoryDisabled    = $false
-                locationTrackingDisabled   = $false
+                locationTrackingDisabled   = $null
                 windowsSuggestionsDisabled = $false
             }
             clipboard                   = @{
@@ -443,15 +443,11 @@ function Get-WCSystemProbe {
     catch {}
 
     try {
-        # Primary: check CapabilityAccessManager consent store (what Disable-LocationTracking writes)
-        $locCam = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" -Name "Value" -EA SilentlyContinue
-        # Fallback: check Group Policy key
-        $locGP = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors" -Name "DisableLocation" -EA SilentlyContinue
-        if (($locCam -and $locCam.Value -eq "Deny") -or ($locGP -and $locGP.DisableLocation -eq 1)) {
-            $state.privacy.telemetry.locationTrackingDisabled = $true
+        $locationStatus = Get-LocationTrackingStatus
+        if ($locationStatus.error -ne $true -and $locationStatus.disabled -is [bool]) {
+            $state.privacy.telemetry.locationTrackingDisabled = $locationStatus.disabled
         }
-    }
-    catch {}
+    } catch {}
 
     try {
         $sug = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name "SoftLandingEnabled" -EA SilentlyContinue

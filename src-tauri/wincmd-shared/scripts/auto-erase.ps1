@@ -2062,7 +2062,7 @@ function Get-AutoEraseSupportedCategories {
 }
 
 $script:AutoEraseSystemCategories = @(
-    'wlanProfiles', 'eventLogs', 'eventTranscript', 'servicingLogs', 'deviceInstallLogs',
+    'wlanProfiles', 'firewallLog', 'eventLogs', 'eventTranscript', 'servicingLogs', 'deviceInstallLogs',
     'usageTraceLogs', 'appLaunchHistory', 'reliabilityHistory', 'defenderHistory', 'maintenanceTrim',
     'connectivityHistory', 'shadowCopies', 'amcache', 'searchIndex', 'srumData', 'branchCache',
     'neighborCache', 'netbiosCache', 'bitsQueue', 'p2pUpdateCache', 'fontCache', 'geolocationCache'
@@ -3379,7 +3379,7 @@ function Invoke-AutoEraseMigrationCore {
                 $firstDue = $info.NextRunTime.ToUniversalTime()
                 $revision = 22
                 $xml.Task.Actions.Exec.Arguments = ConvertTo-AutoEraseTaskArgument -CategoryId $identity.categoryId -IntervalMinutes $minutes -Script $script:AutoEraseScripts[$identity.categoryId] -ExecutionScope $scope -FirstDueUtc $firstDue.ToString('o') -PayloadRevision $revision -AllowDefaultExcluded $manualOptIn
-                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v22 (manual opt-in)' } elseif ($task.Description -like '*managed*') { 'System Maintenance scheduled cleanup v22 (managed)' } else { 'System Maintenance scheduled cleanup v22' }
+                $xml.Task.RegistrationInfo.Description = if ($manualOptIn) { 'System Maintenance scheduled cleanup v22 (manual opt-in)' } elseif (Test-AutoEraseManagedTask $task) { 'System Maintenance scheduled cleanup v22 (managed)' } else { 'System Maintenance scheduled cleanup v22' }
             }
             if ($xml.Task.RegistrationInfo.URI) { $xml.Task.RegistrationInfo.URI = "\$($identity.taskName)" }
             $enabled = Set-AutoEraseTaskXmlEnabled -Document $xml -Value $false

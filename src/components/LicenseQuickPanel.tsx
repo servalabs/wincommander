@@ -7,14 +7,16 @@ import { fireLicenseCelebration } from "./shared/LicenseCelebrationListener";
 import useProInstall from "../hooks/useProInstall";
 import LicenseQuickStats from "./LicenseQuickStats";
 import { licenseStateLabel } from "../utils/licensePresentation";
+import useProcessElevation from "../hooks/useProcessElevation";
 
 export default function LicenseQuickPanel() {
-  const { getLicenseStatus, activateAppLicense, refreshAppLicense, deactivateAppLicense, isCurrentProcessElevated } = useBackend();
+  const { getLicenseStatus, activateAppLicense, refreshAppLicense, deactivateAppLicense } = useBackend();
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [licenseKey, setLicenseKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [canRemoveDeviceLicense, setCanRemoveDeviceLicense] = useState(false);
+  const { state: processElevation } = useProcessElevation();
+  const canRemoveDeviceLicense = processElevation === "administrator";
   const hasPaid = status?.valid === true && (status.features ?? []).includes("paid");
   // Pro install detection shares the module-level cache with the installer,
   // but it only performs local sidecar work after entitlement is known.
@@ -126,20 +128,6 @@ export default function LicenseQuickPanel() {
       window.removeEventListener("license-updated", onLicenseUpdated as EventListener);
     };
   }, [refreshStatus]);
-
-  useEffect(() => {
-    let active = true;
-    void isCurrentProcessElevated()
-      .then((elevated) => {
-        if (active) setCanRemoveDeviceLicense(elevated);
-      })
-      // A failed probe must never make a destructive shared-device action
-      // appear available. Native code applies this same requirement.
-      .catch(() => {
-        if (active) setCanRemoveDeviceLicense(false);
-      });
-    return () => { active = false; };
-  }, [isCurrentProcessElevated]);
 
   // isTrialActive covers both: a local free trial AND a server-activated trial key
   // (where the admin worker sets plan = "trial"). The key path uses the normal

@@ -5,6 +5,15 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Improve cleanup account scoping, partial scan details, protected recurring
+  schedules and independent post-cleanup read-back. Preserve individual schedule
+  ownership and require explicit consent for sensitive recurring cleanup.
+- Flow activity distinguishes failed, simulated and unknown outcomes; commands
+  with failed or unfinished receipts no longer appear completed. Manual execution
+  remains unavailable until actions can actually be run through that path.
+- Verify adopted settings and saved application inventory, share process-elevation
+  observation, and retain authenticated service-peer identity across requests.
+
 - Extend neutral Fleet wire contracts with device-command metadata, detection
   timing, approved-id cleanup selection and explicit unknown browse status.
   Sensitive-finding wire support remains an optional, default-off feature.

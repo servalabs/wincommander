@@ -7369,6 +7369,14 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:adopt_current_state",
+      "name": "adopt_current_state",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:advisor_build_context",
       "name": "advisor_build_context",
       "transport": "tauri",
@@ -7803,7 +7811,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/privacy/GlassesMonitorSection.tsx"
+        "src/hooks/useGlassesMonitor.ts"
       ]
     },
     {
@@ -8740,6 +8748,26 @@
       ]
     },
     {
+      "id": "tauri:fleet_machine_trust_status",
+      "name": "fleet_machine_trust_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/fleet/FleetConnectView.tsx"
+      ]
+    },
+    {
+      "id": "tauri:fleet_repair_machine_trust",
+      "name": "fleet_repair_machine_trust",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/fleet/FleetConnectView.tsx"
+      ]
+    },
+    {
       "id": "tauri:fleet_report_local_alert",
       "name": "fleet_report_local_alert",
       "transport": "tauri",
@@ -9121,7 +9149,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/privacy/GlassesMonitorSection.tsx"
+        "src/hooks/useGlassesMonitor.ts"
       ]
     },
     {
@@ -9783,7 +9811,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/privacy/GlassesMonitorSection.tsx"
+        "src/hooks/useGlassesMonitor.ts"
       ]
     },
     {
@@ -9933,9 +9961,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/PrivacyShieldCard.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:launch_investigator_product",
