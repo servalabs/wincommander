@@ -15,6 +15,7 @@ use serde_json::Value;
 #[cfg(feature = "autonomous-test")]
 pub mod autonomous_test;
 pub mod checkin;
+pub mod console_wire;
 mod deployment_digest;
 pub mod events;
 pub mod outcomes;
@@ -23,6 +24,7 @@ pub mod policy;
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;
 pub use checkin::*;
+pub use console_wire::*;
 pub use deployment_digest::canonical_json_sha256;
 pub use events::*;
 pub use outcomes::*;
@@ -236,6 +238,18 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         action_class: ActionClass::Safe,
         summary: "Read whether print-job auditing is running",
         payload_schema: None,
+    },
+    CommandMeta {
+        catalog_id: "device.checkin_now",
+        action_class: ActionClass::Safe,
+        summary: "Send a check-in to Fleet immediately",
+        payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
+    },
+    CommandMeta {
+        catalog_id: "inventory.refresh",
+        action_class: ActionClass::Safe,
+        summary: "Re-collect the hardware and software inventory",
+        payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
     },
     CommandMeta {
         catalog_id: "endpoint.security_snapshot",
@@ -535,6 +549,12 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         action_class: ActionClass::Destructive,
         summary: "Lock down Remote Desktop access",
         payload_schema: None,
+    },
+    CommandMeta {
+        catalog_id: "device.restart",
+        action_class: ActionClass::Destructive,
+        summary: "Restart the device after a short warning",
+        payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
     },
     CommandMeta {
         catalog_id: "session.lock",
@@ -3060,6 +3080,26 @@ mod tests {
             deduped.len(),
             "COMMAND_METADATA has a duplicate catalog_id"
         );
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn console_redesign_commands_have_expected_classes() {
+        for (id, class) in [
+            ("device.checkin_now", ActionClass::Safe),
+            ("inventory.refresh", ActionClass::Safe),
+            ("device.restart", ActionClass::Destructive),
+        ] {
+            let entry = COMMAND_METADATA
+                .iter()
+                .find(|entry| entry.catalog_id == id)
+                .unwrap_or_else(|| panic!("{id} must be catalogued"));
+            assert_eq!(entry.action_class, class, "{id}");
+            assert!(entry
+                .payload_schema
+                .unwrap()
+                .contains("\"additionalProperties\":false"));
+        }
     }
 
     #[cfg(feature = "command-metadata")]

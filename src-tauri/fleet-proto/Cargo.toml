@@ -42,3 +42,6 @@ command-metadata = []
 # Debug-only autonomous test wire contracts. Consumers must additionally gate
 # their handlers and routes; this feature alone grants no executable action.
 autonomous-test = []
+# Sensitive-finder finding wire type. Off by default until the owner approves
+# reporting relative paths; compiling it in grants no behaviour.
+sensitive-finder = []
