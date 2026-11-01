@@ -3748,8 +3748,7 @@ async fn execute_action(
             let params_map = params.clone().unwrap_or_default();
             backend::run_backend_script(app.clone(), command.clone(), params_map)
                 .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+                .and_then(backend::check_flow_command_receipt)
         }
 
         ActionBlock::SignalAction {
@@ -3767,8 +3766,7 @@ async fn execute_action(
             params.insert("SignalType".to_string(), signal_type.clone());
             backend::run_backend_script(app.clone(), "Send-ContingencySignal".to_string(), params)
                 .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+                .and_then(backend::check_flow_command_receipt)
         }
 
         ActionBlock::HTTPAction {
@@ -4258,6 +4256,53 @@ mod default_flow_merge_tests {
         let merged = merge_default_system_flows(Vec::new());
         assert_eq!(merged, defaults);
         assert_ne!(merged, Vec::<Flow>::new());
+    }
+
+    #[test]
+    fn legacy_user_rule_keeps_unsupported_in_v2_actions_and_missing_metadata() {
+        let old_rule = serde_json::json!({
+            "id": "legacy-user-rule", "name": "Existing rule",
+            "system": false, "enabled": false,
+            "triggers": [{"type": "FileTrigger", "path": "C:\\fixture.txt", "event": "modified"}],
+            "actions": [
+                {"type": "HTTPAction", "method": "GET", "url": "https://example.invalid", "headers": null, "body": null},
+                {"type": "ShellAction", "script": "Write-Output fixture"}
+            ]
+        });
+        let rule: Flow = serde_json::from_value(old_rule).unwrap();
+        let merged = merge_default_system_flows(vec![rule.clone()]);
+        let retained = merged.iter().find(|item| item.id == rule.id).unwrap();
+        assert_eq!(retained, &rule);
+        assert!(!retained.enabled);
+        assert!(matches!(
+            retained.actions[0],
+            ActionBlock::HTTPAction { .. }
+        ));
+        assert!(matches!(
+            retained.actions[1],
+            ActionBlock::ShellAction { .. }
+        ));
+        let restored: Flow =
+            serde_json::from_value(serde_json::to_value(retained).unwrap()).unwrap();
+        assert_eq!(restored, rule);
+    }
+
+    #[test]
+    fn existing_system_rule_keeps_user_disabled_choice_and_custom_actions() {
+        let mut edited = default_system_flows()
+            .into_iter()
+            .find(|flow| flow.enabled)
+            .unwrap();
+        edited.enabled = false;
+        edited.actions = vec![ActionBlock::NotifyAction {
+            message: "fixture".into(),
+            severity: "info".into(),
+            duration: None,
+        }];
+        let merged = merge_default_system_flows(vec![edited.clone()]);
+        let retained = merged.iter().find(|item| item.id == edited.id).unwrap();
+        assert_eq!(retained, &edited);
+        assert_eq!(merge_default_system_flows(merged.clone()), merged);
     }
 }
 

@@ -192,20 +192,12 @@ pub async fn flow_set_enabled(rule_id: String, enabled: bool) -> Result<Value, S
     sync_rules_to_pro().await
 }
 
-/// Manually run a rule now (test trigger): forwards a synthetic manual event so
-/// the operator can see the effect. Paid-gated.
+/// Retains the manual-run IPC entry point without acknowledging unexecuted work.
 #[tauri::command]
-pub async fn flow_fire_now(app: AppHandle, rule_id: String) -> Result<(), String> {
+pub async fn flow_fire_now(rule_id: String) -> Result<(), String> {
     crate::license::require_paid("flows")?;
-    // A manual fire ingests a SignalReceived event scoped to nothing; simplest
-    // is to look the rule up and dispatch its actions directly through Pro via a
-    // dedicated manual path. Here we re-sync then emit a manual marker the UI
-    // reflects; real per-rule manual execution is handled by the Pro engine's
-    // Flow-Ingest with a manual event in a follow-up. For now, resync ensures
-    // Pro has the latest and we surface a UI acknowledgement.
-    let _ = sync_rules_to_pro().await?;
-    let _ = app.emit("flow-fired-manually", json!({ "ruleId": rule_id }));
-    Ok(())
+    let _ = rule_id;
+    Err("Run now is unavailable. No actions were run; enabled rules still run from their configured triggers.".into())
 }
 
 fn persist_pro_flows(flows: &[Value]) -> Result<(), String> {
@@ -331,7 +323,7 @@ pub async fn ingest_and_execute(app: &AppHandle, event: Value, world: Value) {
                 actions.len()
             ),
         );
-        run_actions(app, &rule_id, &actions).await;
+        let failed_actions = run_actions(app, &rule_id, &actions).await;
         crate::log_message_src(
             "info",
             "core",
@@ -343,24 +335,31 @@ pub async fn ingest_and_execute(app: &AppHandle, event: Value, world: Value) {
 
         let _ = app.emit(
             "flow-executed",
-            json!({
-                "ruleId": rule_id,
-                "ruleName": rule_name,
-                "actionCount": actions.len(),
-                // Include the resolved actions so the UI/console can show exactly
-                // WHAT ran (e.g. Set-AppCapabilityAccess Deny vs Allow) — the
-                // difference between a rule that blocks the mic and one that
-                // silently re-allows it.
-                "actions": actions,
-            }),
+            flow_execution_payload(&rule_id, &rule_name, &actions, failed_actions),
         );
     }
 }
 
-/// Execute a rule's actions sequentially. A failing action is logged; execution
-/// continues (the Pro engine already classified every action as a recognized
-/// in-app command, so failures here are runtime — not safety — failures).
-async fn run_actions(app: &AppHandle, rule_id: &str, actions: &[Value]) {
+fn flow_execution_payload(
+    rule_id: &str,
+    rule_name: &str,
+    actions: &[Value],
+    failed: usize,
+) -> Value {
+    json!({
+        "ruleId": rule_id,
+        "ruleName": rule_name,
+        "actionCount": actions.len(),
+        "actions": actions,
+        // Unclassified legacy receipts are not proof of completion.
+        "completed": if failed == 0 { None } else { Some(false) },
+        "failedActionCount": failed,
+    })
+}
+
+/// Execute actions sequentially, logging failures and continuing as before.
+async fn run_actions(app: &AppHandle, rule_id: &str, actions: &[Value]) -> usize {
+    let mut failed = 0;
     for action in actions {
         flow_trace(format!(
             "run_action: rule '{rule_id}' → {}",
@@ -369,6 +368,7 @@ async fn run_actions(app: &AppHandle, rule_id: &str, actions: &[Value]) {
         match run_action(app, action).await {
             Ok(()) => flow_trace(format!("run_action: rule '{rule_id}' action OK")),
             Err(e) => {
+                failed += 1;
                 crate::log_message_src(
                     "warn",
                     "core",
@@ -378,6 +378,7 @@ async fn run_actions(app: &AppHandle, rule_id: &str, actions: &[Value]) {
             }
         }
     }
+    failed
 }
 
 /// Execute one action. Actions are the resolved wire shape Pro returns: every
@@ -483,9 +484,15 @@ async fn run_command_with_timeout(
     params: HashMap<String, String>,
 ) -> Result<(), String> {
     let fut = crate::backend::run_backend_script(app.clone(), command.clone(), params);
+    finish_command(&command, fut).await
+}
+
+async fn finish_command(
+    command: &str,
+    fut: impl std::future::Future<Output = Result<Value, String>>,
+) -> Result<(), String> {
     match tokio::time::timeout(std::time::Duration::from_secs(MAX_ACTION_TIMEOUT_SECS), fut).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(e.to_string()),
+        Ok(result) => result.and_then(crate::backend::check_flow_command_receipt),
         Err(_) => Err(format!("command '{command}' timed out")),
     }
 }
@@ -902,6 +909,48 @@ fn diff_into(old: &Value, new: &Value, prefix: String, out: &mut Vec<SettingChan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_execution_event_includes_action_failure_count() {
+        let actions = [
+            json!({"type": "CommandAction"}),
+            json!({"type": "NotifyAction"}),
+        ];
+        let failed = flow_execution_payload("rule", "fixture", &actions, 1);
+        assert_eq!(failed["completed"], false);
+        assert_eq!(failed["failedActionCount"], 1);
+        assert_eq!(failed["actionCount"], 2);
+        assert_eq!(failed["actions"], json!(actions));
+        assert_eq!(
+            flow_execution_payload("rule", "fixture", &actions, 0)["completed"],
+            Value::Null
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_command_rejects_failed_and_unfinished_receipts() {
+        for value in [
+            json!({"error": true}),
+            json!({"status": "partial"}),
+            json!({"status": "pending"}),
+            json!({"ok": true, "stdout": "fail: denied"}),
+        ] {
+            assert!(finish_command("test", async { Ok(value) }).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_command_keeps_success_and_transport_errors() {
+        assert!(
+            finish_command("test", async { Ok(json!({"status": "enabled"})) })
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            finish_command("test", async { Err("transport unavailable".into()) }).await,
+            Err("transport unavailable".into())
+        );
+    }
 
     #[test]
     fn diff_detects_a_changed_leaf_with_dot_path() {

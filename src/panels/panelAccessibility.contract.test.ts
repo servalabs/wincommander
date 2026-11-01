@@ -43,7 +43,7 @@ describe("assigned panel accessibility contracts", () => {
     expect(fleet).toContain('const hasAuthoritativeDeviceLink = linkState !== "not_linked" && !isRemoved;');
     expect(advisor).toContain('className="advisor-error" role="alert"');
     expect(advisor).toContain('aria-label={`Downloading ${model}`}');
-    expect(flows).toContain('aria-label={`Run ${rule.name} now`}');
+    expect(flows).toContain('disabled title="Run now is unavailable. Enabled rules still run from their configured triggers." aria-label={`Run ${rule.name} now (unavailable)`}');
   });
 
   test("keeps empty server-apps state actionable and controls explicitly named", () => {

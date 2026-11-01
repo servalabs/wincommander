@@ -27,6 +27,10 @@ fn inventory_persistence_receipt(submitted: &serde_json::Value, saved: Result<se
     }
 }
 
+pub(crate) fn check_flow_command_receipt(result: serde_json::Value) -> Result<(), String> {
+    receipt::check_flow_command_receipt(result)
+}
+
 #[path = "backend_process.rs"]
 mod process;
 
@@ -3928,6 +3932,8 @@ mod settings_sync_patch_tests {
                 serde_json::json!({"status": "failed"}),
                 serde_json::json!({"status": "partial"}),
                 serde_json::json!({"status": "blocked"}),
+                serde_json::json!({"ok": true, "stdout": "fail: access denied"}),
+                serde_json::json!({"success": true, "data": "fail: incomplete"}),
             ] {
                 assert!(get_settings_sync_patch(command, &HashMap::new(), Some(&result)).is_none());
             }
