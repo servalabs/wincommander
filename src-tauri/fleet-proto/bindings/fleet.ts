@@ -212,6 +212,73 @@ export type CheckinResponse<Command = SignedCommand> = { protocol_version: bigin
 policy: JsonValue | null, padding: string, pending_search_jobs: Array<PendingSearchJob>, cancelled_search_job_ids: Array<string>, pending_approval: boolean, ack_receipts: Array<CheckinAckReceipt>, action_outcome_receipts: Array<ActionOutcomeReceipt>, action_outcome_head: ActionOutcomeHead | null, action_outcome_recovery_checkpoint: ActionOutcomeRecoveryCheckpoint | null, productivity_detail_receipt: JsonValue | null, inventory_receipt: JsonValue | null, };
 
 /**
+ * One browsable artifact: counts, size and last-write time only.
+ */
+export type CleanupBrowseArtifact = { artifact_id: string,
+/**
+ * False when the collector could not observe the artifact completely.
+ */
+status_known: boolean, item_count: bigint, size_bytes: bigint,
+/**
+ * RFC3339 newest write time, when known.
+ */
+last_write: string | null,
+/**
+ * The owning application is running, so deleting would be skipped.
+ */
+in_use: boolean, };
+
+/**
+ * One browsable source (for example one browser) and its artifacts.
+ */
+export type CleanupBrowseSource = { source_id: string, artifacts: Array<CleanupBrowseArtifact>, };
+
+/**
+ * Result of an artifact-level cleanup, with independent read-back of what
+ * remains after the delete.
+ */
+export type CleanupDeleteOutcome = {
+/**
+ * Artifacts verified gone by a fresh read, grouped by source.
+ */
+removed: Array<CleanupSourceSelection>, skipped: Array<CleanupSkippedArtifact>,
+/**
+ * Fresh browse read taken after the delete.
+ */
+remaining: Array<CleanupBrowseSource>, };
+
+/**
+ * Artifact-level cleanup request. The device removes only what is listed.
+ */
+export type CleanupSelection = {
+/**
+ * Cleanup category such as `browser_traces`.
+ */
+category: string, sources: Array<CleanupSourceSelection>, };
+
+/**
+ * An artifact that was selected but not removed.
+ */
+export type CleanupSkippedArtifact = { source_id: string, artifact_id: string,
+/**
+ * Closed reason such as `application_open` or `not_present`.
+ */
+reason: string, };
+
+/**
+ * Artifacts selected inside one cleanup source (for example one browser).
+ */
+export type CleanupSourceSelection = {
+/**
+ * Opaque closed id such as `vivaldi`. Never a path.
+ */
+source_id: string,
+/**
+ * Closed artifact ids such as `history`. Approved ids only.
+ */
+artifact_ids: Array<string>, };
+
+/**
  * One clipboard-guard rule match, reported by the agent as part of a
  * `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
  * plan §4.4).
@@ -863,6 +930,31 @@ shield_running: boolean | null, };
  * [`ticket_preimage`] below as well as appearing here on the receipt.
  */
 export type PrinterClass = "pdf" | "secure_physical";
+
+/**
+ * One Privacy Shield detection episode. Carries no frame, biometric value,
+ * device name or window title.
+ */
+export type PrivacyShieldDetectionEvent = { kind: PrivacyShieldDetectionKind,
+/**
+ * RFC3339 time the condition began.
+ */
+started_at: string,
+/**
+ * Whole seconds the condition lasted. Absent while the episode is open.
+ */
+duration_seconds: number | null, mode: PrivacyShieldDetectionMode, };
+
+/**
+ * What a Privacy Shield detection episode observed. The agent never decides
+ * severity; the server derives it from the zone.
+ */
+export type PrivacyShieldDetectionKind = "no_face" | "multi_face" | "phone";
+
+/**
+ * Privacy Shield operating mode as the device reports it.
+ */
+export type PrivacyShieldDetectionMode = "notify_only" | "blur_notify";
 
 /**
  * Admin-authored rule that maps an app/title to a category path and optional
