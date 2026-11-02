@@ -8416,6 +8416,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
         "src/panels/secret/index.tsx"
       ]
     },
@@ -11997,6 +11998,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
         "src/panels/secret/index.tsx"
       ]
     },
