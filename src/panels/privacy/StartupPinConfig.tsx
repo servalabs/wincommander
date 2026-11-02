@@ -2,7 +2,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
-import { showSuccess, showError } from "../../utils/toast";
+import { showSuccess, showError, showWarning } from "../../utils/toast";
+import useBackend from "../../hooks/useBackend";
+import { syncCalculatorShortcuts } from "./calculatorShortcuts";
 
 const MODES = [
   { mode: "real",    label: "Real PIN",    desc: "Opens full configuration" },
@@ -28,6 +30,7 @@ function validatePinInput(pin: string): string | null {
 
 export default function StartupPinConfig() {
   const { appSettings, refreshSettings } = useAppState();
+  const { setWinCommanderCalculatorShortcuts } = useBackend();
   const [inputs, setInputs] = useState<Record<Mode, string>>({ real: "", decoy: "", destroy: "" });
 
   // Which PINs are currently set, derived live from the stored hashes
@@ -55,6 +58,18 @@ export default function StartupPinConfig() {
       setInputs((i) => ({ ...i, [mode]: "" }));
       await refreshSettings();
       showSuccess(`${MODES.find((m) => m.mode === mode)!.label} saved`);
+      if (mode === "real") {
+        if (!appSettings?.ideal?.identity?.hideWinCommander) {
+          const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
+          if (warning) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warning}`);
+        }
+        await invoke("update_autostart_task_identity", { covered: true }).catch(() => {});
+        try {
+          await invoke("enter_calculator_mode");
+        } catch (error) {
+          showWarning(`PIN saved, but Calculator Lock could not open: ${String(error)}`);
+        }
+      }
     } catch (e) { showError(String(e)); }
   };
 
@@ -63,6 +78,11 @@ export default function StartupPinConfig() {
       await invoke("clear_startup_pin", { mode });
       await refreshSettings();
       showSuccess("PIN cleared");
+      if (mode === "real" && !appSettings?.ideal?.identity?.hideWinCommander) {
+        const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
+        if (warning) showWarning(`Calculator Lock is off, but shortcuts need attention: ${warning}`);
+      }
+      if (mode === "real") await invoke("update_autostart_task_identity", { covered: !!appSettings?.ideal?.identity?.hideWinCommander }).catch(() => {});
     } catch (e) { showError(String(e)); }
   };
 

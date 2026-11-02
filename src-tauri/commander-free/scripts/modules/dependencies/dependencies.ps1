@@ -2615,9 +2615,17 @@ function Set-WinCommanderCalculatorShortcuts {
     #>
     param([bool]$Hidden = $true)
 
-    $stateDir     = Get-WinCommanderMachineStateDir
-    if ([string]::IsNullOrEmpty($stateDir)) { $stateDir = "$env:APPDATA\WinCommander" }
+    $stateDir     = Join-Path $env:APPDATA 'WinCommander'
     $statePath    = "$stateDir\calc_shortcut_state.json"
+    $oldStateDir = Get-WinCommanderMachineStateDir
+    if ($oldStateDir) {
+        $oldStatePath = Join-Path $oldStateDir 'calc_shortcut_state.json'
+        if (-not (Test-Path -LiteralPath $statePath) -and (Test-Path -LiteralPath $oldStatePath)) {
+            $stateDir = $oldStateDir
+            $statePath = $oldStatePath
+        }
+    }
+    $calculatorLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'Calculator.lnk'
     $itemsChanged = 0
     $warnings     = @()
 
@@ -2627,6 +2635,18 @@ function Set-WinCommanderCalculatorShortcuts {
             $wsh       = New-Object -ComObject WScript.Shell
             $shortcuts = [System.Collections.Generic.List[hashtable]]::new()
             $seen      = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $calculatorCreated = $false
+            if (Test-Path -LiteralPath $statePath) {
+                $previous = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                foreach ($entry in @($previous.hiddenShortcuts)) {
+                    if ($entry -and $entry.path -and $seen.Add([string]$entry.path)) {
+                        $saved = @{}
+                        foreach ($property in $entry.PSObject.Properties) { $saved[$property.Name] = $property.Value }
+                        $shortcuts.Add($saved)
+                    }
+                }
+                $calculatorCreated = $previous.calculatorShortcutCreated -eq $true
+            }
 
             foreach ($target in Get-WinCommanderStartMenuTargets) {
                 try {
@@ -2666,8 +2686,26 @@ function Set-WinCommanderCalculatorShortcuts {
 
             # Save state so restore knows what to recreate
             if (-not (Test-Path $stateDir)) { New-Item -ItemType Directory -Path $stateDir -Force | Out-Null }
-            @{ hiddenShortcuts = @($shortcuts) } | ConvertTo-Json -Depth 5 |
+            $exe = Get-WinCommanderExePath
+            if (-not $exe) { $warnings += 'WinCommander executable not found; Calculator shortcut was not created.' }
+            if ($exe -and -not $calculatorCreated -and (Test-Path -LiteralPath $calculatorLink)) {
+                $warnings += 'An existing Calculator shortcut was left unchanged.'
+            }
+            if ($exe -and -not (Test-Path -LiteralPath $calculatorLink)) { $calculatorCreated = $true }
+            @{ hiddenShortcuts = @($shortcuts); calculatorShortcutCreated = $calculatorCreated } | ConvertTo-Json -Depth 5 |
                 Set-Content -Path $statePath -Encoding UTF8 -Force
+
+            if ($exe -and $calculatorCreated -and -not (Test-Path -LiteralPath $calculatorLink)) {
+                try {
+                    $link = $wsh.CreateShortcut($calculatorLink)
+                    $link.TargetPath = $exe
+                    $link.WorkingDirectory = Split-Path -Parent $exe
+                    $link.IconLocation = "$env:SystemRoot\System32\calc.exe,0"
+                    $link.Description = 'Calculator'
+                    $link.Save()
+                    $itemsChanged++
+                } catch { $warnings += "Calculator shortcut: $($_.Exception.Message)" }
+            }
 
             # Delete shortcuts
             foreach ($entry in $shortcuts) {
@@ -2712,6 +2750,21 @@ function Set-WinCommanderCalculatorShortcuts {
             }
 
             $shortcutErrors = 0
+            if ($savedState.calculatorShortcutCreated -eq $true -and (Test-Path -LiteralPath $calculatorLink)) {
+                try {
+                    $calculatorTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($calculatorLink).TargetPath
+                    $expectedTarget = Get-WinCommanderExePath
+                    if ($expectedTarget -and $calculatorTarget -ieq $expectedTarget) {
+                        Remove-Item -LiteralPath $calculatorLink -Force -ErrorAction Stop
+                        $itemsChanged++
+                    } else {
+                        $warnings += 'Calculator shortcut changed externally; it was left in place.'
+                    }
+                } catch {
+                    $warnings += "Calculator shortcut restore: $($_.Exception.Message)"
+                    $shortcutErrors++
+                }
+            }
             if ($stateShortcuts.Count -gt 0) {
                 $wsh = New-Object -ComObject WScript.Shell
                 $fallbackExe = $null

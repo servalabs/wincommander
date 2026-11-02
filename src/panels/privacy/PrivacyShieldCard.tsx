@@ -524,10 +524,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
         const targetState = !privacyShieldRunning;
         if (targetState && !privacyConfig.blurOnLookAway && !privacyConfig.blurOnMultipleFaces && !privacyConfig.blurOnCamera) {
+            setStopError("Choose at least one detection option before starting Privacy Shield.");
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "configuration", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.CONFIG.NO_TRIGGER", severity: "warn", retryability: "manual", suggestedNextAction: "configure_trigger", privacyClass: "local_sensitive", context: { state: "invalid" } });
             return;
         }
         if (targetState && cameraAvailable === false) {
+            setStopError(cameraMessage || "Camera access is unavailable. Check the camera and Windows camera settings, then refresh.");
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "capability", lifecycle: "verified", outcome: "failed", errorCode: "PSH.CAMERA.UNAVAILABLE", severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera", privacyClass: "local_sensitive", context: { capability: "camera", state: "unavailable" } });
             return;
         }
@@ -585,10 +587,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     } } } }).catch(reportSettingsWriteFailure);
                 } else {
                     const err = (res.error || "").toLowerCase();
+                    setStopError(res.error || "Privacy Shield could not start. Check the camera and AI runtime, then try again.");
                     if (err.includes("python is required") || err.includes("missing python dependency")) setAiRuntimeInstalled(false);
                     else if (err.includes('camera') || err.includes('webcam') || err.includes('cap.read') || err.includes('videocapture') || err.includes('no camera') || err.includes('no webcam')) {
-                        setCameraAvailable(false);
-                        setCameraMessage(res.error || "No camera detected — Privacy Shield requires a webcam.");
+                        // A failed open can mean a busy camera, permission, or a
+                        // driver problem; it does not prove hardware is absent.
+                        setCameraMessage(res.error || "Camera access could not be confirmed.");
                         setAiRuntimeInstalled(null);
                     }
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: err.includes("camera") || err.includes("webcam") ? "PSH.CAMERA.UNAVAILABLE" : "PSH.START.FAILED", severity: "error", retryability: "manual", suggestedNextAction: err.includes("camera") || err.includes("webcam") ? "connect_camera" : "review_status", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: err.includes("camera") || err.includes("webcam") ? "camera" : "start" } });
@@ -611,7 +615,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.STOP.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "unknown" } });
                 }
             }
-        } catch (e) { if (!targetState) setStopError("Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
+        } catch (e) { setStopError(targetState ? "Privacy Shield could not start. Check the camera and AI runtime, then try again." : "Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
             shieldActionInFlight.current = false;
@@ -626,7 +630,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
     };
 
-    const stateUnknown = privacyShieldRunning === null || (cameraAvailable === null && privacyShieldRunning !== true);
+    const stateUnknown = privacyShieldRunning === null;
     const headerRight = stateUnknown ? (
         <Button
             text="Refresh status"
@@ -655,6 +659,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         >
             <div className="flex flex-col gap-5">
                 {stopError && <div role="alert" className="text-sm text-[var(--color-warning)]">{stopError}</div>}
+                {cameraAvailable === null && privacyShieldRunning === false && (
+                    <p className="text-sm text-[var(--color-warning)]">Camera availability could not be confirmed. You can try starting Shield to check the camera.</p>
+                )}
                 <div className="physical-shield-head">
                     <div className="physical-shield-copy flex flex-col gap-2 min-w-0">
                         {/* Title row — name + info icon only. "How it works" and

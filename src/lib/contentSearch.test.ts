@@ -6,6 +6,7 @@ import {
   dedupeContentRows,
   formatContentModified,
   formatSnippetWithHighlights,
+  highlightPreviewText,
   isNameOnlyMatch,
   showIndexedSearchRow,
 } from "./contentSearch";
@@ -39,6 +40,26 @@ describe("buildContentQueryArgs", () => {
     expect(args.limit).toBe(20);
     expect(args.offset).toBe(10);
     expect(args.keyword_only).toBe(false);
+  });
+});
+
+describe("highlightPreviewText", () => {
+  it("highlights all case-insensitive matches including one at the start", () => {
+    expect(highlightPreviewText("Budget and BUDGET", [{ text: "budget", highlighted: true }])).toEqual([
+      { text: "Budget", highlighted: true, offset: 0 },
+      { text: " and ", highlighted: false, offset: 6 },
+      { text: "BUDGET", highlighted: true, offset: 11 },
+    ]);
+  });
+
+  it("treats metacharacters as literal text and keeps the preview as plain text", () => {
+    const parts = highlightPreviewText("C++ <script> C++", [{ text: "C++", highlighted: true }]);
+    expect(parts.map((part) => part.text).join("")).toBe("C++ <script> C++");
+    expect(parts.filter((part) => part.highlighted).map((part) => part.text)).toEqual(["C++", "C++"]);
+  });
+
+  it("leaves text untouched when the index supplied no highlighted terms", () => {
+    expect(highlightPreviewText("contents", [{ text: "contents", highlighted: false }])).toEqual([{ text: "contents", highlighted: false, offset: 0 }]);
   });
 });
 

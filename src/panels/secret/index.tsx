@@ -30,7 +30,8 @@ import { getPersona } from "../../types/settings";
 import { Icon, type IconName } from "@/components/ui/bp";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { showError, showSuccess } from "../../utils/toast";
+import { showError, showSuccess, showWarning } from "../../utils/toast";
+import { syncCalculatorShortcuts } from "../privacy/calculatorShortcuts";
 import VisibilityTable from "./VisibilityTable";
 import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
@@ -307,7 +308,8 @@ function LockDisguiseSection() {
             // don't conflict with its state file. Only manage shortcuts when
             // hide mode is off.
             if (!isHideModeActive) {
-                setWinCommanderCalculatorShortcuts(next).catch(() => {});
+                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next);
+                if (warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${warning}`);
             }
             invoke("update_autostart_task_identity", { covered: next || isHideModeActive }).catch(() => {});
             if (next) {

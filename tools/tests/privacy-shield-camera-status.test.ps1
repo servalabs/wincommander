@@ -63,4 +63,19 @@ try {
     $tail = Get-PrivacyShieldLaunchLogTail -Path $path -RunId $current
     if ((Get-PrivacyShieldStartFailure $tail).code -ne 'model_download_failed') { throw 'A previous launch contaminated the current diagnosis' }
 } finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+
+# An inconclusive inventory must not stop a local user from attempting a
+# detector open, while explicit policy denial and unknown lifecycle stay closed.
+function Get-PrivacyShieldStatus {
+    if ($script:cameraFixture -eq 'status_error') { return @{ error=$true; shieldLifecycle='unknown' } }
+    if ($script:cameraFixture -eq 'blocked') { return @{ running=$false; cameraAvailable=$false; cameraStatus='windows_camera_policy_denied'; shieldLifecycle='stopped' } }
+    return @{ running=$false; cameraAvailable=$false; cameraStatus='unknown'; shieldLifecycle='stopped' }
+}
+function Resolve-PythonPath { return $null }
+$script:cameraFixture = 'wmi_failed'
+if ((Start-PrivacyShield).diagnosticCode -ne 'runtime_unavailable') { throw 'Unknown camera must reach the runtime check' }
+$script:cameraFixture = 'blocked'
+if ((Start-PrivacyShield).diagnosticCode -ne 'windows_camera_policy_denied') { throw 'Known camera policy denial must prevent startup' }
+$script:cameraFixture = 'status_error'
+if ((Start-PrivacyShield).diagnosticCode -ne 'status_unavailable') { throw 'Unknown shield lifecycle must prevent startup' }
 Write-Output 'PASS: camera presence, virtual source, unknown coverage, policy denial, and open-failure classification'

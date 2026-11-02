@@ -52,7 +52,7 @@
 
 .esb-input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(132px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(112px, 160px);
   align-items: center;
   gap: 8px;
   padding: 11px 14px;
@@ -537,9 +537,7 @@
   line-height: 1;
 }
 
-.esb-storage-menu {
-  min-width: min(320px, 90vw);
-}
+.esb-storage-menu { min-width: min(250px, 90vw); }
 
 .esb-drive-grid {
   display: grid;
@@ -699,7 +697,7 @@
   display: grid;
   /* The selected shortcut mock-up reserves a compact result navigator for
      file names and makes the readable match preview the dominant surface. */
-  grid-template-columns: minmax(0, 30%) minmax(0, 70%);
+  grid-template-columns: minmax(180px, 38%) minmax(0, 62%);
   min-height: 300px;
   max-height: min(430px, 48vh);
 }
@@ -748,6 +746,12 @@
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.esb-preview-copy mark {
+  background: var(--highlight-bg, #fff3b0);
+  color: #1b1b1b;
+  border-radius: 2px;
 }
 
 .esb-preview-actions { display: flex; gap: 6px; margin-top: 10px; }
@@ -1331,7 +1335,5 @@
   .esb-filter-control-label { display: none; }
   .esb-filter-control { grid-template-columns: auto minmax(0, 1fr) auto; padding: 0 6px; }
   .esb-filter-control strong { font-size: 10px; }
-  .esb-result-area-preview { grid-template-columns: 1fr; max-height: none; }
-  .esb-result-area-preview .esb-results { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .esb-preview { min-height: 240px; }
+  .esb-result-area-preview { grid-template-columns: minmax(120px, 40%) minmax(0, 60%); }
 }

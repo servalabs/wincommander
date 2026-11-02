@@ -369,8 +369,8 @@ function Get-PrivacyShieldStatus {
             activeMode      = $activeMode
             nativeOptions   = $nativeOptions
             cameraIndex     = $cameraIndex
-            # Existing Fleet guard treats false as not verified and prevents a
-            # reconfiguration stop; cameraStatus retains the unknown reason.
+            # Fleet requires an explicit true before changing a managed
+            # session. The separate status preserves an unknown diagnosis.
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
@@ -454,10 +454,16 @@ function Start-PrivacyShield {
     
     try {
         $status = Get-PrivacyShieldStatus
+        if ($status.error -or $status.shieldLifecycle -eq 'unknown') {
+            return @{ error = $true; message = 'Privacy Shield status could not be confirmed. Refresh and try again.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'status_unavailable' }
+        }
         if ($status.running) {
             return @{ error = $true; message = "Shield is already running."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'running'; diagnosticCode = 'already_running' }
         }
-        if ($status.cameraAvailable -ne $true) {
+        # Enumeration can be inconclusive for virtual or redirected cameras.
+        # In that case the detector's real open/read test below is authoritative.
+        # Never bypass an explicit policy denial or a confirmed unavailable camera.
+        if ($status.cameraAvailable -ne $true -and $status.cameraStatus -ne 'unknown') {
             return @{
                 error = $true
                 message = if ($status.cameraMessage) { $status.cameraMessage } else { "No camera detected - Privacy Shield requires a webcam." }
@@ -866,6 +872,9 @@ class ShieldWorker(QThread):
             try:
                 c = cv2.VideoCapture(self.camera_idx, cv2.CAP_DSHOW)
                 if not c.isOpened():
+                    # Release the failed DirectShow handle before asking the
+                    # default backend to open the same camera.
+                    c.release()
                     c = cv2.VideoCapture(self.camera_idx)
                 _cam_result[0] = c
             except Exception as exc:

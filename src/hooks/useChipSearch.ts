@@ -426,6 +426,7 @@ export interface ChipSearchApi {
   term: string;
   primary: BrowseResult[];
   contentRows: ContentDisplayRow[];
+  contentError: string | null;
   /** True total from the engine, or null when unknown / not worth showing. */
   totalCount: number | null;
   /** The shortcut preview hid additional verified filename results. */
@@ -453,6 +454,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
   // went down and the rows follow 200ms later, so the list sat there unlabelled.
   const [showingBrowse, setShowingBrowse] = useState(true);
   const [contentRows, setContentRows] = useState<ContentDisplayRow[]>([]);
+  const [contentError, setContentError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -486,6 +488,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     setPrimary([]);
     setShowingBrowse(true);
     setContentRows([]);
+    setContentError(null);
     setTotalCount(null);
     setHasMore(false);
     setError(null);
@@ -592,9 +595,11 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     };
   }, [active, blockedReason, plan, searchState, jump.term, privacy.revision, privacyReady]);
 
-  // ── Content pass (best-effort, silent on failure) ──
+  // ── Content pass ──
   useEffect(() => {
     if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
+    setContentRows([]);
+    setContentError(null);
     if (!active || !privacyReady) return;
     if (blockedReason || jump.term.length < 2 || !contentSearchApplies(searchState)) {
       setContentRows([]);
@@ -625,7 +630,11 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
           setContentRows(hits.filter((hit) => mayShowSearchPath(hit.path)).map(contentHitToDisplayRow));
           setContentRevision(privacy.revision);
         })
-        .catch(() => { /* the bar must not break when the index is cold */ });
+        .catch(() => {
+          if (cancelled || !lease()) return;
+          setContentRows([]);
+          setContentError("Inside-file search is unavailable. Open File Search to check the index and retry.");
+        });
     }, CONTENT_DEBOUNCE_MS);
 
     return () => {
@@ -639,6 +648,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     isBrowse: showingBrowse, isJump: jump.isJump, term: jump.term,
     primary: rowsRevision === privacy.revision ? primary.filter((row) => mayShowSearchPath(row.full_path)) : [],
     contentRows: contentRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
+    contentError,
     totalCount, hasMore, isSearching, error, setError, reset,
   };
 }

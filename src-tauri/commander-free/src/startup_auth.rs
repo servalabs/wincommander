@@ -258,7 +258,11 @@ pub async fn register_startup_pin(mode: String, plaintext: String) -> Result<(),
         "destroy" => s.ideal.privacy.startup_pin.destroy_hash = Some(hash),
         _ => return Err(format!("Unknown mode: {mode}")),
     }
-    crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"))
+    let result = crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"));
+    if result.is_ok() && mode == "real" {
+        crate::write_wc_registry_dword("CalculatorMode", 1);
+    }
+    result
 }
 
 #[tauri::command]
