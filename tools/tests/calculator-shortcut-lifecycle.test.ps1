@@ -70,6 +70,22 @@ try {
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Original shortcut bytes were not restored exactly' }
     foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Owned Calculator shortcut was not removed' }
 
+    # Disabling the lock while Hide WinCommander remains active must remove
+    # Calculator aliases without exposing the saved WinCommander shortcuts.
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    $hideFlag = Get-WinCommanderHideFlagPath
+    New-Item -ItemType Directory -Path (Split-Path $hideFlag -Parent) -Force | Out-Null
+    [IO.File]::WriteAllText($hideFlag, '')
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True (-not (Test-Path -LiteralPath $path)) 'Lock off exposed a shortcut while Hide mode remained active' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Calculator shortcut remained after lock off' }
+    $deferredState = Join-Path $env:APPDATA 'WinCommander\calc_shortcut_state.json'
+    Assert-True (Test-Path -LiteralPath $deferredState) 'Deferred original recovery state was discarded'
+    Remove-Item -LiteralPath $hideFlag
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Original shortcut was not restored after Hide mode ended' }
+    Assert-True (-not (Test-Path -LiteralPath $deferredState)) 'Deferred recovery state remained after successful restore'
+
     # Hide WinCommander can remove every original shortcut first. Calculator
     # Lock still needs account Start and Desktop entries without restoring them.
     foreach ($path in $originals) { Remove-Item -LiteralPath $path }

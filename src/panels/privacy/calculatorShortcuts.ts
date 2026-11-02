@@ -8,7 +8,10 @@ export function shouldReconcileCalculatorShortcuts(input: {
   decoy: boolean;
   hasRealPin: boolean;
   enabled: boolean;
+  hideMode: boolean;
 }): boolean {
+  // Hide mode changes restoration ownership, not whether an armed lock needs
+  // its Calculator shortcut. An unarmed lock must never restore at startup.
   return input.unlocked && !input.decoy && input.hasRealPin && input.enabled;
 }
 

@@ -2408,7 +2408,7 @@ function Set-WinCommanderVisibility {
         # Strategy A — recreate from state (field: "path" + "targetPath").
         $stateShortcuts = @()
         if ($savedState -and $savedState.hiddenShortcuts) {
-            $stateShortcuts = @($savedState.hiddenShortcuts) | Where-Object { -not [string]::IsNullOrEmpty("$($_.path)") }
+            $stateShortcuts = @(@($savedState.hiddenShortcuts) | Where-Object { -not [string]::IsNullOrEmpty("$($_.path)") })
         }
 
         if ($stateShortcuts.Count -gt 0) {
@@ -2919,6 +2919,8 @@ function Set-WinCommanderCalculatorShortcuts {
             if ($savedState -and $savedState.hiddenShortcuts) {
                 $stateShortcuts = @(@($savedState.hiddenShortcuts) | Where-Object { -not [string]::IsNullOrEmpty("$($_.path)") })
             }
+            $hideFlagPath = Get-WinCommanderHideFlagPath
+            $keepOriginalsHidden = $stateShortcuts.Count -gt 0 -and $hideFlagPath -and (Test-Path -LiteralPath $hideFlagPath)
 
             $shortcutErrors = 0
             $created = @($savedState.createdCalculatorLinks)
@@ -2946,7 +2948,7 @@ function Set-WinCommanderCalculatorShortcuts {
                     $shortcutErrors++
                 }
             }
-            if ($stateShortcuts.Count -gt 0) {
+            if ($stateShortcuts.Count -gt 0 -and -not $keepOriginalsHidden) {
                 $wsh = New-Object -ComObject WScript.Shell
                 $fallbackExe = $null
                 foreach ($entry in $stateShortcuts) {
@@ -3007,7 +3009,7 @@ function Set-WinCommanderCalculatorShortcuts {
                 }
             }
 
-            if ($shortcutErrors -eq 0) {
+            if ($shortcutErrors -eq 0 -and -not $keepOriginalsHidden) {
                 try { Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue } catch {}
             } else {
                 $warnings += "$shortcutErrors shortcut(s) failed — state kept for retry."

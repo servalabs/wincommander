@@ -452,6 +452,11 @@ function LockDisguiseSection() {
                     const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
                     calculatorNeedsReapply = false;
                     if (warning) showWarning(`Calculator Lock shortcuts need attention: ${warning}`);
+                } else if (!hidden) {
+                    // A lock disabled while Hide mode was active kept its
+                    // original account shortcuts in the Calculator snapshot.
+                    const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
+                    if (warning) showWarning(`Calculator shortcuts need attention: ${warning}`);
                 }
                 await restartExplorer().catch(() => {});
                 await invoke("apply_wincommander_hide_mode", { hidden }).catch(() => {});
