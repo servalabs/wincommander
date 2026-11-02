@@ -74,7 +74,6 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                         <section className="da-folders" aria-label={mode === "space" ? "Folder breakdown" : "Large file results"}>
                             <div className="da-pane-toolbar"><span>{items.length.toLocaleString()} {mode === "large" ? "matching files shown" : "items"}{mode === "space" ? ` · ${formatDiskBytes(totalSize)}` : ""}</span><button type="button" disabled={busy || !selectableItems.length} onClick={selectMatchingFiles}>{allMatchingSelected ? "Deselect" : "Select"} all {selectableItems.length.toLocaleString()} matching files</button></div>
                             {analyzer.largeLoading && mode === "large" ? <div className="da-chart-empty" role="status"><Spinner size={22} />Finding threshold matches…</div> : <DiskItemList items={items} total={totalSize} selected={analyzer.selected} focused={analyzer.focused} large={mode === "large"} disabled={busy} onFocus={analyzer.setFocused} onSelect={analyzer.toggleSelection} onNavigate={path => void analyzer.navigate(path)} />}
-                            <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />
                         </section>
                         {mode === "space" && <section className="da-visualization" aria-label="Storage visualization"><div className="da-pane-toolbar"><span>{formatDiskBytes(totalSize)} in this folder</span><div className="da-chart-controls">
                             <label><span className="sr-only">Chart depth</span><select value={depth} disabled={busy} onChange={event => setDepth(Number(event.target.value))}>{[1, 2, 3].map(value => <option key={value} value={value}>Depth {value}</option>)}</select></label>
@@ -86,7 +85,9 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                     </div>
                 </>}
         </div>
-        <footer className="da-selection-bar"><div><Icon icon="layers" size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} logical size · Space recovered may differ</small></span></div><div>
+        <footer className="da-selection-bar"><div className="da-selection-summary"><Icon icon="layers" size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} logical size · Space recovered may differ</small></span></div>
+            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
+        <div className="da-selection-actions">
             {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
             <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
         </div></footer>

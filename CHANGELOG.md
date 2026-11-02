@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Run independent Dashboard Fix All repairs three at a time while keeping
+  installers and conflicting maintenance operations ordered.
+- Simplify cleanup cards and detail tables, hide wholly empty columns, move
+  pagination above results, and place disk-analysis item details in the selection
+  bar. Distinguish disabled clipboard history and protected process details from
+  scan failures, skip folder junctions during database-trace scans, and verify
+  schedule changes without retrying unrelated upgrades.
 - Refresh saved Wi-Fi profiles after failed or partial cleanup and mark results
   stale when verification fails, instead of leaving an apparently current list.
 - Improve cleanup account scoping, partial scan details, protected recurring

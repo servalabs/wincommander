@@ -22,7 +22,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("getAutoScheduleInterval(");
     expect(scan).toContain("setManagedAutoEraseSchedule(");
     expect(scan).toContain("!!category.schedulerRunAsSystem");
-    expect(scan).toContain("await refreshSchedules()");
+    expect(scan).toContain("await refreshSchedules(undefined, false)");
   });
 
   test("renders a cached schedule snapshot before silently verifying Task Scheduler", async () => {
@@ -30,7 +30,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
 
     expect(scan).toContain("SCHEDULE_CACHE_KEY");
     expect(scan).toContain("useState<Record<string, number>>(readScheduleCache)");
-    expect(scan).toContain("void refreshSchedules()");
+    expect(scan).toContain("void refreshSchedules(undefined, true)");
     expect(scan).toContain("writeScheduleCache(snapshot.schedules)");
   });
 

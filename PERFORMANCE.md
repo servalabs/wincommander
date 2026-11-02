@@ -6,6 +6,12 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 
 ## Responsiveness design
 
+- Dashboard Fix All runs up to three independent repairs at once. Only package
+  work joins the shared installer queue; unrelated settings do not wait behind
+  that queue. Browser hardening follows installation attempts, and cleanup or
+  service-profile changes wait until other repairs settle. Each repair retains
+  its own progress and verification. This bounds concurrency without promising
+  a fixed speed increase on every device.
 - Explorer metadata scrubbing prepares its hidden notification renderer while
   the scrub runs. It publishes the verified result before waiting for owned
   sidecar cleanup, then still joins that cleanup before process exit. A fresh

@@ -6,7 +6,7 @@ $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Could not parse cleanup.ps1' }
-foreach ($name in @('Get-AmcacheEntries', 'Get-NTUserTraces', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
+foreach ($name in @('Get-AmcacheEntries', 'Get-NTUserTraces', 'Get-CleanupBoundedFileInventory', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
     $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $function) { throw "Missing function $name" }
     . ([scriptblock]::Create($function.Extent.Text))
@@ -16,6 +16,7 @@ function Test-Path {
     param($Path, $ErrorAction)
     if ($script:coverageFixture) { return $true }
     if (-not $script:populated) { return $false }
+    if ($Path -eq 'HKLM:\Amcache\Root') { return $true }
     return $Path -match '(InventoryApplication|InventoryApplicationFile|RunMRU|TypedPaths)$'
 }
 function Get-Item {
@@ -30,11 +31,11 @@ function Get-Item {
     return [pscustomobject]@{ Name = 'fixture-category' }
 }
 function Get-ChildItem {
-    param($Path, $ErrorAction, $Include, [switch]$Recurse, [int]$Depth, [switch]$Force, [switch]$File)
+    param($Path, $LiteralPath, $ErrorAction, $Include, [switch]$Recurse, [int]$Depth, [switch]$Force, [switch]$File)
     if ($script:coverageFixture) {
         if ($script:deniedContents) { throw [System.UnauthorizedAccessException]::new('Synthetic access denied') }
         for ($index = 0; $index -lt $script:fixtureCount; $index++) {
-            [pscustomobject]@{ Name = "fixture-$index.db"; FullName = "C:\fixture\root\fixture-$index.db"; Length = 1024; LastWriteTime = [datetime]'2026-01-01'; PSIsContainer = $false }
+            [pscustomobject]@{ Name = "fixture-$index.db-wal"; FullName = "C:\fixture\root\fixture-$index.db-wal"; Length = 1024; LastWriteTime = [datetime]'2026-01-01'; PSIsContainer = $false }
         }
         return
     }
@@ -147,6 +148,8 @@ try {
     Assert-Count $script:clipboardReads ($readsBefore + 1) 'Disabled history still attempts an inventory'
     Assert-Count $clipboard.historyReadStatus 'disabled' 'Disabled clipboard history coverage'
     Assert-Count $clipboard.partial $true 'Unreadable disabled history is partial'
+    Assert-Count $clipboard.coverage 'disabled' 'Disabled clipboard history is distinct from scan failure'
+    if ($clipboard.message -notmatch 'turned off' -or $clipboard.coverageNote -notmatch 'previously stored') { throw 'Disabled clipboard coverage did not explain the unavailable inventory.' }
     $script:clipboardResult = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'Success'; Items = @() })
     $clipboard = Get-ClipboardHistoryStatus
     Assert-Count $clipboard.historyReadStatus 'complete' 'Successful inventory proves disabled history is empty'

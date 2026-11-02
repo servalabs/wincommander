@@ -283,7 +283,9 @@ function Get-ClipboardHistoryStatus {
             historyItems             = @($history.items)
             historyReadStatus        = $history.status
             partial                  = ($history.status -ne 'complete')
-            message                  = if ($history.status -eq 'disabled') { 'Clipboard history is disabled and stored history could not be read.' } elseif ($history.status -ne 'complete') { 'Clipboard history could not be read.' } else { '' }
+            coverage                 = if ($history.status -eq 'disabled') { 'disabled' } elseif ($history.status -ne 'complete') { 'partial' } else { 'complete' }
+            coverageNote             = if ($history.status -eq 'disabled') { 'Windows does not expose previously stored clipboard items while history is turned off.' } else { '' }
+            message                  = if ($history.status -eq 'disabled') { 'Clipboard history is turned off. Previously stored items could not be checked.' } elseif ($history.status -ne 'complete') { 'Clipboard history could not be read.' } else { '' }
         }
     }
     catch {
@@ -1582,10 +1584,12 @@ namespace WcCleanup {
 function Get-ProcessIntelligence {
     $entries = [Collections.Generic.List[object]]::new()
     $partial = $false
+    $unavailableDetails = 0
     try {
         $procs = @(Get-Process -ErrorAction Stop)
         foreach ($p in $procs) {
             try {
+            $detailsIncomplete = $false
             $processId = $p.Id
             if ($processId -le 0) { $partial = $true; continue }
             $processName = $p.ProcessName
@@ -1596,8 +1600,8 @@ function Get-ProcessIntelligence {
             try {
                 $path = $p.MainModule.FileName
             }
-            catch { $partial = $true }
-            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true }
+            catch { $partial = $true; $detailsIncomplete = $true }
+            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true; $detailsIncomplete = $true }
             if ($path -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)) {
                 try {
                     $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
@@ -1607,19 +1611,20 @@ function Get-ProcessIntelligence {
                             $signer = $sig.SignerCertificate.Subject
                         }
                         if ($sigStatus -in @('UnknownError', 'NotSupportedFileFormat', 'Incompatible') -or
-                            ($sigStatus -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$signer))) { $partial = $true }
+                            ($sigStatus -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$signer))) { $partial = $true; $detailsIncomplete = $true }
                     } else {
-                        $partial = $true
+                        $partial = $true; $detailsIncomplete = $true
                     }
                 }
                 catch {
                     $sigStatus = "UnknownError"
-                    $partial = $true
+                    $partial = $true; $detailsIncomplete = $true
                 }
-            } elseif ($path) { $partial = $true }
+            } elseif ($path) { $partial = $true; $detailsIncomplete = $true }
             try { $elevated = Get-CleanupProcessElevation -ProcessId $processId }
-            catch { $elevated = 'Unknown'; $partial = $true }
-            if ($elevated -notin @('Yes', 'No')) { $partial = $true }
+            catch { $elevated = 'Unknown'; $partial = $true; $detailsIncomplete = $true }
+            if ($elevated -notin @('Yes', 'No')) { $partial = $true; $detailsIncomplete = $true }
+            if ($detailsIncomplete) { $unavailableDetails++ }
             $entries.Add(@{
                 name     = $processName
                 pid      = $processId
@@ -1631,7 +1636,8 @@ function Get-ProcessIntelligence {
             })
             } catch { $partial = $true }
         }
-        @{ processes = @($entries.ToArray()); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some processes could not be inspected.' } else { $null } }
+        $note = if ($partial) { 'Some process details are unavailable. Windows protects some system processes; processes can also exit during the scan.' } else { $null }
+        @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; unavailableDetails = $unavailableDetails; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
     }
     catch {
         @{ error = $true; message = "Failed to get process intelligence: $($_.Exception.Message)"; processes = @() }
@@ -2960,7 +2966,7 @@ function Get-AmcacheEntries {
     try {
         $entries = @()
         $hveFile = "$env:SystemRoot\AppCompat\Programs\Amcache.hve"
-        # A denied read must fail the scan, not masquerade as an absent hive.
+        $hveReadError = $null
         try {
             $hveItem = Get-Item -LiteralPath $hveFile -ErrorAction Stop
             $hveSize = [math]::Round($hveItem.Length / 1MB, 2)
@@ -2968,25 +2974,38 @@ function Get-AmcacheEntries {
         } catch [System.Management.Automation.ItemNotFoundException] {
             $hveSize = 0
             $hveExists = $false
+        } catch {
+            $hveSize = $null
+            $hveExists = $null
+            $hveReadError = $_.Exception.Message
         }
 
-        # An existing hive file is not itself a live registry inventory. If
-        # the expected mount is absent, category zeros do not prove it empty.
-        $mountAvailable = $true
-        try { $null = Get-Item -Path 'HKLM:\AppCompatCache\Amcache' -ErrorAction Stop }
-        catch [System.Management.Automation.ItemNotFoundException] { $mountAvailable = $false }
+        $inventoryRoot = $null
+        $mountErrors = @()
+        $categoryNames = @('InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut', 'InventoryDeviceContainer', 'InventoryDriverBinary')
+        foreach ($candidate in @('HKLM:\Amcache\Root', 'HKLM:\AppCompatCache\Amcache\Root', 'HKLM:\AppCompatCache\Amcache')) {
+            try {
+                $null = Get-Item -Path $candidate -ErrorAction Stop
+            } catch [System.Management.Automation.ItemNotFoundException] { continue }
+            catch { $mountErrors += $_.Exception.Message; continue }
+            foreach ($categoryName in $categoryNames) {
+                try {
+                    $null = Get-Item -Path "$candidate\$categoryName" -ErrorAction Stop
+                    $inventoryRoot = $candidate
+                    break
+                } catch [System.Management.Automation.ItemNotFoundException] { }
+                catch { $mountErrors += $_.Exception.Message }
+            }
+            if ($inventoryRoot) { break }
+        }
+        $mountAvailable = -not [string]::IsNullOrWhiteSpace($inventoryRoot)
 
-        # Categories accessible as live registry (mounted hive)
-        $cats = @(
-            @{ name = 'InventoryApplication';        path = 'HKLM:\AppCompatCache\Amcache\InventoryApplication' },
-            @{ name = 'InventoryApplicationFile';    path = 'HKLM:\AppCompatCache\Amcache\InventoryApplicationFile' },
-            @{ name = 'InventoryApplicationShortcut';path = 'HKLM:\AppCompatCache\Amcache\InventoryApplicationShortcut' },
-            @{ name = 'InventoryDeviceContainer';    path = 'HKLM:\AppCompatCache\Amcache\InventoryDeviceContainer' },
-            @{ name = 'InventoryDriverBinary';       path = 'HKLM:\AppCompatCache\Amcache\InventoryDriverBinary' }
-        )
+        $cats = $categoryNames |
+            ForEach-Object { @{ name = $_; path = if ($mountAvailable) { "$inventoryRoot\$_" } else { $null } } }
         foreach ($cat in $cats) {
             $count = 0
             $sample = @()
+            if (-not $mountAvailable) { $entries += @{ category = $cat.name; count = 0; sample = @() }; continue }
             try {
                 $null = Get-Item -Path $cat.path -ErrorAction Stop
                 $children = @(Get-ChildItem -Path $cat.path -ErrorAction Stop)
@@ -3021,8 +3040,12 @@ function Get-AmcacheEntries {
         # of keys. Read the record-count key explicitly instead.
         $totalCount = 0
         foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
-        $partial = $hveExists -and -not $mountAvailable
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; total = $totalCount; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'The Amcache file exists, but its registry inventory is not available.' } else { $null } }
+        $partial = -not $mountAvailable -and ($hveExists -or $hveReadError -or $mountErrors.Count -gt 0)
+        $message = if ($partial) {
+            if ($hveReadError -or $mountErrors.Count) { 'Windows denied access to the application inventory. Open WinCommander as administrator and scan again. No complete inventory was available.' }
+            else { 'The Amcache file exists, but Windows has not exposed a readable registry inventory. No complete inventory was available.' }
+        } else { $null }
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = $totalCount; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -3297,32 +3320,62 @@ function Get-CrashDumpList {
     @{ dumps = @($dumps.ToArray()); total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some crash dump locations could not be checked.' } else { $null } }
 }
 
+function Get-CleanupBoundedFileInventory {
+    param([string[]]$Roots, [string[]]$Patterns, [int]$Depth = 5)
+    $files = [Collections.Generic.List[object]]::new()
+    $errors = [Collections.Generic.List[string]]::new()
+    $skippedLinks = 0
+    $pending = [Collections.Generic.Queue[object]]::new()
+    foreach ($root in $Roots) {
+        try {
+            $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $skippedLinks++; continue }
+            $pending.Enqueue(@{ path = $root; depth = 0 })
+        } catch [System.Management.Automation.ItemNotFoundException] { }
+        catch { $errors.Add($_.Exception.Message) }
+    }
+    while ($pending.Count) {
+        $directory = $pending.Dequeue()
+        try {
+            # Skip compatibility junctions before they redirect traversal into an already scanned profile.
+            Get-ChildItem -LiteralPath $directory.path -Force -ErrorAction Stop | ForEach-Object {
+                if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $skippedLinks++ }
+                elseif ($_.PSIsContainer) {
+                    if ($directory.depth -lt $Depth) { $pending.Enqueue(@{ path = $_.FullName; depth = $directory.depth + 1 }) }
+                } else {
+                    $file = $_
+                    foreach ($pattern in $Patterns) {
+                        if ($file.Name -like $pattern) { $files.Add($file); break }
+                    }
+                }
+            }
+        } catch { $errors.Add($_.Exception.Message) }
+    }
+    @{ files = @($files.ToArray()); errors = @($errors.ToArray()); partial = $errors.Count -gt 0; skippedLinks = $skippedLinks }
+}
+
 function Get-SQLiteWALList {
     # Returns all .wal/.shm files found in the stated app-data scope.
     # Uses -Depth 5 to avoid extremely deep recursive scans that can time out
     try {
         $found = [Collections.Generic.List[object]]::new()
-        $roots = @($env:LOCALAPPDATA, $env:APPDATA)
-        foreach ($root in $roots) {
-            try { $null = Get-Item -LiteralPath $root -ErrorAction Stop }
-            catch [System.Management.Automation.ItemNotFoundException] { continue }
-            Get-ChildItem -Path $root -Include '*.wal','*.shm' -Recurse -Depth 5 -File -Force -ErrorAction Stop |
-                ForEach-Object {
-                    $found.Add(@{
-                        name     = $_.Name
-                        path     = $_.FullName
-                        sizeKB   = [math]::Round($_.Length/1KB,1)
-                        dir      = Split-Path $_.FullName -Parent | Split-Path -Leaf
-                        modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
-                    })
-                }
+        $inventory = Get-CleanupBoundedFileInventory -Roots @($env:LOCALAPPDATA, $env:APPDATA) -Patterns @('*.wal','*.shm','*.db-wal','*.db-shm','*.sqlite-wal','*.sqlite-shm')
+        $inventory.files | ForEach-Object {
+            $found.Add(@{
+                name     = $_.Name
+                path     = $_.FullName
+                sizeKB   = [math]::Round($_.Length/1KB,1)
+                dir      = Split-Path $_.FullName -Parent | Split-Path -Leaf
+                modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+            })
         }
         @{
             files = @($found.ToArray()); total = $found.Count
             totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
-            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5.'
-            partial = $false; truncated = $false
-            message = 'This count covers the stated depth-limited scope.'
+            coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5, excluding directory links and junctions.'
+            skippedLinks = $inventory.skippedLinks; errors = $inventory.errors
+            partial = $inventory.partial; truncated = $false; error = $inventory.partial -and $found.Count -eq 0
+            message = if ($inventory.partial) { 'Some application-data locations could not be checked. ' + (($inventory.errors | Select-Object -Unique) -join ' ') } else { 'This count covers the stated depth-limited scope.' }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -6928,9 +6981,9 @@ function Get-CleanupSummaryAllUsers {
                         # Match per-category function: *.wal, *.db-wal, *.sqlite-wal, *.shm, *.db-shm
                         # Depth 5 balances coverage vs scan time (browsers live ≤4 deep in AppData).
                         $roots = @(@($appData,$localApp) | Where-Object { Test-CleanupSummaryPath $_ })
-                        $f = if ($roots.Count -gt 0) { Get-ChildItem -LiteralPath $roots `
-                            -Include '*.wal','*.db-wal','*.sqlite-wal','*.shm','*.db-shm' `
-                            -Recurse -Depth 5 -File -Force -EA Stop } else { @() }
+                        $walInventory = Get-CleanupBoundedFileInventory -Roots $roots -Patterns @('*.wal','*.db-wal','*.sqlite-wal','*.shm','*.db-shm','*.sqlite-shm')
+                        if ($walInventory.partial) { $categoryPartial = $true }
+                        $f = @($walInventory.files)
                         $count = @($f).Count
                         $records = @(@($f) | Select-Object -First $previewMax | ForEach-Object { @{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); dir=(Split-Path (Split-Path $_.FullName -Parent) -Leaf); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
                         $items = @($records | ForEach-Object { $_.name })

@@ -3410,7 +3410,7 @@ function Invoke-AutoEraseMigrationCore {
             $migrated += $identity.categoryId
         } catch { $errors += $_.Exception.Message }
     }
-    if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; disabledProtected = $disabledProtected; message = ($errors -join ' '); errors = $errors } }
+    if ($errors.Count) { return @{ error = $true; status = 'partial'; migrated = $migrated; disabledProtected = $disabledProtected; message = (($errors | Select-Object -Unique) -join ' '); errors = $errors } }
     @{ status = 'ok'; migrated = $migrated; disabledProtected = $disabledProtected }
 }
 
@@ -3436,7 +3436,7 @@ function Invoke-AutoEraseMigration {
             if ($result.disabledProtected) { $disabledProtected += @($result.disabledProtected) }
             if ($result.error) { $errors += [string]$result.message }
         }
-        if ($errors.Count) { return @{ error=$true; status='partial'; migrated=$migrated; disabledProtected=$disabledProtected; errors=$errors; message=($errors -join ' ') } }
+        if ($errors.Count) { return @{ error=$true; status='partial'; migrated=$migrated; disabledProtected=$disabledProtected; errors=$errors; message=(($errors | Select-Object -Unique) -join ' ') } }
         @{ status='ok'; migrated=$migrated; disabledProtected=$disabledProtected }
     } catch { @{ error=$true; status='failed'; message="Could not inspect cleanup schedules for migration: $($_.Exception.Message)" } }
 }

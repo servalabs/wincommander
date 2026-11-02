@@ -32,6 +32,7 @@ if ($populated.error -or -not $populated.partial -or @($populated.processes).Cou
     throw 'Process Review did not retain an incompletely inspected process.'
 }
 if ($null -ne $populated.processes[0].path -or $populated.processes[0].pathStatus -ne 'unavailable' -or $populated.processes[0].elevated -ne 'Unknown') { throw 'Unavailable process details were not labeled accurately.' }
+if ($populated.observedProcesses -ne 1 -or $populated.unavailableDetails -ne 1 -or $populated.coverage -ne 'limited' -or $populated.coverageNote -notmatch 'Windows protects') { throw 'Protected process coverage was not explained separately from inventory failure.' }
 foreach ($case in @('path-inaccessible', 'unknown-elevation', 'elevation-error', 'signature-error', 'signature-unknown')) {
     $script:case = $case; $result = Get-ProcessIntelligence
     if ($result.error -or -not $result.partial -or $result.status -ne 'partial' -or @($result.processes).Count -ne 1) { throw "An unavailable process detail was reported complete: $case" }
@@ -39,6 +40,7 @@ foreach ($case in @('path-inaccessible', 'unknown-elevation', 'elevation-error',
 foreach ($case in @('valid', 'unsigned')) {
     $script:case = $case; $result = Get-ProcessIntelligence
     if ($result.error -or $result.partial -or $result.status -ne 'complete' -or @($result.processes).Count -ne 1) { throw "Readable process details were reported incomplete: $case" }
+    if ($result.observedProcesses -ne 1 -or $result.unavailableDetails -ne 0 -or $result.coverage -ne 'complete') { throw 'Complete process coverage was mislabeled.' }
     if ($case -eq 'unsigned' -and $result.processes[0].signed -ne 'NotSigned') { throw 'Unsigned status was lost.' }
 }
 $script:denied = $true

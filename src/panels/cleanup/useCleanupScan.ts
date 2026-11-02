@@ -302,7 +302,6 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         getUserProfiles,
         invokeCleanupClearAllUsers,
         getCleanupSummaryAllUsers,
-        error,
     } = backend;
 
     // User exclusions may add protection; backend-protected defaults stay fixed.
@@ -561,10 +560,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         [selectedOwnerSid, scheduleRows]);
     const otherScheduleState = scheduleState === 'verified' && !otherScheduleSnapshot ? 'unavailable' : scheduleState;
 
-    const refreshSchedules = async (verifyOwnerSid?: string) => {
+    const refreshSchedules = async (verifyOwnerSid?: string, runMigration = true) => {
         const ticket = scheduleReadGate.current.begin();
         setScheduleState("checking");
-        if (entitlementsReady && schedulesEnabled && migrationEnabled) {
+        if (runMigration && entitlementsReady && schedulesEnabled && migrationEnabled) {
             let migrationError = "Scheduled cleanup upgrade could not be verified.";
             const migrated = await migrationGate.current.ensure(async () => {
                 const result = await invokeAutoEraseMigration();
@@ -620,7 +619,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     useEffect(() => {
         if (!auxiliaryStateEnabled) return;
         void refreshAccountInventory();
-        void refreshSchedules();
+        void refreshSchedules(undefined, false);
         // Stable refs from useBackend's useMemo — safe to omit from deps.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [auxiliaryStateEnabled]);
@@ -630,7 +629,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         // KT: migration mutates scheduled tasks and is paid. Running it before
         // entitlement and Pro-install resolution could asynchronously cover
         // an open scheduler with LicenseGate or the Pro installer.
-        void refreshSchedules();
+        void refreshSchedules(undefined, true);
         // Stable refs from useBackend's useMemo — safe to omit from deps.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [entitlementsReady, schedulesEnabled, migrationEnabled]);
@@ -655,7 +654,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 return false;
             }
             invalidateDiskCleanupScheduleStatus();
-            const verified = await refreshSchedules(ownerSid ?? undefined);
+            const verified = await refreshSchedules(ownerSid ?? undefined, false);
             const payload = res.data as { intervalMinutes?: number; total?: number; results?: Array<{ intervalMinutes?: number; status?: string }> } | undefined;
             const registeredMinutes = ownerSid ? (payload?.total === 1 && payload.results?.length === 1 && payload.results[0].status === 'enabled' ? payload.results[0].intervalMinutes : undefined) : payload?.intervalMinutes;
             const record = ownerSid ? verified?.selectedSnapshot?.records[categoryId] : verified?.records[categoryId];
@@ -681,27 +680,23 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const schedulerId = getSchedulerCategoryId(categoryId);
             const res = ownerSid ? await removeMultiUserAutoEraseSchedule(schedulerId, [ownerSid]) : await removeAutoEraseSchedule(schedulerId);
             if (!isCleanupCommandSuccessful(res)) {
-                showError(res.error || `Failed to turn off auto-clean for ${categoryId}`);
+                showError(res.error || `Failed to turn off auto-clean for ${category.label}`);
                 return false;
             }
             invalidateDiskCleanupScheduleStatus();
-            const verified = await refreshSchedules(ownerSid ?? undefined);
+            const verified = await refreshSchedules(ownerSid ?? undefined, false);
             const snapshot = ownerSid ? verified?.selectedSnapshot : verified;
             if (!snapshot || snapshot.records[categoryId] !== undefined) {
-                showError(`${categoryId}: schedule removal could not be confirmed. Check Task Scheduler and retry.`);
+                showError(`${category.label}: schedule removal could not be confirmed. Check Task Scheduler and retry.`);
                 return false;
             }
-            showSuccess(`Auto-clean turned off for ${categoryId}${ownerSid ? ` — ${selectedDisplay}` : ''}`);
+            showSuccess(`Auto-clean turned off for ${category.label}${ownerSid ? ` — ${selectedDisplay}` : ''}`);
             return true;
         } finally {
             scheduleMutationBusy.current = false;
             setScheduleBusyId(null);
         }
     };
-
-    useEffect(() => {
-        if (error) showError(error);
-    }, [error]);
 
     // ── Card data (manual load + persistent cache) ─────────────────────
     const buildInitial = (): Record<string, CardData> => {
@@ -1120,7 +1115,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             // both successful tasks and any pre-existing/manual configuration.
             invalidateDiskCleanupScheduleStatus();
             let readback: Awaited<ReturnType<typeof refreshSchedules>> = null;
-            try { readback = await refreshSchedules(); } catch {}
+            try { readback = await refreshSchedules(undefined, false); } catch {}
             for (const { id, interval, scope } of createdIds) {
                 if (!readback || !isVerifiedManagedSchedule(readback.records[id], interval, scope)) {
                     summary.created--; summary.failed++;

@@ -21,7 +21,7 @@ import {
 } from "./useCleanupScan";
 import { packCleanCards } from "./cleanupCardLayout";
 import { PrivacyCleanupReviewDialog, type PrivacyClearReview } from "./PrivacyCleanupReviewDialog";
-import { hasLimitedCleanupCoverage, type CleanupVerification } from "./cleanupDisplayModel";
+import { isClipboardHistoryOff, summarizeCleanupResult, type CleanupVerification } from "./cleanupDisplayModel";
 import { cleanupAccountScopeLabel, cleanupProfileKey } from "./cleanupProfileIdentity";
 import { isOtherAccountScheduleOnly, OTHER_ACCOUNT_READ_ONLY_IDS } from "./cleanupOtherAccountScheduleOnly";
 
@@ -107,7 +107,9 @@ export default function CleanupCategoryGrid({
   );
   const isClean = (cat: CleanupCategory) => {
     const data = cardDataMap[cat.id];
-    return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw);
+    return !cat.actionOnly && !!data && !data.loading &&
+      (isClipboardHistoryOff(cat.id, data.raw) || (data.count === 0 && !data.error &&
+      ["empty", "limited"].includes(summarizeCleanupResult({ id: cat.id, count: data.count, raw: data.raw }).state)));
   };
   const orderActiveCards = (categories: CleanupCategory[]) =>
     [...categories].sort((left, right) => {
@@ -209,8 +211,14 @@ export default function CleanupCategoryGrid({
   };
   const isUserClean = (cat: CleanupCategory) => {
     const data = userCardData(cat);
-    return !cat.actionOnly && data.count === 0 && !data.loading && !data.error && !hasLimitedCleanupCoverage(cat.id, data.raw) &&
-      !(isViewingAllUsers && allUsersRaw.some(user => hasLimitedCleanupCoverage(cat.id, user.categories[cat.id]?.raw)));
+    if (cat.actionOnly || data.loading) return false;
+    if (isClipboardHistoryOff(cat.id, data.raw)) return true;
+    if (data.count !== 0 || data.error) return false;
+    if (isViewingAllUsers) return allUsersRaw.length > 0 && allUsersRaw.every(user => {
+      const result = user.categories[cat.id];
+      return result?.count === 0 && ["empty", "limited"].includes(summarizeCleanupResult({ id: cat.id, count: result.count, raw: result.raw }).state);
+    });
+    return ["empty", "limited"].includes(summarizeCleanupResult({ id: cat.id, count: data.count, raw: data.raw }).state);
   };
   const renderUserCard = (cat: CleanupCategory, compact = false) => {
     const data = userCardData(cat);

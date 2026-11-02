@@ -262,7 +262,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(traceCard).toContain('type BandState = "has" | "clean" | "scanning" | "error"');
     expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,100}\? "incomplete"[\s\S]{0,100}\? "error"/);
     expect(traceCard).toContain('label: "Scan failed"');
-    expect(traceCard).toContain('role="alert"');
+    expect(traceCard).toContain('role={incomplete ? "status" : "alert"}');
     expect(traceCard).toContain('safePreview.length === 0');
     expect(traceCard).toContain('open details to inspect');
   });
