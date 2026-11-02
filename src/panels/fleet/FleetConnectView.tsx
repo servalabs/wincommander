@@ -598,9 +598,9 @@ export default function FleetConnectView() {
           )}
 
           {/* Agent-level error from fleet_status poll (enrollment errors from Pro) */}
-          {agentError && !error && !enrolling && (
+          {agentError && !enrolling && (
             <p className="fleet-connect-error" role="alert">
-              <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
+              <Icon icon="warning-sign" size={13} intent="danger" /> Last agent error (may be from an earlier attempt): {agentError}
             </p>
           )}
 

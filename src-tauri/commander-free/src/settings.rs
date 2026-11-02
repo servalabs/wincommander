@@ -341,6 +341,9 @@ pub struct RdpNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferences {
+    /// Independent user preference; never overwritten by a Fleet Shield epoch.
+    #[serde(default)]
+    pub local_privacy_shield_look_away_delay_seconds: Option<u32>,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -945,6 +948,7 @@ impl Default for AdvisorSettings {
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
+            local_privacy_shield_look_away_delay_seconds: None,
             theme: default_theme(),
             first_run_complete: false,
             has_seen_mandatory_tour: false,
@@ -1655,6 +1659,12 @@ pub struct PrivacyShieldSettings {
     #[serde(default)]
     pub fleet_notification_window_seconds: Option<u32>,
     pub gaze_detection_enabled: Option<bool>,
+    /// Whether Fleet should run the look-away detector at all. Missing means enabled.
+    #[serde(default)]
+    pub look_away_detection_enabled: Option<bool>,
+    /// Signed Fleet look-away delay. Never reused as a local preference.
+    #[serde(default)]
+    pub look_away_delay_seconds: Option<u32>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,
     #[serde(default)]
@@ -1670,6 +1680,11 @@ pub struct PrivacyShieldSettings {
     pub detection_buffer_frames: Option<u32>,
     pub capture_on_device: Option<bool>,
     pub capture_on_multi_face: Option<bool>,
+    /// Fleet-managed webcam recording, disabled when absent.
+    #[serde(default)]
+    pub fleet_capture_on_phone: Option<bool>,
+    #[serde(default)]
+    pub fleet_capture_on_multi_face: Option<bool>,
     pub capture_speed: Option<u32>,
     pub device_wake_multiplier: Option<f32>,
     pub multi_face_wake_multiplier: Option<f32>,

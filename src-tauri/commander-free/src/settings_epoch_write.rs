@@ -66,6 +66,14 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
     if !wincmd_shared::fleet::verify_signature_b64(pinned, &message, signature) {
         return Err("config push signature verification failed".into());
     }
+    if epoch.config.pointer("/privacy/privacyShield/localLookAwayDelaySeconds").is_some() {
+        return Err("Fleet policy cannot modify a local look-away preference".into());
+    }
+    if let Some(value) = epoch.config.pointer("/privacy/privacyShield/lookAwayDelaySeconds") {
+        if !value.as_u64().is_some_and(|seconds| seconds <= 300) {
+            return Err("Fleet look-away delay must be an integer from 0 to 300 seconds".into());
+        }
+    }
     if epoch.version <= current.policy.master_config_version.unwrap_or(0) {
         return Err("Config epoch is not newer than the committed policy".into());
     }
@@ -74,6 +82,23 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
     let mut candidate = current.clone();
     if epoch.strategy == "overwrite" {
         candidate.ideal = super::SystemState::default();
+    }
+    // A signed Shield subtree is the complete authority for this new field.
+    // Omitting it selects the managed default instead of retaining a value
+    // from an older epoch; the independent local preference is untouched.
+    if epoch.config.pointer("/privacy/privacyShield").is_some()
+        && epoch.config.pointer("/privacy/privacyShield/lookAwayDelaySeconds").is_none()
+    {
+        candidate.ideal.privacy.privacy_shield.look_away_delay_seconds = None;
+    }
+    if epoch.config.pointer("/privacy/privacyShield").is_some() {
+        // A later policy must not inherit an earlier recording opt-in.
+        if epoch.config.pointer("/privacy/privacyShield/fleetCaptureOnPhone").is_none() {
+            candidate.ideal.privacy.privacy_shield.fleet_capture_on_phone = None;
+        }
+        if epoch.config.pointer("/privacy/privacyShield/fleetCaptureOnMultiFace").is_none() {
+            candidate.ideal.privacy.privacy_shield.fleet_capture_on_multi_face = None;
+        }
     }
     let mut value = serde_json::to_value(&candidate).map_err(|e| e.to_string())?;
     merge_json(&mut value, &serde_json::json!({"ideal": &epoch.config}));

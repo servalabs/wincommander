@@ -175,6 +175,8 @@ export interface RdpNode {
 }
 
 export interface AppPreferences {
+  /** User-local look-away delay; independent of Fleet Shield policy. */
+  localPrivacyShieldLookAwayDelaySeconds?: number | null;
   theme: 'dark' | 'light';
   firstRunComplete: boolean;
   /** Whether the mandatory first-run spotlight tour has been completed.
@@ -1073,6 +1075,9 @@ export interface AppCapabilitySettings {
 }
 
 export interface PrivacyShieldSettings {
+  /** Signed Fleet delay, distinct from the local preference. */
+  lookAwayDelaySeconds?: number | null;
+  lookAwayDetectionEnabled?: boolean | null;
   /** Signed Fleet policy: enable local-only attention monitoring. */
   fleetMonitoringEnabled?: boolean | null;
   /** Signed Fleet policy owns start/stop and locks local controls. */

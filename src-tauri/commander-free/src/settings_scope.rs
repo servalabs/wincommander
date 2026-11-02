@@ -433,6 +433,14 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {
+        path: "privacy.privacyShield.lookAwayDetectionEnabled",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.lookAwayDelaySeconds",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
         path: "privacy.privacyShield.antiPeepingEnabled",
         scope: SettingsScope::User,
     },
@@ -478,6 +486,14 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
     },
     SystemStateScopeRule {
         path: "privacy.privacyShield.captureOnMultiFace",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.fleetCaptureOnPhone",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.fleetCaptureOnMultiFace",
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {

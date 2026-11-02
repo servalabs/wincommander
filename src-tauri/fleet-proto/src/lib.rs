@@ -1805,6 +1805,9 @@ pub struct PostureReport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShieldNativeOptions {
+    /// Missing for older detectors; never infer an unreported active delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_away_delay_seconds: Option<u32>,
     pub check_gaze: bool,
     pub check_faces: bool,
     pub check_phone: bool,
@@ -1813,6 +1816,9 @@ pub struct ShieldNativeOptions {
     pub blur_phone: bool,
     pub capture_on_device: bool,
     pub capture_on_multi_face: bool,
+    /// Present only when the detector was launched in Fleet video-only mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_video_only: Option<bool>,
     pub model_level: String,
     pub confidence: f64,
     pub overlay_opacity: u32,
@@ -1838,6 +1844,7 @@ impl ShieldNativeOptions {
             && (1.0..=100.0).contains(&self.multi_face_wake_multiplier)
             && (1..=100).contains(&self.buffer_frames)
             && (1..=4).contains(&self.capture_speed)
+            && self.look_away_delay_seconds.is_none_or(|value| value <= 300)
     }
 }
 
@@ -1848,6 +1855,8 @@ impl ShieldNativeOptions {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShieldStoredSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_away_delay_seconds: Option<u32>,
     pub wake_delay_seconds: Option<u32>,
     pub device_wake_multiplier: Option<f64>,
     pub multi_face_wake_multiplier: Option<f64>,
@@ -1864,7 +1873,8 @@ pub struct ShieldStoredSettings {
 
 impl ShieldStoredSettings {
     pub fn is_bounded(&self) -> bool {
-        self.wake_delay_seconds
+        self.look_away_delay_seconds.is_none_or(|value| value <= 300)
+            && self.wake_delay_seconds
             .is_none_or(|value| (50..=1_500).contains(&value))
             && self
                 .device_wake_multiplier
@@ -2416,6 +2426,12 @@ mod tests {
         });
         let parsed: ShieldNativeOptions = serde_json::from_value(options.clone()).unwrap();
         assert!(parsed.is_bounded());
+        assert_eq!(parsed.look_away_delay_seconds, None);
+        let mut delayed = options.clone();
+        delayed["lookAwayDelaySeconds"] = serde_json::json!(300);
+        assert!(serde_json::from_value::<ShieldNativeOptions>(delayed.clone()).unwrap().is_bounded());
+        delayed["lookAwayDelaySeconds"] = serde_json::json!(301);
+        assert!(!serde_json::from_value::<ShieldNativeOptions>(delayed).unwrap().is_bounded());
         let mut with_extra = options.clone();
         with_extra["commandLine"] = Value::String("private path".into());
         assert!(serde_json::from_value::<ShieldNativeOptions>(with_extra).is_err());
@@ -2451,6 +2467,12 @@ mod tests {
         });
         let parsed: ShieldStoredSettings = serde_json::from_value(stored.clone()).unwrap();
         assert!(parsed.is_bounded());
+        assert_eq!(parsed.look_away_delay_seconds, None);
+        let mut delayed = stored.clone();
+        delayed["lookAwayDelaySeconds"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<ShieldStoredSettings>(delayed.clone()).unwrap().is_bounded());
+        delayed["lookAwayDelaySeconds"] = serde_json::json!(301);
+        assert!(!serde_json::from_value::<ShieldStoredSettings>(delayed).unwrap().is_bounded());
         let mut with_extra = stored.clone();
         with_extra["cameraName"] = Value::String("private device".into());
         assert!(serde_json::from_value::<ShieldStoredSettings>(with_extra).is_err());

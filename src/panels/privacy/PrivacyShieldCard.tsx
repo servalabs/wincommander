@@ -14,7 +14,7 @@ import useVisibility from "../../hooks/useVisibility";
 import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } from "../../hooks/useShieldQuota";
 import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
-import { privacyShieldBlurTriggers, resolvePrivacyShieldMode, type PrivacyShieldMode } from "../../lib/privacyShieldMode";
+import { fleetShieldDelayPolicyActive, fleetShieldDetectorPolicyActive, privacyShieldDetectorGaze, privacyShieldBlurTriggers, privacyShieldLookAwayDelay, resolvePrivacyShieldMode, type PrivacyShieldMode } from "../../lib/privacyShieldMode";
 import {
     resolveFleetPrivacyShieldControl,
     resolveLocalFleetPrivacyShieldControl,
@@ -527,7 +527,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     device: privacyConfig.blurOnCamera,
                 });
                 const res = await startPrivacyShield(
-                    0, privacyConfig.blurOnLookAway, privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
+                    0, privacyShieldDetectorGaze(privacyConfig.blurOnLookAway, shieldSettings, fleetShieldDetectorPolicyActive(appSettings?.app?.fleet?.enabled === true, appSettings?.policy?.lockedPaths)), privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
                     privacyConfig.captureOnDevice, privacyConfig.captureOnMultiFace, privacyConfig.modelLevel,
                     privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
                     privacyConfig.deviceWakeMultiplier, privacyConfig.multiFaceWakeMultiplier,
@@ -535,6 +535,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     blurTriggers.gaze,
                     blurTriggers.faces,
                     blurTriggers.device,
+                    privacyShieldLookAwayDelay(shieldSettings, fleetShieldDelayPolicyActive(appSettings?.app?.fleet?.enabled === true, appSettings?.policy?.lockedPaths), appSettings?.app?.localPrivacyShieldLookAwayDelaySeconds),
                 );
                 if (res.success) {
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "running" } });
