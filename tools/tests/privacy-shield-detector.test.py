@@ -38,6 +38,12 @@ def landmarks(yaw=0.0, left=0.25, right=0.75):
 
 
 class GazeTests(unittest.TestCase):
+    def test_missing_landmark_frame_keeps_gaze_protection_until_presence_loss(self):
+        worker = env["ShieldWorker"](buffer_frames=2)
+        worker._lock_reason = "LOOK AWAY"
+        self.assertEqual(worker._observe_missing_face(), (False, True))
+        self.assertEqual(worker._observe_missing_face(), (True, False))
+
     def test_symmetric_mild_turn_blurs_strong_turn_blacks_out(self):
         classify = env["classify_gaze"]
         for sign in [-1, 1]:
@@ -45,7 +51,7 @@ class GazeTests(unittest.TestCase):
             self.assertEqual(classify(landmarks(sign * 0.2)), "blur")
             self.assertEqual(classify(landmarks(sign * 0.45)), "blackout")
         self.assertEqual(classify(landmarks(left=0.01)), "blur")
-        self.assertEqual(classify(landmarks(yaw=0.45, left=-0.1)), "blur")
+        self.assertEqual(classify(landmarks(yaw=0.45, left=-0.1)), "blackout")
         half_face = landmarks()
         half_face[10].y = -0.1
         self.assertEqual(classify(half_face), "blur")
@@ -83,6 +89,8 @@ class GazeTests(unittest.TestCase):
         overlay.update_state(False, "LOOK AWAY (FULL TURN)")
         self.assertEqual(overlay.presentation, "blackout")
         self.assertFalse(overlay.label.isHidden())
+        self.assertTrue(overlay.label.text().startswith("LOOK AWAY\n"))
+        self.assertNotIn("FULL TURN", overlay.label.text())
         self.assertIn("Look at the screen", overlay.label.text())
         self.assertEqual(overlay.grab().toImage().pixelColor(0, 0), QColor("black"))
         overlay.update_state(False, "LOOK AWAY")

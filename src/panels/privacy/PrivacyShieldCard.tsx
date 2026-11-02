@@ -581,7 +581,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "running" } });
                     if (statusGate.current.canApplyAction(actionRevision)) {
                         setPrivacyShieldRunning(true);
-                        await invoke("update_tray_shield_label", { running: true });
+                        void invoke("update_tray_shield_label", { running: true }).catch(() => {});
                     }
                     setAiRuntimeInstalled(true);
                     patchAppSettings({ ideal: { privacy: { privacyShield: {
@@ -602,7 +602,18 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 }
             } else {
                 const failure = await stopShieldWithVerification();
-                if (!failure) { await consumeElapsedSession(); invalidateShieldQuota(); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); if (statusGate.current.canApplyAction(actionRevision)) { setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); } }
+                if (!failure) {
+                    if (statusGate.current.canApplyAction(actionRevision)) {
+                        setPrivacyShieldRunning(false);
+                        setStopError(null);
+                    }
+                    await consumeElapsedSession();
+                    invalidateShieldQuota();
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } });
+                    // Tray refresh is secondary UI work. Its failure must not
+                    // turn a verified stopped detector into a Stop failure.
+                    void invoke("update_tray_shield_label", { running: false }).catch(() => {});
+                }
                 else {
                     if (statusGate.current.canApplyAction(actionRevision)) setStopError(failure);
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.STOP.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "unknown" } });

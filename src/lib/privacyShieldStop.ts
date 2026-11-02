@@ -5,8 +5,11 @@ export function privacyShieldStopError(
 ): string | null {
   if (response.success && response.data?.success === true && (response.data.error === undefined || response.data.error === null || response.data.error === false)) return null;
   const reason = response.error ?? response.data?.message ?? "";
-  if (reason.includes("machine-state operation is busy")) {
+  if (/machine-state operation is busy|privacy shield policy is still changing|shield policy is transitioning/i.test(reason)) {
     return "Privacy Shield is updating. Wait a moment, then try stopping it again.";
+  }
+  if (/process identity|status could not be (read|verified)|stop could not be confirmed/i.test(reason)) {
+    return "Privacy Shield status could not be verified. Refresh its status, then try again.";
   }
   return "Privacy Shield could not be stopped. Check its status and try again.";
 }

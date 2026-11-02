@@ -9,6 +9,10 @@ describe("Privacy Shield Stop results", () => {
   });
   test("explains a busy policy transition", () => {
     expect(privacyShieldStopError({ success: false, error: "machine-state operation is busy; retry shortly" })).toContain("updating");
+    expect(privacyShieldStopError({ success: false, error: "Privacy Shield policy is still changing. Wait for the current transition to finish, then retry." })).toContain("updating");
+  });
+  test("distinguishes an unverifiable detector state from a generic Stop error", () => {
+    expect(privacyShieldStopError({ success: false, error: "Privacy Shield process identity changed before stop." })).toContain("Refresh its status");
   });
   test("does not expose arbitrary backend error details", () => {
     expect(privacyShieldStopError({ success: false, error: "private device detail" })).not.toContain("private device detail");

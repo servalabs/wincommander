@@ -14,6 +14,7 @@ $script:cimFailed = $false
 $script:acceptGracefulStop = $true
 $script:requests = @()
 $script:forced = @()
+$script:exitBeforeOpen = $false
 function Get-PrivacyShieldCameraAvailability { $script:cameraProbes++; throw 'hardware enumeration must not run during Stop' }
 function Get-PrivacyShieldPidFromMarker { return $null }
 function Get-CimInstance {
@@ -36,6 +37,10 @@ function Stop-Process {
 function Wait-Process { [CmdletBinding()] param($Id, $Timeout) }
 function Get-Process {
     [CmdletBinding()] param($Id)
+    if ($script:exitBeforeOpen) {
+        $script:items = @($script:items | Where-Object { $_.ProcessId -ne $Id })
+        throw 'detector exited before handle opened'
+    }
     $process = [pscustomobject]@{ Id=$Id; Handle=1 }
     $process | Add-Member ScriptMethod WaitForExit { param($Timeout) return @($script:items | Where-Object { $_.ProcessId -eq $this.Id }).Count -eq 0 }
     $process | Add-Member ScriptMethod Kill { $script:forced += $this.Id; Stop-Process -Id $this.Id }
@@ -66,6 +71,14 @@ if ($changed.error -ne $true -or $script:stopped -contains 9004) { throw 'change
 $script:cimFailed = $true
 $unknown = Stop-PrivacyShield
 if ($unknown.error -ne $true) { throw 'unknown process state must not claim a verified Stop' }
+
+$script:cimFailed = $false
+$script:changedIdentity = $false
+$script:items = @([pscustomobject]@{ Name='python.exe'; SessionId=$session; ProcessId=9006; CommandLine='--wc-privacy-shield' })
+$script:exitBeforeOpen = $true
+$exitedDuringStop = Stop-PrivacyShield
+$script:exitBeforeOpen = $false
+if ($exitedDuringStop.success -ne $true -or $script:forced -contains 9006) { throw 'already-exited detector was falsely reported as Stop failure' }
 
 & {
     $script:cimFailed = $false

@@ -677,11 +677,11 @@ def classify_gaze(landmarks):
         yaw = abs((nose.x - (left.x + right.x) / 2.0) / width)
         if not np.isfinite(yaw):
             return "blackout"
+        if yaw >= 0.35:
+            return "blackout"
         clipped = left.x <= 0.02 or right.x >= 0.98 or getattr(landmarks[10], "y", 0.5) <= 0.02 or getattr(landmarks[152], "y", 0.5) >= 0.98
         if clipped:
             return "blur"
-        if yaw >= 0.35:
-            return "blackout"
         if yaw >= 0.12:
             return "blur"
         return "clear"
@@ -787,6 +787,17 @@ class ShieldWorker(QThread):
         self.mp_obj = None
         self.face_detector = None
         self.obj_detector = None
+
+    def _observe_missing_face(self):
+        self._no_face_detected_streak += 1
+        self._face_recovery_streak = 0
+        if self.check_gaze and self._no_face_detected_streak >= self.buffer_frames:
+            self._presence_loss_active = True
+        presence_lost = self.check_gaze and self._presence_loss_active
+        hold_gaze_overlay = self.check_gaze and not presence_lost and self._is_locked and (
+            "LOOK AWAY" in self._lock_reason or "PRESENCE LOST" in self._lock_reason
+        )
+        return presence_lost, hold_gaze_overlay
 
     def _is_model_valid(self, path: str) -> bool:
         """Return True only if the file exists and is large enough to be a real model.
@@ -1110,15 +1121,11 @@ class ShieldWorker(QThread):
                     landmarks = face_results.face_landmarks
 
                     if not landmarks:
-                        self._no_face_detected_streak += 1
-                        self._face_recovery_streak = 0
-                        if self.check_gaze:
-                            # Use the configured detector buffer for absence
-                            # and recovery. A sustained absence is alert-worthy
-                            # but one missing frame is not.
-                            if self._no_face_detected_streak >= self.buffer_frames:
-                                self._presence_loss_active = True
-                            presence_lost_triggered = self._presence_loss_active
+                        # Keep the previous gaze overlay through the short
+                        # no-face debounce, then use the existing black
+                        # presence-loss overlay. A single missed frame is not
+                        # a new alert or a reason to briefly reveal the screen.
+                        presence_lost_triggered, presence_unknown = self._observe_missing_face()
                     else:
                         self._no_face_detected_streak = 0
                         if self._presence_loss_active:
@@ -1286,7 +1293,7 @@ class ShieldOverlay(QWidget):
             self.blurred_screen = None
         else:
             if self.presentation == "blackout" or self.blurred_screen is None:
-                self.label.setText(reason + "\nLook at the screen to resume")
+                self.label.setText(reason.replace(" (FULL TURN)", "") + "\nLook at the screen to resume")
                 self.label.show()
             else:
                 self.label.hide()
@@ -1589,10 +1596,22 @@ function Stop-PrivacyShield {
             return @{ error = $true; message = 'Privacy Shield status could not be verified.' }
         }
         if ($status['running'] -eq $true -or $status['detectorProcessRunning'] -eq $true) {
-            $detector = Get-Process -Id $status['processId'] -ErrorAction Stop
+            try {
+                $detector = Get-Process -Id $status['processId'] -ErrorAction Stop
+                # The PID can exit between the status read and opening its
+                # handle. A fresh stopped read is success; an unreadable or
+                # still-running process remains an error.
+                $null = $detector.Handle
+            } catch {
+                $afterExit = Get-PrivacyShieldStatus -SkipCameraProbe
+                if ($afterExit -is [System.Collections.IDictionary] -and $afterExit['error'] -ne $true -and
+                    $afterExit['running'] -eq $false -and $afterExit['detectorProcessRunning'] -ne $true) {
+                    return @{ success = $true; message = 'Stopped.'; running = $false; shieldLifecycle = 'stopped' }
+                }
+                return @{ error = $true; message = 'Privacy Shield process could not be opened safely.' }
+            }
             # Hold the kernel object across validation/request/termination so
             # a recycled numeric PID cannot target an unrelated process.
-            $null = $detector.Handle
             $verified = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $status['processId']) -ErrorAction Stop
             if (-not $verified -or $verified.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId -or
                 $verified.Name -notin @('python.exe', 'pythonw.exe') -or
@@ -1601,15 +1620,27 @@ function Stop-PrivacyShield {
             }
             try { Request-PrivacyShieldGracefulStop -DetectorPid $status['processId'] } catch {}
             if (-not $detector.WaitForExit(2000)) {
-                $detector.Kill()
+                try { $detector.Kill() } catch {
+                    # Kill may race with a graceful exit. Verify the resulting
+                    # state below instead of reporting a failed Stop.
+                }
                 if (-not $detector.WaitForExit(5000)) {
                     return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' }
                 }
             }
-            $after = Get-PrivacyShieldStatus -SkipCameraProbe
-            if ($after -isnot [System.Collections.IDictionary] -or $after['error'] -eq $true -or $after['running'] -ne $false -or $after['detectorProcessRunning'] -eq $true) {
-                return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' }
+            # CIM and the marker can lag the process exit briefly. Never claim
+            # stopped until a fresh status sees no detector in this session.
+            $confirmed = $false
+            for ($attempt = 0; $attempt -lt 5; $attempt++) {
+                $after = Get-PrivacyShieldStatus -SkipCameraProbe
+                if ($after -is [System.Collections.IDictionary] -and $after['error'] -ne $true -and
+                    $after['running'] -eq $false -and $after['detectorProcessRunning'] -ne $true) {
+                    $confirmed = $true
+                    break
+                }
+                if ($attempt -lt 4) { Start-Sleep -Milliseconds 150 }
             }
+            if (-not $confirmed) { return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' } }
         }
         # Status removes stale markers itself. Do not remove a marker for a
         # detector still running in another session of the same profile.
