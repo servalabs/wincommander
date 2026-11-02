@@ -58,6 +58,16 @@ describe("highlightPreviewText", () => {
     expect(parts.filter((part) => part.highlighted).map((part) => part.text)).toEqual(["C++", "C++"]);
   });
 
+  it("highlights the search query when the index snippet has no marks", () => {
+    const parts = highlightPreviewText("A Test and another test", [{ text: "plain", highlighted: false }], "Test");
+    expect(parts.filter((part) => part.highlighted).map((part) => part.text)).toEqual(["Test", "test"]);
+  });
+
+  it("ignores query operators and highlights quoted text literally", () => {
+    const parts = highlightPreviewText("test report AND test report", [], '"test report" AND ext:pdf');
+    expect(parts.filter((part) => part.highlighted).map((part) => part.text)).toEqual(["test report", "test report"]);
+  });
+
   it("leaves text untouched when the index supplied no highlighted terms", () => {
     expect(highlightPreviewText("contents", [{ text: "contents", highlighted: false }])).toEqual([{ text: "contents", highlighted: false, offset: 0 }]);
   });

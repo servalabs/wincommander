@@ -1119,8 +1119,37 @@ pub(crate) async fn verify_service_shield_profile() -> Result<(), String> {
     let settings = crate::settings::read_settings()?;
     let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
         .await
-        .map_err(|_| "WinCommander service is unavailable; Shield cannot verify this machine's Fleet policy".to_string())?;
+        .map_err(|error| shield_service_error(&error).to_string())?;
     verify_shield_profile_against_service(&settings, &response)
+}
+
+fn shield_service_error(error: &str) -> &'static str {
+    if error.starts_with("service rejected request: forbidden ") {
+        "WinCommander service rejected this app's identity. Restore the matching installed service, then try Shield again."
+    } else if error.starts_with("service rejected request: unknown_verb ") {
+        "WinCommander service is an older or incompatible version. Repair the installed service, then try Shield again."
+    } else if error.starts_with("service rejected request: fleet_policy_unavailable ") {
+        "WinCommander service cannot read the machine's Fleet policy. Repair the service policy before starting Shield."
+    } else if error.starts_with("service connect failed:") || error.contains("timed out") {
+        "WinCommander service could not be reached. Start or repair the service, then try Shield again."
+    } else {
+        "WinCommander could not verify the machine's Fleet policy. Check the service and try Shield again."
+    }
+}
+
+#[cfg(test)]
+mod shield_service_error_tests {
+    use super::shield_service_error;
+
+    #[test]
+    fn distinguishes_rejection_from_an_unreachable_service_without_exposing_details() {
+        let rejected = shield_service_error("service rejected request: forbidden (sensitive detail) [operation 12]");
+        assert!(rejected.contains("rejected"));
+        assert!(!rejected.contains("sensitive detail"));
+        assert!(shield_service_error("service connect failed: access denied").contains("could not be reached"));
+        assert!(shield_service_error("service rejected request: unknown_verb (x) [operation 1]").contains("incompatible"));
+        assert!(shield_service_error("service rejected request: fleet_policy_unavailable (x) [operation 1]").contains("cannot read"));
+    }
 }
 
 fn verify_shield_profile_against_service(

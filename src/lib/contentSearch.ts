@@ -88,8 +88,14 @@ export function formatSnippetWithHighlights(snippetHtml: string): SnippetSegment
 }
 
 /** Highlight the exact terms identified by the index without treating text as HTML. */
-export function highlightPreviewText(text: string, snippet: SnippetSegment[]): (SnippetSegment & { offset: number })[] {
-  const terms = [...new Set(snippet.filter((part) => part.highlighted && part.text.trim()).map((part) => part.text))]
+export function highlightPreviewText(text: string, snippet: SnippetSegment[], query = ""): (SnippetSegment & { offset: number })[] {
+  // The index can return a matching document with an unmarked snippet. Keep
+  // the preview useful by also highlighting literal terms from the query.
+  const queryTerms = (query.match(/"[^"]+"|\S+/g) ?? [])
+    .filter((term) => !/^(?:AND|OR|NOT)$/i.test(term) && !/^[+-]?[\w.]+:/.test(term))
+    .map((term) => term.replace(/^"|"$/g, ""))
+    .filter((term) => term.length > 0);
+  const terms = [...new Set([...queryTerms, ...snippet.filter((part) => part.highlighted && part.text.trim()).map((part) => part.text)])]
     .sort((a, b) => b.length - a.length);
   if (!terms.length) return [{ text, highlighted: false, offset: 0 }];
   const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));

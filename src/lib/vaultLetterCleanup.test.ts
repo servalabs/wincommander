@@ -11,7 +11,8 @@ test("cleanup success requires a matching bounded ownership classification", () 
   }
 });
 test("unreleasable letters explain their safe next action without raw service data", () => {
-  expect(vaultLetterReportMessage({ ...stale, letter: "F", released: false, category: "real_windows_volume" })).toContain("mounted Windows volume");
+  expect(vaultLetterReportMessage({ ...stale, letter: "F", released: false, category: "real_windows_volume" })).toContain("Windows volume or device");
+  expect(vaultLetterReportMessage({ ...stale, letter: "A", released: false, category: "system_or_policy_reserved_letter" })).toContain("D:–Z: range");
   expect(vaultLetterReportMessage({ ...stale, released: false, category: "external_or_unknown_owner" })).toContain("left it unchanged");
   expect(vaultLetterReportMessage({ ...stale, released: false, category: "duplicate_saved_entry" })).toContain("duplicate");
 });

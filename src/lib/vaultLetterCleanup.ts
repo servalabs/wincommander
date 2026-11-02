@@ -21,16 +21,16 @@ export function readVaultLetterCleanup(value: unknown): VaultLetterCleanup {
 
 export function vaultLetterReportMessage(report: VaultLetterReport): string {
   const prefix = `${report.letter}: `;
-  if (report.letter <= "C") return `${prefix}is protected by Windows and cannot be released here.`;
+  if (report.letter <= "C") return `${prefix}is outside the D:–Z: range supported by Vault cleanup.`;
   if (report.released) return `${prefix}a confirmed stale WinCommander reservation was released.`;
   switch (report.category) {
-    case "real_windows_volume": return `${prefix}is in use by a mounted Windows volume and cannot be released by WinCommander.`;
+    case "real_windows_volume": return `${prefix}is assigned to a Windows volume or device and cannot be released here.`;
     case "active_wincommander_mount": return `${prefix}is held by an active Vault or recovery operation. Check Secure Storage; finish the operation or use its authorized recovery action.`;
     case "duplicate_saved_entry": return `${prefix}is selected by duplicate saved entries. Edit or remove the duplicate shortcuts; no Windows mapping was changed.`;
     case "system_or_policy_reserved_letter": return report.saved_entry
       ? `${prefix}is reserved by a saved Quick Mount entry. Remove or edit that entry to release its preference.`
       : `${prefix}is protected by Windows or Vault policy and cannot be released here.`;
     case "stale_wincommander_reservation": return `${prefix}has a WinCommander recovery record, but safe release could not be confirmed. Refresh its status and use authorized recovery.`;
-    default: return `${prefix}has an external or unknown owner. Check Windows Disk Management or the app that assigned it; WinCommander left it unchanged.`;
+    default: return `${prefix}has an external or unverified owner, possibly in another Windows session. WinCommander left it unchanged.`;
   }
 }

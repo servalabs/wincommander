@@ -46,11 +46,13 @@ impl VaultMountBroker {
         let active = self.active.lock().map_err(|_| UNKNOWN)?.clone();
         let mut reports = Vec::new();
         let mut released = 0;
-        for letter in 'A'..='Z' {
+        // The picker and cleanup support D–Z; do not report A–C as if they
+        // were occupied when this operation never attempts to release them.
+        for letter in 'D'..='Z' {
             let key = letter.to_string();
             let saved_count = saved.iter().filter(|entry| **entry == key).count();
             let mounts = active.iter().filter(|(_, mount)| mount.drive_letter.trim_end_matches(':').eq_ignore_ascii_case(&key)).collect::<Vec<_>>();
-            if letter > 'C' && !occupied.contains(&key) && saved_count == 0 && !policy.contains(&key) && mounts.is_empty() { continue; }
+            if !occupied.contains(&key) && saved_count == 0 && !policy.contains(&key) && mounts.is_empty() { continue; }
             let own = mounts.first().filter(|(_, mount)| mounts.len() == 1
                 && mount.caller_sid == sid && mount.engine_mount_identity.is_some()
                 && !snapshot.contains_key(&mount.internal_drive)
