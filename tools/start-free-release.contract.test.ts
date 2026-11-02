@@ -12,9 +12,16 @@ describe("prepared Free tag release", () => {
   });
 
   test("refuses a request that would lower the version on main", () => {
-    expect(script).toContain("origin/main already declares a newer version.");
-    expect(script).toContain("Requested version is older than origin/main.");
+    expect(script).toContain("The release branch already declares a newer version.");
+    expect(script).toContain("Requested version is older than origin/$branch.");
     expect(script).toContain("return a.pre[i] < b.pre[i] ? -1 : 1;");
     expect(script.match(/return a\.pre\[i\] < b\.pre\[i\] \? -1 : 1;/g)).toHaveLength(2);
+  });
+
+  test("beta tags are taken from the beta branch and cannot contain a prerelease suffix", () => {
+    expect(script).toContain("$branch = if ($Beta) { 'beta' } else { 'main' }");
+    expect(script).toContain('$tag = if ($Beta) { "beta-v$Version" } else { "v$Version" }');
+    expect(script).toContain("if ($Beta -and $Version -notmatch '^\\d+\\.\\d+\\.\\d+$')");
+    expect(script).toContain("HEAD:$branch");
   });
 });

@@ -18,6 +18,9 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
     [string]$Version,
 
+    # Free beta publication runs through the reviewed GitHub tag workflow.
+    [switch]$Beta,
+
     # Build and validate local artifacts, but do not contact R2 or GitHub.
     [switch]$StageOnly,
 
@@ -42,6 +45,12 @@ $script:Root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $script:Tag = "v$Version"
 $script:WorkRoot = Join-Path ([IO.Path]::GetTempPath()) ("wincommander-free-release-$Version-" + [guid]::NewGuid().ToString('N'))
 $script:RcloneExe = $null
+if ($Beta -and -not $StageOnly) {
+    throw '[FAIL] Free beta publication requires the protected GitHub workflow. Use start-free-release.ps1 -Beta; this local script supports -Beta -StageOnly only.'
+}
+if ($Beta -and $Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw '[FAIL] Free beta candidates require a numeric X.Y.Z version.'
+}
 
 function Stop-Release {
     param([Parameter(Mandatory = $true)][string]$Message)

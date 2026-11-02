@@ -1,0 +1,215 @@
+name: promote tested Free beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Numeric beta version already approved for stable
+        required: true
+        type: string
+      resume:
+        description: Resume a partial promotion after inspecting its draft and pointers
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: public-release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  verify-candidate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      main_sha: ${{ steps.verify.outputs.main_sha }}
+      beta_sha: ${{ steps.verify.outputs.beta_sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Require exact reviewed candidate source and hosted controls
+        id: verify
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          RESUME: ${{ inputs.resume }}
+          RELEASE_AUTO_APPROVERS: ${{ vars.RELEASE_AUTO_APPROVERS }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'A numeric X.Y.Z version is required.' >&2; exit 1; }
+          permission="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq .permission)"
+          allow="$(printf '%s' "${RELEASE_AUTO_APPROVERS:-}" | tr ',;' ' ')"
+          listed=false
+          for actor in ${allow}; do
+            [[ "${GITHUB_ACTOR,,}" == "${actor,,}" ]] && listed=true
+          done
+          [[ "${permission}" == admin || "${listed}" == true ]] || { echo 'Releaser is not authorized.' >&2; exit 1; }
+          git fetch origin main "refs/tags/beta-v${VERSION}:refs/tags/beta-v${VERSION}" --quiet
+          main_sha="$(git rev-parse origin/main)"
+          beta_sha="$(git rev-parse "refs/tags/beta-v${VERSION}^{commit}")"
+          [[ "$(git rev-parse "${main_sha}^{tree}")" == "$(git rev-parse "${beta_sha}^{tree}")" ]] || {
+            echo 'Protected main does not have the exact tested beta source tree.' >&2; exit 1;
+          }
+          [[ "$(git show "${main_sha}:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')" == "${VERSION}" ]] || {
+            echo 'Protected main does not declare the candidate version.' >&2; exit 1;
+          }
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            [[ "${RESUME}" == true ]] || { echo 'Stable tag exists; inspect before using resume.' >&2; exit 1; }
+            git fetch origin "refs/tags/v${VERSION}:refs/tags/v${VERSION}" --quiet
+            [[ "$(git rev-parse "refs/tags/v${VERSION}^{commit}")" == "${main_sha}" ]] || {
+              echo 'Existing stable tag does not point to the reviewed source.' >&2; exit 1;
+            }
+          fi
+          if stable_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" 2>/dev/null)"; then
+            [[ "${RESUME}" == true ]] || { echo 'Stable release exists; inspect before using resume.' >&2; exit 1; }
+            STABLE_RELEASE_JSON="${stable_release}" node -e 'const r=JSON.parse(process.env.STABLE_RELEASE_JSON); if(!r.draft) process.exit(1)'
+          fi
+          beta_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/beta-v${VERSION}")"
+          BETA_RELEASE_JSON="${beta_release}" node -e 'const r=JSON.parse(process.env.BETA_RELEASE_JSON); if(r.draft || !r.prerelease) process.exit(1)'
+          branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"
+          release_environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"
+          tag_rulesets="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id' | while read -r id; do gh api "repos/${GITHUB_REPOSITORY}/rulesets/${id}"; done)"
+          BRANCH_RULES_JSON="${branch_rules}" RELEASE_ENVIRONMENT_JSON="${release_environment}" TAG_RULESETS_JSON_LINES="${tag_rulesets}" node <<'NODE'
+          const branch = JSON.parse(process.env.BRANCH_RULES_JSON);
+          const environment = JSON.parse(process.env.RELEASE_ENVIRONMENT_JSON);
+          const tags = process.env.TAG_RULESETS_JSON_LINES.split('\n').filter(Boolean).map(JSON.parse);
+          if (!branch.some(r => r.type === 'pull_request' && Number(r.parameters?.required_approving_review_count || 0) >= 1 &&
+              (r.parameters?.dismiss_stale_reviews_on_push === true || r.parameters?.require_last_push_approval === true))) throw Error('Main review protection missing');
+          if (environment.can_admins_bypass !== false || !(environment.protection_rules || []).some(r => r.type === 'required_reviewers' && r.reviewers?.length)) throw Error('Release review protection missing');
+          for (const pattern of ['refs/tags/v*', 'refs/tags/beta-v*']) {
+            if (!tags.some(r => r.target === 'tag' && r.enforcement === 'active' && r.conditions?.ref_name?.include?.includes(pattern) &&
+                !(r.conditions?.ref_name?.exclude || []).length && ['creation','deletion','update'].every(t => r.rules?.some(rule => rule.type === t)) &&
+                r.current_user_can_bypass === 'always')) throw Error(`Protected ${pattern} rule missing`);
+          }
+          NODE
+          echo "main_sha=${main_sha}" >> "$GITHUB_OUTPUT"
+          echo "beta_sha=${beta_sha}" >> "$GITHUB_OUTPUT"
+
+  promote:
+    needs: verify-candidate
+    runs-on: windows-latest
+    environment:
+      name: release
+      url: https://winupdates.servalabs.com/free/latest.json
+    permissions:
+      contents: write
+    steps:
+      - name: Install R2 publisher
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $folder = Join-Path $env:RUNNER_TEMP 'rclone'
+          Invoke-WebRequest 'https://downloads.rclone.org/rclone-current-windows-amd64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $folder -Force
+          $rclone = Get-ChildItem $folder -Filter rclone.exe -Recurse | Select-Object -First 1
+          if (-not $rclone) { throw 'rclone.exe is unavailable.' }
+          "RCLONE_EXE=$($rclone.FullName)" | Add-Content $env:GITHUB_ENV
+      - name: Verify exact candidate and paired stable Pro, then promote pointers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          MAIN_SHA: ${{ needs.verify-candidate.outputs.main_sha }}
+          BETA_SHA: ${{ needs.verify-candidate.outputs.beta_sha }}
+          RESUME: ${{ inputs.resume }}
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.CF_R2_API }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
+          RCLONE_CONFIG_R2_REGION: auto
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = $env:VERSION
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid candidate version.' }
+          $rclone = $env:RCLONE_EXE
+          $dir = Join-Path $env:RUNNER_TEMP "promotion-$v"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          gh release download "beta-v$v" --repo $env:GITHUB_REPOSITORY --dir $dir
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the published beta release.' }
+          $manifestFile = Join-Path $dir 'latest.json'
+          $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
+          $setups = @(Get-ChildItem -LiteralPath $dir -Filter 'WinCommander*_x64-setup.exe' -File)
+          if ($setups.Count -ne 1) { throw 'Expected one beta NSIS setup.' }
+          $setup = $setups[0]
+          $signature = (Get-Content -LiteralPath "$($setup.FullName).sig" -Raw).Trim()
+          $domain = $env:UPDATE_DOMAIN.Trim().TrimEnd('/')
+          if ($domain -notmatch '^https://') { $domain = "https://$domain" }
+          $expectedUrl = "$domain/free/v$v/$([Uri]::EscapeDataString($setup.Name))"
+          if ($manifest.version -ne $v -or $manifest.platforms.'windows-x86_64'.url -ne $expectedUrl -or
+              $manifest.platforms.'windows-x86_64'.signature -ne $signature) { throw 'Beta manifest does not match its signed installer.' }
+          $digest = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = (Get-Content -LiteralPath (Join-Path $dir 'SHA256SUMS.txt') -Raw).Trim()
+          if ($checksum -cne "$digest *$($setup.Name)") { throw 'Beta checksum does not match installer.' }
+          gh attestation verify $setup.FullName --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Beta installer provenance verification failed.' }
+          & $rclone copyto "r2:windows/free/v$v/$($setup.Name)" (Join-Path $dir 'remote-setup.exe') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0 -or (Get-FileHash (Join-Path $dir 'remote-setup.exe') -Algorithm SHA256).Hash -ine $digest) { throw 'Versioned R2 setup differs from tested beta.' }
+          & $rclone copyto 'r2:windows/pro/latest.json' (Join-Path $dir 'pro-stable.json') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Promoted Pro manifest is unavailable.' }
+          & $rclone copyto "r2:windows/pro/v$v/latest.json" (Join-Path $dir 'pro-candidate.json') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate Pro manifest is unavailable.' }
+          $proStable = Get-Content (Join-Path $dir 'pro-stable.json') -Raw | ConvertFrom-Json
+          $proCandidate = Get-Content (Join-Path $dir 'pro-candidate.json') -Raw | ConvertFrom-Json
+          if ($proStable.version -ne $v -or $proCandidate.version -ne $v -or $proStable.sha256 -ne $proCandidate.sha256 -or $proStable.url -ne $proCandidate.url) {
+            throw 'Promote matching Pro first; Free stable pointer is unchanged.'
+          }
+          & $rclone copyto "r2:windows/pro/v$v/release-receipt.json" (Join-Path $dir 'pro-receipt.json') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Pro candidate receipt is unavailable.' }
+          & $rclone copyto 'r2:windows/pro/latest.exe' (Join-Path $dir 'pro-latest.exe') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Promoted Pro executable is unavailable.' }
+          $proReceipt = Get-Content (Join-Path $dir 'pro-receipt.json') -Raw | ConvertFrom-Json
+          $proHash = (Get-FileHash (Join-Path $dir 'pro-latest.exe') -Algorithm SHA256).Hash
+          $proManifestHash = (Get-FileHash (Join-Path $dir 'pro-candidate.json') -Algorithm SHA256).Hash
+          if ($proReceipt.version -ne $v -or $proReceipt.free_commit -ne $env:BETA_SHA -or
+              $proReceipt.pro_sha256 -ine $proHash -or $proReceipt.manifest_sha256 -ine $proManifestHash -or
+              $proStable.sha256 -ine $proHash -or [int64]$proReceipt.size -ne (Get-Item (Join-Path $dir 'pro-latest.exe')).Length) {
+            throw 'Promoted Pro does not match the tested Free and Pro candidate.'
+          }
+          & $rclone copyto 'r2:windows/free/latest.json' (Join-Path $dir 'old-stable.json') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Current stable baseline is unavailable.' }
+          $old = Get-Content (Join-Path $dir 'old-stable.json') -Raw | ConvertFrom-Json
+          if ([version]$v -lt [version]$old.version) { throw 'Promotion cannot roll back Stable.' }
+          if ([version]$v -eq [version]$old.version -and
+              (Get-FileHash (Join-Path $dir 'old-stable.json') -Algorithm SHA256).Hash -ne
+              (Get-FileHash $manifestFile -Algorithm SHA256).Hash) { throw 'Current stable version has different bytes.' }
+          $tagExists = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/v$v" --jq .ref 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($env:RESUME -ne 'true') { throw 'Stable tag already exists; explicit resume is required.' }
+          } else {
+            gh api -X POST "repos/$env:GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/v$v" -f "sha=$env:MAIN_SHA" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the protected stable tag.' }
+          }
+          $assets = @($setup.FullName, "$($setup.FullName).sig", $manifestFile, (Join-Path $dir 'SHA256SUMS.txt'), (Join-Path $dir 'wincommander-free.sbom.cdx.json'))
+          $draft = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/v$v" --jq .draft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($env:RESUME -ne 'true' -or $draft -ne 'true') { throw 'Existing stable release is not an authorized draft resume.' }
+            $draftDir = Join-Path $dir 'stable-draft'
+            New-Item -ItemType Directory -Path $draftDir -Force | Out-Null
+            gh release download "v$v" --repo $env:GITHUB_REPOSITORY --dir $draftDir
+            if ($LASTEXITCODE -ne 0) { throw 'Could not verify existing stable draft assets.' }
+            foreach ($asset in $assets) {
+              $draftAsset = Join-Path $draftDir (Split-Path -Leaf $asset)
+              if (-not (Test-Path $draftAsset) -or (Get-FileHash $draftAsset -Algorithm SHA256).Hash -ne (Get-FileHash $asset -Algorithm SHA256).Hash) {
+                throw 'Existing stable draft differs from tested beta assets.'
+              }
+            }
+          } else {
+            gh release create "v$v" @assets --repo $env:GITHUB_REPOSITORY --draft --title "v$v" --notes "Promoted the verified beta-v$v installer without rebuilding."
+            if ($LASTEXITCODE -ne 0) { throw 'Stable release draft could not be created; pointers are unchanged.' }
+          }
+          & $rclone copyto $setup.FullName 'r2:windows/free/latest.exe' '--ignore-times' '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Stable setup pointer copy failed; manifest remains unchanged.' }
+          & $rclone copyto 'r2:windows/free/latest.exe' (Join-Path $dir 'readback.exe') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0 -or (Get-FileHash (Join-Path $dir 'readback.exe') -Algorithm SHA256).Hash -ine $digest) { throw 'Stable setup read-back failed; manifest remains unchanged.' }
+          & $rclone copyto $manifestFile 'r2:windows/free/latest.json' '--ignore-times' '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0) { throw 'Stable manifest copy failed.' }
+          & $rclone copyto 'r2:windows/free/latest.json' (Join-Path $dir 'readback.json') '--s3-no-check-bucket'
+          if ($LASTEXITCODE -ne 0 -or (Get-FileHash (Join-Path $dir 'readback.json') -Algorithm SHA256).Hash -ne (Get-FileHash $manifestFile -Algorithm SHA256).Hash) { throw 'Stable manifest read-back failed.' }
+          gh release edit "v$v" --repo $env:GITHUB_REPOSITORY --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Stable pointers moved, but release archive is still a draft. Do not rerun without auditing the current state.' }

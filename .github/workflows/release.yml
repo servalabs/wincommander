@@ -1,13 +1,15 @@
 name: release
 
-# A vX.Y.Z tag starts the release. The NSIS setup
-# job uses the protected `release` environment (signing key + R2).
+# A vX.Y.Z tag starts Stable; beta-vX.Y.Z starts Beta. The NSIS setup
+# job uses the protected `release` environment (signing key + R2). Beta
+# requires reviewed beta branch rules and protected beta-v* tag rules.
 # An authorized maintainer may start the workflow, but publication always waits
 # for a different required reviewer to approve the protected environment.
 on:
   push:
     tags:
       - "v*.*.*"
+      - "beta-v*.*.*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -37,14 +39,21 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require protected main and independently reviewed environment
+      - name: Require protected source and independently reviewed environment
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
 
-          if ! branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"; then
-            echo "::error::Cannot verify the effective rules for main. Configure an active repository ruleset that requires pull requests and at least one approval, and ensure RELEASE_AUTOMATION_TOKEN can read repository rules." >&2
+          branch=main
+          tag_pattern='refs/tags/v*'
+          if [[ "${RELEASE_TAG}" == beta-v* ]]; then
+            branch=beta
+            tag_pattern='refs/tags/beta-v*'
+          fi
+          if ! branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${branch}")"; then
+            echo "::error::Cannot verify effective release rules for ${branch}." >&2
             exit 1
           fi
           if ! release_environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"; then
@@ -65,7 +74,7 @@ jobs:
             tag_rulesets+="${ruleset}"$'\n'
           done <<< "${tag_ruleset_ids}"
 
-          BRANCH_RULES_JSON="${branch_rules}" RELEASE_ENVIRONMENT_JSON="${release_environment}" TAG_RULESETS_JSON_LINES="${tag_rulesets}" node <<'NODE'
+          BRANCH_RULES_JSON="${branch_rules}" RELEASE_ENVIRONMENT_JSON="${release_environment}" TAG_RULESETS_JSON_LINES="${tag_rulesets}" TAG_PATTERN="${tag_pattern}" node <<'NODE'
           // RELEASE_CONTROL_EVALUATOR
           const branchRules = JSON.parse(process.env.BRANCH_RULES_JSON || "null");
           const releaseEnvironment = JSON.parse(process.env.RELEASE_ENVIRONMENT_JSON || "null");
@@ -73,7 +82,7 @@ jobs:
           const reviewedMain = Array.isArray(branchRules) && branchRules.some((rule) => rule.type === "pull_request" &&
             Number(rule.parameters?.required_approving_review_count || 0) >= 1 &&
             (rule.parameters?.dismiss_stale_reviews_on_push === true || rule.parameters?.require_last_push_approval === true));
-          if (!reviewedMain) throw new Error("Release blocked: main review protection is incomplete.");
+          if (!reviewedMain) throw new Error("Release blocked: source branch review protection is incomplete.");
           const reviewerRules = (releaseEnvironment?.protection_rules || []).filter((rule) => rule.type === "required_reviewers");
           if (!reviewerRules.some((rule) => rule.reviewers?.length >= 1) || releaseEnvironment?.can_admins_bypass !== false) {
             throw new Error("Release blocked: Release environment protection is incomplete.");
@@ -82,14 +91,14 @@ jobs:
             const includes = ruleset.conditions?.ref_name?.include || [];
             const excludes = ruleset.conditions?.ref_name?.exclude || [];
             const ruleTypes = new Set((ruleset.rules || []).map((rule) => rule.type));
-            return ruleset.target === "tag" && ruleset.enforcement === "active" && includes.includes("refs/tags/v*") &&
+            return ruleset.target === "tag" && ruleset.enforcement === "active" && includes.includes(process.env.TAG_PATTERN || "refs/tags/v*") &&
               excludes.length === 0 && ["creation", "deletion", "update"].every((type) => ruleTypes.has(type)) &&
               ruleset.current_user_can_bypass === "always";
           });
-          if (!protectedTags) throw new Error("Release blocked: protected v* tag creation is not configured for this automation identity.");
+          if (!protectedTags) throw new Error("Release blocked: protected release tag creation is not configured for this automation identity.");
           NODE
 
-          echo "Release controls verified: reviewed main, independently approved publication, and protected v* tags."
+          echo "Release controls verified: reviewed ${branch}, independently approved publication, and protected ${tag_pattern} tags."
 
   align-version:
     name: Validate release source and versions
@@ -99,6 +108,7 @@ jobs:
       contents: read
     outputs:
       release_sha: ${{ steps.align.outputs.release_sha }}
+      promoted_candidate: ${{ steps.align.outputs.promoted_candidate }}
     steps:
       - name: Require owner, admin, or allowlisted releaser
         env:
@@ -128,27 +138,32 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Require reviewed main source aligned with the tag
+      - name: Require reviewed release source aligned with the tag
         id: align
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release tags must look like vX.Y.Z or vX.Y.Z-prerelease: ${RELEASE_TAG}" >&2
+          if [[ ! "${RELEASE_TAG}" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|beta-v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Release tags must look like vX.Y.Z or beta-vX.Y.Z: ${RELEASE_TAG}" >&2
             exit 1
           fi
 
+          branch=main
           version="${RELEASE_TAG#v}"
-          git fetch origin main --quiet
+          if [[ "${RELEASE_TAG}" == beta-v* ]]; then
+            branch=beta
+            version="${RELEASE_TAG#beta-v}"
+          fi
+          git fetch origin "${branch}" --quiet
           tag_sha="$(git rev-parse HEAD)"
-          if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
-            echo "::error::Release blocked: ${RELEASE_TAG} is not part of protected main. Prepare and merge the release PR before creating its tag." >&2
+          if ! git merge-base --is-ancestor "${tag_sha}" "origin/${branch}"; then
+            echo "::error::Release blocked: ${RELEASE_TAG} is not part of protected ${branch}." >&2
             exit 1
           fi
 
-          main_version="$(git show origin/main:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          main_version="$(git show "origin/${branch}:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
           if ! published_tags="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"; then
             echo "::error::Cannot verify published release versions." >&2
             exit 1
@@ -161,15 +176,26 @@ jobs:
             echo "::error::Release ${RELEASE_TAG} is already published; replay and asset overwrite are blocked." >&2
             exit 1
           fi
+          if [[ "${RELEASE_TAG}" == v* ]] && gh api "repos/${GITHUB_REPOSITORY}/releases/tags/beta-${RELEASE_TAG}" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/beta-${RELEASE_TAG}:refs/tags/beta-${RELEASE_TAG}" --quiet
+            beta_sha="$(git rev-parse "refs/tags/beta-${RELEASE_TAG}^{commit}")"
+            [[ "$(git rev-parse "${tag_sha}^{tree}")" == "$(git rev-parse "${beta_sha}^{tree}")" && "${main_version}" == "${version}" ]] || {
+              echo 'Promoted candidate tag does not match the exact reviewed beta source and version.' >&2; exit 1;
+            }
+            echo 'promoted_candidate=true' >> "$GITHUB_OUTPUT"
+            echo "release_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
+            echo 'Candidate promotion is owned by promote-beta.yml; no installer will be rebuilt.'
+            exit 0
+          fi
 
           MAIN_VERSION="${main_version}" PUBLISHED_TAGS_LINES="${published_tags}" node <<'NODE'
           const fs = require('fs');
-          const version = process.env.RELEASE_TAG.slice(1);
+          const version = process.env.RELEASE_TAG.replace(/^(?:beta-)?v/, "");
           const packagePath = 'package.json';
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
           const current = packageJson.version;
           const parse = (value) => {
-            const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+            const match = /^(?:beta-)?(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
             if (!match) throw new Error(`Invalid version: ${value}`);
             return { core: match.slice(1, 4).map(Number), pre: match[4]?.split(".") || [] };
           };
@@ -188,10 +214,10 @@ jobs:
             }
             return 0;
           };
-          if (version !== process.env.MAIN_VERSION) throw new Error(`Tag v${version} is not current protected-main version ${process.env.MAIN_VERSION}.`);
+          if (version !== process.env.MAIN_VERSION) throw new Error(`Tag ${process.env.RELEASE_TAG} is not the current protected-branch version ${process.env.MAIN_VERSION}.`);
           const publishedTags = (process.env.PUBLISHED_TAGS_LINES || "").split("\n").filter(Boolean);
           if (!publishedTags.length || publishedTags.some((tag) => compare(version, tag) <= 0)) {
-            throw new Error(`Tag v${version} must be newer than every published release; rollback or replay requires a separate reviewed process.`);
+            throw new Error(`Tag ${process.env.RELEASE_TAG} must be newer than every published release; rollback or replay requires a separate reviewed process.`);
           }
 
           const tauriPath = 'src-tauri/commander-free/tauri.conf.json';
@@ -219,6 +245,7 @@ jobs:
   build-free-release:
     name: Build, sign, publish to R2 and GitHub, and attest Free setup
     needs: align-version
+    if: needs.align-version.outputs.promoted_candidate != 'true'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -226,7 +253,7 @@ jobs:
       attestations: write
     environment:
       name: release
-      url: https://winupdates.servalabs.com/free/latest.json
+      url: https://winupdates.servalabs.com
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -342,7 +369,7 @@ jobs:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           $ErrorActionPreference = "Stop"
-          $version = $env:RELEASE_TAG.Substring(1)
+          $version = $env:RELEASE_TAG -replace '^(beta-)?v', ''
           $setups = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "WinCommander*${version}*_x64-setup.exe" -File | Where-Object { $_.Name -notlike "*.sig*" })
           if ($setups.Count -ne 1) {
             throw "Expected exactly one NSIS setup for v$version; found $($setups.Count)."
@@ -496,11 +523,11 @@ jobs:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
           UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
         run: |
-          if (-not $env:RELEASE_TAG.StartsWith("v")) {
-            throw "Release tags must start with 'v': $env:RELEASE_TAG"
+          if ($env:RELEASE_TAG -notmatch '^(?:beta-v\d+\.\d+\.\d+|v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag has an invalid format: $env:RELEASE_TAG"
           }
 
-          $version = $env:RELEASE_TAG.Substring(1)
+          $version = $env:RELEASE_TAG -replace '^(beta-)?v', ''
           $config = Get-Content "src-tauri/commander-free/tauri.conf.json" -Raw | ConvertFrom-Json
           if ($config.version -ne $version) {
             throw "Tag $env:RELEASE_TAG does not match Tauri version $($config.version)."
@@ -587,6 +614,8 @@ jobs:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
           RCLONE_CONFIG_R2_REGION: auto
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
+          RELEASE_SHA: ${{ needs.align-version.outputs.release_sha }}
         run: |
           $ErrorActionPreference = "Stop"
           $rcloneZip = Join-Path $env:RUNNER_TEMP "rclone.zip"
@@ -597,20 +626,45 @@ jobs:
           if (-not $rclone) { throw "rclone.exe was not found after download." }
 
           $remote = "r2:windows"
-          $version = $env:RELEASE_TAG.Substring(1)
+          $version = $env:RELEASE_TAG -replace '^(beta-)?v', ''
           $setupName = Split-Path -Leaf $env:SETUP_PATH
-          & $rclone copyto $env:SETUP_PATH "$remote/free/v$version/$setupName" "--s3-no-check-bucket"
+          if ($env:RELEASE_TAG.StartsWith('beta-v')) {
+            $proManifestPath = Join-Path $env:RUNNER_TEMP "paired-pro-$version.json"
+            $proBinaryPath = Join-Path $env:RUNNER_TEMP "paired-pro-$version.exe"
+            & $rclone copyto "$remote/pro/v$version/latest.json" $proManifestPath "--s3-no-check-bucket"
+            if ($LASTEXITCODE -ne 0) { throw "Matching Pro versioned manifest is not published." }
+            & $rclone copyto "$remote/pro/v$version/wincommander-pro.exe" $proBinaryPath "--s3-no-check-bucket"
+            if ($LASTEXITCODE -ne 0) { throw "Matching Pro versioned binary is not published." }
+            $proReceiptPath = Join-Path $env:RUNNER_TEMP "paired-pro-$version-receipt.json"
+            & $rclone copyto "$remote/pro/v$version/release-receipt.json" $proReceiptPath "--s3-no-check-bucket"
+            if ($LASTEXITCODE -ne 0) { throw "Matching Pro release receipt is not published." }
+            $freeTree = (git rev-parse "$($env:RELEASE_SHA)^{tree}").Trim()
+            if ($LASTEXITCODE -ne 0) { throw "Could not resolve the tagged Free source tree." }
+            $domain = $env:UPDATE_DOMAIN.Trim().TrimEnd('/')
+            if ($domain -notmatch '^https?://') { $domain = "https://$domain" }
+            & pwsh -NoProfile -File ./tools/assert-pro-beta-pair.ps1 -Version $version -FreeCommit $env:RELEASE_SHA -FreeTree $freeTree -ManifestPath $proManifestPath -BinaryPath $proBinaryPath -ReceiptPath $proReceiptPath -UpdateDomain $domain
+            if ($LASTEXITCODE -ne 0) { throw "Matching Pro release receipt does not bind this Free beta commit and binary." }
+          }
+          & $rclone copyto $env:SETUP_PATH "$remote/free/v$version/$setupName" "--immutable" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned setup to R2." }
-          & $rclone copyto $env:SETUP_SIGNATURE_PATH "$remote/free/v$version/$setupName.sig" "--s3-no-check-bucket"
+          & $rclone copyto $env:SETUP_SIGNATURE_PATH "$remote/free/v$version/$setupName.sig" "--immutable" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned setup signature to R2." }
-          & $rclone copyto $env:CHECKSUM_PATH "$remote/free/v$version/SHA256SUMS.txt" "--s3-no-check-bucket"
+          & $rclone copyto $env:CHECKSUM_PATH "$remote/free/v$version/SHA256SUMS.txt" "--immutable" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned checksum to R2." }
-          & $rclone copyto "wincommander-free.sbom.cdx.json" "$remote/free/v$version/wincommander-free.sbom.cdx.json" "--s3-no-check-bucket"
+          & $rclone copyto "wincommander-free.sbom.cdx.json" "$remote/free/v$version/wincommander-free.sbom.cdx.json" "--immutable" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned SBOM to R2." }
-          & $rclone copyto $env:SETUP_PATH "$remote/free/latest.exe" "--ignore-times" "--s3-no-check-bucket"
-          if ($LASTEXITCODE -ne 0) { throw "Could not promote the latest setup to R2." }
-          & $rclone copyto $env:LATEST_JSON_PATH "$remote/free/latest.json" "--ignore-times" "--s3-no-check-bucket"
-          if ($LASTEXITCODE -ne 0) { throw "Could not publish free/latest.json to R2." }
+          $readbackSetup = Join-Path $env:RUNNER_TEMP "free-$version-readback.exe"
+          & $rclone copyto "$remote/free/v$version/$setupName" $readbackSetup "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0 -or
+              (Get-FileHash -LiteralPath $readbackSetup -Algorithm SHA256).Hash -ne
+              (Get-FileHash -LiteralPath $env:SETUP_PATH -Algorithm SHA256).Hash) {
+            throw "Versioned Free installer read-back differs from the signed build."
+          }
+          $channelPath = if ($env:RELEASE_TAG.StartsWith('beta-v')) { 'free/beta' } else { 'free' }
+          & $rclone copyto $env:SETUP_PATH "$remote/$channelPath/latest.exe" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the $channelPath setup pointer to R2." }
+          & $rclone copyto $env:LATEST_JSON_PATH "$remote/$channelPath/latest.json" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish $channelPath/latest.json to R2." }
 
       # GitHub Releases remain the public release archive. The installed app
       # does not read this release or download its updater from GitHub.
@@ -636,7 +690,7 @@ jobs:
           }
 
           $releaseArgs = @("release", "create", $env:RELEASE_TAG, "--title", $env:RELEASE_TAG, "--notes", $notes)
-          if ($env:RELEASE_TAG.Contains("-")) {
+          if ($env:RELEASE_TAG.StartsWith('beta-v') -or $env:RELEASE_TAG.Contains('-')) {
             $releaseArgs += "--prerelease"
           }
           $releaseArgs += $releaseAssets
