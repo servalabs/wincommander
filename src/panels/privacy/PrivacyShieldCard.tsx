@@ -342,7 +342,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
                     if (!shield.data.cameraAvailable) {
-                        setAiRuntimeInstalled(null);
                         recordDiagnostic({ feature: "privacy_shield", action: "camera_check", stage: "capability",
                             lifecycle: "verified", outcome: "degraded", errorCode: "PSH.CAMERA.UNAVAILABLE",
                             severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera",
@@ -422,10 +421,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, []);
 
     useEffect(() => {
-        if (cameraAvailable !== true) {
-            if (cameraAvailable === false) setAiRuntimeInstalled(null);
-            return;
-        }
         const checkAI = async () => {
             try {
                 const res = await getAIDependenciesStatus();
@@ -433,7 +428,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             } catch { setAiRuntimeInstalled(false); }
         };
         checkAI();
-    }, [cameraAvailable]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Surface the backend reader's look-away/look-back transitions. The
     // reader emits `lookingAway:false` on shield stop, so the badge clears
@@ -786,7 +781,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     </div>
                 </div>
 
-                {cameraAvailable === true && (
                     <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2">
                         <button
                             type="button"
@@ -814,8 +808,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             </div>
                         )}
                     </div>
-                )}
-
                 {cameraAvailable !== false && (
                 <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${localFleetControl.settingsLocked ? "pointer-events-none opacity-70" : ""}`}>
                     {/* Blur conditions are intentionally kept together: these

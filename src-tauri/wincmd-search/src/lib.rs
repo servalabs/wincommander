@@ -65,6 +65,39 @@ pub struct SearchEngine {
     worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
+const WRITER_WAIT_MESSAGE: &str = "The search index is in use by another WinCommander window. Indexing will resume automatically.";
+
+fn wait_for_index_writer(
+    index: &ContentIndex,
+    status: &Mutex<IndexStatus>,
+    stop: &AtomicBool,
+) -> Option<IndexWriter> {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        match index.writer() {
+            Ok(writer) => {
+                let mut state = status.lock().unwrap();
+                if state.last_error.as_deref() == Some(WRITER_WAIT_MESSAGE) {
+                    state.last_error = None;
+                }
+                return Some(writer);
+            }
+            Err(SearchError::Index(tantivy::TantivyError::LockFailure(
+                tantivy::directory::error::LockError::LockBusy, _,
+            ))) => {
+                status.lock().unwrap().last_error = Some(WRITER_WAIT_MESSAGE.into());
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(error) => {
+                status.lock().unwrap().last_error = Some(error.to_string());
+                return None;
+            }
+        }
+    }
+}
+
 impl SearchEngine {
     /// Open (or create) the index described by `config`.
     pub fn open(config: IndexConfig) -> Result<Self> {
@@ -226,10 +259,12 @@ impl SearchEngine {
                 s.pending_docs = files.len() as u64;
             }
 
-            let mut writer = match ci.writer() {
-                Ok(w) => w,
-                Err(e) => {
-                    status.lock().unwrap().last_error = Some(e.to_string());
+            let mut writer = match wait_for_index_writer(&ci, &status, &stop) {
+                Some(w) => w,
+                None => {
+                    let mut s = status.lock().unwrap();
+                    s.is_indexing = false;
+                    s.pending_docs = 0;
                     return;
                 }
             };
@@ -257,12 +292,10 @@ impl SearchEngine {
             status.lock().unwrap().is_indexing = false;
 
             // ── Step 3: drain buffered + live watcher events ─────────────
-            // ONE persistent IndexWriter is reused across every event instead
-            // of opening a fresh ~50 MB writer per filesystem event (that
-            // allocation is what made node_modules/.git churn so expensive).
-            // Events are coalesced and committed at most once per
+            // Events are coalesced under one writer and committed at most once per
             // `COMMIT_DEBOUNCE` window instead of once per event, so a burst
-            // of saves/downloads shares a single commit.
+            // of saves/downloads shares a single commit. Release it after each
+            // batch so another app instance can update the same index.
             //
             // The loop exits naturally when tx is dropped (engine drops the
             // watcher) OR when the stop flag is set.
@@ -298,12 +331,9 @@ impl SearchEngine {
                     Ok(action) => {
                         let w = match writer.as_mut() {
                             Some(w) => w,
-                            None => match ci.writer() {
-                                Ok(w) => writer.insert(w),
-                                Err(e) => {
-                                    status.lock().unwrap().last_error = Some(e.to_string());
-                                    continue;
-                                }
+                            None => match wait_for_index_writer(&ci, &status, &stop) {
+                                Some(w) => writer.insert(w),
+                                None => break,
                             },
                         };
                         apply_action(w, action);
@@ -347,10 +377,10 @@ impl SearchEngine {
                 }
 
                 // Commit once the debounce window has elapsed since the last
-                // event, reusing the same writer for the next batch.
+                // event, releasing the writer so other instances can proceed.
                 if dirty && last_event_at.elapsed() >= COMMIT_DEBOUNCE {
-                    if let Some(w) = writer.as_mut() {
-                        if let Err(e) = ci.commit(w) {
+                    if let Some(mut w) = writer.take() {
+                        if let Err(e) = ci.commit(&mut w) {
                             status.lock().unwrap().last_error = Some(e.to_string());
                         }
                     }
@@ -599,6 +629,52 @@ mod tests {
     /// Polls status().is_indexing with a tight loop bounded to ~5 s so the test
     /// remains fast under normal CI.  Uses a unique token ("gruntledwombat") to
     /// avoid cross-test interference.
+    #[test]
+    fn competing_index_writer_waits_and_resumes_without_losing_the_crawl() {
+        let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();
+        let data = TempDir::new().unwrap();
+        let index = TempDir::new().unwrap();
+        fs::write(data.path().join("known.txt"), "contentionrecoverytoken").unwrap();
+        let config = make_config(index.path().to_path_buf(), vec![data.path().to_path_buf()]);
+        let first = SearchEngine::open(config.clone()).unwrap();
+        let second = SearchEngine::open(config).unwrap();
+        let writer = first.ci.writer().unwrap();
+        second.start_indexing().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while second.status().last_error.as_deref() != Some(WRITER_WAIT_MESSAGE) {
+            assert!(std::time::Instant::now() < deadline, "writer contention was not reported");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        drop(writer);
+        while second.status().is_indexing {
+            assert!(std::time::Instant::now() < deadline, "indexing did not resume");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(second.status().last_error.is_none());
+        let q = ContentQuery { terms: "contentionrecoverytoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(second.search(&q).unwrap().len(), 1);
+        second.stop();
+    }
+
+    #[test]
+    fn indexer_can_stop_while_another_writer_is_active() {
+        let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();
+        let index = TempDir::new().unwrap();
+        let config = make_config(index.path().to_path_buf(), vec![]);
+        let first = SearchEngine::open(config.clone()).unwrap();
+        let second = SearchEngine::open(config).unwrap();
+        let _writer = first.ci.writer().unwrap();
+        second.start_indexing().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while second.status().last_error.as_deref() != Some(WRITER_WAIT_MESSAGE) {
+            assert!(std::time::Instant::now() < deadline, "writer contention was not reported");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        second.stop();
+        assert!(!second.status().is_indexing);
+        assert_eq!(second.status().pending_docs, 0);
+    }
+
     #[test]
     fn start_indexing_smoke_search_after_crawl() {
         let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();

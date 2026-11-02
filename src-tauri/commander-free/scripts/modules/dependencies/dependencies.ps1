@@ -2603,6 +2603,25 @@ function Set-WinCommanderVisibility {
     }
 }
 
+function Test-WinCommanderCalculatorUserPath {
+    param([string]$Path, [string[]]$Roots)
+    try { $candidate = [IO.Path]::GetFullPath($Path).TrimEnd('\') } catch { return $false }
+    foreach ($root in $Roots) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        try { $base = [IO.Path]::GetFullPath($root).TrimEnd('\') } catch { continue }
+        if ($candidate.StartsWith("$base\", [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Get-WinCommanderCalculatorUserRoots {
+    $roots = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'), "$env:USERPROFILE\Desktop")
+    foreach ($oneDrive in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+        if ($oneDrive) { $roots += (Join-Path $oneDrive 'Desktop') }
+    }
+    return @($roots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
 function Set-WinCommanderCalculatorShortcuts {
     <#
     .SYNOPSIS
@@ -2626,6 +2645,7 @@ function Set-WinCommanderCalculatorShortcuts {
         }
     }
     $calculatorLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'Calculator.lnk'
+    $userRoots    = @(Get-WinCommanderCalculatorUserRoots)
     $itemsChanged = 0
     $warnings     = @()
 
@@ -2649,6 +2669,10 @@ function Set-WinCommanderCalculatorShortcuts {
             }
 
             foreach ($target in Get-WinCommanderStartMenuTargets) {
+                if (-not (Test-WinCommanderCalculatorUserPath $target $userRoots)) {
+                    if (Test-Path -LiteralPath $target) { $warnings += 'A shared WinCommander shortcut remains visible to all Windows accounts.' }
+                    continue
+                }
                 try {
                     if (Test-Path $target -PathType Leaf) {
                         if ($seen.Add($target)) {
@@ -2709,6 +2733,9 @@ function Set-WinCommanderCalculatorShortcuts {
 
             # Delete shortcuts
             foreach ($entry in $shortcuts) {
+                # Previous releases may have saved machine-wide shortcuts;
+                # retain their recovery information without hiding them again.
+                if (-not (Test-WinCommanderCalculatorUserPath $entry.path $userRoots)) { continue }
                 try {
                     if (Test-Path $entry.path) {
                         Remove-Item -Path $entry.path -Force -ErrorAction Stop
@@ -2718,7 +2745,7 @@ function Set-WinCommanderCalculatorShortcuts {
             }
 
             # Remove empty shortcut folders
-            foreach ($target in (Get-WinCommanderStartMenuTargets | Where-Object { Test-Path $_ -PathType Container })) {
+            foreach ($target in (Get-WinCommanderStartMenuTargets | Where-Object { (Test-WinCommanderCalculatorUserPath $_ $userRoots) -and (Test-Path $_ -PathType Container) })) {
                 try {
                     if (-not (Get-ChildItem $target -ErrorAction SilentlyContinue)) {
                         Remove-Item $target -Force -ErrorAction SilentlyContinue

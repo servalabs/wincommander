@@ -73,7 +73,9 @@ function Get-PrivacyShieldStatus {
 }
 function Resolve-PythonPath { return $null }
 $script:cameraFixture = 'wmi_failed'
-if ((Start-PrivacyShield).diagnosticCode -ne 'runtime_unavailable') { throw 'Unknown camera must reach the runtime check' }
+$unknownRuntime = Start-PrivacyShield
+if ($unknownRuntime.diagnosticCode -ne 'runtime_unavailable') { throw 'Unknown camera must reach the runtime check' }
+if ($unknownRuntime.cameraStatus -ne 'unknown') { throw 'Missing runtime must not mark an unknown camera available' }
 $script:cameraFixture = 'blocked'
 if ((Start-PrivacyShield).diagnosticCode -ne 'windows_camera_policy_denied') { throw 'Known camera policy denial must prevent startup' }
 $script:cameraFixture = 'status_error'

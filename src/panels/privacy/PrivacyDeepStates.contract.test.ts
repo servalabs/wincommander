@@ -71,6 +71,15 @@ describe("Privacy deep-state and responsive contracts", () => {
     expect(source).toContain('notification sent');
   });
 
+  test("Shield runtime setup remains accessible when camera detection is uncertain", async () => {
+    const source = await Bun.file("src/panels/privacy/PrivacyShieldCard.tsx").text();
+    const runtimeCheck = source.slice(source.indexOf("const checkAI = async"), source.indexOf("// Surface the backend reader"));
+    expect(runtimeCheck).toContain("getAIDependenciesStatus()");
+    expect(runtimeCheck).not.toContain("cameraAvailable");
+    expect(source).not.toContain("{cameraAvailable === true && (\n                    <div className=\"rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2\">");
+    expect(source).toContain('<AIRuntimeInstaller onInstalled=');
+  });
+
   test("Pro upsell badges are keyboard-native actions", async () => {
     const source = await Bun.file("src/panels/privacy/RdpIdleCard.tsx").text();
     expect(source).toContain('<button type="button" aria-label="Upgrade to unlock Idle Session Monitor"');

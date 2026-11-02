@@ -478,7 +478,7 @@ function Start-PrivacyShield {
 
         $pythonExe = Resolve-PythonPath
         if (-not $pythonExe) {
-            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
+            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
 
         # Check dependencies (Quietly)
@@ -499,7 +499,7 @@ function Start-PrivacyShield {
                 }
                 & $pythonExe -c "import $importName" *>$null
                 if ($LASTEXITCODE -ne 0) {
-                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
+                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
                 }
             }
             catch {}
@@ -1383,9 +1383,8 @@ if __name__ == "__main__":
             } elseif ($failure.code -eq 'camera_start_unverified') {
                 'unknown'
             } else {
-                # The preflight succeeded, so a dependency/model failure is
-                # not evidence that camera hardware disappeared.
-                'available'
+                # A dependency/model failure does not resolve an unknown preflight.
+                if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
             }
             return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
