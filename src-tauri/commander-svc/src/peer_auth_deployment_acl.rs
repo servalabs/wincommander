@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The relay's fixed image and parents must remain administrator/SYSTEM owned.
+//! The relay's fixed image and parents must remain Windows-administrator owned.
 
 use crate::peer_auth::PeerAuthError;
 use std::{
@@ -12,7 +12,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::LocalFree,
     Security::{
-        Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+        Authorization::{ConvertStringSidToSidW, GetSecurityInfo, SE_FILE_OBJECT},
         CreateWellKnownSid, EqualSid, GetAce, WinBuiltinAdministratorsSid, WinLocalSystemSid,
         ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
         OWNER_SECURITY_INFORMATION,
@@ -24,6 +24,8 @@ use windows_sys::Win32::{
 };
 
 const WRITE_MASK: u32 = 0x500d_0156;
+const TRUSTED_INSTALLER_SID: &str =
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 
 pub(super) fn verify_path(path: &Path) -> Result<(), PeerAuthError> {
     // ProgramData itself permits creation of unrelated subfolders. Only WinCommander,
@@ -35,6 +37,13 @@ pub(super) fn verify_path(path: &Path) -> Result<(), PeerAuthError> {
 }
 
 pub(crate) fn verify_component(part: &Path) -> Result<(), PeerAuthError> {
+    verify_component_with(part, |handle| unsafe { verify(handle) })
+}
+
+fn verify_component_with(
+    part: &Path,
+    inspect: impl FnOnce(*mut core::ffi::c_void) -> Result<(), PeerAuthError>,
+) -> Result<(), PeerAuthError> {
     if std::fs::symlink_metadata(part)
         .map_err(|_| PeerAuthError::IdentityUnavailable)?
         .file_attributes()
@@ -49,10 +58,7 @@ pub(crate) fn verify_component(part: &Path) -> Result<(), PeerAuthError> {
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(part)
         .map_err(|_| PeerAuthError::IdentityUnavailable)?;
-    unsafe {
-        verify(file.as_raw_handle())?;
-    }
-    Ok(())
+    inspect(file.as_raw_handle())
 }
 
 struct Descriptor(*mut core::ffi::c_void);
@@ -84,6 +90,11 @@ unsafe fn verify(handle: *mut core::ffi::c_void) -> Result<(), PeerAuthError> {
         return Err(deny);
     }
     let _descriptor = Descriptor(descriptor);
+    verify_acl(owner, acl)
+}
+
+unsafe fn verify_acl(owner: *mut core::ffi::c_void, acl: *mut ACL) -> Result<(), PeerAuthError> {
+    let deny = PeerAuthError::PathNotAllowed;
     let mut system = [0u32; 17];
     let mut admins = [0u32; 17];
     let mut length = 68;
@@ -106,9 +117,21 @@ unsafe fn verify(handle: *mut core::ffi::c_void) -> Result<(), PeerAuthError> {
     {
         return Err(deny);
     }
+    // Windows owns Program Files through this exact installer service SID.
+    // Other service SIDs must not gain permission to replace a trusted image.
+    let text: Vec<u16> = TRUSTED_INSTALLER_SID
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut installer = std::ptr::null_mut();
+    if ConvertStringSidToSidW(text.as_ptr(), &mut installer) == 0 {
+        return Err(deny);
+    }
+    let _installer = Descriptor(installer);
     let trusted = |sid| {
         EqualSid(sid, system.as_ptr().cast_mut().cast()) != 0
             || EqualSid(sid, admins.as_ptr().cast_mut().cast()) != 0
+            || EqualSid(sid, installer) != 0
     };
     if owner.is_null() || !trusted(owner) || acl.is_null() || (*acl).AceCount == 0 {
         return Err(deny);
@@ -133,3 +156,7 @@ unsafe fn verify(handle: *mut core::ffi::c_void) -> Result<(), PeerAuthError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "peer_auth_deployment_acl_tests.rs"]
+mod tests;
