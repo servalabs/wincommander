@@ -30,6 +30,8 @@ import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
 import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
+import useBackend from "./hooks/useBackend";
+import { shouldReconcileCalculatorShortcuts, syncCalculatorShortcuts } from "./panels/privacy/calculatorShortcuts";
 import { getCalculatorGateGeneration } from "./hooks/startupWindow";
 import { FlowSettingsRecovery } from "./components/startup/FlowSettingsRecovery";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
@@ -1545,7 +1547,31 @@ function AppContent({ splashDone, onSplashComplete }: {
 
 function StartupAuthGate({ children }: { children: React.ReactNode }) {
   const [showCalc, setShowCalc]       = useState<number | null | undefined>(undefined);
-  const { setMode } = useAuthMode();
+  const { mode, setMode } = useAuthMode();
+  const { appSettings, startupDataState } = useAppState();
+  const { setWinCommanderCalculatorShortcuts } = useBackend();
+  const calculatorShortcutsChecked = useRef(false);
+  const [calculatorShortcutWarning, setCalculatorShortcutWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (calculatorShortcutsChecked.current || !appSettings || startupDataState === "stale") return;
+    const pin = appSettings.ideal?.privacy?.startupPin;
+    if (!shouldReconcileCalculatorShortcuts({
+      unlocked: showCalc === null,
+      decoy: mode === "decoy",
+      hasRealPin: !!pin?.realHash,
+      enabled: pin?.enabled !== false,
+      hideMode: appSettings.ideal?.identity?.hideWinCommander === true,
+    })) return;
+    calculatorShortcutsChecked.current = true;
+    void syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true).then(setCalculatorShortcutWarning);
+  }, [appSettings, mode, setWinCommanderCalculatorShortcuts, showCalc, startupDataState]);
+
+  useEffect(() => {
+    if (!calculatorShortcutWarning || showCalc !== null || mode !== "real") return;
+    showWarning(`Calculator Lock shortcuts need attention: ${calculatorShortcutWarning}`);
+    setCalculatorShortcutWarning(null);
+  }, [calculatorShortcutWarning, mode, showCalc]);
 
   useEffect(() => {
     let mounted = true;
