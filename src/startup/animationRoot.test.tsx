@@ -29,7 +29,7 @@ test('bootstrap handoff keeps one animation root and ignores stale effect cleanu
             assert.notEqual(tag, 'style');
             return node;
         }, body: { append() {} } };
-        const { showStartupAnimation: show, hideStartupAnimation: hide } = await import('./src/startup/animationRoot');
+        const { showStartupAnimation: show, hideStartupAnimation: hide, suppressStartupAnimation: suppress } = await import('./src/startup/animationRoot');
         const initial = { branding: { companyLabel: 'SERVAlABS', productLabel: 'WINCOMMANDER' },
             isLight: false, reducedMotion: false, isAppReady: false,
             startupError: null, onComplete() {}, onRetry() {} };
@@ -52,6 +52,14 @@ test('bootstrap handoff keeps one animation root and ignores stale effect cleanu
         assert.equal(frames[1].props.reducedMotion, false);
         assert.deepEqual(frames[1].props.branding, initial.branding);
         assert.equal(node.hidden, false);
+        const release = suppress();
+        assert.equal(node.hidden, true, 're-lock hides a visible splash synchronously');
+        show(initial);
+        assert.equal(frames.length, 2, 'a pending splash update cannot cover the calculator');
+        assert.equal(node.hidden, true);
+        release();
+        show(initial);
+        assert.equal(node.hidden, false, 'splash may return after the calculator unmounts');
         hide();
         await Promise.resolve();
         assert.equal(node.hidden, true);

@@ -626,8 +626,13 @@ pub fn enter_calculator_mode_with(
     // (cold start, dashboard Lock button, lock keyword, tray, peek hotkey,
     // relaunch) — without it the window resizes to calc dimensions but the
     // React gate never renders, leaving a calculator-sized blank real UI.
+    if !crate::calc_mode_active(window.app_handle()) {
+        // Do not expose the previous app content while React switches gates.
+        let _ = window.hide();
+    }
     crate::set_calc_mode_active(window.app_handle(), true);
-    let _ = window.emit("calculator-mode-entered", ());
+    let generation = crate::calculator_gate_generation(window.app_handle().clone())?;
+    let _ = window.emit("calculator-mode-entered", generation);
 
     crate::log_message_src(
         "info",
@@ -667,6 +672,10 @@ pub fn enter_calculator_mode_with(
         let _ = tray.set_visible(false);
     }
     if reveal {
+        if crate::startup_window::defer_reveal_until_ready(&window) {
+            let _ = window.hide();
+            return Ok(());
+        }
         let _ = window.unminimize();
         let _ = window.show();
         // Foreground synchronously here: the reveal usually originates from a

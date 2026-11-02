@@ -1,8 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import type { AuthMode } from "../../context/AuthModeContext";
+import { revealStartupWindow } from "../../hooks/startupWindow";
+import { applyCalculatorPinResult } from "./calculatorAuth";
+import { suppressStartupAnimation } from "../../startup/animationRoot";
 import calcIcon from "@assets/softwares/calc.png";
 import "./CalculatorGate.css";
 
@@ -93,9 +96,16 @@ function renderResultDisplay(formatted: string): React.ReactNode {
 
 interface Props {
   onAuth: (mode: AuthMode) => void;
+  generation: number;
 }
 
-export default function CalculatorGate({ onAuth }: Props) {
+export default function CalculatorGate({ onAuth, generation }: Props) {
+  // The DOM is committed before native startup may reveal the calculator.
+  useLayoutEffect(() => {
+    const releaseSplash = suppressStartupAnimation();
+    void revealStartupWindow(generation).catch((error: unknown) => console.error("Calculator window could not be shown", error));
+    return releaseSplash;
+  }, [generation]);
   const [s, setS]               = useState<CalcState>(INITIAL);
   const [memory, setMemory]     = useState<number | null>(null);
   const [history, setHistory]   = useState<HistoryEntry[]>([]);
@@ -111,15 +121,15 @@ export default function CalculatorGate({ onAuth }: Props) {
     if (authResolvedRef.current) return;
     try {
       const result = await invoke<string>("verify_startup_pin", { pin: displayValue });
-      if (result === "wrong" || authResolvedRef.current) return;
-      authResolvedRef.current = true;
-      if (result === "real" || result === "open") {
+      if (authResolvedRef.current) return;
+      await applyCalculatorPinResult(result, async (mode) => {
+        if (authResolvedRef.current) return;
+        authResolvedRef.current = true;
         await invoke("exit_calculator_mode", { title: "WinCommander" });
-        onAuth("real");
-      } else if (result === "decoy") {
-        await invoke("exit_calculator_mode", { title: "WinCommander" });
-        onAuth("decoy");
-      } else if (result === "destroy") {
+        onAuth(mode);
+      }, async () => {
+        if (authResolvedRef.current) return;
+        authResolvedRef.current = true;
         const capabilityToken = await requestDestructiveCapability(
           { command: "lockdown", deactivateLicenseFirst: false, shutdownSystem: false },
           displayValue,
@@ -129,9 +139,10 @@ export default function CalculatorGate({ onAuth }: Props) {
           shutdownSystem: false,
           capabilityToken,
         });
-      }
+      });
     } catch {
-      // swallow — never surface auth errors visually
+      // Keep the cover discreet, but allow a retry after a transient failure.
+      authResolvedRef.current = false;
     }
   }, [onAuth]);
 

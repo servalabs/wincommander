@@ -61,7 +61,10 @@ describe("Privacy deep-state and responsive contracts", () => {
     expect(source).toContain('aria-label="Upgrade Privacy Shield for unlimited time"');
     expect(source).toContain('aria-controls="privacy-shield-ai-runtime"');
     expect(source).toContain('const [showAiRuntimeDetails, setShowAiRuntimeDetails] = useState(false);');
-    expect(source).toContain('const stateUnknown = privacyShieldRunning === null || cameraAvailable === null');
+    expect(source).toContain('const stateUnknown = privacyShieldRunning === null || (cameraAvailable === null && privacyShieldRunning !== true)');
+    expect(source).toContain('generation !== statusGeneration.current || shieldActionInFlight.current');
+    expect(source).toContain('if (shieldActionInFlight.current) return;');
+    expect(source).toContain('shieldWaiting ? "Waiting for Shield"');
     expect(source).toContain('text="Refresh status"');
     expect(source).toContain('notification sent');
   });

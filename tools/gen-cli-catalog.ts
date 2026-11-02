@@ -40,6 +40,8 @@ const INTERNAL_TAURI_HANDLERS = new Set([
   "mark_tauri_cli_ready",
   "complete_tauri_cli",
   "startup_window_ready",
+  "calculator_gate_generation",
+  "dashboard_camera_presence",
   "is_autostart_enabled",
   "enable_autostart_task",
 ]);

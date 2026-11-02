@@ -1,7 +1,7 @@
 import { showStartupAnimation } from './startup/animationRoot';
 import { readStartupBranding } from './startup/brandingCache';
 import { applyMotionClass } from './lib/motionPolicy';
-import { prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
+import { getCalculatorGateGeneration, prepareStartupTheme, revealStartupWindow } from './hooks/startupWindow';
 import { flushSync } from 'react-dom';
 import { settleStartupReveal, shouldKeepStartupAnimationVisible } from './startup/revealBudget';
 
@@ -14,6 +14,12 @@ const isMain = Boolean(native) && (!label || label === 'main')
 
 applyMotionClass();
 async function startMainWindow(): Promise<void> {
+    // The native window stays hidden until the calculator has committed its
+    // own UI. Never mount the branded splash while the startup gate is armed.
+    if ((await getCalculatorGateGeneration()) !== null) {
+        await import('./main');
+        return;
+    }
     try {
         await prepareStartupTheme();
     } catch (error: unknown) {

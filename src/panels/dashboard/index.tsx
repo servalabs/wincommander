@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
+import { useCameraPresence } from "../../hooks/useCameraPresence";
 import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { useLiveMetrics } from "../../context/LiveMetricsContext";
 import useVisibility from "../../hooks/useVisibility";
@@ -862,9 +863,7 @@ export default function DashboardPanel() {
     invoke("lock_to_calculator").catch(() => {});
   }, []);
 
-  const webcamCap = getByPath(appSettings, "current.privacy.appCapabilities.webcam");
-  const cameraAvailable = webcamCap !== null && webcamCap !== undefined;
-  const cameraBlocked = webcamCap === "Deny";
+  const { presence: cameraPresence, blocked: cameraBlocked, refreshAccess: refreshCameraAccess, invalidateAccess: invalidateCameraAccess } = useCameraPresence();
   const microphoneBlocked = getByPath(appSettings, "current.privacy.appCapabilities.microphone") === "Deny";
 
   const missingEngineCount = activeFindings.filter((f) => f.category === "engines").length;
@@ -872,16 +871,22 @@ export default function DashboardPanel() {
   const handleCapabilityToggle = useCallback(async (capability: "webcam" | "microphone", blocked: boolean) => {
     if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setCapabilityPending(capability);
+    if (capability === "webcam") invalidateCameraAccess();
     try {
-      await executeBackendCommand("Set-AppCapabilityAccess", {
+      const result = await executeBackendCommand("Set-AppCapabilityAccess", {
         Capability: capability,
         Access: blocked ? "Deny" : "Allow",
       });
-      await refreshSettings();
+      if (!result.success) {
+        showError(result.error || "Could not change camera or microphone access.");
+        return;
+      }
+      void refreshSettings().catch(reportSettingsWriteFailure);
     } finally {
+      if (capability === "webcam") void refreshCameraAccess();
       setCapabilityPending(null);
     }
-  }, [refreshSettings, needsElevation]);
+  }, [refreshSettings, refreshCameraAccess, invalidateCameraAccess, needsElevation]);
 
   // Ambient backdrop glow tracks the health BAND as a peripheral-vision cue:
   // calm green when strong, amber as it slips, red at risk — driven by the
@@ -929,7 +934,7 @@ export default function DashboardPanel() {
           <div data-tour="dashboard-privacy-toggles">
             <PrivacyTogglesCard
               cameraBlocked={cameraBlocked}
-              cameraAvailable={cameraAvailable}
+              cameraPresence={cameraPresence}
               microphoneBlocked={microphoneBlocked}
               capabilityPending={capabilityPending}
               onCapabilityToggle={handleCapabilityToggle}

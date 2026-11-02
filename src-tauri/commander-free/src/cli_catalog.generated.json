@@ -4403,7 +4403,9 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/hooks/useCameraPresence.ts"
+      ]
     },
     {
       "id": "backend:Get\u002dAppInventory",
@@ -10784,7 +10786,9 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/context/AppContext.tsx",
-        "src/hooks/useBackend.ts"
+        "src/hooks/useBackend.ts",
+        "src/hooks/useCameraPresence.ts",
+        "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
     {
@@ -11636,9 +11640,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/App.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:stop_auth_anomaly_monitor",

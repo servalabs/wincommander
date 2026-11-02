@@ -4,6 +4,15 @@ use std::io::Write;
 use std::process::{Child, Output};
 use std::time::Duration;
 
+pub(super) fn ui_script_timeout(command: &str) -> Option<Duration> {
+    match command {
+        // These are read-only status checks polled by the dashboard/Shield.
+        // A stalled check must release the shared request tracker promptly.
+        "Get-AppCapabilityAccessStatus" | "Get-PrivacyShieldStatus" => Some(Duration::from_secs(15)),
+        _ => None,
+    }
+}
+
 pub(super) async fn wait_for_script(
     mut child: Child,
     script: String,
@@ -74,6 +83,13 @@ mod tests {
     use super::*;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
+
+    #[test]
+    fn camera_status_has_a_bounded_deadline_without_shortening_other_commands() {
+        assert_eq!(ui_script_timeout("Get-AppCapabilityAccessStatus"), Some(Duration::from_secs(15)));
+        assert_eq!(ui_script_timeout("Get-PrivacyShieldStatus"), Some(Duration::from_secs(15)));
+        assert_eq!(ui_script_timeout("Start-PrivacyShield"), None);
+    }
 
     fn fixture(command: &str) -> Child {
         Command::new("powershell")

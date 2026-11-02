@@ -4884,7 +4884,8 @@ pub async fn run_backend_script(
         .await
         .map_err(|error| format!("Shield action worker failed: {error}"))?;
     }
-    run_backend_script_with_timeout(app, command, params, None).await
+    let timeout = process::ui_script_timeout(&command);
+    run_backend_script_with_timeout(app, command, params, timeout).await
 }
 
 fn local_stop_owns_pending_restart(

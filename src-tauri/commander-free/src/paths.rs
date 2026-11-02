@@ -584,17 +584,68 @@ pub fn migration_marker_path() -> Result<PathBuf, String> {
     Ok(user_data_dir()?.join("migration-v3.done"))
 }
 
-pub fn migrate_user_data_layout() -> Result<(), String> {
-    let marker = migration_marker_path()?;
-    let new_settings = user_settings_path()?;
+pub(crate) fn legacy_settings_exist(path: &std::path::Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("Could not inspect legacy settings".into()),
+    }
+}
 
-    if !new_settings.exists() {
-        if let Ok(old_settings) = old_roaming_settings_path() {
-            if old_settings.exists() {
-                let _ = fs::copy(&old_settings, &new_settings);
-            }
+fn copy_legacy_settings_if_absent(old: &std::path::Path, new: &std::path::Path) -> Result<(), String> {
+    use std::io::Read;
+    const MAX_LEGACY_BYTES: u64 = 16 * 1024 * 1024;
+    if legacy_settings_exist(new)? {
+        return Ok(());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = match options.open(old) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) if legacy_settings_exist(new)? => return Ok(()),
+        Err(_) => return Err("Could not open legacy settings for migration".into()),
+    };
+    let metadata = file.metadata().map_err(|_| "Could not inspect legacy settings for migration")?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("Legacy settings cannot be redirected".into());
         }
     }
+    if !metadata.is_file() || metadata.len() > MAX_LEGACY_BYTES {
+        return Err("Legacy settings are not a bounded regular file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_LEGACY_BYTES + 1).read_to_end(&mut bytes)
+        .map_err(|_| "Could not read legacy settings for migration")?;
+    if bytes.len() as u64 > MAX_LEGACY_BYTES {
+        return Err("Legacy settings exceed the size limit".into());
+    }
+    // A second startup must see a complete file or no file. Never overwrite a
+    // migrated copy that another process already published.
+    crate::datastore_io::publish_new(new, &bytes).map(|_| ())
+}
+
+pub(crate) fn migrate_legacy_settings_if_required() -> Result<(), String> {
+    let new_settings = user_settings_path()?;
+    if !legacy_settings_exist(&new_settings)? {
+        let old_settings = old_roaming_settings_path()?;
+        copy_legacy_settings_if_absent(&old_settings, &new_settings)?;
+    }
+    Ok(())
+}
+
+pub fn migrate_user_data_layout() -> Result<(), String> {
+    let marker = migration_marker_path()?;
 
     if let (Ok(old_flag), Ok(new_flag)) = (hide_flag_legacy_path(), hide_flag_path()) {
         if old_flag.exists() && !new_flag.exists() {
@@ -643,6 +694,80 @@ pub fn migrate_user_data_layout() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn legacy_copy_child_process_fixture() {
+        let Some(directory) = std::env::var_os("WINCMD_LEGACY_COPY_FIXTURE") else { return };
+        let directory = std::path::PathBuf::from(directory);
+        let id = std::env::var("WINCMD_LEGACY_COPY_FIXTURE_ID").unwrap();
+        std::fs::write(directory.join(format!("ready-{id}")), b"ready").unwrap();
+        let start = std::time::Instant::now();
+        while !directory.join("go").exists() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(20));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let old = directory.join("legacy.json");
+        let new = directory.join("settings.json");
+        super::copy_legacy_settings_if_absent(&old, &new).unwrap();
+        assert_eq!(std::fs::read(&new).unwrap(), std::fs::read(&old).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn independent_processes_publish_only_complete_legacy_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let payload = vec![b'x'; 128 * 1024];
+        std::fs::write(directory.path().join("legacy.json"), &payload).unwrap();
+        let module = module_path!().split_once("::").map_or(module_path!(), |(_, name)| name);
+        let child_name = format!("{module}::legacy_copy_child_process_fixture");
+        let mut children: Vec<_> = (0..2).map(|id| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &child_name, "--nocapture"])
+                .env("WINCMD_LEGACY_COPY_FIXTURE", directory.path())
+                .env("WINCMD_LEGACY_COPY_FIXTURE_ID", id.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn().unwrap()
+        }).collect();
+        let start = std::time::Instant::now();
+        while !(directory.path().join("ready-0").exists() && directory.path().join("ready-1").exists()) {
+            if start.elapsed() >= std::time::Duration::from_secs(15) { break; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let both_ready = directory.path().join("ready-0").exists() && directory.path().join("ready-1").exists();
+        std::fs::write(directory.path().join("go"), b"go").unwrap();
+        for child in children.drain(..) {
+            let result = child.wait_with_output().unwrap();
+            assert!(result.status.success(), "child failed: {}", String::from_utf8_lossy(&result.stderr));
+        }
+        assert!(both_ready, "both child processes must reach the launch barrier");
+        assert_eq!(std::fs::read(directory.path().join("settings.json")).unwrap(), payload);
+    }
+
+    #[test]
+    fn concurrent_legacy_copies_publish_only_complete_settings_and_keep_the_winner() {
+        let directory = tempfile::tempdir().unwrap();
+        let old = directory.path().join("old-settings.json");
+        let new = directory.path().join("settings.json");
+        let bytes = vec![b'x'; 128 * 1024];
+        std::fs::write(&old, &bytes).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8).map(|_| {
+            let old = old.clone();
+            let new = new.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                super::copy_legacy_settings_if_absent(&old, &new)
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap().unwrap(); }
+        assert_eq!(std::fs::read(&new).unwrap(), bytes);
+        std::fs::write(&old, b"newer legacy copy").unwrap();
+        super::copy_legacy_settings_if_absent(&old, &new).unwrap();
+        assert_eq!(std::fs::read(&new).unwrap(), bytes);
+    }
+
     #[test]
     fn diagnostic_locks_share_one_profile_but_never_another_profiles_log() {
         let first = super::diagnostic_log_lock_resource(std::path::Path::new(

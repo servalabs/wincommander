@@ -58,9 +58,44 @@ function Install-AIDependencies {
     return @{ error = $true; message = "Dependencies module not loaded." }
 }
 
+function Get-PrivacyShieldVideoSourceSummary {
+    # Enumerates source metadata only: it does not open a camera or request permission.
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.Devices.Enumeration.DeviceInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $type = [Windows.Devices.Enumeration.DeviceInformationCollection,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 -and
+            $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+        } | Select-Object -First 1
+        $operation = [Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync([Windows.Devices.Enumeration.DeviceClass]::VideoCapture)
+        $task = $method.MakeGenericMethod($type).Invoke($null, @($operation))
+        if (-not $task.Wait(4000)) { throw 'Camera enumeration timed out' }
+        $count = @($task.Result).Count
+        $access = 'Unknown'
+        try {
+            $null = [Windows.Devices.Enumeration.DeviceAccessInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+            $access = [string]([Windows.Devices.Enumeration.DeviceAccessInformation]::CreateFromDeviceClass([Windows.Devices.Enumeration.DeviceClass]::VideoCapture).CurrentStatus)
+        } catch {}
+        return @{ known = $true; count = $count; access = $access }
+    } catch {
+        return @{ known = $false; count = 0; access = 'Unknown' }
+    }
+}
+
+function Get-PrivacyShieldRemoteSession {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        return [bool][System.Windows.Forms.SystemInformation]::TerminalServerSession
+    } catch { return $null }
+}
+
 function Get-PrivacyShieldCameraAvailability {
     try {
         $devices = @()
+        $uncertain = $false
+        $isRemote = Get-PrivacyShieldRemoteSession
+        if ($null -eq $isRemote) { $uncertain = $true }
         # ProductType 2/3 means Windows Server. Fleet receives only this
         # coarse capability when Privacy Shield cannot use a camera there.
         $isWindowsServer = $false
@@ -71,19 +106,31 @@ function Get-PrivacyShieldCameraAvailability {
 
         foreach ($className in @("Camera", "Image")) {
             try {
-                $devices += Get-CimInstance -ClassName Win32_PnPEntity `
+                $found = @(Get-CimInstance -ClassName Win32_PnPEntity `
                     -Filter "PNPClass='$className'" `
-                    -ErrorAction SilentlyContinue |
-                    Where-Object {
-                        $_.Status -eq "OK" -and
-                        $_.Name -and
-                        $_.Name -notmatch '(?i)\bvirtual\b|obs|snap\s*camera'
-                    } |
-                    ForEach-Object { $_.Name }
-            } catch {}
+                    -ErrorAction Stop)
+                foreach ($item in $found) {
+                    $cameraLike = $className -eq 'Camera' -or $item.Name -match '(?i)camera|webcam' -or $item.CompatibleID -match '(?i)USB\\Class_0E|VideoCapture'
+                    if (-not $cameraLike) { $uncertain = $true; continue }
+                    if ($item.Present -ne $true -or $item.Status -ne 'OK' -or $isRemote -ne $false) { $uncertain = $true; continue }
+                    # Do not send device names or IDs to the status consumer.
+                    $devices += 'Camera source'
+                }
+            } catch { $uncertain = $true }
         }
 
         $names = @($devices | Sort-Object -Unique)
+        $video = if ($names.Count -eq 0) { Get-PrivacyShieldVideoSourceSummary } else { $null }
+        if ($video -and $video.known -and $video.count -gt 0) { $names = @('Camera source') }
+        if ($names.Count -eq 0 -and ($isRemote -ne $false -or -not $video -or -not $video.known -or $video.access -ne 'Allowed')) { $uncertain = $true }
+        if ($names.Count -eq 0 -and -not $uncertain) {
+            # Generic media/software devices may expose a localized or virtual
+            # camera through a path not represented by the two CIM classes.
+            try {
+                $ambiguous = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.Class -in @('Media','SoftwareDevice') })
+                if ($ambiguous.Count -gt 0) { $uncertain = $true }
+            } catch { $uncertain = $true }
+        }
         $policyBlockers = @()
         try {
             if ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) {
@@ -110,6 +157,8 @@ function Get-PrivacyShieldCameraAvailability {
             'app_camera_permission_denied'
         } elseif ($blockedByPolicy) {
             'windows_camera_policy_denied'
+        } elseif ($names.Count -eq 0 -and $uncertain) {
+            'unknown'
         } elseif ($names.Count -eq 0) {
             'hardware_unavailable'
         } else {
@@ -123,9 +172,9 @@ function Get-PrivacyShieldCameraAvailability {
             $null
         }
         @{
-            available = ($names.Count -gt 0) -and -not $blockedByPolicy
+            available = if ($cameraStatus -eq 'unknown') { $null } else { ($names.Count -gt 0) -and -not $blockedByPolicy }
             devices   = $names
-            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
+            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } elseif ($cameraStatus -eq 'unknown') { 'Camera status could not be confirmed. Check camera access and refresh.' } else { "No usable camera detected." }
             blockedByPolicy = $blockedByPolicy
             policyBlockers = @($policyBlockers)
             cameraStatus = $cameraStatus
@@ -136,7 +185,7 @@ function Get-PrivacyShieldCameraAvailability {
     catch {
         # Registry/WMI probe failures are not evidence that the hardware is
         # absent.  Keep the diagnosis honest and do not echo exception text.
-        @{ available = $false; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+        @{ available = $null; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 
@@ -320,6 +369,8 @@ function Get-PrivacyShieldStatus {
             activeMode      = $activeMode
             nativeOptions   = $nativeOptions
             cameraIndex     = $cameraIndex
+            # Existing Fleet guard treats false as not verified and prevents a
+            # reconfiguration stop; cameraStatus retains the unknown reason.
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
@@ -350,8 +401,10 @@ function Get-PrivacyShieldStartFailure {
     if ($LogTail -imatch 'black frames|camera feed unavailable') {
         return @{ code = 'camera_feed_unavailable'; message = 'Camera feed is black - open its privacy shutter or close another camera app.' }
     }
-    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out') {
-        return @{ code = 'hardware_unavailable'; message = 'No usable camera detected for Privacy Shield.' }
+    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out|camera.*(?:open|initializ)') {
+        # An open failure alone cannot distinguish missing hardware from a
+        # busy camera, privacy restriction, driver failure or timeout.
+        return @{ code = 'camera_start_unverified'; message = 'Camera could not be opened. Check Windows camera access and close other camera apps, then try again.' }
     }
     if ($LogTail -imatch 'missing python dependency|importerror|module not found') {
         return @{ code = 'runtime_dependency_missing'; message = 'Privacy Shield AI runtime is unavailable.' }
@@ -363,6 +416,16 @@ function Get-PrivacyShieldStartFailure {
         return @{ code = 'model_invalid'; message = 'Privacy Shield model could not be loaded.' }
     }
     return @{ code = 'shield_start_failed'; message = 'Privacy Shield could not start.' }
+}
+
+function Get-PrivacyShieldLaunchLogTail {
+    param([string]$Path, [string]$RunId)
+    if (-not $Path -or $RunId -cnotmatch '^[0-9a-f]{32}$' -or -not (Test-Path -LiteralPath $Path)) { return '' }
+    try {
+        # The file can contain older or other-session runs. Only lines tagged
+        # by this launched process can contribute to its failure diagnosis.
+        return @((Get-Content -LiteralPath $Path -Tail 100 -ErrorAction Stop) | Where-Object { $_.Contains("[$RunId]") }) -join "`n"
+    } catch { return '' }
 }
 
 function Start-PrivacyShield {
@@ -472,13 +535,14 @@ CAPTURES_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", 
 # Rust backend (backend.rs shield event reader).
 EVENTS_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield_events.ndjson")
 PID_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield.pid")
+RUN_ID = os.environ.get("WINCMD_SHIELD_RUN_ID", "")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 def log(msg):
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with open(LOG_FILE, "a", encoding="utf-8") as handle:
-            handle.write(f"[{timestamp}] {msg}\n")
+            handle.write(f"[{timestamp}] [{RUN_ID}] {msg}\n")
     except Exception:
         pass
 
@@ -810,14 +874,14 @@ class ShieldWorker(QThread):
                 _cam_done.set()
         threading.Thread(target=_try_open_cam, daemon=True).start()
         if not _cam_done.wait(timeout=5.0):
-            log("No camera detected - VideoCapture timed out (no webcam on this system)")
-            self.init_failed.emit("No camera detected - this system has no webcam")
+            log("Camera initialization timed out")
+            self.init_failed.emit("Camera could not be opened. Check camera access and try again.")
             return
         cap = _cam_result[0]
         if not cap or not cap.isOpened():
             self.status_msg.emit("Camera Failed")
-            log("No camera detected - VideoCapture returned not-opened")
-            self.init_failed.emit("No camera detected - webcam not found or in use by another app")
+            log("Camera could not be opened")
+            self.init_failed.emit("Camera could not be opened. Check camera access and close other camera apps, then try again.")
             return
 
         # A device can open successfully while returning only black frames,
@@ -1265,6 +1329,8 @@ if __name__ == "__main__":
         $pythonCmd = $pythonExe
 
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $runId = [guid]::NewGuid().ToString('N')
+        $startInfo.EnvironmentVariables['WINCMD_SHIELD_RUN_ID'] = $runId
         $startInfo.FileName = $pythonCmd
         $startInfo.Arguments = $pythonArgs -join " "
         $startInfo.UseShellExecute = $false
@@ -1288,8 +1354,8 @@ if __name__ == "__main__":
             $process.StandardInput.Write($embeddedScript)
             $process.StandardInput.Close()
         }
-        # Poll for up to 8 s. Camera probe inside Python times out at 5 s,
-        # so a no-camera exit arrives around 6-7 s. Fast failures (import
+        # Poll for up to 8 s. Camera open inside Python times out at 5 s,
+        # so an open timeout arrives around 6-7 s. Fast failures (import
         # error, dependency missing) exit within 1-2 s.
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $exitedEarly = $false
@@ -1301,14 +1367,12 @@ if __name__ == "__main__":
         if ($exitedEarly) {
             $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
             $logPath = if ($logRoot) { Join-Path $logRoot "WinCommander\logs\privacy_shield.log" } else { $null }
-            $logTail = ""
+            $logTail = Get-PrivacyShieldLaunchLogTail -Path $logPath -RunId $runId
             $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
-            if ($logPath -and (Test-Path $logPath)) {
-                $logTail = (Get-Content $logPath -Tail 30 | Out-String).Trim()
-                $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
-            }
             $cameraStatus = if ($failure.code -in @('camera_busy', 'camera_feed_unavailable', 'hardware_unavailable')) {
                 $failure.code
+            } elseif ($failure.code -eq 'camera_start_unverified') {
+                'unknown'
             } else {
                 # The preflight succeeded, so a dependency/model failure is
                 # not evidence that camera hardware disappeared.

@@ -122,6 +122,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn concurrent_first_writer_commits_pin_before_second_writer_checks_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let lock_path = directory.path().join("writer.lock");
+        let settings_path = directory.path().join("machine.json");
+        let first = lock_writer(&lock_path, Duration::ZERO).unwrap();
+        let (started, waiting) = std::sync::mpsc::channel();
+        let second = std::thread::spawn({
+            let lock_path = lock_path.clone();
+            let settings_path = settings_path.clone();
+            move || {
+                started.send(()).unwrap();
+                let _lease = lock_writer(&lock_path, Duration::from_secs(5)).unwrap();
+                let current: serde_json::Value = serde_json::from_slice(&std::fs::read(settings_path).unwrap()).unwrap();
+                assert!(super::super::initial_snapshot_needs_reload(true, &current, &json!({})).unwrap());
+                let snapshot = super::super::parse_and_migrate_json_val(current).unwrap();
+                assert_eq!(snapshot.ideal.privacy.startup_pin.real_hash.as_deref(), Some("winner"));
+            }
+        });
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut winner = create_default_settings();
+        winner.ideal.privacy.startup_pin.enabled = Some(true);
+        winner.ideal.privacy.startup_pin.real_hash = Some("winner".into());
+        let (machine, _) = split_settings_value(serde_json::to_value(winner).unwrap()).unwrap();
+        std::fs::write(&settings_path, serde_json::to_vec(&machine).unwrap()).unwrap();
+        drop(first);
+        second.join().unwrap();
+    }
+
+    #[test]
     fn ordinary_personal_writer_needs_no_protected_lock() {
         assert!(acquire_writer_with(false, false, || panic!(
             "standard users must not touch the machine lock"

@@ -30,6 +30,7 @@ import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
 import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
+import { getCalculatorGateGeneration } from "./hooks/startupWindow";
 import { FlowSettingsRecovery } from "./components/startup/FlowSettingsRecovery";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
 import ShredConfirmationDialog from "./components/ShredConfirmationDialog";
@@ -1543,13 +1544,17 @@ function AppContent({ splashDone, onSplashComplete }: {
 }
 
 function StartupAuthGate({ children }: { children: React.ReactNode }) {
-  const [showCalc, setShowCalc]       = useState(false);
+  const [showCalc, setShowCalc]       = useState<number | null | undefined>(undefined);
   const { setMode } = useAuthMode();
 
   useEffect(() => {
     let mounted = true;
+    let calculatorEventVersion = 0;
     const handleCalculatorLockEngaged = () => {
-      setShowCalc(true);
+      const version = ++calculatorEventVersion;
+      void getCalculatorGateGeneration().then((generation) => {
+        if (mounted && calculatorEventVersion === version && generation !== null) setShowCalc(generation);
+      }).catch((error: unknown) => console.error("Unable to confirm calculator lock", error));
     };
     window.addEventListener("wincommander:calculator-lock-engaged", handleCalculatorLockEngaged);
 
@@ -1558,8 +1563,11 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
     // backend resizes the window to calc dimensions; this shows the matching
     // calc UI so the window is never a calc-sized blank real app.
     let unlistenCalc: (() => void) | undefined;
-    listen("calculator-mode-entered", () => {
-      if (mounted) setShowCalc(true);
+    const calculatorListener = listen<number>("calculator-mode-entered", ({ payload }) => {
+      const version = ++calculatorEventVersion;
+      void getCalculatorGateGeneration().then((generation) => {
+        if (mounted && calculatorEventVersion === version && generation === payload) setShowCalc(payload);
+      }).catch((error: unknown) => console.error("Unable to confirm calculator lock", error));
     }).then((un) => {
       if (mounted) unlistenCalc = un;
       else un();
@@ -1587,20 +1595,16 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
       },
     ).then((un) => { unlistenDestruct = un; }).catch(() => {});
 
-    invoke<boolean>("startup_pin_is_configured")
-      .then((configured) => {
-        if (!mounted) return;
-        if (configured) {
-          // Native setup owns the window transition before its first paint;
-          // React only replaces the webview content with the calculator.
-          setShowCalc(true);
-        } else {
-          setMode("real");
-        }
-      })
-      .catch(() => {
-        if (mounted) setMode("real");
-      });
+    void calculatorListener.then(async () => {
+      const version = calculatorEventVersion;
+      const generation = await getCalculatorGateGeneration();
+      if (!mounted || calculatorEventVersion !== version) return;
+      setShowCalc(generation);
+      if (generation === null) {
+        setMode("real");
+      }
+    })
+      .catch((error: unknown) => console.error("Unable to confirm startup PIN state", error));
 
     return () => {
       mounted = false;
@@ -1615,16 +1619,21 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
     // for every decoy transition, so no explicit set_decoy_mode call is needed
     // here — the calculator gate, distress phrase, and command palette all go
     // through the same context setter.
-    setMode(mode);
-    setShowCalc(false);
+    void getCalculatorGateGeneration().then((generation) => {
+      if (generation !== null) {
+        setShowCalc(generation);
+        return;
+      }
+      setMode(mode);
+      setShowCalc(null);
+    }).catch((error: unknown) => console.error("Unable to confirm calculator unlock", error));
   }, [setMode]);
 
-  if (showCalc) {
-    return <CalculatorGate onAuth={handleAuth} />;
+  if (typeof showCalc === "number") {
+    return <CalculatorGate key={showCalc} generation={showCalc} onAuth={handleAuth} />;
   }
-  // Always render children while the PIN check runs — AppContent already
-  // hides the dashboard behind SplashScreen, so a blank native window is
-  // worse than mounting early. Calculator still replaces the tree above.
+  // Do not mount the application until the verified PIN decision is known.
+  if (showCalc === undefined) return null;
   return <>{children}</>;
 }
 

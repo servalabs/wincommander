@@ -134,6 +134,7 @@ mod startup_trace;
 #[cfg(windows)]
 mod startup_visibility;
 mod startup_window;
+mod camera_presence;
 mod storage_probe;
 mod svc_client;
 mod trust_store_audit;
@@ -224,14 +225,28 @@ struct HideHotkeyState(Mutex<String>);
 /// true at once, but only this flag decides tray/close/reopen behaviour so an
 /// authenticated session doesn't get treated as locked. Seeded in setup() from
 /// the cold-start state; flipped by enter_calculator_mode / exit_calculator_mode.
-pub(crate) struct CalcModeState(pub Mutex<bool>);
+pub(crate) struct CalcModeState(pub Mutex<CalcModeSnapshot>);
+
+pub(crate) struct CalcModeSnapshot {
+    pub(crate) active: bool,
+    pub(crate) generation: u32,
+}
+
+impl CalcModeState {
+    fn new(active: bool) -> Self {
+        Self(Mutex::new(CalcModeSnapshot {
+            active,
+            generation: u32::from(active),
+        }))
+    }
+}
 
 /// Read the runtime calculator-locked flag. Falls back to the configured-PIN
 /// check only when the state hasn't been managed yet (should not happen post-setup).
 pub(crate) fn calc_mode_active(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
     app.try_state::<CalcModeState>()
-        .and_then(|s| s.0.lock().ok().map(|g| *g))
+        .and_then(|s| s.0.lock().ok().map(|g| g.active))
         .unwrap_or_else(startup_auth::startup_pin_is_configured_sync)
 }
 
@@ -240,9 +255,27 @@ pub(crate) fn set_calc_mode_active(app: &tauri::AppHandle, value: bool) {
     use tauri::Manager;
     if let Some(s) = app.try_state::<CalcModeState>() {
         if let Ok(mut g) = s.0.lock() {
-            *g = value;
+            if value && !g.active {
+                g.generation = g.generation.wrapping_add(1).max(1);
+                if let Some(startup) = app.try_state::<startup_window::StartupWindow>() {
+                    startup.reset_for_calculator();
+                }
+            }
+            g.active = value;
         }
     }
+}
+
+#[tauri::command]
+fn calculator_gate_generation(app: tauri::AppHandle) -> Result<Option<u32>, String> {
+    let state = app
+        .try_state::<CalcModeState>()
+        .ok_or("Calculator state is unavailable")?;
+    let state = state
+        .0
+        .lock()
+        .map_err(|_| "Calculator state is unavailable")?;
+    Ok(state.active.then_some(state.generation))
 }
 
 #[tauri::command]
@@ -391,6 +424,10 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         ),
     );
     if calculator_mode {
+        if startup_window::defer_reveal_until_ready(&window) {
+            let _ = startup_auth::enter_calculator_mode_with(window.clone(), false);
+            return;
+        }
         let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
     } else {
         if startup_window::defer_reveal_until_ready(&window) {
@@ -1320,7 +1357,7 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         file_watch_trigger::FileWatchTriggerState::default(),
     ));
     app.manage(HideHotkeyState(Mutex::new("Ctrl+Shift+G".to_string())));
-    app.manage(CalcModeState(Mutex::new(false)));
+    app.manage(CalcModeState::new(false));
 
     updater::init_headless(app.handle());
     flow_engine::init_headless(app.handle());
@@ -1800,7 +1837,7 @@ pub fn run() {
 
             let calculator_mode_on_startup = startup_auth::startup_pin_is_configured_sync();
             // Cache the startup calc-mode flag so CloseRequested avoids a disk read per close.
-            app.manage(CalcModeState(Mutex::new(calculator_mode_on_startup)));
+            app.manage(CalcModeState::new(calculator_mode_on_startup));
             let tray = _tray.build(app)?;
             // Hide tray icon immediately if WinCommander is in hidden mode.
             // The tray is still built so its event handlers (quit, show) remain
@@ -1888,7 +1925,8 @@ pub fn run() {
                     // Keep cold-start and every later calculator entry on the
                     // same native path. Divergent setup here caused a second
                     // transition after React mounted in packaged builds.
-                    let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
+                    let _ = startup_auth::enter_calculator_mode_with(window.clone(), false);
+                    let _ = startup_window::defer_reveal_until_ready(&window);
                 } else if foreground_launch && !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
                     reveal_main_window(app.handle());
@@ -1996,8 +2034,7 @@ pub fn run() {
                     let _ = window_clone.set_skip_taskbar(true);
                     let _ = window_clone.hide();
                     if lock_on_close && armed {
-                        set_calc_mode_active(window_clone.app_handle(), true);
-                        let _ = window_clone.app_handle().emit("calculator-mode-entered", ());
+                        let _ = startup_auth::enter_calculator_mode_with(window_clone.clone(), false);
                     } else {
                         // Re-arm Borrowed Mode. The webview persists across a hide
                         // (we prevent_close + hide, never destroy), so a session
@@ -2394,6 +2431,8 @@ pub fn run() {
             startup_trace::report_startup_milestone,
             startup_trace::report_startup_phase,
             startup_window::startup_window_ready,
+            camera_presence::dashboard_camera_presence,
+            calculator_gate_generation,
             exit_app,
             open_search_files_from_shortcut,
             reveal_main_window_for_security_alert,

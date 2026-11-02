@@ -56,6 +56,13 @@ impl StartupWindow {
         self.armed.store(true, Ordering::Release);
     }
 
+    pub(crate) fn reset_for_calculator(&self) {
+        if let Ok(_generation) = self.document_generation.lock() {
+            self.ready.store(false, Ordering::Release);
+            self.warned.store(false, Ordering::Release);
+        }
+    }
+
     fn defer_reveal(&self) -> bool {
         // Readiness and reveal intent must be ordered: an early tray click
         // cannot be lost between the document's acknowledgement and its reveal.
@@ -71,6 +78,13 @@ impl StartupWindow {
 
     fn take_reveal(&self) -> bool {
         self.armed.swap(false, Ordering::AcqRel)
+    }
+
+    fn take_ready_reveal(&self) -> bool {
+        let Ok(_generation) = self.document_generation.lock() else {
+            return false;
+        };
+        self.is_ready() && self.take_reveal()
     }
 
     pub(crate) fn is_ready(&self) -> bool {
@@ -99,6 +113,17 @@ impl StartupWindow {
         self.ready.store(true, Ordering::Release);
         self.warned.store(false, Ordering::Release);
         true
+    }
+
+    fn accept_content_ready(
+        &self,
+        document_generation: u32,
+        calculator_active: bool,
+        active_calculator_generation: u32,
+        content_calculator_generation: Option<u32>,
+    ) -> bool {
+        let expected = calculator_active.then_some(active_calculator_generation);
+        content_calculator_generation == expected && self.accept_ready(document_generation)
     }
 
     pub(crate) fn invalidate_renderer(&self, reveal: bool, can_reload: bool) -> bool {
@@ -184,17 +209,29 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
     let Some(state) = window.try_state::<StartupWindow>() else {
         return Ok(false);
     };
-    if !state.take_reveal() {
+    if !state.take_ready_reveal() {
+        return window.is_visible().map_err(|error| error.to_string());
+    }
+    if crate::calc_mode_active(window.app_handle()) {
+        if let Err(error) = crate::startup_auth::enter_calculator_mode_with(window.clone(), true) {
+            state.arm();
+            return Err(error);
+        }
         return window.is_visible().map_err(|error| error.to_string());
     }
     let mut result = crate::window_placement::show_maximized(window).await;
     // A display/session transition can briefly reject placement. Let Windows
     // finish processing it before reporting a persistent failure.
-    if result.is_err() {
+    if result.is_err() && !crate::calc_mode_active(window.app_handle()) {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         result = crate::window_placement::show_maximized(window).await;
     }
     if let Err(error) = result {
+        // A lock may have superseded an already queued normal-window reveal.
+        // The calculator owns the next reveal and must not expose a branded error.
+        if crate::calc_mode_active(window.app_handle()) {
+            return window.is_visible().map_err(|error| error.to_string());
+        }
         state.arm();
         crate::log_message_src("error", "core", &format!("[Startup] window reveal failed: {error}"));
         #[cfg(debug_assertions)]
@@ -203,6 +240,9 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
             show_native_startup_error(&format!("WinCommander could not open its window. {error}"));
         }
         return Err(error);
+    }
+    if crate::calc_mode_active(window.app_handle()) {
+        return window.is_visible().map_err(|error| error.to_string());
     }
     crate::set_wincommander_window_icon(window);
     let _ = window.set_focus();
@@ -255,6 +295,7 @@ pub(crate) async fn startup_window_ready(
     window: tauri::WebviewWindow,
     is_light: bool,
     generation: Option<u32>,
+    calculator_generation: Option<u32>,
 ) -> Result<bool, String> {
     if window.label() != "main" {
         return Err("Startup readiness is only available to the main window".into());
@@ -262,7 +303,23 @@ pub(crate) async fn startup_window_ready(
     let Some(state) = window.try_state::<StartupWindow>() else {
         return Ok(false);
     };
-    if !state.accept_ready(generation.unwrap_or(0)) {
+    // Hold the lock through validation and readiness publication so an old
+    // document cannot acknowledge a newly entered calculator gate.
+    let accepted = {
+        let Some(calculator_state) = window.try_state::<crate::CalcModeState>() else {
+            return Ok(false);
+        };
+        let Ok(calculator) = calculator_state.0.lock() else {
+            return Ok(false);
+        };
+        state.accept_content_ready(
+            generation.unwrap_or(0),
+            calculator.active,
+            calculator.generation,
+            calculator_generation,
+        )
+    };
+    if !accepted {
         return Ok(false);
     }
     let background = if is_light {

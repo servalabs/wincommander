@@ -113,6 +113,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
     const [localLoading, setLocalLoading] = useState(false);
+    const [shieldWaiting, setShieldWaiting] = useState(false);
     const [stopError, setStopError] = useState<string | null>(null);
     const [showShieldIntro, setShowShieldIntro] = useState(false);
     // Single disclosure for every non-essential control (was split across a
@@ -304,21 +305,40 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // The check function is held in a ref so handleToggle can call it
     // imperatively too.
     const checkStatusRef = useRef<() => Promise<void>>(async () => {});
+    const statusCheckInFlight = useRef(false);
+    const statusRefreshQueued = useRef(false);
+    const statusGeneration = useRef(0);
+    const inFlightGeneration = useRef(0);
+    const shieldActionInFlight = useRef(false);
     checkStatusRef.current = async () => {
+        if (shieldActionInFlight.current) { statusRefreshQueued.current = true; return; }
+        if (statusCheckInFlight.current) {
+            if (inFlightGeneration.current !== statusGeneration.current) statusRefreshQueued.current = true;
+            return;
+        }
+        statusRefreshQueued.current = false;
+        statusCheckInFlight.current = true;
+        const generation = statusGeneration.current;
+        inFlightGeneration.current = generation;
         try {
             const shield = await executeBackendCommand<{
                 running: boolean;
                 activeMode?: PrivacyShieldMode | null;
-                cameraAvailable?: boolean;
+                cameraAvailable?: boolean | null;
+                cameraStatus?: string;
                 cameraMessage?: string;
             }>("Get-PrivacyShieldStatus");
+            if (generation !== statusGeneration.current || shieldActionInFlight.current) return;
             if (shield.success && shield.data && typeof shield.data.running === "boolean") {
                 setPrivacyShieldRunning(shield.data.running);
                 setActiveShieldMode(shield.data.running
                     && (shield.data.activeMode === "notify_only" || shield.data.activeMode === "blur_notify")
                     ? shield.data.activeMode
                     : null);
-                if (typeof shield.data.cameraAvailable === "boolean") {
+                if (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean") {
+                    setCameraAvailable(null);
+                    setCameraMessage(shield.data.cameraMessage ?? "Camera status could not be confirmed.");
+                } else if (typeof shield.data.cameraAvailable === "boolean") {
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
                     if (!shield.data.cameraAvailable) {
@@ -345,6 +365,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     privacyClass: "local_sensitive", context: { health: "unknown" } });
             }
         } catch {
+            if (generation !== statusGeneration.current || shieldActionInFlight.current) return;
             // A failed probe is also unknown state, not evidence that the last
             // observed running/camera value is still current.
             setPrivacyShieldRunning(null);
@@ -355,6 +376,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 lifecycle: "verified", outcome: "failed", errorCode: "PSH.STATUS.UNAVAILABLE",
                 severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
                 privacyClass: "local_sensitive", context: { health: "unknown" } });
+        } finally {
+            statusCheckInFlight.current = false;
+            if (statusRefreshQueued.current && !shieldActionInFlight.current) {
+                statusRefreshQueued.current = false;
+                void checkStatusRef.current();
+            }
         }
     };
     const checkStatus = useCallback(() => checkStatusRef.current(), []);
@@ -480,10 +507,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // and answering the status poll. Belt-and-braces with the explicit
     // setLocalLoading(false) in handleToggle's finally block.
     useEffect(() => {
-        if (privacyShieldRunning === true && localLoading) setLocalLoading(false);
+        if (privacyShieldRunning === true && localLoading && !shieldActionInFlight.current) setLocalLoading(false);
     }, [privacyShieldRunning, localLoading]);
 
     const handleToggle = async () => {
+        if (shieldActionInFlight.current) return;
         setStopError(null);
         const operationId = newDiagnosticOperationId("privacy_shield");
         if (fleetShieldSessionLocked) {
@@ -505,6 +533,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
         if (targetState && quota && !quota.is_unlimited && quota.minutes_remaining <= 0) { openShieldPaywall(); return; }
         setLocalLoading(true);
+        setShieldWaiting(false);
+        shieldActionInFlight.current = true;
+        statusGeneration.current++;
         const action = targetState ? "start" : "stop";
         const startedAt = Date.now();
         recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: targetState ? "start" : "stop" } });
@@ -514,6 +545,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         // running independently so the real state still surfaces.
         const loadingTimeout = setTimeout(() => {
             setLocalLoading(false);
+            setShieldWaiting(true);
             checkStatus();
         }, 60_000);
         try {
@@ -565,8 +597,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 const res = await executeBackendCommand<{ success: boolean; message?: string }>("Stop-PrivacyShield", {});
                 let failure = privacyShieldStopError(res);
                 if (!failure) {
+                    // Do not reuse a status request that started before Stop.
+                    const freshStatus = await invoke<{ running?: boolean; error?: boolean | null }>(
+                        "run_backend_script", { command: "Get-PrivacyShieldStatus", params: {} },
+                    );
                     failure = privacyShieldStopVerificationError(
-                        await executeBackendCommand<{ running?: boolean }>("Get-PrivacyShieldStatus", {}),
+                        { success: true, data: freshStatus },
                     );
                 }
                 if (!failure) { await consumeElapsedSession(); invalidateShieldQuota(); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); }
@@ -578,6 +614,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         } catch (e) { if (!targetState) setStopError("Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
+            shieldActionInFlight.current = false;
+            setShieldWaiting(false);
             setLocalLoading(false);
             // Reconcile against the actual process state right away so the
             // button label updates the moment the start/stop returns,
@@ -588,7 +626,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
     };
 
-    const stateUnknown = privacyShieldRunning === null || cameraAvailable === null;
+    const stateUnknown = privacyShieldRunning === null || (cameraAvailable === null && privacyShieldRunning !== true);
     const headerRight = stateUnknown ? (
         <Button
             text="Refresh status"
@@ -598,11 +636,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         />
     ) : (
         <Button
-            text={privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
+            text={shieldWaiting ? "Waiting for Shield" : privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
             intent={privacyShieldRunning ? "danger" : "primary"}
             onClick={handleToggle}
-            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || (privacyShieldRunning ? false : localLoading || cameraAvailable === false)}
-            loading={privacyShieldRunning ? false : localLoading}
+            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || localLoading || shieldWaiting || (!privacyShieldRunning && cameraAvailable === false)}
+            loading={localLoading}
             className="shield-primary-btn physical-shield-header-btn"
         />
     );
