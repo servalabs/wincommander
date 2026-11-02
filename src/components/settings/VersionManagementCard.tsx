@@ -78,9 +78,12 @@ export default function VersionManagementCard() {
     const [freeLatest, setFreeLatest] = useState<string | null>(null);
     const [freeChecking, setFreeChecking] = useState(false);
     const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
+    const [channelChanging, setChannelChanging] = useState(false);
+    const confirmAction = useAppConfirm();
     const { hasPaid, canUpdatePro } = useEntitlements();
-    const { appSettings, patchAppSettings } = useAppState();
+    const { appSettings, patchAppSettings, refreshSettings } = useAppState();
     const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
+    const updateChannel = appSettings?.app?.updateChannel ?? "stable";
 
     const refreshVersions = useCallback(async () => {
         setFreeChecking(true);
@@ -110,6 +113,31 @@ export default function VersionManagementCard() {
 
     const freeCompare = compareVersions(freeLatest, freeCurrent);
     const freeNeedsUpdate = freeCompare === 1;
+
+    const changeChannel = async (joinBeta: boolean) => {
+        const accepted = await confirmAction({
+            title: joinBeta ? "Join WinCommander beta testing?" : "Leave beta testing?",
+            description: joinBeta
+                ? "Beta updates may contain defects. This choice affects every Windows user of this WinCommander installation. Open WinCommander as an administrator to change it."
+                : "This choice affects every Windows user of this installation and requires WinCommander to run as administrator. Your current beta version will stay installed until Stable offers the same or a newer version; WinCommander will not downgrade it.",
+            confirmLabel: joinBeta ? "Join beta" : "Use Stable",
+            destructive: false,
+        });
+        if (!accepted) return;
+        setChannelChanging(true);
+        try {
+            await invoke("set_update_channel", { channel: joinBeta ? "beta" : "stable" });
+            await refreshSettings();
+            await refreshVersions();
+            showSuccess(joinBeta ? "Beta updates are now enabled for this installation." : "This installation now checks Stable updates.");
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const guidance = message.includes("Administrator") ? " Reopen WinCommander as an administrator and try again." : "";
+            showWarning(`Could not change update channel: ${message}${guidance}`, undefined, { kind: "notification" });
+        } finally {
+            setChannelChanging(false);
+        }
+    };
 
     return (
         <SectionCard
@@ -142,6 +170,20 @@ export default function VersionManagementCard() {
                             void patchAppSettings({ app: { autoUpdate: event.currentTarget.checked } }).catch(reportSettingsWriteFailure);
                         }}
                         aria-label="Automatically update WinCommander"
+                    />
+                </div>
+                <div className="version-auto-update">
+                    <div>
+                        <div className="version-auto-update__title">Join beta testing</div>
+                        <div className="version-auto-update__description">
+                            Beta receives new WinCommander builds before Stable. The choice applies to everyone using this Windows installation. Leaving beta does not reinstall an older version.
+                        </div>
+                    </div>
+                    <Switch
+                        checked={updateChannel === "beta"}
+                        disabled={channelChanging}
+                        onChange={(event) => { void changeChannel(event.currentTarget.checked); }}
+                        aria-label="Join WinCommander beta testing"
                     />
                 </div>
                 {/* Check/Update/Delete controls stay available inline per-row as a

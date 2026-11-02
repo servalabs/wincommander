@@ -191,6 +191,8 @@ export interface AppPreferences {
    *  and not surfaced again in settings. NOT to be confused with
    *  `ideal.apps.autoUpdate`, which is the winget *installed-apps* policy. */
   autoUpdate: boolean;
+  /** Machine-wide release channel shared by Free and Pro. */
+  updateChannel?: 'stable' | 'beta';
   startMinimized: boolean;
   /** Machine-wide sign-in choice, editable by an elevated app. Defaults to tray; manual launches are unaffected. */
   startSilentlyAtSignIn?: boolean;

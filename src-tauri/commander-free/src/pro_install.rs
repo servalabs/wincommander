@@ -604,6 +604,17 @@ fn read_pro_file_version(_path: &std::path::Path) -> Option<String> {
 pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Value, String> {
     // F-1: refuse any manifest URL outside the pinned update host.
     validate_update_url(&manifest_url, "manifest_url")?;
+    let channel = crate::updater::selected_update_channel()?;
+    let pinned_url = format!(
+        "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
+        crate::updater::effective_free_version()
+    );
+    let stable_url = format!("https://{ALLOWED_UPDATE_HOST}/pro/latest.json");
+    if manifest_url != pinned_url
+        && !(channel == crate::settings::UpdateChannel::Stable && manifest_url == stable_url)
+    {
+        return Err("validation:Pro manifest does not match the selected update channel".into());
+    }
     // DoH-aware client: winupdates.servalabs.com is the same family of host
     // as the license/update hosts that were observed to be ISP-DNS-blocked,
     // so route through the same system-DNS-first/Cloudflare-DoH-fallback
@@ -626,6 +637,7 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
         .json::<serde_json::Value>()
         .await
         .map_err(|e| format!("parse:{}", e))?;
+    crate::updater::require_selected_channel(channel)?;
     check_pro_release_minimum(manifest.get("version").and_then(serde_json::Value::as_str))?;
     Ok(manifest)
 }
@@ -900,8 +912,8 @@ fn check_pro_release_minimum(pro_version: Option<&str>) -> Result<[u64; 4], Stri
 }
 
 fn check_pro_version_compatible(pro_version: Option<&str>) -> Result<(), String> {
-    let free_str = env!("CARGO_PKG_VERSION");
-    let free = parse_semver(free_str)
+    let free_str = crate::updater::effective_free_version();
+    let free = parse_semver(&free_str)
         .ok_or_else(|| "validation:WinCommander version could not be verified.".to_string())?;
     let pro = check_pro_release_minimum(pro_version)?;
     if pro > free {
@@ -940,13 +952,17 @@ async fn verify_published_pro_request(
     expected_sha256: &str,
     pro_version: Option<&str>,
 ) -> Result<(), String> {
+    let channel = crate::updater::selected_update_channel()?;
     let pinned_url = format!(
         "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
-        env!("CARGO_PKG_VERSION")
+        crate::updater::effective_free_version()
     );
     let manifest = match fetch_pro_manifest(pinned_url).await {
         Ok(manifest) => manifest,
-        Err(error) if error.starts_with("not_published:") => {
+        Err(error)
+            if channel == crate::settings::UpdateChannel::Stable
+                && error.starts_with("not_published:") =>
+        {
             fetch_pro_manifest(format!("https://{ALLOWED_UPDATE_HOST}/pro/latest.json")).await?
         }
         Err(error) => return Err(error),
@@ -1353,6 +1369,7 @@ async fn install_pro_binary_machine(
     validate_update_url(&download_url, "download_url")?;
 
     // The renderer cannot make an old artifact current by relabeling its version or hash.
+    let channel = crate::updater::selected_update_channel()?;
     verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
 
     #[cfg(windows)]
@@ -1469,6 +1486,7 @@ async fn install_pro_binary_machine(
         let _ = std::fs::remove_file(&tmp_path);
         return Err(error);
     }
+    crate::updater::require_selected_channel(channel)?;
     let _maintenance = update_guard::Maintenance::begin(&install_path).await?;
     crate::sidecar::drain_pro_sessions_for_update(&_maintenance).await;
     if install_path.exists() {
@@ -1477,6 +1495,7 @@ async fn install_pro_binary_machine(
             .await
             .map_err(|error| format!("disk:Pro stop worker failed: {error}"))??;
     }
+    crate::updater::require_selected_channel(channel)?;
     update_replace::replace_with_metadata(&install_path, tmp_path, || {
         write_pro_install_metadata(pro_version.clone(), &expected_sha256)
     })?;

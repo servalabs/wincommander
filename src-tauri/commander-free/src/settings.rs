@@ -32,6 +32,14 @@ enum SettingsScope {
     User,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+}
+
 #[path = "settings_scope.rs"]
 mod settings_scope;
 
@@ -349,6 +357,9 @@ pub struct AppPreferences {
     /// installed-apps policy — that is `ideal.apps.auto_update`.
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// One channel for the machine-wide installation and its Pro sidecar.
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
     #[serde(default)]
     pub start_minimized: bool,
     // Machine-wide sign-in presentation. Personal overlays cannot override it.
@@ -938,6 +949,7 @@ impl Default for AppPreferences {
             first_run_complete: false,
             has_seen_mandatory_tour: false,
             auto_update: true,
+            update_channel: UpdateChannel::Stable,
             start_minimized: false,
             start_silently_at_sign_in: true,
             context_menu_enabled: false,
@@ -2614,11 +2626,13 @@ fn scope_for_path(path: &str) -> Result<Option<SettingsScope>, String> {
         return Ok(None);
     }
     if path.starts_with("app.") {
-        return Ok(Some(if path == startup_scope::PATH {
-            SettingsScope::Machine
-        } else {
-            SettingsScope::User
-        }));
+        return Ok(Some(
+            if path == startup_scope::PATH || path == "app.updateChannel" {
+                SettingsScope::Machine
+            } else {
+                SettingsScope::User
+            },
+        ));
     }
     if let Some((_, scope)) = ROOT_SETTINGS_SCOPE_TABLE
         .iter()
@@ -2718,6 +2732,14 @@ fn merge_user_overlay(
     mut overlay: serde_json::Value,
 ) -> Result<AppSettings, String> {
     startup_scope::remove_personal_choice(&mut overlay);
+    // A legacy or hand-edited per-user overlay cannot choose the shared
+    // installer channel when settings are read back.
+    if let Some(app) = overlay
+        .get_mut("app")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        app.remove("updateChannel");
+    }
     normalize_file_search_result_limit(&mut overlay);
     let mut merged = serde_json::to_value(machine)
         .map_err(|error| format!("Failed to serialize machine settings: {error}"))?;
@@ -2988,6 +3010,21 @@ fn write_settings_under_lease(
         return Err("Settings are read-only in decoy mode.".to_string());
     }
     let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
+    // A current-user install can write its own machine partition without an
+    // elevated token. The update channel still controls which installer all
+    // users receive, so enforce approval here as well as in the dedicated UI
+    // command; generic settings patches must not bypass it.
+    let stored_channel = stored_machine
+        .pointer("/app/updateChannel")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("stable");
+    let requested_channel = match settings.app.update_channel {
+        UpdateChannel::Stable => "stable",
+        UpdateChannel::Beta => "beta",
+    };
+    if stored_channel != requested_channel && !elevated {
+        return Err("Administrator approval is required to change the update channel.".into());
+    }
     let cached_silent = SETTINGS_CACHE
         .lock()
         .map_err(|_| "Settings cache lock poisoned")?
@@ -4643,6 +4680,30 @@ mod tests {
             let restored = merge_user_overlay(machine, personal).unwrap();
             assert_eq!(restored.app.start_silently_at_sign_in, silent);
         }
+    }
+
+    #[test]
+    fn beta_channel_is_machine_scoped_and_old_settings_default_to_stable() {
+        let old: AppPreferences = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(old.update_channel, UpdateChannel::Stable);
+        let mut settings = create_default_settings();
+        settings.app.update_channel = UpdateChannel::Beta;
+        let (machine, personal) =
+            split_settings_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert_eq!(machine["app"]["updateChannel"], "beta");
+        assert!(personal["app"].get("updateChannel").is_none());
+        let restored =
+            merge_user_overlay(parse_and_migrate_json_val(machine).unwrap(), personal).unwrap();
+        assert_eq!(restored.app.update_channel, UpdateChannel::Beta);
+        let with_stale_user_choice = merge_user_overlay(
+            restored,
+            serde_json::json!({ "app": { "updateChannel": "stable" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            with_stale_user_choice.app.update_channel,
+            UpdateChannel::Beta
+        );
     }
 
     #[test]
