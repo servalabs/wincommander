@@ -38,7 +38,7 @@ implementation, commercial work, and acceptance records live in
   measurement evidence. `CHANGELOG.md` owns shipped historical changes.
 - This repository carries **no weaknesses ledger and no roadmap**. The open
   limitations and validation gaps for this client are tracked privately in
-  `wincommander-pro` (`docs/product/PUBLIC-FREE-WEAKNESSES-INTERNAL.md`), and
+  `wincommander-pro` (`WEAKNESSES.md`, Free-client boundaries), and
   approved future work in that repository's `ROADMAP.md`. A limitation that must
   reach users belongs here as a boundary in `NON-GOALS.md` or a threat-model
   statement in `SECURITY.md`, written for that audience — never as a new
