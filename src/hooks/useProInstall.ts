@@ -38,6 +38,8 @@ import { proReleaseCompatibilityError } from "../lib/proReleaseCompatibility";
 // is maintained. Must stay in lock-step with pro_install.rs's
 // ALLOWED_UPDATE_HOST.
 const PRO_MANIFEST_BASE = "https://winupdates.servalabs.com";
+type UpdateChannel = "stable" | "beta";
+let activeManifestChannel: UpdateChannel = "stable";
 
 // Cached Free version (resolved once per session).
 let cachedFreeVersion: string | null = null;
@@ -72,6 +74,9 @@ async function resolveManifestUrl(): Promise<string> {
     if (freeVersion) {
         // Attempt version-specific path first. If 404, fall back to latest.
         return `${PRO_MANIFEST_BASE}/pro/v${freeVersion}/latest.json`;
+    }
+    if (activeManifestChannel === "beta") {
+        throw Object.assign(new Error("A matching beta Pro release cannot be verified."), { stage: "not_published" });
     }
     return `${PRO_MANIFEST_BASE}/pro/latest.json`;
 }
@@ -220,7 +225,7 @@ async function fetchManifestOnce(): Promise<ProManifest> {
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         // Version-specific manifest not yet published — fall back to latest.
-        if (message.startsWith("not_published:") && resolvedManifestUrl !== `${PRO_MANIFEST_BASE}/pro/latest.json`) {
+        if (activeManifestChannel === "stable" && message.startsWith("not_published:") && resolvedManifestUrl !== `${PRO_MANIFEST_BASE}/pro/latest.json`) {
             const fallback = `${PRO_MANIFEST_BASE}/pro/latest.json`;
             resolvedManifestUrl = fallback;
             try {
@@ -390,7 +395,19 @@ export interface ProInstallProbePolicy {
 
 export default function useProInstall(policy: ProInstallProbePolicy) {
     const snap = useSyncExternalStore(subscribe, () => state, () => state);
-    const { runStartupJob } = useAppState();
+    const { runStartupJob, appSettings } = useAppState();
+    const updateChannel = appSettings?.app?.updateChannel ?? "stable";
+
+    useEffect(() => {
+        if (activeManifestChannel === updateChannel) return;
+        activeManifestChannel = updateChannel;
+        void (async () => {
+            await manifestFetchInFlight;
+            invalidateManifestCache(cachedFreeVersion);
+            setState({ manifest: null, manifestError: null });
+            if (policy.manifest) await fetchManifest();
+        })();
+    }, [updateChannel, policy.manifest]);
 
     useEffect(() => {
         if (policy.manifest && !snap.manifest && !manifestFetchInFlight && !snap.manifestError) {

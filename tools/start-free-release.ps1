@@ -2,11 +2,12 @@
   Prepare and start one WinCommander Free tag release without the GitHub
   prepare-release workflow.
 
-  This command creates the version commit on origin/main, then creates the
-  matching vX.Y.Z tag. The tag push starts .github/workflows/release.yml.
+  Stable may create a version commit on origin/main. Beta requires an already
+  reviewed version on origin/beta. The tag starts .github/workflows/release.yml.
 
   Examples:
     .\tools\start-free-release.ps1 -Version 3.5.7
+    .\tools\start-free-release.ps1 -Version 3.6.7 -Beta
     .\tools\start-free-release.ps1 -Version 3.5.6 -ReplaceUnpublishedTag
 #>
 [CmdletBinding()]
@@ -14,6 +15,9 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
     [string]$Version,
+
+    # Candidate source and destination are isolated from stable latest URLs.
+    [switch]$Beta,
 
     # Only use when a previous attempt created this tag but no GitHub Release.
     [switch]$ReplaceUnpublishedTag
@@ -34,7 +38,11 @@ function Invoke-Git([string[]]$Arguments) {
 }
 
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
-$tag = "v$Version"
+$branch = if ($Beta) { 'beta' } else { 'main' }
+$tag = if ($Beta) { "beta-v$Version" } else { "v$Version" }
+if ($Beta -and $Version -notmatch '^\d+\.\d+\.\d+$') {
+    Stop-Release 'Beta candidates need a numeric X.Y.Z version so their exact installer can later be promoted.'
+}
 
 $gitAuthorName = (git -C $root config --get user.name | Out-String).Trim()
 $gitAuthorEmail = (git -C $root config --get user.email | Out-String).Trim()
@@ -45,7 +53,7 @@ if ([string]::IsNullOrWhiteSpace($gitAuthorName) -or [string]::IsNullOrWhiteSpac
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Stop-Release 'GitHub CLI (gh) is required to verify release state.'
 }
-Invoke-Git @('-C', $root, 'fetch', '--quiet', 'origin', 'main', '--tags')
+Invoke-Git @('-C', $root, 'fetch', '--quiet', 'origin', $branch, '--tags')
 $origin = (Invoke-Git @('-C', $root, 'remote', 'get-url', 'origin') | Out-String).Trim()
 if ($origin -notmatch 'github\.com[/:](?<owner>[^/]+)/(?<name>[^/.]+)(?:\.git)?$') {
     Stop-Release "Could not determine the GitHub repository from origin: $origin"
@@ -60,6 +68,16 @@ $ErrorActionPreference = $priorErrorActionPreference
 if ($publishedExitCode -eq 0) {
     Stop-Release "$tag is already published and cannot be replaced. Choose a newer version."
 }
+if (-not $Beta) {
+    $priorErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $betaCandidate = & gh release view "beta-v$Version" --repo $repository 2>$null
+    $betaCandidateExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $priorErrorActionPreference
+    if ($betaCandidateExitCode -eq 0) {
+        Stop-Release "beta-v$Version already exists. Promote it with the reviewed beta promotion workflow instead of creating a stable tag here."
+    }
+}
 $publishedTags = (& gh api "repos/$repository/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name' | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($publishedTags)) {
     Stop-Release 'Could not establish the published release baseline.'
@@ -68,7 +86,7 @@ $env:WINCOMMANDER_RELEASE_VERSION = $Version
 $env:WINCOMMANDER_PUBLISHED_TAGS = $publishedTags
 @'
 const parse = (value) => {
-  const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+  const match = /^(?:beta-)?(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
   if (!match) throw new Error(`Invalid semantic version: ${value}`);
   return { core: match.slice(1, 4).map(Number), pre: match[4]?.split('.') || [] };
 };
@@ -104,7 +122,7 @@ if ($remoteTag -and -not $ReplaceUnpublishedTag) {
 
 $worktree = Join-Path ([IO.Path]::GetTempPath()) ("wincommander-free-release-" + [guid]::NewGuid().ToString('N'))
 try {
-    Invoke-Git @('-C', $root, 'worktree', 'add', '--detach', $worktree, 'origin/main')
+    Invoke-Git @('-C', $root, 'worktree', 'add', '--detach', $worktree, "origin/$branch")
     Push-Location $worktree
 
     $current = (& node -e "const fs=require('fs'); process.stdout.write(JSON.parse(fs.readFileSync('package.json','utf8')).version)" --input-type=commonjs 2>$null).Trim()
@@ -139,13 +157,16 @@ const compare = (left, right) => {
   return 0;
 };
 if (compare(process.env.WINCOMMANDER_CURRENT_MAIN_VERSION, process.env.WINCOMMANDER_RELEASE_VERSION) > 0) {
-  throw new Error('origin/main already declares a newer version.');
+  throw new Error('The release branch already declares a newer version.');
 }
 '@ | node --input-type=commonjs -
     Remove-Item Env:WINCOMMANDER_CURRENT_MAIN_VERSION
     Remove-Item Env:WINCOMMANDER_RELEASE_VERSION
-    if ($LASTEXITCODE -ne 0) { Stop-Release 'Requested version is older than origin/main.' }
+    if ($LASTEXITCODE -ne 0) { Stop-Release "Requested version is older than origin/$branch." }
     $versionAlreadyPrepared = $current -eq $Version
+    if ($Beta -and -not $versionAlreadyPrepared) {
+        Stop-Release 'Prepare and merge the beta version on protected origin/beta before pushing its tag. Beta release automation never pushes a version commit around review.'
+    }
 
     $update = @'
 const fs = require('fs');
@@ -197,7 +218,7 @@ if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => 
     if (-not $versionAlreadyPrepared) {
         Invoke-Git @('-C', $worktree, 'add', 'package.json', 'src-tauri/commander-free/tauri.conf.json', 'src-tauri/commander-free/Cargo.toml', 'src-tauri/Cargo.lock')
         Invoke-Git @('-C', $worktree, 'commit', '-m', "release: v$Version")
-        Invoke-Git @('-C', $worktree, 'push', 'origin', 'HEAD:main')
+        Invoke-Git @('-C', $worktree, 'push', 'origin', "HEAD:$branch")
     }
 
     if ($remoteTag) {

@@ -11316,6 +11316,16 @@
       ]
     },
     {
+      "id": "tauri:set_update_channel",
+      "name": "set_update_channel",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/settings/VersionManagementCard.tsx"
+      ]
+    },
+    {
       "id": "tauri:set_usb_autosandbox_config",
       "name": "set_usb_autosandbox_config",
       "transport": "tauri",

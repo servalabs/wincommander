@@ -54,8 +54,19 @@ pub struct StagedState {
     last_state: Mutex<Option<StatePayload>>,
 }
 
+static INSTALLED_PENDING_RESTART_VERSION: Mutex<Option<String>> = Mutex::new(None);
+
+pub(crate) fn effective_free_version() -> String {
+    INSTALLED_PENDING_RESTART_VERSION
+        .lock()
+        .ok()
+        .and_then(|version| version.clone())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
 struct StagedUpdate {
     version: String,
+    channel: crate::settings::UpdateChannel,
     bytes: Vec<u8>,
 }
 
@@ -63,9 +74,15 @@ struct StagedUpdate {
 /// still names the exact same release. A manifest can advance while the app is
 /// running; installing older staged bytes through the newer `Update` handle
 /// would make the displayed release metadata diverge from the installer.
-fn take_staged_for_version(staged: &mut Option<StagedUpdate>, version: &str) -> Option<Vec<u8>> {
+fn take_staged_for_version(
+    staged: &mut Option<StagedUpdate>,
+    version: &str,
+    channel: crate::settings::UpdateChannel,
+) -> Option<Vec<u8>> {
     match staged.take() {
-        Some(candidate) if candidate.version == version => Some(candidate.bytes),
+        Some(candidate) if candidate.version == version && candidate.channel == channel => {
+            Some(candidate.bytes)
+        }
         Some(_) | None => None,
     }
 }
@@ -123,6 +140,11 @@ pub(crate) fn emit_ready(
     current_version: Option<String>,
     body: Option<String>,
 ) {
+    if let Some(installed) = version.as_ref() {
+        if let Ok(mut pending) = INSTALLED_PENDING_RESTART_VERSION.lock() {
+            *pending = Some(installed.clone());
+        }
+    }
     emit(app, "ready", version, current_version, body, None);
 }
 
@@ -152,20 +174,49 @@ fn preserve_app_until_installer_launch(
     builder.on_before_exit(|| {})
 }
 
-pub(crate) fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+pub(crate) fn selected_update_channel() -> Result<crate::settings::UpdateChannel, String> {
+    Ok(crate::settings::read_settings()?.app.update_channel)
+}
+
+pub(crate) fn require_selected_channel(
+    channel: crate::settings::UpdateChannel,
+) -> Result<(), String> {
+    if selected_update_channel()? == channel {
+        Ok(())
+    } else {
+        Err("Update channel changed. Check again before installing.".into())
+    }
+}
+
+pub(crate) fn clear_staged(app: &AppHandle) {
+    if let Some(state) = app.try_state::<StagedState>() {
+        if let Ok(mut staged) = state.inner.lock() {
+            *staged = None;
+        }
+        if let Ok(mut last) = state.last_state.lock() {
+            *last = None;
+        }
+    }
+    emit(app, "idle", None, None, None, None);
+}
+
+pub(crate) fn build_updater_for_channel(
+    app: &AppHandle,
+    channel: crate::settings::UpdateChannel,
+) -> Result<tauri_plugin_updater::Updater, String> {
     preserve_app_until_installer_launch(app.updater_builder())
-        .endpoints(crate::cache_busted_endpoints(app)?)
+        .endpoints(crate::cache_busted_endpoints(app, channel)?)
         .map_err(|e| format!("Updater endpoints failed: {}", e))?
         .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
         .build()
         .map_err(|e| format!("Updater build failed: {}", e))
 }
 
-fn already_staged(app: &AppHandle, version: &str) -> bool {
+fn already_staged(app: &AppHandle, version: &str, channel: crate::settings::UpdateChannel) -> bool {
     if let Some(state) = app.try_state::<StagedState>() {
         if let Ok(guard) = state.inner.lock() {
             if let Some(staged) = guard.as_ref() {
-                return staged.version == version;
+                return staged.version == version && staged.channel == channel;
             }
         }
     }
@@ -193,7 +244,14 @@ async fn run_cycle(app: &AppHandle) -> Duration {
     crate::log_message_src("info", "core", "[Updater] cycle start: checking for update");
     emit(app, "checking", None, None, None, None);
 
-    let updater = match build_updater(app) {
+    let channel = match selected_update_channel() {
+        Ok(channel) => channel,
+        Err(error) => {
+            emit(app, "error", None, None, None, Some(error));
+            return RETRY_INTERVAL;
+        }
+    };
+    let updater = match build_updater_for_channel(app, channel) {
         Ok(u) => u,
         Err(e) => {
             crate::log_message_src(
@@ -245,6 +303,9 @@ async fn run_cycle(app: &AppHandle) -> Duration {
         }
         Ok(Ok(maybe)) => maybe,
     };
+    if require_selected_channel(channel).is_err() {
+        return RETRY_INTERVAL;
+    }
 
     let update = match checked {
         None => {
@@ -289,7 +350,7 @@ async fn run_cycle(app: &AppHandle) -> Duration {
 
     // Already staged this exact version? Re-surface the prompt without burning
     // bandwidth re-downloading the same artifact every NORMAL_INTERVAL (7 days).
-    if already_staged(app, &version) {
+    if already_staged(app, &version, channel) {
         crate::log_message_src(
             "info",
             "core",
@@ -317,13 +378,21 @@ async fn run_cycle(app: &AppHandle) -> Duration {
     );
     match update.download(|_, _| {}, || {}).await {
         Ok(bytes) => {
+            if require_selected_channel(channel).is_err() {
+                return RETRY_INTERVAL;
+            }
             if let Some(state) = app.try_state::<StagedState>() {
                 if let Ok(mut guard) = state.inner.lock() {
                     *guard = Some(StagedUpdate {
                         version: version.clone(),
+                        channel,
                         bytes,
                     });
                 }
+            }
+            if require_selected_channel(channel).is_err() {
+                clear_staged(app);
+                return RETRY_INTERVAL;
             }
             crate::log_message_src(
                 "info",
@@ -414,7 +483,16 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
     // until this re-check completes: they are reusable only if its manifest
     // names the same version, and retaining them lets a transient re-check
     // failure be retried without a needless re-download.
-    let updater = build_updater(&app);
+    let channel = match selected_update_channel() {
+        Ok(channel) => channel,
+        Err(error) => {
+            if let Some(s) = app.try_state::<StagedState>() {
+                s.installing.store(false, Ordering::Release);
+            }
+            return Err(error);
+        }
+    };
+    let updater = build_updater_for_channel(&app, channel);
     let update = match updater {
         Ok(u) => match tokio::time::timeout(CHECK_TIMEOUT, u.check()).await {
             Err(_) => {
@@ -444,6 +522,12 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
             return Err(e);
         }
     };
+    if let Err(error) = require_selected_channel(channel) {
+        if let Some(s) = app.try_state::<StagedState>() {
+            s.installing.store(false, Ordering::Release);
+        }
+        return Err(error);
+    }
 
     // Captured before `install()`/`download_and_install()` consume `update`, so
     // we can emit the terminal "ready" phase (installed, awaiting relaunch).
@@ -455,7 +539,7 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
         s.inner
             .lock()
             .ok()
-            .and_then(|mut state| take_staged_for_version(&mut state, &target_version))
+            .and_then(|mut state| take_staged_for_version(&mut state, &target_version, channel))
     });
 
     let result = match staged {
@@ -493,6 +577,7 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{take_staged_for_version, StagedUpdate};
+    use crate::settings::UpdateChannel;
 
     #[test]
     fn update_install_requires_an_actually_elevated_token() {
@@ -506,19 +591,24 @@ mod tests {
     fn staged_installer_is_reused_only_for_the_manifested_version() {
         let mut matching = Some(StagedUpdate {
             version: "4.2.0".into(),
+            channel: UpdateChannel::Stable,
             bytes: vec![1, 2, 3],
         });
         assert_eq!(
-            take_staged_for_version(&mut matching, "4.2.0"),
+            take_staged_for_version(&mut matching, "4.2.0", UpdateChannel::Stable),
             Some(vec![1, 2, 3])
         );
         assert!(matching.is_none());
 
         let mut stale = Some(StagedUpdate {
             version: "4.2.0".into(),
+            channel: UpdateChannel::Beta,
             bytes: vec![4, 5, 6],
         });
-        assert_eq!(take_staged_for_version(&mut stale, "4.3.0"), None);
+        assert_eq!(
+            take_staged_for_version(&mut stale, "4.2.0", UpdateChannel::Stable),
+            None
+        );
         assert!(stale.is_none());
     }
 }

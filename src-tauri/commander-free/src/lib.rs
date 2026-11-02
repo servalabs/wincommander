@@ -923,11 +923,13 @@ async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInf
     // intermediate proxy between us and the manifest host can't serve
     // a stale latest.json. The frontend retry in 3ef0cbe flushed our own
     // in-process cache; this closes the remaining HTTP-layer hole.
-    let updater = updater::build_updater(&app)?;
+    let channel = updater::selected_update_channel()?;
+    let updater = updater::build_updater_for_channel(&app, channel)?;
     let check_fut = updater.check();
     let result = tokio::time::timeout(std::time::Duration::from_secs(20), check_fut)
         .await
         .map_err(|_| "Update check timed out (network/DNS slow or blocked)".to_string())?;
+    updater::require_selected_channel(channel)?;
     match result {
         Ok(Some(update)) => Ok(DohUpdateInfo {
             available: true,
@@ -965,12 +967,14 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     let result: Result<(String, String, Option<String>), String> = async {
-        let updater = updater::build_updater(&app)?;
+        let channel = updater::selected_update_channel()?;
+        let updater = updater::build_updater_for_channel(&app, channel)?;
         let update = tokio::time::timeout(crate::updater::CHECK_TIMEOUT, updater.check())
             .await
             .map_err(|_| "Update re-check timed out".to_string())?
             .map_err(|e| format!("Update re-check failed: {}", e))?
             .ok_or_else(|| "No update available".to_string())?;
+        updater::require_selected_channel(channel)?;
         // Captured before download_and_install consumes `update`.
         let version = update.version.clone();
         let current = update.current_version.clone();
@@ -1014,12 +1018,37 @@ fn is_current_process_elevated() -> Result<bool, String> {
     process_privileges::current_process_elevation()
 }
 
+#[tauri::command]
+async fn set_update_channel(
+    app: tauri::AppHandle,
+    channel: settings::UpdateChannel,
+) -> Result<serde_json::Value, String> {
+    updater::require_update_administrator()?;
+    if app
+        .try_state::<updater::StagedState>()
+        .is_some_and(|state| state.installing.load(std::sync::atomic::Ordering::Acquire))
+    {
+        return Err(
+            "An update installation is in progress. Change channels after it finishes.".into(),
+        );
+    }
+    let updated = settings::patch_settings_cmd(serde_json::json!({
+        "app": { "updateChannel": channel }
+    }))
+    .await?;
+    updater::clear_staged(&app);
+    Ok(updated)
+}
+
 /// Build the updater endpoint list with a `?t=<unix_ms>` cache-buster
 /// appended to each URL. Reads the configured endpoints from
 /// tauri.conf.json so the source-of-truth stays in one place; we just
 /// add the query param at call time. If an endpoint already has a
 /// query string, we use `&` instead of `?`.
-pub(crate) fn cache_busted_endpoints(app: &tauri::AppHandle) -> Result<Vec<url::Url>, String> {
+pub(crate) fn cache_busted_endpoints(
+    app: &tauri::AppHandle,
+    channel: settings::UpdateChannel,
+) -> Result<Vec<url::Url>, String> {
     let cfg = app.config();
     let plugins = &cfg.plugins;
     let updater = plugins
@@ -1039,13 +1068,25 @@ pub(crate) fn cache_busted_endpoints(app: &tauri::AppHandle) -> Result<Vec<url::
         let raw = ep
             .as_str()
             .ok_or_else(|| "Updater endpoint not a string".to_string())?;
-        let busted = if raw.contains('?') {
-            format!("{}&t={}", raw, now_ms)
-        } else {
-            format!("{}?t={}", raw, now_ms)
-        };
-        let parsed =
-            url::Url::parse(&busted).map_err(|e| format!("Bad updater URL '{}': {}", raw, e))?;
+        let mut parsed =
+            url::Url::parse(raw).map_err(|e| format!("Bad updater URL '{}': {}", raw, e))?;
+        if parsed.scheme() != "https"
+            || parsed.host_str() != Some(pro_install::ALLOWED_UPDATE_HOST)
+            || parsed.path() != "/free/latest.json"
+            || parsed.port().is_some()
+            || parsed.username() != ""
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err("Updater endpoint must be the approved stable Free manifest".into());
+        }
+        if channel == settings::UpdateChannel::Beta {
+            parsed.set_path("/free/beta/latest.json");
+        }
+        parsed
+            .query_pairs_mut()
+            .append_pair("t", &now_ms.to_string());
         out.push(parsed);
     }
     Ok(out)
@@ -2428,6 +2469,7 @@ pub fn run() {
             app_check_for_updates_doh,
             app_install_update_doh,
             is_current_process_elevated,
+            set_update_channel,
             updater::app_install_staged_update,
             updater::updater_current_state,
             update_tray_shield_label,
