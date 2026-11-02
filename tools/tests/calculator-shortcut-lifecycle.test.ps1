@@ -76,13 +76,16 @@ try {
     $hideFlag = Get-WinCommanderHideFlagPath
     New-Item -ItemType Directory -Path (Split-Path $hideFlag -Parent) -Force | Out-Null
     [IO.File]::WriteAllText($hideFlag, '')
-    $null = Set-WinCommanderCalculatorShortcuts $false
+    $deferred = Set-WinCommanderCalculatorShortcuts $false
+    Assert-True ($deferred.status -eq 'deferred') 'Hide mode did not report deferred original restoration'
+    Assert-True (-not $deferred.warnings) 'Deferred restoration reported a false shortcut failure'
     foreach ($path in $originals) { Assert-True (-not (Test-Path -LiteralPath $path)) 'Lock off exposed a shortcut while Hide mode remained active' }
     foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Calculator shortcut remained after lock off' }
     $deferredState = Join-Path $env:APPDATA 'WinCommander\calc_shortcut_state.json'
     Assert-True (Test-Path -LiteralPath $deferredState) 'Deferred original recovery state was discarded'
     Remove-Item -LiteralPath $hideFlag
-    $null = Set-WinCommanderCalculatorShortcuts $false
+    $finishedRestore = Set-WinCommanderCalculatorShortcuts $false
+    Assert-True ($finishedRestore.status -eq 'restored') 'Original shortcuts did not report restored after Hide mode ended'
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Original shortcut was not restored after Hide mode ended' }
     Assert-True (-not (Test-Path -LiteralPath $deferredState)) 'Deferred recovery state remained after successful restore'
 

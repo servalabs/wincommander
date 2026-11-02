@@ -3011,12 +3011,12 @@ function Set-WinCommanderCalculatorShortcuts {
 
             if ($shortcutErrors -eq 0 -and -not $keepOriginalsHidden) {
                 try { Remove-Item -Path $statePath -Force -ErrorAction SilentlyContinue } catch {}
-            } else {
+            } elseif ($shortcutErrors -gt 0) {
                 $warnings += "$shortcutErrors shortcut(s) failed — state kept for retry."
             }
 
             Invoke-ShellChangeNotify
-            $result = @{ status = 'restored'; itemsChanged = $itemsChanged }
+            $result = @{ status = $(if ($keepOriginalsHidden) { 'deferred' } else { 'restored' }); itemsChanged = $itemsChanged }
             if ($warnings.Count -gt 0) { $result.warnings = $warnings }
             return $result
         }
