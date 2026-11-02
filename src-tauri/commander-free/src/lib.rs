@@ -1502,21 +1502,31 @@ pub fn run() {
     // A duplicate launch in the same session forwards its args to the primary
     // and exits; launches from different sessions are completely independent.
     #[cfg(windows)]
+    let mut preloaded_startup_settings = None;
+    #[cfg(windows)]
     {
         let cli_args: Vec<String> = std::env::args().collect();
-        // Keep the desktop manifest asInvoker. A normal interactive launch
-        // asks Windows for an elevated replacement; cancelling that UAC prompt
-        // simply continues with the user's standard token. This runs before
-        // single-instance acquisition: an elevated child can then cleanly
-        // replace an already-running normal instance instead of being treated
-        // as a duplicate.
         if !cli_mode
             && !session_instance::is_background_duplicate(&cli_args)
-            && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args)
-            && startup_elevation::offer_startup_elevation(&cli_args)
-                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+            && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args, false)
         {
-            std::process::exit(0);
+            // Resolve the real per-user PIN policy before any optional UAC.
+            // A stale registry hint must not reveal the app before its cover.
+            let startup = match settings::preload_settings() {
+                Ok(startup) => startup,
+                Err(error) => {
+                    startup_window::show_initialization_error(&error);
+                    return;
+                }
+            };
+            preloaded_startup_settings = Some(startup);
+            if startup_elevation::should_offer_startup_elevation(
+                cli_mode, &cli_args, startup.calculator_lock_active,
+            ) && startup_elevation::offer_startup_elevation(&cli_args)
+                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+            {
+                std::process::exit(0);
+            }
         }
         if !cli_mode && !session_instance::acquire(&cli_args) {
             // Primary instance already running in this session and has received
@@ -1557,10 +1567,17 @@ pub fn run() {
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
     let start_silently_at_sign_in = if !cli_mode {
-        // Security settings must be known before creating the window. A stalled
-        // preload fails closed; it never starts a second read or bypasses PIN policy.
-        match settings::preload_settings() {
-            Ok(start_silently) => start_silently,
+        // Reuse the verified snapshot when foreground elevation already needed it.
+        #[cfg(windows)]
+        let preloaded = preloaded_startup_settings;
+        #[cfg(not(windows))]
+        let preloaded = None;
+        let loaded = match preloaded {
+            Some(startup) => Ok(startup),
+            None => settings::preload_settings(),
+        };
+        match loaded {
+            Ok(startup) => startup.start_silently_at_sign_in,
             Err(error) => {
                 startup_window::show_initialization_error(&error);
                 return;
