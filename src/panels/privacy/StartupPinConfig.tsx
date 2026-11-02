@@ -59,10 +59,8 @@ export default function StartupPinConfig() {
       await refreshSettings();
       showSuccess(`${MODES.find((m) => m.mode === mode)!.label} saved`);
       if (mode === "real") {
-        if (!appSettings?.ideal?.identity?.hideWinCommander) {
-          const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
-          if (warning) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warning}`);
-        }
+        const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
+        if (warning) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warning}`);
         await invoke("update_autostart_task_identity", { covered: true }).catch(() => {});
         try {
           await invoke("enter_calculator_mode");
@@ -78,7 +76,7 @@ export default function StartupPinConfig() {
       await invoke("clear_startup_pin", { mode });
       await refreshSettings();
       showSuccess("PIN cleared");
-      if (mode === "real" && !appSettings?.ideal?.identity?.hideWinCommander) {
+      if (mode === "real") {
         const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
         if (warning) showWarning(`Calculator Lock is off, but shortcuts need attention: ${warning}`);
       }

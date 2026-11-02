@@ -11,14 +11,13 @@ test("reports success only when shortcut operation succeeded without warnings", 
   expect(await syncCalculatorShortcuts(async () => { throw new Error("failed"); }, true)).toContain("failed");
 });
 
-test("reconciles existing lock only after real unlock and without conflicting hide mode", () => {
-  const ready = { unlocked: true, decoy: false, hasRealPin: true, enabled: true, hideMode: false };
+test("reconciles an existing lock only after real unlock", () => {
+  const ready = { unlocked: true, decoy: false, hasRealPin: true, enabled: true };
   expect(shouldReconcileCalculatorShortcuts(ready)).toBe(true);
   expect(shouldReconcileCalculatorShortcuts({ ...ready, unlocked: false })).toBe(false);
   expect(shouldReconcileCalculatorShortcuts({ ...ready, decoy: true })).toBe(false);
   expect(shouldReconcileCalculatorShortcuts({ ...ready, hasRealPin: false })).toBe(false);
   expect(shouldReconcileCalculatorShortcuts({ ...ready, enabled: false })).toBe(false);
-  expect(shouldReconcileCalculatorShortcuts({ ...ready, hideMode: true })).toBe(false);
 });
 
 test("serializes an automatic shortcut update before a later disable", async () => {

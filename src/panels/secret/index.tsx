@@ -304,13 +304,8 @@ function LockDisguiseSection() {
         try {
             await invoke("set_startup_pin_enabled", { enabled: next });
             await refreshSettings();
-            // Hide mode already manages shortcuts — skip if it's active so we
-            // don't conflict with its state file. Only manage shortcuts when
-            // hide mode is off.
-            if (!isHideModeActive) {
-                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next);
-                if (warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${warning}`);
-            }
+            const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next);
+            if (warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${warning}`);
             invoke("update_autostart_task_identity", { covered: next || isHideModeActive }).catch(() => {});
             if (next) {
                 await invoke("enter_calculator_mode").catch(() => {});
@@ -442,9 +437,22 @@ function LockDisguiseSection() {
     const handleToggleWc = useCallback(async (hidden: boolean) => {
         if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setWcBusy(true);
+        let calculatorNeedsReapply = false;
         try {
+            if (hidden && lockArmed) {
+                // Transfer the original shortcut snapshots to Hide mode before
+                // it hides them. Each feature can then be disabled independently.
+                calculatorNeedsReapply = true;
+                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
+                if (warning) { showWarning(`Could not prepare Calculator Lock shortcuts: ${warning}`); return; }
+            }
             const result = await setWinCommanderVisibility(hidden);
             if (result.success && result.data) {
+                if (lockArmed) {
+                    const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
+                    calculatorNeedsReapply = false;
+                    if (warning) showWarning(`Calculator Lock shortcuts need attention: ${warning}`);
+                }
                 await restartExplorer().catch(() => {});
                 await invoke("apply_wincommander_hide_mode", { hidden }).catch(() => {});
                 await invoke("update_autostart_task_identity", { covered: hidden || lockArmed }).catch(() => {});
@@ -455,9 +463,13 @@ function LockDisguiseSection() {
                 showError(result.error || "Failed to update WinCommander visibility.");
             }
         } finally {
+            if (calculatorNeedsReapply) {
+                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
+                if (warning) showWarning(`Calculator Lock shortcuts need attention: ${warning}`);
+            }
             setWcBusy(false);
         }
-    }, [setWinCommanderVisibility, restartExplorer, lockArmed, patchAppSettings, refreshHardening, needsElevation]);
+    }, [setWinCommanderVisibility, setWinCommanderCalculatorShortcuts, restartExplorer, lockArmed, patchAppSettings, refreshHardening, needsElevation]);
 
     const savedHideList: string[] = appSettings?.ideal?.identity?.hideBackendAppsList ?? [];
     const allBackendHidden = BACKEND_ALL_APP_IDS.every(id => savedHideList.includes(id));

@@ -37,6 +37,7 @@ try {
         Assert-True ($discoveredRoots -contains [Environment]::GetFolderPath('Desktop')) 'The current account Desktop was not discovered'
     } finally { $env:OneDrive = $savedOneDrive }
     function Get-WinCommanderCalculatorProgramsPath { $script:programs }
+    function Get-WinCommanderCalculatorDesktopPath { $script:desktop }
     function Get-WinCommanderCalculatorUserRoots { @($script:programs,$script:desktop,$script:quickLaunch) }
     function Get-WinCommanderExePath { $script:target }
     function Get-WinCommanderStartMenuTargets { @($script:shared) }
@@ -68,6 +69,42 @@ try {
     Assert-True ($restored.status -eq 'restored') 'Disable failed'
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Original shortcut bytes were not restored exactly' }
     foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Owned Calculator shortcut was not removed' }
+
+    # Hide WinCommander can remove every original shortcut first. Calculator
+    # Lock still needs account Start and Desktop entries without restoring them.
+    foreach ($path in $originals) { Remove-Item -LiteralPath $path }
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:programs 'Calculator.lnk')) 'Calculator Start shortcut was not created without originals'
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:desktop 'Calculator.lnk')) 'Calculator Desktop shortcut was not created without an original'
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:programs 'Calculator.lnk'))) 'Calculator Start shortcut remained after disabling'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:desktop 'Calculator.lnk'))) 'Calculator Desktop shortcut remained after disabling'
+    foreach ($path in $originals) {
+        Assert-True (-not (Test-Path -LiteralPath $path)) 'Hide mode original returned when Calculator Lock was disabled'
+        New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force | Out-Null
+        [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($snapshots[$path]))
+    }
+
+    # Historical installer and Pro links can point to other executable names
+    # inside the same installation folder.
+    $script:fixtureExe = Join-Path $fixture 'Install\wincommander-free.exe'
+    $legacyTarget = Join-Path (Split-Path $script:fixtureExe -Parent) 'WinCommander.exe'
+    New-Item -ItemType Directory -Path (Split-Path $script:fixtureExe -Parent) -Force | Out-Null
+    [IO.File]::WriteAllBytes($script:fixtureExe, [byte[]]@(1))
+    [IO.File]::WriteAllBytes($legacyTarget, [byte[]]@(1))
+    $legacyLink = Join-Path $script:programs 'Legacy\WinCommander alias.lnk'
+    New-TestLink $legacyLink $legacyTarget
+    $legacyBytes = Read-Bytes $legacyLink
+    function Get-WinCommanderExePath { $script:fixtureExe }
+    $hiddenAlias = Set-WinCommanderCalculatorShortcuts $true
+    Assert-True (-not (Test-Path -LiteralPath $legacyLink)) 'A historical WinCommander alias stayed visible'
+    $aliasState = Get-Content -LiteralPath (Join-Path $env:APPDATA 'WinCommander\calc_shortcut_state.json') -Raw | ConvertFrom-Json
+    Assert-True (@($aliasState.hiddenShortcuts | Where-Object { $_.path -eq $legacyLink }).Count -eq 1) 'Historical alias was not recorded for restoration'
+    $restoredAlias = Set-WinCommanderCalculatorShortcuts $false
+    Assert-True (Test-Path -LiteralPath $legacyLink) ("Historical alias was not restored: " + ($hiddenAlias | ConvertTo-Json -Compress) + " / " + ($restoredAlias | ConvertTo-Json -Compress))
+    Assert-True ((Read-Bytes $legacyLink) -ceq $legacyBytes) 'Historical alias bytes were not restored'
+    function Get-WinCommanderExePath { $script:target }
+    Remove-Item -LiteralPath $legacyLink
 
     $collision = Join-Path $script:desktop 'Calculator.lnk'
     New-TestLink $collision $script:otherTarget

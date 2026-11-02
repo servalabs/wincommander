@@ -8,9 +8,8 @@ export function shouldReconcileCalculatorShortcuts(input: {
   decoy: boolean;
   hasRealPin: boolean;
   enabled: boolean;
-  hideMode: boolean;
 }): boolean {
-  return input.unlocked && !input.decoy && input.hasRealPin && input.enabled && !input.hideMode;
+  return input.unlocked && !input.decoy && input.hasRealPin && input.enabled;
 }
 
 export async function syncCalculatorShortcuts(

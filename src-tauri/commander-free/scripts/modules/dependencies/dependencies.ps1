@@ -2626,6 +2626,7 @@ function Test-WinCommanderCalculatorUserPath {
 }
 
 function Get-WinCommanderCalculatorProgramsPath { return [Environment]::GetFolderPath('Programs') }
+function Get-WinCommanderCalculatorDesktopPath { return [Environment]::GetFolderPath('Desktop') }
 
 function Get-WinCommanderCalculatorLauncherPath {
     param([string]$Executable)
@@ -2642,6 +2643,16 @@ function Get-WinCommanderCalculatorLaunchPath {
     if ($launcher -and (Test-Path -LiteralPath $launcher -PathType Leaf) -and
         ((Get-Item -LiteralPath $launcher -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { return $launcher }
     return $Executable
+}
+
+function Get-WinCommanderCalculatorOwnedTargets {
+    param([string]$Executable)
+    if (-not $Executable) { return @() }
+    $installation = Split-Path $Executable -Parent
+    return @($Executable, (Get-WinCommanderCalculatorLauncherPath $Executable),
+        (Join-Path $installation 'WinCommander.exe'),
+        (Join-Path $installation 'commander-free.exe'),
+        (Join-Path $installation 'wincommander-pro.exe')) | Where-Object { $_ } | Select-Object -Unique
 }
 
 function Get-WinCommanderCalculatorUserRoots {
@@ -2761,7 +2772,7 @@ function Set-WinCommanderCalculatorShortcuts {
             $exe = Get-WinCommanderExePath
             if (-not $exe) { throw 'WinCommander executable not found; shortcuts were left unchanged.' }
             $launchExe = Get-WinCommanderCalculatorLaunchPath $exe
-            $ownedTargets = @($exe, (Get-WinCommanderCalculatorLauncherPath $exe)) | Where-Object { $_ }
+            $ownedTargets = @(Get-WinCommanderCalculatorOwnedTargets $exe)
             $created = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
             foreach ($path in @($previous.createdCalculatorLinks)) {
                 if ($path -and (Test-WinCommanderCalculatorUserPath $path $userRoots)) { [void]$created.Add([string]$path) }
@@ -2807,6 +2818,17 @@ function Set-WinCommanderCalculatorShortcuts {
                 }
             }
             $desired = @($calculatorLink)
+            # A prior Hide WinCommander operation may already have removed the
+            # user's desktop shortcut. The calculator still needs its own
+            # account-scoped desktop entry in that case.
+            $desktop = Get-WinCommanderCalculatorDesktopPath
+            if (-not $desktop -or -not (Test-Path -LiteralPath $desktop -PathType Container)) {
+                $desktop = Join-Path $env:USERPROFILE 'Desktop'
+            }
+            if ($desktop -and (Test-Path -LiteralPath $desktop -PathType Container)) {
+                $desktopLink = Join-Path $desktop 'Calculator.lnk'
+                if (Test-WinCommanderCalculatorUserPath $desktopLink $userRoots) { $desired += $desktopLink }
+            }
             foreach ($entry in $shortcuts) {
                 $replacement = Get-WinCommanderCalculatorReplacementPath $entry.path $userRoots
                 if ($replacement) { $desired += $replacement }
@@ -2895,7 +2917,7 @@ function Set-WinCommanderCalculatorShortcuts {
 
             $stateShortcuts = @()
             if ($savedState -and $savedState.hiddenShortcuts) {
-                $stateShortcuts = @($savedState.hiddenShortcuts) | Where-Object { -not [string]::IsNullOrEmpty("$($_.path)") }
+                $stateShortcuts = @(@($savedState.hiddenShortcuts) | Where-Object { -not [string]::IsNullOrEmpty("$($_.path)") })
             }
 
             $shortcutErrors = 0
@@ -2911,7 +2933,7 @@ function Set-WinCommanderCalculatorShortcuts {
                 try {
                     $calculatorTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($path).TargetPath
                     $expectedTarget = Get-WinCommanderExePath
-                    $ownedTargets = @($expectedTarget, (Get-WinCommanderCalculatorLauncherPath $expectedTarget)) | Where-Object { $_ }
+                    $ownedTargets = @(Get-WinCommanderCalculatorOwnedTargets $expectedTarget)
                     if ($expectedTarget -and $ownedTargets -contains $calculatorTarget -and $generated.ContainsKey($path) -and $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) {
                         Remove-Item -LiteralPath $path -Force -ErrorAction Stop
                         $itemsChanged++

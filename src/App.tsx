@@ -1561,7 +1561,6 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
       decoy: mode === "decoy",
       hasRealPin: !!pin?.realHash,
       enabled: pin?.enabled !== false,
-      hideMode: appSettings.ideal?.identity?.hideWinCommander === true,
     })) return;
     calculatorShortcutsChecked.current = true;
     void syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true).then(setCalculatorShortcutWarning);
