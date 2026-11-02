@@ -5,6 +5,7 @@ import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import type { AuthMode } from "../../context/AuthModeContext";
 import { revealStartupWindow } from "../../hooks/startupWindow";
 import { applyCalculatorPinResult } from "./calculatorAuth";
+import { advanceCalculatorHandoff } from "./calculatorHandoff";
 import { suppressStartupAnimation } from "../../startup/animationRoot";
 import calcIcon from "@assets/softwares/calc.png";
 import "./CalculatorGate.css";
@@ -110,11 +111,20 @@ export default function CalculatorGate({ onAuth, generation }: Props) {
   const [memory, setMemory]     = useState<number | null>(null);
   const [history, setHistory]   = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const containerRef            = useRef<HTMLDivElement>(null);
+  const ceCountRef              = useRef(0);
+  const handoffPendingRef       = useRef(false);
   const appWindow               = getCurrentWindow();
   // Latches once a PIN check has resolved to a real/decoy/destroy outcome so
   // repeated presses while the native window transition completes are ignored.
   const authResolvedRef         = useRef(false);
+
+  useEffect(() => {
+    const resetWhenHidden = () => { if (document.hidden) ceCountRef.current = 0; };
+    document.addEventListener("visibilitychange", resetWhenHidden);
+    return () => document.removeEventListener("visibilitychange", resetWhenHidden);
+  }, []);
 
   // ── PIN check on equals ──────────────────────────────────────────
   const checkPin = useCallback(async (displayValue: string) => {
@@ -163,6 +173,15 @@ export default function CalculatorGate({ onAuth, generation }: Props) {
     | { type: "sqrt" };
 
   const dispatch = useCallback((action: Action) => {
+    const nextHandoff = advanceCalculatorHandoff(ceCountRef.current, action.type === "clearEntry");
+    ceCountRef.current = nextHandoff.count;
+    if (nextHandoff.shouldOpen && !handoffPendingRef.current) {
+      handoffPendingRef.current = true;
+      setHandoffError(null);
+      void invoke("open_windows_calculator")
+        .catch(() => setHandoffError("Windows Calculator could not be opened."))
+        .finally(() => { handoffPendingRef.current = false; });
+    }
     setS((prev) => {
       let next = { ...prev };
 
@@ -329,6 +348,9 @@ export default function CalculatorGate({ onAuth, generation }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target instanceof Element &&
+          e.target.closest("button[data-calculator-ce]")) return;
+      if (e.key !== "Delete") ceCountRef.current = 0;
       if (showHistory) { if (e.key === "Escape") setShowHistory(false); return; }
       if (e.key >= "0" && e.key <= "9") { dispatch({ type: "digit", value: e.key }); return; }
       if (e.key === ".") { dispatch({ type: "dot" }); return; }
@@ -378,13 +400,16 @@ export default function CalculatorGate({ onAuth, generation }: Props) {
     "calc-result";
 
   const B = (label: string, cls: string, onClick: () => void, key?: string) => (
-    <button key={key ?? label} className={`calc-btn ${cls}`} onClick={onClick}>
+    <button key={key ?? label} className={`calc-btn ${cls}`} data-calculator-ce={label === "CE" || undefined} onClick={onClick}>
       {label}
     </button>
   );
 
   return (
-    <div className="calc-root" ref={containerRef}>
+    <div className="calc-root" ref={containerRef} onClickCapture={(event) => {
+      const button = (event.target as Element).closest("button");
+      if (button && !button.hasAttribute("data-calculator-ce")) ceCountRef.current = 0;
+    }}>
       <div className="calc-titlebar" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
         <img src={calcIcon} alt="" className="calc-titlebar-icon" aria-hidden="true" />
         <div className="calc-window-title">Calculator</div>
@@ -450,6 +475,7 @@ export default function CalculatorGate({ onAuth, generation }: Props) {
 
       {/* Display */}
       <div className="calc-display">
+        {handoffError && <div className="calc-handoff-error" role="status">{handoffError}</div>}
         <div className="calc-expression">{s.expression || " "}</div>
         <div className={resultClass}>{renderResultDisplay(displayFormatted)}</div>
       </div>

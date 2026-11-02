@@ -30,6 +30,7 @@ mod bluetooth_control;
 mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
+mod calculator_handoff;
 mod context_menu_scrub;
 mod context_menu_shred;
 mod context_scrub_failure;
@@ -2433,6 +2434,7 @@ pub fn run() {
             startup_window::startup_window_ready,
             camera_presence::dashboard_camera_presence,
             calculator_gate_generation,
+            calculator_handoff::open_windows_calculator,
             exit_app,
             open_search_files_from_shortcut,
             reveal_main_window_for_security_alert,

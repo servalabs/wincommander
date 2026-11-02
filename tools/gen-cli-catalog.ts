@@ -41,6 +41,7 @@ const INTERNAL_TAURI_HANDLERS = new Set([
   "complete_tauri_cli",
   "startup_window_ready",
   "calculator_gate_generation",
+  "open_windows_calculator",
   "dashboard_camera_presence",
   "is_autostart_enabled",
   "enable_autostart_task",
