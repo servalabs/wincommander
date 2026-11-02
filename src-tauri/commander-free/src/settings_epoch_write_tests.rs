@@ -94,6 +94,29 @@ fn signed_merge_commits_configuration_locks_and_version_together() {
 }
 
 #[test]
+fn fleet_epoch_cannot_enable_or_disable_account_incident_media_delivery() {
+    let f = Fixture::new();
+    let signed = |version: u32, strategy: &str, remote: bool| {
+        let mut epoch = f.epoch(version, strategy);
+        epoch.config = json!({"privacy":{"privacyShield":{"sendIncidentCapturesToFleet":remote}}});
+        let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+            version: i64::from(epoch.version), config: &epoch.config,
+            locked_paths: &epoch.locked_paths, managed: epoch.managed,
+            target_kind: epoch.target_kind.as_deref().unwrap_or("org"),
+            target_id: epoch.target_id.as_deref(),
+        });
+        epoch.signature = Some(STANDARD.encode(f.key.sign(&preimage).to_bytes()));
+        epoch
+    };
+    let result = apply_with(&signed(11, "merge", true), |_| Ok(())).unwrap();
+    assert!(!result.ideal.privacy.privacy_shield.send_incident_captures_to_fleet);
+    SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().ideal.privacy.privacy_shield
+        .send_incident_captures_to_fleet = true;
+    let result = apply_with(&signed(12, "overwrite", false), |_| Ok(())).unwrap();
+    assert!(result.ideal.privacy.privacy_shield.send_incident_captures_to_fleet);
+}
+
+#[test]
 fn overwrite_preserves_verification_key_connection_and_device_identity() {
     let f = Fixture::new();
     let before = f.value();

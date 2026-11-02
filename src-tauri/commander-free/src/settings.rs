@@ -41,6 +41,8 @@ mod legacy_migration;
 mod personal_settings;
 #[path = "settings_startup_scope.rs"]
 mod startup_scope;
+#[path = "shield_capture_preferences.rs"]
+pub(crate) mod capture_preferences;
 
 pub(crate) fn personal_settings_automation_available() -> bool {
     personal_settings::automation_available()
@@ -1658,6 +1660,10 @@ pub struct PrivacyShieldSettings {
     pub detection_buffer_frames: Option<u32>,
     pub capture_on_device: Option<bool>,
     pub capture_on_multi_face: Option<bool>,
+    /// Explicit opt-in for sending saved incident captures to the linked Fleet.
+    /// Attention/status telemetry remains separate and media-free.
+    #[serde(default)]
+    pub send_incident_captures_to_fleet: bool,
     pub capture_speed: Option<u32>,
     pub device_wake_multiplier: Option<f32>,
     pub multi_face_wake_multiplier: Option<f32>,
@@ -3035,7 +3041,9 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
         elevated,
         crate::paths::current_user_install_uses_local_datastore(),
     )?;
-    write_settings_under_lease(settings, elevated, machine_writer.is_some())
+    capture_preferences::restrict_before_save(settings)?;
+    write_settings_under_lease(settings, elevated, machine_writer.is_some())?;
+    capture_preferences::publish(settings)
 }
 
 fn write_settings_under_lease(

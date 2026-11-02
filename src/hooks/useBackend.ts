@@ -2384,7 +2384,7 @@ export function useBackend(retainCleanupScanErrors = false) {
       blurGaze: boolean = checkGaze,
       blurFaces: boolean = checkFaces,
       blurPhone: boolean = checkPhone,
-    ) => execute<{ success: boolean; processId?: number; message?: string }>("Start-PrivacyShield", {
+    ) => execute<{ success: boolean; processId?: number; message?: string; captureDeliveryStatus?: "local_only" | "ready" | "unavailable" }>("Start-PrivacyShield", {
       Camera: camera,
       CheckGaze: checkGaze,
       CheckFaces: checkFaces,

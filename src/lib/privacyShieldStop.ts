@@ -18,3 +18,13 @@ export function privacyShieldStopVerificationError(
     ? null
     : "Privacy Shield stop could not be confirmed. Check its status and try again.";
 }
+
+export async function confirmPrivacyShieldStop(
+  response: BackendResponse<{ success: boolean; message?: string; error?: boolean | null; running?: boolean; shieldLifecycle?: string }>,
+  readFresh: () => Promise<BackendResponse<{ running?: boolean; error?: boolean | null }>>,
+): Promise<string | null> {
+  const failure = privacyShieldStopError(response);
+  if (failure) return failure;
+  if (response.data?.running === false && response.data.shieldLifecycle === "stopped") return null;
+  return privacyShieldStopVerificationError(await readFresh());
+}

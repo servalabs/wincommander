@@ -29,6 +29,13 @@ try {
     New-Item -ItemType Directory -Path $env:APPDATA,$env:ProgramData,$script:programs,$script:desktop,$script:quickLaunch -Force | Out-Null
     $module = Join-Path $PSScriptRoot '../../src-tauri/commander-free/scripts/modules/dependencies/dependencies.ps1'
     Invoke-Expression ([IO.File]::ReadAllText((Resolve-Path $module), [Text.Encoding]::UTF8))
+    $savedOneDrive = $env:OneDrive
+    try {
+        $env:OneDrive = Join-Path $fixture 'OneDrive'
+        $discoveredRoots = @(Get-WinCommanderCalculatorUserRoots)
+        Assert-True ($discoveredRoots -contains (Join-Path $env:OneDrive 'Desktop')) 'Redirected OneDrive Desktop was not discovered'
+        Assert-True ($discoveredRoots -contains [Environment]::GetFolderPath('Desktop')) 'The current account Desktop was not discovered'
+    } finally { $env:OneDrive = $savedOneDrive }
     function Get-WinCommanderCalculatorProgramsPath { $script:programs }
     function Get-WinCommanderCalculatorUserRoots { @($script:programs,$script:desktop,$script:quickLaunch) }
     function Get-WinCommanderExePath { $script:target }
@@ -99,6 +106,24 @@ try {
     $null = Set-WinCommanderCalculatorShortcuts $false
     Assert-True ((Read-Bytes $originals[1]) -ceq $snapshots[$originals[1]]) 'Retry did not restore the original after removing the collision'
 
+    $canonical = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WinCommander\wincommander-free.exe'
+    Assert-True ((Get-WinCommanderCalculatorLauncherPath $canonical) -ieq (Join-Path (Split-Path $canonical -Parent) 'Calculator.exe')) 'Canonical installation did not select its protected launcher'
+    Assert-True (-not (Get-WinCommanderCalculatorLauncherPath $script:target)) 'A custom executable was allowed to select a privileged launcher'
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    function Get-WinCommanderCalculatorLauncherPath { param([string]$Executable) if ($Executable -ieq $script:target) { $script:otherTarget } }
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
+        $replacement = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $root 'Calculator.lnk'))
+        Assert-True ($replacement.TargetPath -ieq $script:otherTarget) 'A previously generated shortcut was not migrated to the real launcher'
+        Assert-True ($replacement.IconLocation -ieq "$script:otherTarget,0") 'The launcher icon was not selected'
+    }
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Launcher migration lost an original shortcut snapshot' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Migrated launcher shortcut was not removed on disable'
+    }
+    function Get-WinCommanderCalculatorLauncherPath { param([string]$Executable) return $null }
+
     New-TestLink $originals[1] $script:otherTarget
     $legacyExternalBytes = Read-Bytes $originals[1]
     @{ hiddenShortcuts = @(@{ path = $originals[1]; targetPath = $script:target }); calculatorShortcutCreated = $false } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath
@@ -110,7 +135,7 @@ try {
     $capped = $false
     $null = Get-WinCommanderCalculatorShortcutFiles @($boundedRoot) (New-Object -ComObject WScript.Shell) $script:target ([ref]$capped)
     Assert-True $capped 'Shortcut traversal did not enforce its directory bound'
-    Write-Output 'PASS: account scope, exact restoration, empty owned folders, collisions, external edits, legacy recovery, and bounded scan'
+    Write-Output 'PASS: account scope, exact restoration, launcher migration, empty owned folders, collisions, external edits, legacy recovery, and bounded scan'
 } finally {
     $env:APPDATA = $savedAppData
     $env:ProgramData = $savedProgramData

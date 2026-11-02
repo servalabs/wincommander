@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { privacyShieldStopError, privacyShieldStopVerificationError } from "./privacyShieldStop";
+import { confirmPrivacyShieldStop, privacyShieldStopError, privacyShieldStopVerificationError } from "./privacyShieldStop";
 
 describe("Privacy Shield Stop results", () => {
   test("only a positive native result counts as success", () => {
@@ -20,5 +20,20 @@ describe("Privacy Shield Stop results", () => {
     expect(privacyShieldStopVerificationError({ success: true, data: {} })).toContain("could not be confirmed");
     expect(privacyShieldStopVerificationError({ success: true, data: { running: false, error: true } })).toContain("could not be confirmed");
     expect(privacyShieldStopError({ success: true, data: { success: true, error: true } })).toContain("could not be stopped");
+  });
+  test("uses the verified stopped receipt without another hardware probe", async () => {
+    let probes = 0;
+    expect(await confirmPrivacyShieldStop({ success: true, data: {
+      success: true, running: false, shieldLifecycle: "stopped",
+    } }, async () => { probes++; return { success: false }; })).toBeNull();
+    expect(probes).toBe(0);
+  });
+  test("success-only legacy results require fresh verification, and failed Stops never report stopped", async () => {
+    expect(await confirmPrivacyShieldStop({ success: true, data: { success: true } },
+      async () => ({ success: true, data: { running: true } }))).toContain("could not be confirmed");
+    let probes = 0;
+    expect(await confirmPrivacyShieldStop({ success: false, error: "machine-state operation is busy" },
+      async () => { probes++; return { success: true, data: { running: false } }; })).toContain("updating");
+    expect(probes).toBe(0);
   });
 });

@@ -223,8 +223,20 @@ impl CtEqBytes for [u8; 32] {
 /// want a hard guarantee of "never fails to construct" can fall back to
 /// `reqwest::Client::new()` on `Err`, matching pre-pinning behavior.
 pub fn build_client(pins: Option<SpkiPinSet>) -> Result<reqwest::Client, String> {
+    build_client_inner(pins, false)
+}
+
+/// Preserve the same TLS validation while refusing HTTP redirects of a body.
+pub fn build_client_without_redirects(pins: Option<SpkiPinSet>) -> Result<reqwest::Client, String> {
+    build_client_inner(pins, true)
+}
+
+fn build_client_inner(pins: Option<SpkiPinSet>, no_redirects: bool) -> Result<reqwest::Client, String> {
+    let builder = if no_redirects {
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+    } else { reqwest::Client::builder() };
     let Some(pins) = pins else {
-        return Ok(reqwest::Client::new());
+        return builder.build().map_err(|e| format!("fleet client build failed: {e}"));
     };
 
     let provider = Arc::new(aws_lc_rs::default_provider());
@@ -244,7 +256,7 @@ pub fn build_client(pins: Option<SpkiPinSet>) -> Result<reqwest::Client, String>
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
 
-    reqwest::Client::builder()
+    builder
         .use_preconfigured_tls(tls_config)
         .build()
         .map_err(|e| format!("fleet TLS pin: client build failed: {e}"))

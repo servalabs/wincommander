@@ -79,6 +79,14 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
     merge_json(&mut value, &serde_json::json!({"ideal": &epoch.config}));
     candidate =
         serde_json::from_value(value).map_err(|e| format!("Invalid policy configuration: {e}"))?;
+    // Incident media delivery is an account choice. A signed Fleet policy may
+    // control Shield protection, but cannot silently turn on media upload for
+    // the current Windows profile (including with an overwrite strategy).
+    candidate.ideal.privacy.privacy_shield.send_incident_captures_to_fleet = current
+        .ideal
+        .privacy
+        .privacy_shield
+        .send_incident_captures_to_fleet;
     candidate.policy.locked_paths = epoch.locked_paths.clone();
     candidate.policy.last_synced_at = Some(super::now_iso8601());
     candidate.policy.master_config_version = Some(epoch.version);

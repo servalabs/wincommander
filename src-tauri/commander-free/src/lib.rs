@@ -1781,7 +1781,7 @@ pub fn run() {
                         // here stalls the OS message pump and hangs the window.
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            if backend::kill_privacy_shield_process(app.clone()).await.is_ok() {
+                            if backend::stop_privacy_shield_gracefully(app.clone()).await.is_ok() {
                                 // Restore only after the detector has actually stopped.
                                 backend::restore_shield_webcam_access(app.clone()).await;
                             }
@@ -1819,7 +1819,7 @@ pub fn run() {
                                     // is independently confirmed by the backend.
                                     let app = app.clone();
                                     tauri::async_runtime::spawn(async move {
-                                        match backend::kill_privacy_shield_process(app.clone()).await {
+                                        match backend::stop_privacy_shield_gracefully(app.clone()).await {
                                             Ok(()) => {
                                                 set_tray_shield_running(&app, false);
                                                 backend::restore_shield_webcam_access(app).await;

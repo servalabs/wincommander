@@ -77,4 +77,4 @@ pub use transport::{
 };
 
 #[cfg(feature = "transport")]
-pub use pinning::{build_client, SpkiPin, SpkiPinSet};
+pub use pinning::{build_client, build_client_without_redirects, SpkiPin, SpkiPinSet};

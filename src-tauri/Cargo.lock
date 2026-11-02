@@ -918,6 +918,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "commander-calculator-launcher"
+version = "3.6.6"
+dependencies = [
+ "embed-resource",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "commander-context-shred"
 version = "3.5.1"
 dependencies = [

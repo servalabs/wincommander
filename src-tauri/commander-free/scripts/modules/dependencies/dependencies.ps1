@@ -2627,6 +2627,23 @@ function Test-WinCommanderCalculatorUserPath {
 
 function Get-WinCommanderCalculatorProgramsPath { return [Environment]::GetFolderPath('Programs') }
 
+function Get-WinCommanderCalculatorLauncherPath {
+    param([string]$Executable)
+    try {
+        $root = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WinCommander'
+        if ([IO.Path]::GetFullPath($Executable) -ine (Join-Path $root 'wincommander-free.exe')) { return $null }
+        return (Join-Path $root 'Calculator.exe')
+    } catch { return $null }
+}
+
+function Get-WinCommanderCalculatorLaunchPath {
+    param([string]$Executable)
+    $launcher = Get-WinCommanderCalculatorLauncherPath $Executable
+    if ($launcher -and (Test-Path -LiteralPath $launcher -PathType Leaf) -and
+        ((Get-Item -LiteralPath $launcher -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { return $launcher }
+    return $Executable
+}
+
 function Get-WinCommanderCalculatorUserRoots {
     $roots = @((Get-WinCommanderCalculatorProgramsPath), [Environment]::GetFolderPath('Desktop'), "$env:USERPROFILE\Desktop", (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch'))
     foreach ($oneDrive in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
@@ -2644,7 +2661,7 @@ function Get-WinCommanderCalculatorReplacementPath {
 }
 
 function Get-WinCommanderCalculatorShortcutFiles {
-    param([string[]]$Roots, $Shell, [string]$Executable, [ref]$Capped)
+    param([string[]]$Roots, $Shell, [string[]]$Executable, [ref]$Capped)
     $visited = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $examined = 0
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -2670,7 +2687,7 @@ function Get-WinCommanderCalculatorShortcutFiles {
                     if ($item.PSIsContainer) { $pending.Enqueue($item.FullName); continue }
                     if ($item.Extension -ine '.lnk' -or -not $seen.Add($item.FullName)) { continue }
                     try {
-                        if ($Shell.CreateShortcut($item.FullName).TargetPath -ieq $Executable) { $item.FullName }
+                        if ($Executable -contains $Shell.CreateShortcut($item.FullName).TargetPath) { $item.FullName }
                     } catch {}
                 }
             } catch {} finally { if ($iterator) { $iterator.Dispose() } }
@@ -2743,6 +2760,8 @@ function Set-WinCommanderCalculatorShortcuts {
 
             $exe = Get-WinCommanderExePath
             if (-not $exe) { throw 'WinCommander executable not found; shortcuts were left unchanged.' }
+            $launchExe = Get-WinCommanderCalculatorLaunchPath $exe
+            $ownedTargets = @($exe, (Get-WinCommanderCalculatorLauncherPath $exe)) | Where-Object { $_ }
             $created = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
             foreach ($path in @($previous.createdCalculatorLinks)) {
                 if ($path -and (Test-WinCommanderCalculatorUserPath $path $userRoots)) { [void]$created.Add([string]$path) }
@@ -2759,7 +2778,7 @@ function Set-WinCommanderCalculatorShortcuts {
                     break
                 }
             }
-            foreach ($target in Get-WinCommanderCalculatorShortcutFiles $userRoots $wsh $exe ([ref]$scanCapped)) {
+            foreach ($target in Get-WinCommanderCalculatorShortcutFiles $userRoots $wsh $ownedTargets ([ref]$scanCapped)) {
                 if ($created.Contains($target)) { continue }
                 if ($target -match '\\User Pinned\\') {
                     $warnings += 'A pinned WinCommander shortcut was preserved. Unpin it and pin the Calculator shortcut to update its cached Windows identity.'
@@ -2782,7 +2801,7 @@ function Set-WinCommanderCalculatorShortcuts {
             foreach ($entry in $shortcuts) {
                 if ($entry.originalBytes -or -not (Test-WinCommanderCalculatorUserPath $entry.path $userRoots) -or -not (Test-Path -LiteralPath $entry.path)) { continue }
                 $currentTarget = $wsh.CreateShortcut($entry.path).TargetPath
-                if ($entry.targetPath -and $currentTarget -ieq $entry.targetPath -and $currentTarget -ieq $exe) {
+                if ($entry.targetPath -and $currentTarget -ieq $entry.targetPath -and $ownedTargets -contains $currentTarget) {
                     $bytes = [IO.File]::ReadAllBytes($entry.path)
                     if ($bytes.Length -le 1048576) { $entry.originalBytes = [Convert]::ToBase64String($bytes) }
                 }
@@ -2802,17 +2821,21 @@ function Set-WinCommanderCalculatorShortcuts {
             $ready = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
             foreach ($path in $created) {
                 try {
-                    if (-not (Test-Path -LiteralPath $path)) {
+                    $exists = Test-Path -LiteralPath $path
+                    $canMigrate = $exists -and $generated.ContainsKey($path) -and
+                        $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -and
+                        $ownedTargets -contains $wsh.CreateShortcut($path).TargetPath
+                    if (-not $exists -or ($canMigrate -and $wsh.CreateShortcut($path).TargetPath -ine $launchExe)) {
                         $link = $wsh.CreateShortcut($path)
-                        $link.TargetPath = $exe
-                        $link.WorkingDirectory = Split-Path -Parent $exe
-                        $link.IconLocation = "$env:SystemRoot\System32\calc.exe,0"
+                        $link.TargetPath = $launchExe
+                        $link.WorkingDirectory = Split-Path -Parent $launchExe
+                        $link.IconLocation = if ($launchExe -ine $exe) { "$launchExe,0" } else { "$env:SystemRoot\System32\calc.exe,0" }
                         $link.Description = 'Calculator'
                         $link.Save()
                         $generated[$path] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
                         $itemsChanged++
                     }
-                    if ($generated.ContainsKey($path) -and $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -and $wsh.CreateShortcut($path).TargetPath -ieq $exe) { [void]$ready.Add($path) }
+                    if ($generated.ContainsKey($path) -and $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -and $wsh.CreateShortcut($path).TargetPath -ieq $launchExe) { [void]$ready.Add($path) }
                     else { $warnings += 'A Calculator shortcut has no matching recovery snapshot or changed externally; it was left unchanged.' }
                 } catch { $warnings += "Calculator shortcut: $($_.Exception.Message)" }
             }
@@ -2829,7 +2852,7 @@ function Set-WinCommanderCalculatorShortcuts {
                 if (-not $replacement -or -not $ready.Contains($replacement)) { continue }
                 try {
                     if (Test-Path -LiteralPath $entry.path) {
-                        if (-not $entry.originalBytes -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($entry.path)) -cne $entry.originalBytes -or $wsh.CreateShortcut($entry.path).TargetPath -ine $exe) {
+                        if (-not $entry.originalBytes -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($entry.path)) -cne $entry.originalBytes -or $ownedTargets -notcontains $wsh.CreateShortcut($entry.path).TargetPath) {
                             $warnings += 'A WinCommander shortcut changed while updating; it was left unchanged.'
                             continue
                         }
@@ -2888,7 +2911,8 @@ function Set-WinCommanderCalculatorShortcuts {
                 try {
                     $calculatorTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($path).TargetPath
                     $expectedTarget = Get-WinCommanderExePath
-                    if ($expectedTarget -and $calculatorTarget -ieq $expectedTarget -and $generated.ContainsKey($path) -and $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) {
+                    $ownedTargets = @($expectedTarget, (Get-WinCommanderCalculatorLauncherPath $expectedTarget)) | Where-Object { $_ }
+                    if ($expectedTarget -and $ownedTargets -contains $calculatorTarget -and $generated.ContainsKey($path) -and $generated[$path] -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) {
                         Remove-Item -LiteralPath $path -Force -ErrorAction Stop
                         $itemsChanged++
                     } else {

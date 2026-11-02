@@ -414,6 +414,18 @@ fn is_valid_machine_state_resource(resource: &str) -> bool {
 }
 
 pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, String> {
+    acquire_machine_state_lock_with_timeout(resource, MACHINE_STATE_LOCK_TIMEOUT_MS)
+}
+
+pub(crate) fn acquire_shield_action_lock() -> Result<MachineStateLock, String> {
+    acquire_machine_state_lock_with_timeout("fleet-shield-policy", 45_000).map_err(|error| {
+        if error == "machine-state operation is busy; retry shortly" {
+            "Privacy Shield policy is still changing. Wait for the current transition to finish, then retry.".into()
+        } else { error }
+    })
+}
+
+fn acquire_machine_state_lock_with_timeout(resource: &str, timeout_ms: u32) -> Result<MachineStateLock, String> {
     if !is_valid_machine_state_resource(resource) {
         return Err("invalid machine state lock name".to_string());
     }
@@ -432,7 +444,7 @@ pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, St
         if handle.is_null() {
             return Err("machine-state lock is unavailable".to_string());
         }
-        match unsafe { WaitForSingleObject(handle, MACHINE_STATE_LOCK_TIMEOUT_MS) } {
+        match unsafe { WaitForSingleObject(handle, timeout_ms) } {
             // Atomic replacement means an abandoned writer cannot leave the
             // destination half-written, so ownership can safely transfer.
             WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(MachineStateLock {
@@ -450,6 +462,7 @@ pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, St
     }
     #[cfg(not(windows))]
     {
+        let _ = timeout_ms;
         Ok(MachineStateLock {})
     }
 }
@@ -810,6 +823,49 @@ mod tests {
         drop(held);
         finished.recv_timeout(Duration::from_secs(1)).unwrap();
         shared.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn machine_state_wait_is_bounded_and_waiters_resume_after_a_transition() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let name = format!("shield-test-{}", uuid::Uuid::new_v4().simple());
+        let held = super::acquire_machine_state_lock(&name).unwrap();
+        let blocked_name = name.clone();
+        let start = std::time::Instant::now();
+        let timed_out = std::thread::spawn(move || {
+            super::acquire_machine_state_lock_with_timeout(&blocked_name, 30).is_err()
+        }).join().unwrap();
+        assert!(timed_out);
+        assert!(start.elapsed() < Duration::from_secs(1));
+        let (done, finished) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let _guard = super::acquire_machine_state_lock_with_timeout(&name, 1000).unwrap();
+            done.send(()).unwrap();
+        });
+        assert!(finished.recv_timeout(Duration::from_millis(30)).is_err());
+        drop(held);
+        finished.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_abandoned_owner_does_not_leave_a_stale_machine_lock() {
+        let name = format!("shield-abandoned-{}", uuid::Uuid::new_v4().simple());
+        let abandoned_name = name.clone();
+        let leaked_handle = std::thread::spawn(move || {
+            let guard = super::acquire_machine_state_lock(&abandoned_name).unwrap();
+            let handle = guard.handle;
+            std::mem::forget(guard);
+            handle
+        }).join().unwrap();
+        let recovered = super::acquire_machine_state_lock_with_timeout(&name, 100).unwrap();
+        // The old owner's handle is deliberately retained only to exercise
+        // Windows' WAIT_ABANDONED path, then closed after ownership transfers.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(leaked_handle as _); }
+        drop(recovered);
     }
 
     use std::path::PathBuf;

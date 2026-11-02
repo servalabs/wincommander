@@ -1117,10 +1117,32 @@ fn validate_cached_shield_envelope(
 /// not make stale local options look current.
 pub(crate) async fn verify_service_shield_profile() -> Result<(), String> {
     let settings = crate::settings::read_settings()?;
-    let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
-        .await
-        .map_err(|error| shield_service_error(&error).to_string())?;
+    let response = service_shield_policy().await?;
     verify_shield_profile_against_service(&settings, &response)
+}
+
+async fn service_shield_policy() -> Result<Value, String> {
+    crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
+        .await
+        .map_err(|error| shield_service_error(&error).to_string())
+}
+
+async fn service_shield_profile_is_bound() -> Result<bool, String> {
+    let settings = crate::settings::read_settings()?;
+    let response = service_shield_policy().await?;
+    shield_supervisor_requires_policy_lock(&settings, &response)
+}
+
+fn shield_supervisor_requires_policy_lock(
+    settings: &crate::settings::AppSettings,
+    response: &Value,
+) -> Result<bool, String> {
+    let bound = response.get("trust_bound").and_then(Value::as_bool)
+        .ok_or("service Fleet trust state is unavailable")?;
+    if !bound {
+        verify_shield_profile_against_service(settings, response)?;
+    }
+    Ok(bound)
 }
 
 fn shield_service_error(error: &str) -> &'static str {
@@ -1139,7 +1161,26 @@ fn shield_service_error(error: &str) -> &'static str {
 
 #[cfg(test)]
 mod shield_service_error_tests {
-    use super::shield_service_error;
+    use super::{shield_service_error, shield_supervisor_requires_policy_lock};
+
+    #[test]
+    fn only_confirmed_unbound_devices_skip_the_policy_mutex() {
+        let mut settings = crate::settings::create_default_settings();
+        let unbound = serde_json::json!({"trust_bound": false, "policy": null});
+        assert_eq!(shield_supervisor_requires_policy_lock(&settings, &unbound), Ok(false));
+        assert_eq!(shield_supervisor_requires_policy_lock(&settings,
+            &serde_json::json!({"trust_bound": true})), Ok(true));
+        for response in [serde_json::json!({}), serde_json::json!({"trust_bound": null}),
+            serde_json::json!({"trust_bound": false, "policy": {"stale": true}})]
+        {
+            assert!(shield_supervisor_requires_policy_lock(&settings, &response).is_err());
+        }
+        settings.policy.fleet_signing_key = Some("locally-pinned".into());
+        assert!(shield_supervisor_requires_policy_lock(&settings, &unbound).is_err());
+        settings.policy.fleet_signing_key = None;
+        settings.policy.master_config_version = Some(3);
+        assert!(shield_supervisor_requires_policy_lock(&settings, &unbound).is_err());
+    }
 
     #[test]
     fn distinguishes_rejection_from_an_unreachable_service_without_exposing_details() {
@@ -1498,6 +1539,13 @@ async fn apply_fleet_privacy_shield_policy_locked(
     app: &tauri::AppHandle,
     reported: &Arc<Mutex<std::collections::BTreeSet<String>>>,
 ) -> Result<(), String> {
+    // An unlinked device has no Fleet transaction to serialize. In particular,
+    // do not hold the machine mutex while bootstrapping an unused Pro sidecar.
+    // The protected service response, never the profile's enabled checkbox,
+    // decides this; bound devices are reverified inside the locked transaction.
+    if !service_shield_profile_is_bound().await? {
+        return Ok(());
+    }
     let runtime = tokio::runtime::Handle::current();
     let app = app.clone();
     let reported = Arc::clone(reported);
