@@ -417,10 +417,11 @@ fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
     let Some(envelope) = &metadata.signed_manifest else {
         return false;
     };
-    let Ok(manifest) = crate::investigator_install::manifest::verify_manifest(envelope) else {
-        return false;
-    };
-    signed_pro_matches(&manifest, metadata.version.as_deref(), hash)
+    if let Ok(release) = crate::investigator_install::manifest::verify_signed_pro(envelope) {
+        return signed_pro_release_matches(&release, metadata.version.as_deref(), hash);
+    }
+    crate::investigator_install::manifest::verify_manifest(envelope)
+        .is_ok_and(|manifest| signed_pro_matches(&manifest, metadata.version.as_deref(), hash))
 }
 
 /// Replace the shared version/hash record without leaving a partially-written
@@ -989,6 +990,18 @@ async fn verify_published_pro_request(
         return Ok(None);
     }
     let version = pro_version.ok_or("validation:Pro release version is missing")?;
+    if let Some(envelope) = crate::investigator_install::manifest::fetch_signed_pro(version)
+        .await
+        .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?
+    {
+        let release = crate::investigator_install::manifest::verify_signed_pro(&envelope)?;
+        if !signed_pro_release_matches(&release, pro_version, expected_sha256)
+            || release.url != download_url
+        {
+            return Err("validation:Pro release does not match its signed record.".into());
+        }
+        return Ok(Some(envelope));
+    }
     let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest_for_pro(version)
         .await
         .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?;
@@ -996,6 +1009,17 @@ async fn verify_published_pro_request(
         return Err("validation:Pro release does not match the independently signed manifest. Update Free or retry after the release is published.".to_string());
     }
     Ok(Some(envelope))
+}
+
+fn signed_pro_release_matches(
+    release: &crate::investigator_install::manifest::SignedProRelease,
+    version: Option<&str>,
+    sha256: &str,
+) -> bool {
+    version.and_then(parse_semver).is_some_and(|expected| {
+        parse_semver(&release.version) == Some(expected)
+            && release.sha256.eq_ignore_ascii_case(sha256)
+    })
 }
 
 fn signed_pro_matches(
@@ -1589,6 +1613,19 @@ mod machine_update_tests {
             .json()
             .await
             .unwrap();
+        let proof = crate::investigator_install::manifest::fetch_signed_pro(
+            published["version"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        if let Some(envelope) = proof {
+            let release = crate::investigator_install::manifest::verify_signed_pro(&envelope).unwrap();
+            assert!(super::signed_pro_release_matches(
+                &release,
+                published["version"].as_str(),
+                published["sha256"].as_str().unwrap(),
+            ));
+        }
         let (_, versioned) = crate::investigator_install::manifest::fetch_manifest_for_pro(
             published["version"].as_str().unwrap(),
         )
@@ -1638,6 +1675,18 @@ mod machine_update_tests {
         assert!(!metadata_has_signed_hash(&metadata, hash));
         metadata.signed_manifest = None;
         assert!(!metadata_has_signed_hash(&metadata, hash));
+    }
+
+    #[test]
+    fn product_specific_pro_record_binds_version_and_hash() {
+        let envelope: crate::investigator_install::manifest::SignedManifestEnvelope =
+            serde_json::from_str(include_str!("../tests/fixtures/signed-pro-test.json")).unwrap();
+        let release: crate::investigator_install::manifest::SignedProRelease =
+            serde_json::from_str(&envelope.payload).unwrap();
+        assert!(super::signed_pro_release_matches(&release, Some("3.7.0"), &"a".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, Some("3.7.1"), &"a".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, Some("3.7.0"), &"b".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, None, &"a".repeat(64)));
     }
 
     #[cfg(windows)]
