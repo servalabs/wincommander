@@ -93,7 +93,9 @@ fn dacl_bytes(handle: HANDLE) -> Vec<u8> {
 }
 
 fn child(name: &str, mode: &str) {
-    let filter = format!("{}::child_probe", module_path!());
+    // libtest names omit the crate component included by module_path!.
+    let (_, module) = module_path!().split_once("::").expect("test module has a crate prefix");
+    let filter = format!("{module}::child_probe");
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     let mut process = command
         .args(["--exact", &filter, "--nocapture"])
