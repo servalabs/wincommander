@@ -10,6 +10,8 @@ const combinedLauncher = readFileSync("tools/dev-all.ts", "utf8");
 const serviceSync = readFileSync("tools/sync-dev-service.ps1", "utf8");
 const devServer = readFileSync("tools/dev-server.ts", "utf8");
 const serviceStartup = readFileSync("tools/dev-service-startup.ts", "utf8");
+const protectedRunner = readFileSync("tools/protected-dev-runner.ps1", "utf8");
+const protectedRunnerCommand = readFileSync("tools/protected-dev-runner.cmd", "utf8");
 
 describe("desktop development launchers", () => {
   test("excludes locked runtime files from the frontend watcher", () => {
@@ -105,6 +107,68 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(devLauncher).toContain("Start-Process -FilePath powershell.exe -Verb RunAs");
     expect(devLauncher).toContain("-NoExit -NoProfile");
     expect(devLauncher).toContain("-File $scriptPath -Elevated");
+  });
+
+  test("runs the compiled desktop from the protected service pin in Pro development", () => {
+    expect(devLauncher).toContain("'--runner', $runnerCommand");
+    expect(devLauncher).not.toContain("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER");
+    expect(devLauncher).toContain("--no-watch");
+    expect(protectedRunnerCommand).toContain('protected-dev-runner.ps1" %*');
+    expect(protectedRunner).toContain("& $cargo build -p commander-free --bin wincommander-free @buildArgs");
+    expect(protectedRunner).not.toContain("& $cargo run");
+    expect(protectedRunner).toContain("-SyncPro -StageFleetDebug");
+    expect(protectedRunner).toContain("WinCommander\\dev-fleet\\wincommander-free.exe");
+  });
+
+  test.skipIf(process.platform !== "win32")("protected runner rejects an unexpected Tauri command before staging", () => {
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+      "tools/protected-dev-runner.ps1", "build", "--", "unexpected.exe",
+    ], { encoding: "utf8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("only accepts Tauri development runs");
+    expect(result.stderr).not.toContain("development-service synchronization failed");
+  });
+
+  test.skipIf(process.platform !== "win32")("runner follows only a new staged app in its own session", () => {
+    const script = String.raw`
+Set-StrictMode -Version Latest
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+  (Join-Path (Get-Location) 'tools/protected-dev-runner.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'PowerShell parse failed' }
+$definition = $ast.Find({ param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Get-NewStagedProcess'
+}, $true)
+. ([scriptblock]::Create($definition.Extent.Text))
+$script:processes = @(
+  [pscustomobject]@{Id=10; SessionId=2},
+  [pscustomobject]@{Id=11; SessionId=3},
+  [pscustomobject]@{Id=12; SessionId=2},
+  [pscustomobject]@{Id=13; SessionId=2}
+)
+$script:images = @{10='C:\stage\wincommander-free.exe'; 11='C:\stage\wincommander-free.exe';
+  12='C:\other\wincommander-free.exe'; 13='C:\stage\wincommander-free.exe'}
+function Get-Process {
+  [CmdletBinding()] param([string]$Name)
+  return $script:processes
+}
+function Get-ProcessImagePath { param([int]$ProcessId) return $script:images[$ProcessId] }
+$selected = Get-NewStagedProcess -Path 'C:\stage\WINCOMMANDER-FREE.EXE' -SessionId 2 -KnownIds @(10)
+$script:processes = @($script:processes | Where-Object Id -ne 13)
+$missing = Get-NewStagedProcess -Path 'C:\stage\wincommander-free.exe' -SessionId 2 -KnownIds @(10)
+ConvertTo-Json -Compress -InputObject @($selected.Id, ($null -eq $missing))
+`;
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([13, true]);
+    expect(protectedRunner).toContain("$knownIds += $active.Id");
+    expect(protectedRunner).toContain("$handoffDeadline = [DateTime]::UtcNow.AddSeconds(8)");
   });
 
   test("verifies the running service process and current Pro helper", () => {

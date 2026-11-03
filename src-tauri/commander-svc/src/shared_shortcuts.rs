@@ -144,6 +144,47 @@ fn capture_initial(specs: &[LinkSpec; 2]) -> Result<[Option<LinkOriginal>; 2], &
     Ok(originals)
 }
 
+fn hold_optional_parent(
+    path: &std::path::Path,
+) -> Result<Option<Vec<std::fs::File>>, &'static str> {
+    match crate::shared_shortcuts_file::hold_parent(path) {
+        Ok(guards) => Ok(Some(guards)),
+        // A dev-only machine may have no installed shared Start folder at all.
+        // Its absence is safe only when there is no link to manage there.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !entry_exists(path) => {
+            Ok(None)
+        }
+        Err(_) => Err(UNAVAILABLE),
+    }
+}
+
+fn inactive_without_journal(specs: &[LinkSpec; 2]) -> ClaimReply {
+    let clean = specs.iter().all(|spec| {
+        !entry_exists(&spec.backup)
+            && !entry_exists(&spec.calculator_backup)
+            && !entry_exists(&spec.calculator)
+    });
+    ClaimReply {
+        status: if clean { "restored" } else { "partial" },
+        warnings: if clean { Vec::new() } else { vec![PARTIAL] },
+        managed: Managed {
+            desktop: false,
+            start: false,
+        },
+    }
+}
+
+fn no_managed_shared_links(journal: &Journal, specs: &[LinkSpec; 2]) -> bool {
+    journal.originals.iter().all(Option::is_none)
+        && journal.aliases.iter().all(Option::is_none)
+        && specs.iter().all(|spec| {
+            !entry_exists(&spec.original)
+                && !entry_exists(&spec.backup)
+                && !entry_exists(&spec.calculator)
+                && !entry_exists(&spec.calculator_backup)
+        })
+}
+
 pub(crate) fn set_claim(sid: &str, kind: &str, active: bool) -> Result<ClaimReply, &'static str> {
     #[cfg(debug_assertions)]
     let trace_started = std::time::Instant::now();
@@ -162,45 +203,34 @@ pub(crate) fn set_claim(sid: &str, kind: &str, active: bool) -> Result<ClaimRepl
     let (root, specs) = paths()?;
     let guards = crate::personal_settings::platform::secure_directory(&root)?;
     clean_old_alias_temps(&root);
+    let path = root.join("state.json");
+    let prior = read_journal(&path)?;
+    if prior.is_none() && !active {
+        return Ok(inactive_without_journal(&specs));
+    }
+    let had_journal = prior.is_some();
     let public_guards: Vec<_> = specs
         .iter()
-        .map(|spec| {
-            crate::shared_shortcuts_file::hold_parent(&spec.original).map_err(|_| UNAVAILABLE)
-        })
+        .map(|spec| hold_optional_parent(&spec.original))
         .collect::<Result<_, _>>()?;
-    let path = root.join("state.json");
-    let mut journal = match read_journal(&path)? {
+    let mut journal = match prior {
         Some(journal) => journal,
-        None if active => Journal {
+        None => Journal {
             version: 3,
             claims: BTreeMap::new(),
             originals: capture_initial(&specs)?,
             aliases: [None, None],
         },
-        None => {
-            let clean = specs.iter().all(|spec| {
-                !entry_exists(&spec.backup)
-                    && !entry_exists(&spec.calculator_backup)
-                    && !entry_exists(&spec.calculator)
-            });
-            return Ok(ClaimReply {
-                status: if clean { "restored" } else { "partial" },
-                warnings: if clean { Vec::new() } else { vec![PARTIAL] },
-                managed: Managed {
-                    desktop: false,
-                    start: false,
-                },
-            });
-        }
     };
     #[cfg(debug_assertions)]
     crate::diagnostics::record_shared_shortcut_stage("store_open", trace_started);
     let backup_volume = crate::shared_shortcuts_file::volume_of(guards.last().ok_or(UNAVAILABLE)?)
         .map_err(|_| UNAVAILABLE)?;
-    for (original, guards) in journal.originals.iter().zip(&public_guards) {
+    for (original, public_guard) in journal.originals.iter().zip(&public_guards) {
         if let Some(original) = original {
+            let public_guard = public_guard.as_ref().ok_or(UNAVAILABLE)?;
             let source_volume =
-                crate::shared_shortcuts_file::volume_of(guards.last().ok_or(UNAVAILABLE)?)
+                crate::shared_shortcuts_file::volume_of(public_guard.last().ok_or(UNAVAILABLE)?)
                     .map_err(|_| UNAVAILABLE)?;
             if source_volume != original.identity.volume || backup_volume != source_volume {
                 return Err(UNAVAILABLE);
@@ -208,6 +238,26 @@ pub(crate) fn set_claim(sid: &str, kind: &str, active: bool) -> Result<ClaimRepl
         }
     }
     journal.set_claim(sid, kind, active);
+    // No installed shared links exist on this machine. Do not persist an
+    // empty-original journal: a later installer can add links, and the next
+    // claim must snapshot those originals before changing them.
+    if no_managed_shared_links(&journal, &specs) {
+        if had_journal {
+            std::fs::remove_file(&path).map_err(|_| UNAVAILABLE)?;
+        }
+        return Ok(ClaimReply {
+            status: if journal.mode() == Mode::Original {
+                "restored"
+            } else {
+                "hidden"
+            },
+            warnings: Vec::new(),
+            managed: Managed {
+                desktop: false,
+                start: false,
+            },
+        });
+    }
     save_journal(&path, &journal)?;
     #[cfg(debug_assertions)]
     crate::diagnostics::record_shared_shortcut_stage("store_journal", trace_started);
@@ -283,5 +333,49 @@ mod tests {
             "kind": "other", "active": true
         }))
         .is_err());
+    }
+
+    #[test]
+    fn absent_shared_folder_without_link_is_unmanaged() {
+        let missing = std::env::temp_dir()
+            .join(format!(
+                "wincommander-missing-{:032x}",
+                rand::random::<u128>()
+            ))
+            .join("WinCommander.lnk");
+        assert!(hold_optional_parent(&missing).unwrap().is_none());
+    }
+
+    #[test]
+    fn inactive_claim_without_journal_or_installed_links_needs_no_shared_folder() {
+        let missing = std::env::temp_dir().join(format!(
+            "wincommander-shared-{:032x}",
+            rand::random::<u128>()
+        ));
+        let specs = std::array::from_fn(|index| {
+            let directory = missing.join(index.to_string());
+            LinkSpec {
+                original: directory.join("WinCommander.lnk"),
+                backup: missing.join(format!("{index}-backup.lnk")),
+                target: directory.join("wincommander-free.exe"),
+                calculator: directory.join("calculator..lnk"),
+                calculator_backup: missing.join(format!("{index}-calculator.lnk")),
+                calculator_target: directory.join("Calculator.exe"),
+            }
+        });
+        let reply = inactive_without_journal(&specs);
+        assert_eq!(reply.status, "restored");
+        assert!(reply.warnings.is_empty());
+        assert!(!reply.managed.desktop && !reply.managed.start);
+        let mut journal = empty();
+        journal.set_claim("S-1-5-21-101", "calculator", true);
+        assert!(no_managed_shared_links(&journal, &specs));
+
+        // An installed link appearing later must require a fresh snapshot.
+        std::fs::create_dir_all(specs[0].original.parent().unwrap()).unwrap();
+        std::fs::write(&specs[0].original, b"installed-link").unwrap();
+        assert!(!no_managed_shared_links(&journal, &specs));
+        std::fs::remove_file(&specs[0].original).unwrap();
+        std::fs::remove_dir_all(&missing).unwrap();
     }
 }

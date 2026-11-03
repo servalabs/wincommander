@@ -8,7 +8,10 @@ function Get-WcDevelopmentVaultState {
         if (-not (Test-Path -LiteralPath $registryPath -PathType Leaf -ErrorAction Stop)) {
             $service = Get-Service -Name WinCommanderSvc -ErrorAction SilentlyContinue
             $desktop = Get-Process wincommander-free, wincommander-pro, WinCommander -ErrorAction SilentlyContinue
-            if ($service -or $desktop) {
+            # A running service may own mounts even without a readable journal.
+            # A stopped service with no desktop process cannot own a live
+            # presentation; managed mounts persist their journal before mount.
+            if (($service -and $service.Status -ne 'Stopped') -or $desktop) {
                 return [pscustomobject]@{ state = 'unknown'; mountedCount = 0 }
             }
             return [pscustomobject]@{ state = 'free'; mountedCount = 0 }

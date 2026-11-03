@@ -53,7 +53,8 @@ if ($Elevated -and -not (Test-ElevatedToken)) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot "ensure-dev-environment.ps1")
 
-if (Test-ProWorkspaceAvailable) {
+$hasProWorkspace = Test-ProWorkspaceAvailable
+if ($hasProWorkspace) {
     Remove-Item Env:WINCOMMANDER_DEV_FREE_ONLY -ErrorAction SilentlyContinue
 } else {
     # The public checkout is still fully useful for Free development. Do not
@@ -99,7 +100,19 @@ try {
         if (-not (Test-Path -LiteralPath $tauriCli)) {
             throw "The local Tauri CLI is missing. Run bun install, then start tools/dev.ps1 again."
         }
-        & $tauriCli dev --config src-tauri/commander-free/tauri.conf.json --config src-tauri/commander-free/tauri.prepared-dev.conf.json
+        if ($hasProWorkspace) {
+            # Tauri's --runner replaces its `cargo run` command. The wrapper
+            # builds Free without executing the writable target/debug image,
+            # then stages and runs the image pinned by the protected service.
+            $runnerCommand = Join-Path $PSScriptRoot 'protected-dev-runner.cmd'
+            if (-not (Test-Path -LiteralPath $runnerCommand -PathType Leaf)) {
+                throw 'The protected development runner is missing.'
+            }
+        }
+        $tauriArgs = @('dev', '--config', 'src-tauri/commander-free/tauri.conf.json',
+            '--config', 'src-tauri/commander-free/tauri.prepared-dev.conf.json')
+        if ($hasProWorkspace) { $tauriArgs += @('--runner', $runnerCommand, '--no-watch') }
+        & $tauriCli @tauriArgs
     }
     $exitCode = $LASTEXITCODE
 } finally {
