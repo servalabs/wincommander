@@ -24,6 +24,7 @@ import AuthAnomalySection from "./AuthAnomalySection";
 import ArgusDlpSection from "./ArgusDlpSection";
 import ArgusTamperSection from "./ArgusTamperSection";
 import UsbDevicesSection from "./UsbDevicesSection";
+import AdditionalAppPermissions, { additionalPermissionMatches } from "./AdditionalAppPermissions";
 import PrintMonitoringSection from "./PrintMonitoringSection";
 import RdpIdleCard from "./RdpIdleCard";
 import PanelHeader from "../../components/shared/PanelHeader";
@@ -70,6 +71,10 @@ export default function PrivacyPanel() {
     const showMonitoring = visibility.isVisible({ capability: ["monitoring"] }) || showExpertPrivacy;
 
     const [activeTab, setActiveTab] = usePrivacySessionState("privacy.active-tab", "tracking");
+
+    useEffect(() => {
+        if (searchQuery.trim() && showPrivacyControls && additionalPermissionMatches(searchQuery)) setActiveTab("capabilities");
+    }, [searchQuery, setActiveTab, showPrivacyControls]);
 
     // The guide tour anchors three in-panel steps (Browser Hardening, Privacy
     // Shield, RDP Idle) inside the Monitor tab. Tabs unmount inactive content,
@@ -259,8 +264,8 @@ export default function PrivacyPanel() {
                    (t.keywords && t.keywords.some((k: string) => k.toLowerCase().includes(q)));
         };
         const matchesBrowserHardening = showExpertPrivacy && browserTerms.some((term) => term.includes(q));
-        return privacyToggles.some(checkMatch) || CAPABILITY_TOGGLES.some(checkMatch) || matchesBrowserHardening || (showMonitoring && monitoringMatchesSearch);
-    }, [monitoringMatchesSearch, privacyToggles, searchQuery, showExpertPrivacy, showMonitoring]);
+        return privacyToggles.some(checkMatch) || CAPABILITY_TOGGLES.some(checkMatch) || matchesBrowserHardening || (showPrivacyControls && additionalPermissionMatches(q)) || (showMonitoring && monitoringMatchesSearch);
+    }, [monitoringMatchesSearch, privacyToggles, searchQuery, showExpertPrivacy, showMonitoring, showPrivacyControls]);
 
     const noSearch = !searchQuery.trim();
 
@@ -343,6 +348,7 @@ export default function PrivacyPanel() {
                                 gridClassName="privacy-compact-grid capability-grid"
                                 searchQuery={searchQuery}
                             />
+                            {additionalPermissionMatches(searchQuery) && <AdditionalAppPermissions searchQuery={searchQuery} />}
                         </TabsContent>
                     )}
 

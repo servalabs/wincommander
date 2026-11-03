@@ -387,6 +387,148 @@ $Script:AppPrivacyValueNames = @{
     'bluetoothSync' = 'LetAppsSyncWithDevices'
 }
 
+# Additional capability defaults are kept separate from per-app consent. A
+# snapshot is written before a change, so restoring never invents an Allow.
+$Script:AdditionalAppPermissions = @('humanPresence', 'passkeys', 'bluetooth', 'humanInterfaceDevice', 'passkeysEnumeration', 'sensors.custom', 'serialCommunication', 'usb', 'wifiData', 'wiFiDirect')
+
+function Get-AdditionalPermissionRegistryValue {
+    param([string]$Scope, [string]$Key, [string]$Name)
+    $hive = if ($Scope -eq 'Machine') { 'LocalMachine' } else { 'CurrentUser' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ keyExists = $false; exists = $false; value = $null; kind = $null } }
+        try {
+            if ($Name -notin $sub.GetValueNames()) { return @{ keyExists = $true; exists = $false; value = $null; kind = $null } }
+            return @{ keyExists = $true; exists = $true; value = $sub.GetValue($Name, $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind($Name) }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-AdditionalPermissionRegistryValue {
+    param([string]$Scope, [string]$Key, [string]$Name, $Value, [string]$Kind)
+    $hive = if ($Scope -eq 'Machine') { 'LocalMachine' } else { 'CurrentUser' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, 'Registry64')
+    try {
+        $sub = $base.CreateSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'Windows denied the permission write.' }
+        try { $sub.SetValue($Name, $Value, $Kind); $sub.Flush() } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-AdditionalPermissionRegistryValue {
+    param([string]$Scope, [string]$Key, [string]$Name)
+    $hive = if ($Scope -eq 'Machine') { 'LocalMachine' } else { 'CurrentUser' }
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -ne $sub) { try { $sub.DeleteValue($Name, $false); $sub.Flush() } finally { $sub.Dispose() } }
+    } finally { $base.Dispose() }
+}
+
+function Invoke-WithAdditionalPermissionMutex {
+    param([scriptblock]$Action)
+    $mutex = [Threading.Mutex]::new($false, 'Global\WinCommander_AdditionalAppPermissions')
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Timed out waiting for the permission lock.' }
+        & $Action
+    } finally { if ($acquired) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+}
+
+function Get-AdditionalPermissionState {
+    param([string]$Capability, [string]$Scope)
+    $key = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
+    $snapshot = "SOFTWARE\WinCommander\AdditionalAppPermissions\$Capability"
+    $machine = Get-AdditionalPermissionRegistryValue 'Machine' $key 'Value'
+    $user = Get-AdditionalPermissionRegistryValue 'User' $key 'Value'
+    $current = if ($Scope -eq 'Machine') { $machine } else { $user }
+    $phase = Get-AdditionalPermissionRegistryValue $Scope $snapshot 'Phase'
+    $previous = Get-AdditionalPermissionRegistryValue $Scope $snapshot 'PreviousValue'
+    $hadValue = Get-AdditionalPermissionRegistryValue $Scope $snapshot 'HadValue'
+    $validSnapshot = $phase.exists -and $phase.kind -eq 'DWord' -and $phase.value -in @(1, 2) -and $hadValue.exists -and $hadValue.kind -eq 'DWord' -and $hadValue.value -in @(0, 1) -and (($hadValue.value -eq 0 -and -not $previous.exists) -or ($hadValue.value -eq 1 -and $previous.exists -and $previous.kind -eq 'String' -and $previous.value -cin @('Allow', 'Deny', 'Prompt')))
+    $owned = $validSnapshot -and $phase.value -eq 2
+    $pending = $validSnapshot -and $phase.value -eq 1
+    $snapshotPresent = $phase.exists -or $previous.exists -or $hadValue.exists
+    $pendingChanged = $pending -and (($hadValue.value -eq 0 -and $current.exists) -or ($hadValue.value -eq 1 -and (-not $current.exists -or $current.kind -ne 'String' -or $current.value -cne $previous.value)))
+    $conflict = ($snapshotPresent -and -not $validSnapshot) -or ($owned -and (-not $current.exists -or $current.kind -ne 'String' -or $current.value -cne 'Deny')) -or $pendingChanged
+    $managed = $false
+    if ($Capability -eq 'humanPresence') {
+        foreach ($policyScope in @('Machine', 'User')) {
+            foreach ($suffix in @('', '_ForceAllowTheseApps', '_ForceDenyTheseApps', '_UserInControlOfTheseApps')) {
+                $policy = Get-AdditionalPermissionRegistryValue $policyScope 'SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' ('LetAppsAccessHumanPresence' + $suffix)
+                if ($policy.exists) { $managed = $true }
+            }
+        }
+    }
+    return @{
+        capability = $Capability; scope = $Scope
+        available = [bool]($machine.keyExists -or $user.keyExists)
+        value = if (-not $current.exists) { 'Unset' } elseif ($current.kind -eq 'String' -and $current.value -cin @('Allow', 'Deny', 'Prompt')) { [string]$current.value } else { 'Unknown' }
+        owned = [bool]$owned; pending = [bool]$pending; conflict = [bool]$conflict; managed = [bool]$managed
+        previousPresent = if ($validSnapshot) { [bool]($hadValue.value -eq 1) } else { $null }
+        previousValue = if ($validSnapshot -and $hadValue.value -eq 1) { [string]$previous.value } else { $null }
+    }
+}
+
+function Get-AdditionalAppPermissions {
+    return Invoke-WithAdditionalPermissionMutex {
+        $rows = @(
+            foreach ($capability in $Script:AdditionalAppPermissions) {
+                foreach ($scope in @('User', 'Machine')) { Get-AdditionalPermissionState $capability $scope }
+            }
+        )
+        @{ isAdmin = [bool](Test-IsAdmin); permissions = $rows }
+    }
+}
+
+function Set-AdditionalAppPermission {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('humanPresence', 'passkeys', 'bluetooth', 'humanInterfaceDevice', 'passkeysEnumeration', 'sensors.custom', 'serialCommunication', 'usb', 'wifiData', 'wiFiDirect')][string]$Capability,
+        [Parameter(Mandatory = $true)][ValidateSet('User', 'Machine')][string]$Scope,
+        [Parameter(Mandatory = $true)][ValidateSet('deny', 'restore')][string]$Mode
+    )
+    if ($Scope -eq 'Machine') { Assert-IsAdmin }
+    return Invoke-WithAdditionalPermissionMutex {
+        $key = "SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
+        $snapshot = "SOFTWARE\WinCommander\AdditionalAppPermissions\$Capability"
+        $state = Get-AdditionalPermissionState $Capability $Scope
+        if ($state.conflict) { throw 'The setting or its backup changed outside WinCommander. No setting was changed.' }
+        if ($state.managed) { throw 'An administrator policy controls this permission. No setting was changed.' }
+        if ($Mode -eq 'deny') {
+            if (-not $state.available) { throw 'Windows has not exposed this permission on this PC.' }
+            if ($state.value -eq 'Unknown') { throw 'Windows returned an unsupported permission value.' }
+            if ($state.value -eq 'Deny' -and -not $state.owned) { throw 'This default was already blocked outside WinCommander.' }
+            if (-not $state.owned -and -not $state.pending) {
+                Set-AdditionalPermissionRegistryValue $Scope $snapshot 'HadValue' ([int]($state.value -ne 'Unset')) 'DWord'
+                if ($state.value -ne 'Unset') { Set-AdditionalPermissionRegistryValue $Scope $snapshot 'PreviousValue' $state.value 'String' }
+                Set-AdditionalPermissionRegistryValue $Scope $snapshot 'Phase' 1 'DWord'
+                $state = Get-AdditionalPermissionState $Capability $Scope
+                if (-not $state.pending -or $state.conflict) { throw 'Windows could not confirm the permission backup.' }
+            }
+            if (-not $state.owned) {
+                Set-AdditionalPermissionRegistryValue $Scope $key 'Value' 'Deny' 'String'
+                $written = Get-AdditionalPermissionRegistryValue $Scope $key 'Value'
+                if (-not $written.exists -or $written.kind -ne 'String' -or $written.value -cne 'Deny') { throw 'Windows could not verify the permission write.' }
+                Set-AdditionalPermissionRegistryValue $Scope $snapshot 'Phase' 2 'DWord'
+            }
+            $result = Get-AdditionalPermissionState $Capability $Scope
+            if (-not $result.owned -or $result.value -ne 'Deny' -or $result.conflict) { throw 'Windows could not verify this permission change.' }
+        } else {
+            if (-not $state.owned) { throw 'WinCommander has no confirmed change to restore.' }
+            if ($state.previousPresent) { Set-AdditionalPermissionRegistryValue $Scope $key 'Value' $state.previousValue 'String' }
+            else { Remove-AdditionalPermissionRegistryValue $Scope $key 'Value' }
+            $restored = Get-AdditionalPermissionRegistryValue $Scope $key 'Value'
+            if (($state.previousPresent -and (-not $restored.exists -or $restored.kind -ne 'String' -or $restored.value -cne $state.previousValue)) -or (-not $state.previousPresent -and $restored.exists)) { throw 'Windows could not verify restoration.' }
+            foreach ($name in @('Phase', 'HadValue', 'PreviousValue')) { Remove-AdditionalPermissionRegistryValue $Scope $snapshot $name }
+            $result = Get-AdditionalPermissionState $Capability $Scope
+            if ($result.owned -or $result.pending -or $result.conflict) { throw 'The permission was restored, but its backup could not be cleared.' }
+        }
+        @{ status = 'updated'; verified = $true; permission = $result }
+    }
+}
+
 function Get-CapabilityRegistryValue {
     param([string]$Path, [string]$Name = 'Value')
     try { $properties = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop }

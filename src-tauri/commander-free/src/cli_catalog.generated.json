@@ -4346,6 +4346,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dAdditionalAppPermissions",
+      "name": "Get\u002dAdditionalAppPermissions",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/AdditionalAppPermissions.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dAdobeRecentInfo",
       "name": "Get\u002dAdobeRecentInfo",
       "transport": "backend\u002dscript",
@@ -6747,6 +6757,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Set\u002dAdditionalAppPermission",
+      "name": "Set\u002dAdditionalAppPermission",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/AdditionalAppPermissions.tsx"
+      ]
     },
     {
       "id": "backend:Set\u002dAppBranding",

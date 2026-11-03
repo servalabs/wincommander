@@ -2087,6 +2087,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Set-AppCapabilityAccess" => Some("privacy/telemetry"),
         "Get-AppCapabilityAccessStatus" => Some("privacy/telemetry"),
         "Get-AppPrivacyCapabilitiesStatus" => Some("privacy/telemetry"),
+        "Get-AdditionalAppPermissions" | "Set-AdditionalAppPermission" => Some("privacy/telemetry"),
 
         "Disable-LockScreenPrivacy" => Some("privacy/telemetry"),
         "Enable-LockScreenPrivacy" => Some("privacy/telemetry"),
@@ -5785,6 +5786,7 @@ pub(crate) async fn run_backend_script_with_timeout(
                     | "Set-UpdateRestartPolicy"
                     | "Add-IPFirewallRule"
                     | "Remove-IPFirewallRule"
+                    | "Set-AdditionalAppPermission"
             );
         if mutating {
             let msg = format!(

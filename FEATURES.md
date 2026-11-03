@@ -22,6 +22,12 @@ the backend and private component before execution.
 
 - Visible Windows privacy, telemetry, application, network, and security-posture
   controls where the public backend supports the operation.
+- Additional account and PC app-permission defaults for presence sensing,
+  passkeys and the passkey list, Bluetooth, human-interface devices, custom
+  sensors, serial ports, USB, Wi-Fi information and Wi-Fi Direct. Availability
+  depends on what Windows exposes.
+  Restoring a WinCommander change restores the prior default; individual app
+  exceptions and administrator policies can affect access.
 - Current-versus-intended state reporting so the UI can show whether Windows
   actually applied a requested setting.
 - Fix All keeps supported Explorer preferences in the current Windows account,
