@@ -249,6 +249,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test experimental Free updater verification
         run: 'cargo test --locked -p commander-free --lib --features experimental-pq-free-release updater::hybrid_free::'
+      - name: Test restricted access to Free update registry when elevated
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Host '::notice::Free update registry ACL acceptance was not run: this runner is not elevated.'
+            exit 0
+          }
+          $test = 'updater::hybrid_free::floor::anchor::tests::secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl'
+          $output = & cargo test --locked -p commander-free --lib --features experimental-pq-free-release $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation
