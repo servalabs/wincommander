@@ -30,4 +30,10 @@ describe("Fleet link presentation", () => {
   test("only calls a device unlinked when the status bridge has no device identity", () => {
     expect(fleetLinkState(status({ deviceId: "", serverUrl: "", lastError: null }))).toBe("not_linked");
   });
+
+  test("does not turn a historical signed contact into connection health", () => {
+    const lastSignedContactAt = "2026-11-03T12:00:00Z";
+    expect(fleetLinkState(status({ lastSignedContactAt }))).toBe("offline");
+    expect(fleetLinkState(status({ connected: true, lastSignedContactAt: null }))).toBe("linked");
+  });
 });

@@ -11,6 +11,7 @@ export interface FleetLinkStatus {
   lastError: string | null;
   retrying: boolean;
   pendingApproval?: boolean;
+  lastSignedContactAt?: string | null;
 }
 
 export type FleetLinkState = "linked" | "pending" | "reconnecting" | "offline" | "error" | "not_linked";

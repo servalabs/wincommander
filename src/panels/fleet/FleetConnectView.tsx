@@ -12,6 +12,7 @@ import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
+import { FleetSignedContact } from "./FleetSignedContact";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -564,13 +565,13 @@ export default function FleetConnectView() {
             <Input
               value={signingKeyPub}
               onChange={(e) => setSigningKeyPub(e.target.value)}
-              placeholder="Base64 Ed25519 key (optional — required for dispatch)"
+              placeholder="Base64 Ed25519 key (optional)"
               spellCheck={false}
               className="mono"
               disabled={enrolling}
             />
             <span className="fleet-field-hint">
-              Pinned fleet key used to verify signed commands. Only needed when command dispatch is on.
+              Pin the Fleet signing key to verify commands and signed contact. Signed contact also requires a separate operator key configured in Fleet.
             </span>
           </label>
 
@@ -620,6 +621,7 @@ export default function FleetConnectView() {
           </Button>
         </div>
       )}
+      {status?.deviceId && <FleetSignedContact timestamp={status.lastSignedContactAt} />}
     </div>
   );
 }

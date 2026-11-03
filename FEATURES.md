@@ -260,9 +260,12 @@ a standard owner cannot transfer ownership. Group membership changes remain
 restricted to authorized administrators. Seeing a group does not grant access
 to its Vaults.
 
-Fleet enrollment is an administrative boundary. On an enrolled device, the
-organization's configured productivity collection can include application
-names, window titles, URLs/page titles, source-file paths, project/language
+Fleet enrollment is an administrative boundary. The device enrollment card
+displays the last recorded signed Fleet contact when available. It is a
+historical device-clock observation, not current link health.
+
+On an enrolled device, the organization's configured productivity collection
+can include application names, window titles, URLs/page titles, source-file paths, project/language
 metadata, and the interactive username. Built-in ActivityWatch inputs use
 aggregate key/click/scroll counts rather than keystroke content and do not
 capture screenshots, webcam frames, or clipboard contents. A generic
