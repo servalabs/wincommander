@@ -6,6 +6,8 @@ use wincmd_pq_experiment::{free_release, jws, Purpose};
 
 #[path = "hybrid_free_floor.rs"]
 mod floor;
+#[path = "hybrid_free_history.rs"]
+mod history;
 
 pub(super) struct VerifiedUpdate {
     pub(super) bytes: Vec<u8>,

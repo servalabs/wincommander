@@ -24,7 +24,12 @@ struct Floor {
     hash: String,
 }
 
-fn verify(record: &Record, trust: &Trust, historical: bool) -> Result<Floor, String> {
+fn verify(
+    record: &Record,
+    trust: &Trust,
+    historical: bool,
+    old_trust: Option<&super::history::HistoricalTrust>,
+) -> Result<Floor, String> {
     if !matches!(record.channel.as_str(), "stable" | "beta") {
         return Err("Free update record has an invalid channel".into());
     }
@@ -37,14 +42,28 @@ fn verify(record: &Record, trust: &Trust, historical: bool) -> Result<Floor, Str
         // A stored proof is evidence of the old floor, not permission to install it.
         policy.minimum_epoch = 1;
     }
-    let (release, epoch) = wincmd_pq_experiment::free_release::verify_metadata(
-        record.envelope.as_bytes(),
-        &record.version,
-        &record.channel,
-        &url,
-        &policy,
-    )
-    .map_err(|_| "Free update record is not trusted")?;
+    let verify_with = |policy: &wincmd_pq_experiment::jws::Trust<'_>| {
+        wincmd_pq_experiment::free_release::verify_metadata(
+            record.envelope.as_bytes(),
+            &record.version,
+            &record.channel,
+            &url,
+            policy,
+        )
+    };
+    let (release, epoch) = match verify_with(&policy) {
+        Ok(verified) => verified,
+        Err(_) if historical => {
+            let old = old_trust.ok_or("Free historical update trust is not configured")?;
+            let verified =
+                verify_with(&old.policy()).map_err(|_| "Free update record is not trusted")?;
+            if verified.1 > old.maximum_epoch {
+                return Err("Free historical update exceeds its epoch limit".into());
+            }
+            verified
+        }
+        Err(_) => return Err("Free update record is not trusted".into()),
+    };
     let parts: Vec<u32> = release
         .version
         .split('.')
@@ -62,7 +81,17 @@ fn verify(record: &Record, trust: &Trust, historical: bool) -> Result<Floor, Str
 }
 
 fn check(previous: Option<&[u8]>, candidate: &Record, trust: &Trust) -> Result<(), String> {
-    let next = verify(candidate, trust, false)?;
+    let old_trust = super::history::configured(trust)?;
+    check_with_history(previous, candidate, trust, old_trust.as_ref())
+}
+
+fn check_with_history(
+    previous: Option<&[u8]>,
+    candidate: &Record,
+    trust: &Trust,
+    old_trust: Option<&super::history::HistoricalTrust>,
+) -> Result<(), String> {
+    let next = verify(candidate, trust, false, None)?;
     let Some(previous) = previous else {
         return Ok(());
     };
@@ -71,7 +100,7 @@ fn check(previous: Option<&[u8]>, candidate: &Record, trust: &Trust) -> Result<(
     }
     let previous: Record =
         serde_json::from_slice(previous).map_err(|_| "Free update record is invalid")?;
-    let old = verify(&previous, trust, true)?;
+    let old = verify(&previous, trust, true, old_trust)?;
     if next.version < old.version
         || next.epoch < old.epoch
         || (next.version == old.version && next.hash != old.hash)
@@ -153,6 +182,9 @@ fn record_with_lock(
     Ok(lock)
 }
 
+#[cfg(test)]
+#[path = "hybrid_free_history_tests.rs"]
+mod history_tests;
 #[cfg(test)]
 #[path = "hybrid_free_floor_tests.rs"]
 mod tests;
