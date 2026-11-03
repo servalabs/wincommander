@@ -1,0 +1,255 @@
+[
+  {
+    "detectorId": "payment_card",
+    "textParts": [
+      "card: ",
+      "4532 0",
+      "151 12",
+      "83 036",
+      "6"
+    ]
+  },
+  {
+    "detectorId": "iban",
+    "textParts": [
+      "IBAN: ",
+      "GB82 W",
+      "EST 12",
+      "34 569",
+      "8 7654",
+      " 32"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 1",
+      "23-45-",
+      "6789"
+    ]
+  },
+  {
+    "detectorId": "us_itin",
+    "textParts": [
+      "ITIN: ",
+      "900-70",
+      "-0001"
+    ]
+  },
+  {
+    "detectorId": "us_aba_routing",
+    "textParts": [
+      "routin",
+      "g: 021",
+      "000021"
+    ]
+  },
+  {
+    "detectorId": "uk_nino",
+    "textParts": [
+      "Nation",
+      "al ins",
+      "urance",
+      ": AB 1",
+      "2 34 5",
+      "6 C"
+    ]
+  },
+  {
+    "detectorId": "uk_nhs",
+    "textParts": [
+      "NHS: 9",
+      "43 476",
+      " 5919"
+    ]
+  },
+  {
+    "detectorId": "email",
+    "textParts": [
+      "test-p",
+      "erson@",
+      "exampl",
+      "e.inva",
+      "lid"
+    ]
+  },
+  {
+    "detectorId": "phone",
+    "textParts": [
+      "Phone:",
+      " +44 2",
+      "0 7946",
+      " 0958"
+    ]
+  },
+  {
+    "detectorId": "crypto_wallet",
+    "textParts": [
+      "Bitcoi",
+      "n wall",
+      "et: 1B",
+      "oatSLR",
+      "HtKNng",
+      "kdXEeo",
+      "bR76b5",
+      "3LETtp",
+      "yT"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.github-pat",
+    "textParts": [
+      "github",
+      " = ghp",
+      "_91Wds",
+      "AalzTY",
+      "6qnZrO",
+      "RfcGIN",
+      "LtHJx8",
+      "3uDpwy",
+      "4"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.adafruit-api-key",
+    "textParts": [
+      "adafru",
+      "it = B",
+      "8d3cvL",
+      "5mVh9z",
+      "isCbTG",
+      "MSog1A",
+      "e0ROyZ",
+      "j"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.slack-bot-token",
+    "textParts": [
+      "slack ",
+      "= xoxb",
+      "-12345",
+      "678901",
+      "2-1234",
+      "567890",
+      "12-dHL",
+      "awh5Sx",
+      "FJNvIo",
+      "kcjq91",
+      "slY"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.aws-access-token",
+    "textParts": [
+      "aws = ",
+      "AKIAAB",
+      "CDEFGH",
+      "IJKLMN",
+      "OP"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.generic-api-key",
+    "textParts": [
+      "api_ke",
+      "y = 7q",
+      "M4vZ2x",
+      "C9rT1b",
+      "H6sW0n",
+      "K5aE3f",
+      "J8uY4d"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.npm-access-token",
+    "textParts": [
+      "npm_o9",
+      "W4yfht",
+      "DCZk6v",
+      "LOaY7J",
+      "PBAiH5",
+      "Iwm1Kq",
+      "XQse"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.stripe-access-token",
+    "textParts": [
+      "sk_liv",
+      "e_2AxE",
+      "75T3vZ",
+      "lj49ck",
+      "Nh1sgJ",
+      "Ma"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.private-key",
+    "textParts": [
+      "-----B",
+      "EGIN R",
+      "SA PRI",
+      "VATE K",
+      "EY----",
+      "-\nSYNT",
+      "HETIC_",
+      "INVALI",
+      "D_KEY_",
+      "MATERI",
+      "AL_SYN",
+      "THETIC",
+      "_INVAL",
+      "ID_KEY",
+      "_MATER",
+      "IAL_SY",
+      "NTHETI",
+      "C_INVA",
+      "LID_KE",
+      "Y_MATE",
+      "RIAL_S",
+      "YNTHET",
+      "IC_INV",
+      "ALID_K",
+      "EY_MAT",
+      "ERIAL_",
+      "\n-----",
+      "END RS",
+      "A PRIV",
+      "ATE KE",
+      "Y-----"
+    ]
+  },
+  {
+    "detectorId": "es_dni",
+    "textParts": [
+      "DNI: 1",
+      "234567",
+      "8Z"
+    ]
+  },
+  {
+    "detectorId": "es_nie",
+    "textParts": [
+      "NIE: X",
+      "123456",
+      "7L"
+    ]
+  },
+  {
+    "detectorId": "es_nie",
+    "textParts": [
+      "NIE: Y",
+      "123456",
+      "7X"
+    ]
+  },
+  {
+    "detectorId": "es_nie",
+    "textParts": [
+      "NIE: Z",
+      "123456",
+      "7R"
+    ]
+  }
+]

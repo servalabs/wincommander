@@ -137,9 +137,9 @@ export const ARGUS_TOGGLES: ToggleDef[] = [
     defenderFlagged: true,
 
     id: "argus-print-usb",
-    label: "Print & Removable Media Monitor",
+    label: "Print Monitor",
     description:
-      "Detect print jobs and USB mass-storage attach events — page counts and device classes only, no document names or paths",
+      "Detect print jobs using aggregate page counts; USB attachment and receipt reconciliation are unavailable",
 
     section: "argus",
     domain: "privacy",

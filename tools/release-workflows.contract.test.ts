@@ -11,6 +11,8 @@ const parseWorkflow = (source: string) => Bun.YAML.parse(source) as Record<strin
 const parsedRelease = parseWorkflow(releaseWorkflow);
 const parsedPrepare = parseWorkflow(prepareWorkflow);
 const parsedPublishTag = parseWorkflow(publishTagWorkflow);
+const promotionWorkflow = readWorkflow(".github/workflows/promote-beta.yml");
+const parsedPromotion = parseWorkflow(promotionWorkflow);
 
 function extractMarkedNodeScript(source: string, marker: string): string {
   const blocks = [...source.matchAll(/node <<'NODE'\n([\s\S]*?)\n\s*NODE/g)].map((match) =>
@@ -98,6 +100,35 @@ describe("Free release workflow controls", () => {
   test("serializes every public release that writes shared latest pointers", () => {
     expect(parsedRelease.concurrency.group).toBe("public-release");
     expect(parsedRelease.concurrency["cancel-in-progress"]).toBe(false);
+    expect(parsedPromotion.concurrency.group).toBe("public-release");
+    expect(parsedPromotion.jobs.promote.environment.name).toBe("release");
+  });
+
+  test("beta tag runs through reviewed publication while stable pointers remain channel-specific", () => {
+    expect(parsedRelease.on.push.tags).toContain("beta-v*.*.*");
+    const evaluator = extractMarkedNodeScript(releaseWorkflow, "RELEASE_CONTROL_EVALUATOR");
+    const protectedBeta = [{ ...secureTagRulesets[0], conditions: { ref_name: { include: ["refs/tags/beta-v*"], exclude: [] } } }];
+    const result = runNodeScript(evaluator, {
+      ...controlEnv({ TAG_RULESETS_JSON_LINES: protectedBeta }),
+      TAG_PATTERN: "refs/tags/beta-v*",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(releaseWorkflow).toContain("$channelPath = if ($env:RELEASE_TAG.StartsWith('beta-v')) { 'free/beta' } else { 'free' }");
+    expect(releaseWorkflow).toContain('"$remote/pro/v$version/latest.json"');
+    expect(releaseWorkflow).toContain("assert-pro-beta-pair.ps1");
+    expect(releaseWorkflow).toContain("Matching Pro release receipt does not bind this Free beta commit and binary.");
+  });
+
+  test("promotion requires an identical source tree and reuses the signed beta setup", () => {
+    expect(promotionWorkflow).toContain('"${main_sha}^{tree}"');
+    expect(promotionWorkflow).toContain('"${beta_sha}^{tree}"');
+    expect(promotionWorkflow).toContain("gh attestation verify $setup.FullName");
+    expect(promotionWorkflow).toContain("Promote matching Pro first; Free stable pointer is unchanged.");
+    expect(promotionWorkflow.indexOf("r2:windows/free/latest.exe")).toBeLessThan(promotionWorkflow.indexOf("r2:windows/free/latest.json' '--ignore-times'"));
+    expect(promotionWorkflow).not.toContain("build:free:release-installer");
+    expect(parsedPromotion.on.workflow_dispatch.inputs.resume.type).toBe("boolean");
+    expect(promotionWorkflow).toContain("Existing stable draft differs from tested beta assets.");
+    expect(releaseWorkflow).toContain("if: needs.align-version.outputs.promoted_candidate != 'true'");
   });
 
   test("the actual control evaluators accept a fully protected configuration", () => {

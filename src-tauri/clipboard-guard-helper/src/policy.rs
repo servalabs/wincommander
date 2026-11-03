@@ -53,6 +53,19 @@ pub enum PolicyInstallError {
 pub struct ClipboardPolicyResponse {
     pub policy_version: i64,
     pub rules: Vec<Rule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_rules: Option<wincmd_clip_rules::ContentRulesSubtree>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub reporting_binding: Option<String>,
+}
+
+impl ClipboardPolicyResponse {
+    pub fn effective_rules(&self) -> Result<Vec<Rule>, Vec<CompileError>> {
+        match &self.content_rules {
+            Some(subtree) => wincmd_clip_rules::resolve_content_rules(subtree),
+            None => Ok(self.rules.clone()),
+        }
+    }
 }
 
 /// A successfully compiled, ready-to-match ruleset plus the per-rule
@@ -130,7 +143,7 @@ impl PolicyStore {
     /// A legacy caller must not install while local rules exist because it
     /// cannot represent a collision failure.
     pub fn install(&mut self, response: &ClipboardPolicyResponse) -> Result<(), Vec<CompileError>> {
-        if self.has_rule_id_collision(&response.rules, &self.local) {
+        if self.has_rule_id_collision(&response.effective_rules()?, &self.local) {
             self.fleet_rules_compiled = false;
             return Err(Vec::new());
         }
@@ -158,6 +171,11 @@ impl PolicyStore {
         &mut self,
         response: &ClipboardPolicyResponse,
     ) -> Result<(), PolicyInstallError> {
+        if response.content_rules.is_some() || response.reporting_binding.is_some() {
+            return Err(PolicyInstallError::Compile(vec![
+                CompileError::InvalidRuleOptions { index: 0 },
+            ]));
+        }
         for rule in &response.rules {
             for action in &rule.actions {
                 if matches!(action, Action::ReportFleet | Action::AlertAdmin) {
@@ -185,19 +203,25 @@ impl PolicyStore {
         response: &ClipboardPolicyResponse,
         source: PolicySource,
     ) -> Result<(), PolicyInstallError> {
+        let rules = response
+            .effective_rules()
+            .map_err(PolicyInstallError::Compile)?;
         let other = match source {
             PolicySource::Local => &self.fleet,
             PolicySource::Fleet => &self.local,
         };
-        if let Some(rule_id) = self.first_rule_id_collision(&response.rules, other) {
+        if let Some(rule_id) = self.first_rule_id_collision(&rules, other) {
             self.set_compiled_health(source, false);
             return Err(PolicyInstallError::RuleIdCollision { rule_id });
         }
-        let limits = RuleSetLimits::default();
-        match compile(&response.rules, &limits) {
+        let limits = wincmd_clip_rules::content_rule_limits();
+        let compiled = match response.content_rules.as_ref() {
+            Some(subtree) => wincmd_clip_rules::compile_content_rules(subtree),
+            None => compile(&rules, &limits),
+        };
+        match compiled {
             Ok(compiled) => {
-                let cooldowns = response
-                    .rules
+                let cooldowns = rules
                     .iter()
                     .filter(|r| r.enabled)
                     .map(|r| (r.id.clone(), Duration::from_secs(r.cooldown_seconds as u64)))
@@ -206,7 +230,7 @@ impl PolicyStore {
                     policy_version: response.policy_version,
                     compiled,
                     cooldowns,
-                    rule_ids: response.rules.iter().map(|rule| rule.id.clone()).collect(),
+                    rule_ids: rules.iter().map(|rule| rule.id.clone()).collect(),
                 };
                 match source {
                     PolicySource::Local => self.local = active,
@@ -290,6 +314,7 @@ mod tests {
             cooldown_seconds: 30,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         }
     }
 
@@ -312,6 +337,7 @@ mod tests {
             cooldown_seconds: 30,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         }
     }
 
@@ -326,7 +352,8 @@ mod tests {
     #[test]
     fn good_policy_installs_and_flips_health_true() {
         let mut store = PolicyStore::new();
-        let response = ClipboardPolicyResponse {
+        let response = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 5,
             rules: vec![good_rule()],
         };
@@ -343,13 +370,15 @@ mod tests {
     #[test]
     fn bad_policy_leaves_previous_active_untouched_and_flips_health_false() {
         let mut store = PolicyStore::new();
-        let good = ClipboardPolicyResponse {
+        let good = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 5,
             rules: vec![good_rule()],
         };
         store.install(&good).expect("good policy installs");
 
-        let bad = ClipboardPolicyResponse {
+        let bad = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 6,
             rules: vec![bad_rule()],
         };
@@ -369,7 +398,8 @@ mod tests {
     #[test]
     fn fleet_install_failure_keeps_last_good_fleet_and_local_policies() {
         let mut store = PolicyStore::new();
-        let local = ClipboardPolicyResponse {
+        let local = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 2,
             rules: vec![good_rule()],
         };
@@ -377,13 +407,15 @@ mod tests {
 
         let mut fleet_rule = good_rule();
         fleet_rule.id = rule_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let fleet = ClipboardPolicyResponse {
+        let fleet = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 3,
             rules: vec![fleet_rule],
         };
         store.install_fleet(&fleet).unwrap();
 
-        let failure = ClipboardPolicyResponse {
+        let failure = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 4,
             rules: vec![bad_rule()],
         };
@@ -400,13 +432,15 @@ mod tests {
     #[test]
     fn rejects_rule_id_collisions_between_sources_without_replacing_either() {
         let mut store = PolicyStore::new();
-        let local = ClipboardPolicyResponse {
+        let local = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 1,
             rules: vec![good_rule()],
         };
         store.install_local(&local).unwrap();
 
-        let collision = ClipboardPolicyResponse {
+        let collision = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 9,
             rules: vec![good_rule()],
         };
@@ -424,13 +458,15 @@ mod tests {
         disabled_local.enabled = false;
         let mut store = PolicyStore::new();
         store
-            .install_local(&ClipboardPolicyResponse {
+            .install_local(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![disabled_local],
             })
             .unwrap();
         assert!(matches!(
-            store.install_fleet(&ClipboardPolicyResponse {
+            store.install_fleet(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 2,
                 rules: vec![good_rule()],
             }),
@@ -441,13 +477,15 @@ mod tests {
         disabled_fleet.enabled = false;
         let mut store = PolicyStore::new();
         store
-            .install_local(&ClipboardPolicyResponse {
+            .install_local(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![good_rule()],
             })
             .unwrap();
         assert!(matches!(
-            store.install_fleet(&ClipboardPolicyResponse {
+            store.install_fleet(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 2,
                 rules: vec![disabled_fleet],
             }),
@@ -460,7 +498,8 @@ mod tests {
         let mut store = PolicyStore::new();
         let mut rule = good_rule();
         rule.actions = vec![Action::NotifyUser, Action::ReportFleet];
-        let response = ClipboardPolicyResponse {
+        let response = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 1,
             rules: vec![rule],
         };
@@ -478,7 +517,8 @@ mod tests {
     #[test]
     fn explicit_unenrol_removes_fleet_only() {
         let mut store = PolicyStore::new();
-        let local = ClipboardPolicyResponse {
+        let local = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 2,
             rules: vec![good_rule()],
         };
@@ -486,7 +526,8 @@ mod tests {
         let mut fleet_rule = good_rule();
         fleet_rule.id = rule_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         store
-            .install_fleet(&ClipboardPolicyResponse {
+            .install_fleet(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 3,
                 rules: vec![fleet_rule],
             })
@@ -509,7 +550,8 @@ mod tests {
     #[test]
     fn cooldown_for_installed_rule_matches_its_declared_seconds() {
         let mut store = PolicyStore::new();
-        let response = ClipboardPolicyResponse {
+        let response = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 1,
             rules: vec![good_rule()],
         };

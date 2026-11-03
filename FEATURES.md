@@ -47,7 +47,10 @@ the backend and private component before execution.
 - Basic USB attach/detach timeline, observed volume mounts/unmounts, and device
   visibility. Times reflect periodic observation, not a complete Windows history.
   Manual Pro block/allow actions appear with their Windows verification result.
-- Local clipboard-risk warnings and user-controlled clear/snooze behavior.
+- Local clipboard-risk warnings, scored secret/identifier detectors, catalog
+  controls and content-free match explanations. Optional contact checks start
+  off; detector scores are evidence, not proof of an active secret. Paid
+  clipboard masking preserves text outside the matched spans.
 - Optional background Bluetooth LE scan that warns when camera-capable smart
   glasses (Ray-Ban/Oakley Meta, Snap Spectacles, Vuzix and similar) are likely
   within roughly 10 m. It matches public Bluetooth vendor identifiers, so other

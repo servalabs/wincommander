@@ -7179,7 +7179,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/BackgroundPollers.tsx",
         "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
@@ -8786,9 +8785,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/components/BackgroundPollers.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_request_unenroll",
@@ -8960,6 +8957,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/CanaryTokensSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:get_content_detector_catalog",
+      "name": "get_content_detector_catalog",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useContentDetectors.ts"
       ]
     },
     {
@@ -10366,7 +10373,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/BackgroundPollers.tsx",
         "src/context/ThemeContext.tsx"
       ]
     },
@@ -11342,6 +11348,16 @@
       ]
     },
     {
+      "id": "tauri:set_update_channel",
+      "name": "set_update_channel",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/settings/VersionManagementCard.tsx"
+      ]
+    },
+    {
       "id": "tauri:set_usb_autosandbox_config",
       "name": "set_usb_autosandbox_config",
       "transport": "tauri",
@@ -11886,6 +11902,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/LockdownWordsSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:test_local_content_rules",
+      "name": "test_local_content_rules",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useContentDetectors.ts"
       ]
     },
     {

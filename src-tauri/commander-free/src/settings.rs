@@ -32,6 +32,14 @@ enum SettingsScope {
     User,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+}
+
 #[path = "settings_scope.rs"]
 mod settings_scope;
 
@@ -156,6 +164,8 @@ pub struct BitLockerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SystemState {
     #[serde(default)]
+    pub argus: ArgusSettings,
+    #[serde(default)]
     pub device: DeviceIdentifiers,
     #[serde(default)]
     pub privacy: PrivacySettings,
@@ -174,6 +184,19 @@ pub struct SystemState {
     /// Security diagnostics — driver-health / Device-Manager check (#6).
     #[serde(default)]
     pub security: SecuritySettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ArgusSettings {
+    pub dlp: ArgusDlpSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ArgusDlpSettings {
+    pub enabled: bool,
+    pub running: bool,
 }
 
 // ── Security diagnostics ─────────────────────────────────────────────
@@ -335,6 +358,9 @@ pub struct RdpNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferences {
+    /// Independent user preference; never overwritten by a Fleet Shield epoch.
+    #[serde(default)]
+    pub local_privacy_shield_look_away_delay_seconds: Option<u32>,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -351,6 +377,9 @@ pub struct AppPreferences {
     /// installed-apps policy — that is `ideal.apps.auto_update`.
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// One channel for the machine-wide installation and its Pro sidecar.
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
     #[serde(default)]
     pub start_minimized: bool,
     // Machine-wide sign-in presentation. Personal overlays cannot override it.
@@ -936,10 +965,12 @@ impl Default for AdvisorSettings {
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
+            local_privacy_shield_look_away_delay_seconds: None,
             theme: default_theme(),
             first_run_complete: false,
             has_seen_mandatory_tour: false,
             auto_update: true,
+            update_channel: UpdateChannel::Stable,
             start_minimized: false,
             start_silently_at_sign_in: true,
             context_menu_enabled: false,
@@ -1645,6 +1676,12 @@ pub struct PrivacyShieldSettings {
     #[serde(default)]
     pub fleet_notification_window_seconds: Option<u32>,
     pub gaze_detection_enabled: Option<bool>,
+    /// Whether Fleet should run the look-away detector at all. Missing means enabled.
+    #[serde(default)]
+    pub look_away_detection_enabled: Option<bool>,
+    /// Signed Fleet look-away delay. Never reused as a local preference.
+    #[serde(default)]
+    pub look_away_delay_seconds: Option<u32>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,
     #[serde(default)]
@@ -1664,6 +1701,11 @@ pub struct PrivacyShieldSettings {
     /// Attention/status telemetry remains separate and media-free.
     #[serde(default)]
     pub send_incident_captures_to_fleet: bool,
+    /// Fleet-managed webcam recording, disabled when absent.
+    #[serde(default)]
+    pub fleet_capture_on_phone: Option<bool>,
+    #[serde(default)]
+    pub fleet_capture_on_multi_face: Option<bool>,
     pub capture_speed: Option<u32>,
     pub device_wake_multiplier: Option<f32>,
     pub multi_face_wake_multiplier: Option<f32>,
@@ -2620,11 +2662,13 @@ fn scope_for_path(path: &str) -> Result<Option<SettingsScope>, String> {
         return Ok(None);
     }
     if path.starts_with("app.") {
-        return Ok(Some(if path == startup_scope::PATH {
-            SettingsScope::Machine
-        } else {
-            SettingsScope::User
-        }));
+        return Ok(Some(
+            if path == startup_scope::PATH || path == "app.updateChannel" {
+                SettingsScope::Machine
+            } else {
+                SettingsScope::User
+            },
+        ));
     }
     if let Some((_, scope)) = ROOT_SETTINGS_SCOPE_TABLE
         .iter()
@@ -2724,6 +2768,14 @@ fn merge_user_overlay(
     mut overlay: serde_json::Value,
 ) -> Result<AppSettings, String> {
     startup_scope::remove_personal_choice(&mut overlay);
+    // A legacy or hand-edited per-user overlay cannot choose the shared
+    // installer channel when settings are read back.
+    if let Some(app) = overlay
+        .get_mut("app")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        app.remove("updateChannel");
+    }
     normalize_file_search_result_limit(&mut overlay);
     let mut merged = serde_json::to_value(machine)
         .map_err(|error| format!("Failed to serialize machine settings: {error}"))?;
@@ -3055,6 +3107,21 @@ fn write_settings_under_lease(
         return Err("Settings are read-only in decoy mode.".to_string());
     }
     let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
+    // A current-user install can write its own machine partition without an
+    // elevated token. The update channel still controls which installer all
+    // users receive, so enforce approval here as well as in the dedicated UI
+    // command; generic settings patches must not bypass it.
+    let stored_channel = stored_machine
+        .pointer("/app/updateChannel")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("stable");
+    let requested_channel = match settings.app.update_channel {
+        UpdateChannel::Stable => "stable",
+        UpdateChannel::Beta => "beta",
+    };
+    if stored_channel != requested_channel && !elevated {
+        return Err("Administrator approval is required to change the update channel.".into());
+    }
     let cached_silent = SETTINGS_CACHE
         .lock()
         .map_err(|_| "Settings cache lock poisoned")?
@@ -3757,6 +3824,7 @@ enum SubtreeOutcome {
 #[derive(Debug, Clone, Copy)]
 struct ParsedEpochSubtrees {
     clipboard_guard: SubtreeOutcome,
+    content_rules: SubtreeOutcome,
     ink_receipt: SubtreeOutcome,
 }
 
@@ -3766,12 +3834,14 @@ impl ParsedEpochSubtrees {
     /// subtree behaves exactly as it always has.
     fn is_no_op(&self) -> bool {
         matches!(self.clipboard_guard, SubtreeOutcome::Absent)
+            && matches!(self.content_rules, SubtreeOutcome::Absent)
             && matches!(self.ink_receipt, SubtreeOutcome::Absent)
     }
 
     /// At least one PRESENT subtree failed its shape check.
     fn any_malformed(&self) -> bool {
         matches!(self.clipboard_guard, SubtreeOutcome::Malformed)
+            || matches!(self.content_rules, SubtreeOutcome::Malformed)
             || matches!(self.ink_receipt, SubtreeOutcome::Malformed)
     }
 }
@@ -3789,6 +3859,13 @@ fn parse_epoch_policy_subtrees(config: &serde_json::Value) -> ParsedEpochSubtree
             Err(_) => SubtreeOutcome::Malformed,
         },
     };
+    let content_rules = match config.get("contentRules") {
+        None => SubtreeOutcome::Absent,
+        Some(value) => match serde_json::from_value::<wincmd_clip_rules::ContentRulesSubtree>(value.clone()) {
+            Ok(subtree) if wincmd_clip_rules::compile_content_rules(&subtree).is_ok() => SubtreeOutcome::Valid,
+            _ => SubtreeOutcome::Malformed,
+        },
+    };
     let ink_receipt = match config.get("inkReceipt") {
         None => SubtreeOutcome::Absent,
         Some(v) => {
@@ -3801,6 +3878,7 @@ fn parse_epoch_policy_subtrees(config: &serde_json::Value) -> ParsedEpochSubtree
     };
     ParsedEpochSubtrees {
         clipboard_guard,
+        content_rules,
         ink_receipt,
     }
 }
@@ -3941,13 +4019,30 @@ fn spawn_clipboard_guard_epoch_relay(
     });
 }
 
+pub(crate) fn relay_committed_content_epoch(epoch: &wincmd_shared::fleet::ConfigEpoch) -> Result<(), String> {
+    let settings=read_settings()?;
+    if epoch.version != i64::from(settings.policy.master_config_version.unwrap_or(0)) { return Ok(()); }
+    let pinned=settings.policy.fleet_signing_key.as_deref().ok_or("Fleet signing key is unavailable")?;
+    let preimage=wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+        version:epoch.version,config:&epoch.config_json,locked_paths:&epoch.locked_paths,
+        managed:epoch.managed,target_kind:&epoch.target_kind,target_id:epoch.target_id.as_deref(),
+    });
+    if epoch.signer_key != pinned || !wincmd_shared::fleet::verify_signature_b64(pinned,&preimage,&epoch.signature) {
+        return Err("Fleet content epoch signature is invalid".into());
+    }
+    spawn_clipboard_guard_epoch_relay(&epoch.config_json,epoch.version,&epoch.locked_paths,epoch.managed,
+        Some(&epoch.target_kind),epoch.target_id.as_deref(),&epoch.signature,pinned);
+    Ok(())
+}
+
 /// Extend a JUST-VERIFIED epoch's handling with the Clipboard Guard / Ink
 /// Receipt subtrees and relay to commander-svc over the real `wincmd-svc`
 /// pipe. Only ever reachable from [`spawn_clipboard_guard_epoch_relay`] in
 /// production — see that function's doc comment for the "verified before
 /// use" precondition.
 async fn handle_clipboard_guard_epoch_subtrees(args: InstallEpochArgs) {
-    handle_clipboard_guard_epoch_subtrees_via(wincmd_shared::svc::SVC_PIPE_NAME, args).await
+    handle_clipboard_guard_epoch_subtrees_via(wincmd_shared::svc::SVC_PIPE_NAME, args).await;
+    let _ = crate::paste_monitor::refresh_managed_clipboard_guard_rules().await;
 }
 
 /// Same as [`handle_clipboard_guard_epoch_subtrees`], but with the target
@@ -4757,6 +4852,30 @@ mod tests {
             let restored = merge_user_overlay(machine, personal).unwrap();
             assert_eq!(restored.app.start_silently_at_sign_in, silent);
         }
+    }
+
+    #[test]
+    fn beta_channel_is_machine_scoped_and_old_settings_default_to_stable() {
+        let old: AppPreferences = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(old.update_channel, UpdateChannel::Stable);
+        let mut settings = create_default_settings();
+        settings.app.update_channel = UpdateChannel::Beta;
+        let (machine, personal) =
+            split_settings_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert_eq!(machine["app"]["updateChannel"], "beta");
+        assert!(personal["app"].get("updateChannel").is_none());
+        let restored =
+            merge_user_overlay(parse_and_migrate_json_val(machine).unwrap(), personal).unwrap();
+        assert_eq!(restored.app.update_channel, UpdateChannel::Beta);
+        let with_stale_user_choice = merge_user_overlay(
+            restored,
+            serde_json::json!({ "app": { "updateChannel": "stable" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            with_stale_user_choice.app.update_channel,
+            UpdateChannel::Beta
+        );
     }
 
     #[test]

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Rule } from "../types/generated/fleet";
+import type { ContentRulesSubtree, Rule } from "../types/generated/fleet";
 
 export interface ClipboardGuardPolicy {
   policy_version: number;
+  content_rules?: ContentRulesSubtree | null;
+  reporting_binding?: string | null;
   rules: Rule[];
 }
 

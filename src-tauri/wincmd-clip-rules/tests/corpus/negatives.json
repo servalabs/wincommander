@@ -1,0 +1,174 @@
+[
+  {
+    "detectorId": "payment_card",
+    "textParts": [
+      "card: ",
+      "453201",
+      "511283",
+      "0367"
+    ]
+  },
+  {
+    "detectorId": "payment_card",
+    "textParts": [
+      "card: ",
+      "000000",
+      "000000",
+      "0000"
+    ]
+  },
+  {
+    "detectorId": "iban",
+    "textParts": [
+      "IBAN: ",
+      "GB82 W",
+      "EST 12",
+      "34 569",
+      "8 7654",
+      " 33"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 0",
+      "00-12-",
+      "3456"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 6",
+      "66-12-",
+      "3456"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 9",
+      "00-12-",
+      "3456"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 1",
+      "23-00-",
+      "3456"
+    ]
+  },
+  {
+    "detectorId": "us_ssn",
+    "textParts": [
+      "SSN: 1",
+      "23-12-",
+      "0000"
+    ]
+  },
+  {
+    "detectorId": "us_itin",
+    "textParts": [
+      "ITIN: ",
+      "900-89",
+      "-0001"
+    ]
+  },
+  {
+    "detectorId": "us_itin",
+    "textParts": [
+      "ITIN: ",
+      "900-93",
+      "-0001"
+    ]
+  },
+  {
+    "detectorId": "us_aba_routing",
+    "textParts": [
+      "routin",
+      "g: 021",
+      "000022"
+    ]
+  },
+  {
+    "detectorId": "uk_nino",
+    "textParts": [
+      "Nation",
+      "al ins",
+      "urance",
+      ": BG 1",
+      "2 34 5",
+      "6 C"
+    ]
+  },
+  {
+    "detectorId": "uk_nhs",
+    "textParts": [
+      "NHS: 9",
+      "43 476",
+      " 5918"
+    ]
+  },
+  {
+    "detectorId": "crypto_wallet",
+    "textParts": [
+      "Bitcoi",
+      "n wall",
+      "et: 1B",
+      "oatSLR",
+      "HtKNng",
+      "kdXEeo",
+      "bR76b5",
+      "3LETtp",
+      "yU"
+    ]
+  },
+  {
+    "detectorId": "gitleaks.github-pat",
+    "textParts": [
+      "github",
+      " = ghp",
+      "_xxxxx",
+      "xxxxxx",
+      "xxxxxx",
+      "xxxxxx",
+      "xxxxxx",
+      "xxxxxx",
+      "x"
+    ]
+  },
+  {
+    "detectorId": "es_dni",
+    "textParts": [
+      "DNI: 1",
+      "234567",
+      "8A"
+    ]
+  },
+  {
+    "detectorId": "es_dni",
+    "textParts": [
+      "DNI: 1",
+      "234567",
+      "Z"
+    ]
+  },
+  {
+    "detectorId": "es_nie",
+    "textParts": [
+      "NIE: X",
+      "123456",
+      "7A"
+    ]
+  },
+  {
+    "detectorId": "es_nie",
+    "textParts": [
+      "NIE: W",
+      "123456",
+      "7L"
+    ]
+  }
+]

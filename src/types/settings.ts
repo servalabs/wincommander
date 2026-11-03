@@ -19,6 +19,7 @@ import type { CapabilityBundle, Density } from './persona';
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface SystemState {
+  argus?: { dlp: { enabled: boolean; running: boolean } };
   device: DeviceIdentifiers;
   privacy: PrivacySettings;
   tweaks: TweakSettings;
@@ -175,6 +176,8 @@ export interface RdpNode {
 }
 
 export interface AppPreferences {
+  /** User-local look-away delay; independent of Fleet Shield policy. */
+  localPrivacyShieldLookAwayDelaySeconds?: number | null;
   theme: 'dark' | 'light';
   firstRunComplete: boolean;
   /** Whether the mandatory first-run spotlight tour has been completed.
@@ -191,6 +194,8 @@ export interface AppPreferences {
    *  and not surfaced again in settings. NOT to be confused with
    *  `ideal.apps.autoUpdate`, which is the winget *installed-apps* policy. */
   autoUpdate: boolean;
+  /** Machine-wide release channel shared by Free and Pro. */
+  updateChannel?: 'stable' | 'beta';
   startMinimized: boolean;
   /** Machine-wide sign-in choice, editable by an elevated app. Defaults to tray; manual launches are unaffected. */
   startSilentlyAtSignIn?: boolean;
@@ -1071,6 +1076,9 @@ export interface AppCapabilitySettings {
 }
 
 export interface PrivacyShieldSettings {
+  /** Signed Fleet delay, distinct from the local preference. */
+  lookAwayDelaySeconds?: number | null;
+  lookAwayDetectionEnabled?: boolean | null;
   /** Signed Fleet policy: enable local-only attention monitoring. */
   fleetMonitoringEnabled?: boolean | null;
   /** Signed Fleet policy owns start/stop and locks local controls. */

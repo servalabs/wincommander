@@ -644,7 +644,9 @@ async fn dispatch_verb(
             .map(|_| serde_json::json!({ "stored": true }))
             .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
-        "svc.clipboard.get_policy" => Ok(clipboard_policy_response(policy_store)),
+        "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
+            policy_store.bound_clipboard_response(bound,policy)
+        }).map_err(|kind|VerbError::new("clipboard_policy_unavailable",kind))),
 
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
@@ -923,18 +925,6 @@ fn handle_apply_machine_setting(args: serde_json::Value) -> Result<serde_json::V
 /// own `ActivePolicy::empty()` represents on the client side — version 0,
 /// no rules — rather than a differently-shaped "not installed" marker a
 /// required-field struct could never parse.
-fn clipboard_policy_response(policy_store: &PolicyStore) -> serde_json::Value {
-    match policy_store.get_clipboard_policy() {
-        Some(view) => serde_json::json!({
-            "policy_version": view.version,
-            "rules": view.rules,
-        }),
-        None => serde_json::json!({
-            "policy_version": 0,
-            "rules": Vec::<wincmd_clip_rules::Rule>::new(),
-        }),
-    }
-}
 
 #[cfg(test)]
 const VAULT_POLICY_MAX_ENTRIES: usize = 64;
@@ -3512,14 +3502,19 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
     VerbError::new(kind, vault_error_message(error))
 }
 
-fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
-    use crate::fleet_machine_policy::{FleetMachinePolicy, FleetTrust, WindowsFleetPolicyFs};
+fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::FleetMachinePolicy,VerbError> {
+    use crate::fleet_machine_policy::{FleetMachinePolicy, WindowsFleetPolicyFs};
     static STORE: std::sync::OnceLock<Result<FleetMachinePolicy, &'static str>> = std::sync::OnceLock::new();
-    let store = STORE.get_or_init(|| {
+    STORE.get_or_init(|| {
         let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
         let dir = std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
         FleetMachinePolicy::open(Box::new(WindowsFleetPolicyFs), dir)
-    }).as_ref().map_err(|kind| VerbError::new("fleet_policy_unavailable", *kind))?;
+    }).as_ref().map_err(|kind| VerbError::new("fleet_policy_unavailable", *kind))
+}
+
+fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
+    use crate::fleet_machine_policy::FleetTrust;
+    let store=fleet_machine_policy_store()?;
     match verb {
         "svc.fleet.begin_enrollment" => {
             #[derive(serde::Deserialize)]
@@ -3637,10 +3632,11 @@ fn handle_install_epoch(
     let wire: InstallEpochWireArgs = serde_json::from_value(args)
         .map_err(|_| VerbError::new("bad_request", "malformed install_epoch payload"))?;
 
+    let content_present = wire.config.get("contentRules").is_some();
     let clipboard_present = wire.config.get(CLIPBOARD_GUARD_CONFIG_KEY).is_some();
     let ink_receipt_present = wire.config.get(INK_RECEIPT_CONFIG_KEY).is_some();
 
-    if !clipboard_present && !ink_receipt_present {
+    if !clipboard_present && !ink_receipt_present && !content_present {
         return Ok(serde_json::json!({ "applied": Vec::<&str>::new() }));
     }
 
@@ -3658,6 +3654,12 @@ fn handle_install_epoch(
     let mut applied = Vec::new();
     let mut failures = Vec::new();
 
+    if content_present {
+        match policy_store.install_content_epoch(input.clone()) {
+            Ok(()) => applied.push("contentRules"),
+            Err(error) => failures.push(format!("contentRules: {error}")),
+        }
+    }
     if clipboard_present {
         match policy_store.install_clipboard_epoch(input.clone()) {
             Ok(()) => applied.push(CLIPBOARD_GUARD_CONFIG_KEY),
@@ -5665,7 +5667,7 @@ mod tests {
     #[test]
     fn get_policy_response_shape_matches_client_contract_when_nothing_installed() {
         let store = test_policy_store();
-        let value = clipboard_policy_response(&store);
+        let value = store.bound_clipboard_response(false,None).unwrap();
         assert_eq!(value["policy_version"], serde_json::json!(0));
         assert_eq!(value["rules"], serde_json::json!([]));
         // The client's `ClipboardPolicyResponse` has no `installed` field
@@ -5682,11 +5684,7 @@ mod tests {
     fn get_policy_response_shape_matches_client_contract_when_installed() {
         let store = test_policy_store();
         handle_install_epoch(&store, pipe_wire_args(1, PIPE_SIG_V1_B64)).expect("v1 installs");
-        let value = clipboard_policy_response(&store);
-        assert_eq!(value["policy_version"], serde_json::json!(1));
-        assert!(value["rules"].as_array().is_some_and(|r| !r.is_empty()));
-        assert!(value.get("installed").is_none());
-        assert!(value.get("version").is_none());
+        assert!(store.bound_clipboard_response(false,None).is_err(),"retained policy needs current machine authorization");
     }
 
     // ── report_event / set_enabled ───────────────────────────────────────

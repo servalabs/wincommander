@@ -8,7 +8,8 @@ const POLICY_FILE: &str = "clipboard-guard-rules.dat";
 const MAX_POLICY_BYTES: usize = 128 * 1024;
 
 fn empty_policy() -> ClipboardPolicyResponse {
-    ClipboardPolicyResponse {
+    ClipboardPolicyResponse { reporting_binding:None,
+        content_rules: None,
         policy_version: 0,
         rules: Vec::new(),
     }
@@ -17,7 +18,7 @@ fn empty_policy() -> ClipboardPolicyResponse {
 fn decode_policy(bytes: &[u8]) -> Result<ClipboardPolicyResponse, String> {
     let policy: ClipboardPolicyResponse = serde_json::from_slice(bytes)
         .map_err(|_| "local clipboard rules are invalid".to_string())?;
-    if policy.policy_version != 0 {
+    if policy.policy_version != 0 || policy.content_rules.is_some() || policy.reporting_binding.is_some() {
         return Err("local clipboard rules are invalid".to_string());
     }
     Ok(policy)

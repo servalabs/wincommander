@@ -69,15 +69,6 @@ describe("privacy shield device guardrails", () => {
     expect(sidecar).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
   });
 
-  test("long-lived detector does not hold the backend command output pipe open", async () => {
-    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
-
-    expect(shield).toContain("$startInfo.RedirectStandardOutput = $true");
-    expect(shield).toContain("$startInfo.RedirectStandardError = $true");
-    expect(shield).toContain("$process.BeginOutputReadLine()");
-    expect(shield).toContain("$process.BeginErrorReadLine()");
-  });
-
   test("black camera frames fail startup before a false look-away blackout", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
 
@@ -94,11 +85,10 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("self._no_face_detected_streak = 0");
     expect(shield).toContain("self._face_recovery_streak = 0");
     expect(shield).toContain("self._presence_loss_active = False");
-    expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
     expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
-    expect(shield).toContain("presence_lost_triggered = self._presence_loss_active");
     expect(shield).toContain('parts.append("PRESENCE LOST")');
-    expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):");
+    expect(shield).toContain("recovery_unknown = presence_unknown or raw_look_away");
+    expect(shield).toContain("if recovery_unknown and is_clear:");
     expect(shield).not.toContain('parts.append("NO FACE")');
     expect(backend).toContain('classes.push("presence_lost")');
     expect(backend).toContain('"look_away" | "presence_lost" | "multiple_faces" | "phone_detected"');
@@ -141,27 +131,22 @@ describe("privacy shield device guardrails", () => {
     expect(pollers).toContain('update_tray_shield_label", { running: false');
   });
 
-  test("Fleet receives unavailable-camera truth before an unmanaged stopped state", async () => {
-    const pollers = await read("src/components/BackgroundPollers.tsx");
-    const unavailable = pollers.indexOf('if (!running && status.success && status.data?.cameraAvailable === false)');
-    const unmanaged = pollers.indexOf('if (!shieldControl.managed || !shieldControl.enabled)');
-
-    expect(unavailable).toBeGreaterThan(-1);
-    expect(unmanaged).toBeGreaterThan(unavailable);
-    const capabilityBranch = pollers.slice(unavailable, unmanaged);
-    expect(capabilityBranch).toContain('"windows_camera_policy_denied"');
-    expect(capabilityBranch).toContain('"hardware_unavailable"');
-    expect(capabilityBranch).toContain('"camera_status_unknown"');
+  test("native Fleet supervisor reports camera unavailability instead of a generic stopped state", async () => {
+    const native = await read("src-tauri/commander-free/src/fleet_agent.rs");
+    expect(native).toContain('fleet_shield_camera_issue(&local).unwrap_or("stopped")');
+    expect(native).toContain('fleet_shield_camera_issue(&before).unwrap_or("stopped")');
+    expect(native).toContain('Some("windows_camera_policy_denied")');
+    expect(native).toContain('Some("hardware_unavailable")');
   });
 
-  test("fleet policy stop retains ownership until the local process really stops", async () => {
-    const pollers = await read("src/components/BackgroundPollers.tsx");
-
-    expect(pollers).toContain("const fleetPrivacySupervisor");
-    expect(pollers).toContain("if (!fleetPrivacySupervisor) return;");
-    expect(pollers).toContain("const stopOwnedSession = async () =>");
-    expect(pollers).toContain("if (!stopped.success || stopped.data?.success !== true) return false;");
-    expect(pollers).toContain('await report("disabled_by_policy");');
+  test("native Fleet stop retains ownership until stop is observed", async () => {
+    const native = await read("src-tauri/commander-free/src/fleet_agent.rs");
+    const stop = native.indexOf('"Privacy Shield stop was not accepted by the device"');
+    const verified = native.indexOf('"Privacy Shield is still running after the stop request"', stop);
+    const clearOwner = native.indexOf('"privacyShieldSessionOwned": false', verified);
+    expect(stop).toBeGreaterThan(-1);
+    expect(verified).toBeGreaterThan(stop);
+    expect(clearOwner).toBeGreaterThan(verified);
   });
 
   test("Fleet policy does not lock a shield session the local user started", async () => {

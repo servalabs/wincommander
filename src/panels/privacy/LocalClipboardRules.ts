@@ -3,7 +3,7 @@ import { newUuidV4 } from "../../lib/uuid";
 
 export type ClipboardRuleSource = "local" | "fleet";
 export type LocalClipboardRuleLoadState = "loading" | "ready" | "degraded";
-export type LocalClipboardAction = Extract<Action, "notify_user" | "clear_clipboard" | "quarantine_clipboard">;
+export type LocalClipboardAction = Extract<Action, "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "mask_matches">;
 export type EditableMatchKind = Extract<MatchKind, { kind: "phrase" | "regex" }>;
 
 export interface SourcedClipboardRule {
@@ -16,7 +16,7 @@ export interface LocalRuleValidation {
   message: string | null;
 }
 
-const LOCAL_ACTIONS = new Set<Action>(["notify_user", "clear_clipboard", "quarantine_clipboard"]);
+const LOCAL_ACTIONS = new Set<Action>(["notify_user", "clear_clipboard", "quarantine_clipboard", "mask_matches"]);
 
 export function canEditLocalClipboardRules(loadState: LocalClipboardRuleLoadState): boolean {
   return loadState === "ready";
@@ -33,6 +33,7 @@ export function createLocalClipboardRule(existingIds: ReadonlySet<string>): Rule
   return {
     id,
     revision: 1,
+    keywords: [], context: [], threshold: 50, channels: ["clipboard"], allowList: [], channelActions: [],
     name: "New local rule",
     enabled: true,
     priority: 100,

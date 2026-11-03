@@ -18,6 +18,15 @@ Public release notes are published with each versioned
   bar. Distinguish disabled clipboard history and protected process details from
   scan failures, skip folder junctions during database-trace scans, and verify
   schedule changes without retrying unrelated upgrades.
+- Expand local clipboard detection with scored secret and identifier checks,
+  per-detector controls and content-free explanations. Optional contact checks
+  start off. Paid clipboard masking preserves unrelated text and rechecks the
+  current clipboard before replacing matched spans; alert cooldowns never
+  suspend protection of a newly copied value.
+- Share bounded content-rule contracts with managed devices while retaining
+  source-specific reporting, signed service verification and compatible epochs
+  for older clients. Detection results contain categories and counts, not text.
+
 - Refresh saved Wi-Fi profiles after failed or partial cleanup and mark results
   stale when verification fails, instead of leaving an apparently current list.
 - Improve cleanup account scoping, partial scan details, protected recurring

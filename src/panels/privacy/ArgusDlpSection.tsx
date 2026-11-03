@@ -144,9 +144,8 @@ export default function ArgusDlpSection() {
       {(
         <div className="flex flex-col gap-3">
           <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[360px]">
-            Detects large USB transfers, sensitive clipboard pattern matches, and coarse
-            cloud-upload activity. Only aggregate counts and byte totals are recorded -
-            no filenames, paths, URLs, or clipboard content cross the IPC boundary.
+            Detects sensitive clipboard content and inspects supported files after they are written to removable media.
+            Large-transfer and network activity are additional signals. Reports contain counts and categories only.
           </p>
           {/* Start / Stop row */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -179,6 +178,29 @@ export default function ArgusDlpSection() {
               <Icon icon="time" size={11} color="var(--shield-text-muted)" />
               <span>Running — started {formatRelative(status.startedAt)}</span>
             </div>
+          )}
+
+          {isRunning && status?.content_enabled === false && (
+            <p role="status" className="text-xs text-[var(--color-warning)]">
+              Content inspection is disabled or unavailable. Other activity signals may still be collected.
+            </p>
+          )}
+          {status?.per_category_counts && (
+            <div aria-label="Content detections by category" className="flex flex-wrap gap-2 text-xs">
+              {Object.entries(status.per_category_counts).map(([category, count]) => (
+                <span key={category} className="rounded border border-[var(--color-border)] px-2 py-1">
+                  {category.replaceAll('_', ' ')}: {count}
+                </span>
+              ))}
+            </div>
+          )}
+          {isRunning && (
+            <p className="text-xs text-[var(--shield-text-subtle)]">
+              {status?.coverage_skipped === undefined
+                ? 'File inspection coverage is unavailable.'
+                : `Coverage skips: ${status.coverage_skipped}. This includes files that could not be fully inspected and watcher errors or lost events.`}
+              {' '}Content inspection covers drives Windows classifies as removable. It happens after a write and does not prevent the copy.
+            </p>
           )}
 
           {recent.length > 0 && (

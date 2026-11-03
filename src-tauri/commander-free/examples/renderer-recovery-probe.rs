@@ -2,10 +2,14 @@
 //! Crashes only this isolated probe's renderer; never opens installed app data.
 #[path = "../src/startup_renderer.rs"]
 mod startup_renderer;
+#[allow(dead_code)] // This probe exercises renderer recovery, not every startup path.
 #[path = "../src/startup_window.rs"]
 mod startup_window;
 #[path = "../src/window_placement.rs"]
 mod window_placement;
+#[path = "support/startup.rs"]
+mod probe_startup;
+use probe_startup::{startup_auth, CalcModeState};
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -172,6 +176,7 @@ fn main() {
         .manage(AtomicU32::new(u32::MAX))
         .manage(AtomicBool::new(false))
         .manage(startup_window::StartupWindow::new())
+        .manage(CalcModeState::new())
         .invoke_handler(tauri::generate_handler![probe_ready, startup_window::startup_window_ready])
         .register_uri_scheme_protocol("rendererprobe", |_, _| {
             tauri::http::Response::builder().header("Content-Type", "text/html").body(
@@ -195,6 +200,7 @@ fn main() {
                     if hidden || locked { window.hide().map_err(|e| e.to_string())?; }
                     if minimized { window.minimize().map_err(|e| e.to_string())?; }
                     handle.state::<AtomicBool>().store(locked, Ordering::Release);
+                    handle.state::<CalcModeState>().0.lock().unwrap().active = locked;
                     if unresponsive {
                         hang_renderer(&window).await?;
                     } else {
@@ -204,7 +210,7 @@ fn main() {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         if handle.state::<startup_window::StartupWindow>().is_ready()
                             || window.is_visible().map_err(|e| e.to_string())?
-                            || startup_window::startup_window_ready(window.clone(), false, Some(0)).await? {
+                            || startup_window::startup_window_ready(window.clone(), false, Some(0), None).await? {
                             return Err("locked renderer failure exposed or acknowledged old content".into());
                         }
                         println!("PASS locked renderer remains hidden; no reload or stale readiness accepted");

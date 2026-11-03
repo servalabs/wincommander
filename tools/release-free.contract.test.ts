@@ -51,4 +51,10 @@ describe("manual Free release publisher", () => {
     expect(publisher).toContain("& gh release upload");
     expect(publisher).toContain("gh release edit $script:Tag --draft=false");
   });
+
+  test("refuses local beta publication so GitHub review cannot be bypassed", () => {
+    expect(publisher).toContain("if ($Beta -and -not $StageOnly)");
+    expect(publisher).toContain("Free beta publication requires the protected GitHub workflow.");
+    expect(publisher).toContain("if ($Beta -and $Version -notmatch '^\\d+\\.\\d+\\.\\d+$')");
+  });
 });

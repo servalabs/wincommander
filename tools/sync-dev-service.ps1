@@ -111,6 +111,77 @@ function Assert-NoReparsePoint([string]$Path) {
     }
 }
 
+function Assert-NoReparsePointsInPath([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($current) {
+        Assert-NoReparsePoint $current
+        $parent = [IO.Directory]::GetParent($current)
+        if ($null -eq $parent -or $parent.FullName.Equals($current, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $current = $parent.FullName
+    }
+}
+
+function Test-LegacyDevelopmentServiceImagePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try { $fullPath = [IO.Path]::GetFullPath($Path) } catch { return $false }
+    return $fullPath -match '(?i)[\\/]\.dev[\\/]wincommander-service[\\/]wincommander-svc\.exe$'
+}
+
+function Copy-LegacyServiceToProtectedBackup([string]$Source, [string]$Destination) {
+    if (-not (Test-LegacyDevelopmentServiceImagePath $Source)) {
+        throw 'The previous service is not at the recognized legacy development-service path.'
+    }
+    Assert-ProtectedPath (Split-Path -Parent $Destination)
+    if (Test-Path -LiteralPath $Destination) { Assert-ProtectedPath $Destination }
+    Assert-NoReparsePointsInPath $Source
+
+    $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction Stop
+    if ($null -eq $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or
+        $service.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM')) {
+        throw 'The legacy service is not a running LocalSystem service.'
+    }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($service.ProcessId)" -ErrorAction Stop
+    if ($null -eq $process -or [string]::IsNullOrWhiteSpace($process.ExecutablePath) -or
+        -not $process.ExecutablePath.Equals([IO.Path]::GetFullPath($Source), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The running service process does not match its configured legacy image path.'
+    }
+
+    $sourceStream = $null
+    $backupStream = $null
+    $hasher = $null
+    try {
+        # Deny concurrent writes and renames while taking the recovery snapshot.
+        $sourceStream = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $sourceHash = -join ($hasher.ComputeHash($sourceStream) | ForEach-Object { $_.ToString('X2') })
+        $sourceStream.Position = 0
+        $backupStream = [IO.File]::Open($Destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $sourceStream.CopyTo($backupStream)
+        $backupStream.Flush($true)
+    }
+    finally {
+        if ($null -ne $backupStream) { $backupStream.Dispose() }
+        if ($null -ne $sourceStream) { $sourceStream.Dispose() }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+    }
+
+    Assert-ProtectedPath $Destination
+    if ((Get-Sha256 $Destination) -ne $sourceHash) {
+        throw 'The protected legacy service snapshot differs from the running image file.'
+    }
+
+    $serviceAfter = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction Stop
+    if ($null -eq $serviceAfter -or $serviceAfter.State -ne 'Running' -or $serviceAfter.ProcessId -ne $service.ProcessId) {
+        throw 'The legacy service changed while its protected recovery snapshot was being made.'
+    }
+    $processAfter = Get-CimInstance Win32_Process -Filter "ProcessId=$($serviceAfter.ProcessId)" -ErrorAction Stop
+    if ($null -eq $processAfter -or [string]::IsNullOrWhiteSpace($processAfter.ExecutablePath) -or
+        -not $processAfter.ExecutablePath.Equals([IO.Path]::GetFullPath($Source), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The running service image path changed while its protected recovery snapshot was being made.'
+    }
+    return $sourceHash
+}
+
 function Assert-ProtectedPath([string]$Path) {
     Assert-NoReparsePoint $Path
     $acl = Get-Acl -LiteralPath $Path
@@ -483,8 +554,10 @@ $priorService = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -
 $priorPath = Get-ServiceImagePath
 $rollbackPath = Join-Path $stagingDirectory 'wincommander-svc.rollback.exe'
 $rollbackHash = $null
+$rollbackImageIsSnapshot = $false
 $rollbackStart = if ($priorService) { switch ($priorService.StartMode) { 'Auto' { 'auto' } 'Manual' { 'demand' } 'Disabled' { 'disabled' } default { $null } } } else { $null }
 $priorWasRunning = $null -ne $priorService -and $priorService.State -eq 'Running'
+$priorStatus = if ($priorService) { $priorService.State } else { 'Missing' }
 if ($priorService -and $priorPath -and $priorService.StartName -in @('LocalSystem', 'NT AUTHORITY\SYSTEM')) {
     try {
         Assert-ProtectedPath (Split-Path -Parent $priorPath)
@@ -497,10 +570,19 @@ if ($priorService -and $priorPath -and $priorService.StartName -in @('LocalSyste
         if (-not $rollbackStart) { $rollbackHash = $null }
     } catch {
         $rollbackHash = $null
-        Write-Diagnostic 'The previous service cannot be safely backed up; automatic restart will not be attempted on failure.'
+        Write-Diagnostic ("The previous service could not be backed up from its configured path: {0}" -f $_.Exception.Message)
+        if ($priorStatus -eq 'Running' -and $rollbackStart -and (Test-LegacyDevelopmentServiceImagePath $priorPath)) {
+            try {
+                $rollbackHash = Copy-LegacyServiceToProtectedBackup $priorPath $rollbackPath
+                $rollbackImageIsSnapshot = $true
+                Write-Diagnostic 'Captured the running legacy development service in the protected staging directory for recovery.'
+            } catch {
+                $rollbackHash = $null
+                Write-Diagnostic ("The running legacy development service could not be safely snapshotted: {0}" -f $_.Exception.Message)
+            }
+        }
     }
 }
-$priorStatus = if ($priorService) { $priorService.State } else { 'Missing' }
 $recoverableConfig = $null -ne $priorService -and (Test-SimpleServiceImagePath $priorPath) -and [bool]$rollbackStart -and $priorService.StartName -in @('LocalSystem', 'NT AUTHORITY\SYSTEM')
 $sameTarget = $priorPath -and $priorPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase)
 $recoveryPlan = Get-PriorRecoveryPlan ($null -ne $priorService) $priorStatus ([bool]$rollbackHash) ([bool]$sameTarget) $recoverableConfig
@@ -597,25 +679,35 @@ Write-Host 'WinCommander development service synchronized and running.'
         try {
             [void](Invoke-SafeServiceRecovery $true $priorWasRunning $rollbackHash $currentStatus {
             param([bool]$RestartPrior)
+            $restorePath = $priorPath
             if ($rollbackHash -ne 'config-only') {
                 Assert-ProtectedPath $stagingDirectory
                 Assert-ProtectedPath $rollbackPath
                 if ((Get-Sha256 $rollbackPath) -ne $rollbackHash) { throw 'The previous service backup no longer matches.' }
-                Assert-ProtectedPath (Split-Path -Parent $priorPath)
-                if (Test-Path -LiteralPath $priorPath) { Assert-ProtectedPath $priorPath }
-                Copy-Item -LiteralPath $rollbackPath -Destination $priorPath -Force
-                Assert-ProtectedPath $priorPath
-                if ((Get-Sha256 $priorPath) -ne $rollbackHash) { throw 'The restored service image does not match its backup.' }
+                if ($rollbackImageIsSnapshot) {
+                    $restorePath = $rollbackPath
+                } else {
+                    Assert-ProtectedPath (Split-Path -Parent $priorPath)
+                    if (Test-Path -LiteralPath $priorPath) { Assert-ProtectedPath $priorPath }
+                    Copy-Item -LiteralPath $rollbackPath -Destination $priorPath -Force
+                    Assert-ProtectedPath $priorPath
+                    if ((Get-Sha256 $priorPath) -ne $rollbackHash) { throw 'The restored service image does not match its backup.' }
+                }
             }
-            $rollbackArgument = '"' + $priorPath + '"'
+            $rollbackArgument = '"' + $restorePath + '"'
             & sc.exe config $serviceName 'binPath=' $rollbackArgument 'start=' $rollbackStart 'obj=' 'LocalSystem'
-            if ($LASTEXITCODE -ne 0 -or (Get-ServiceImagePath) -ne $priorPath) { throw 'Windows did not restore the previous service configuration.' }
+            $restoredPath = Get-ServiceImagePath
+            if ($LASTEXITCODE -ne 0 -or -not $restoredPath -or -not $restoredPath.Equals($restorePath, [StringComparison]::OrdinalIgnoreCase)) { throw 'Windows did not restore the previous service configuration.' }
             if ($RestartPrior) {
                 Start-Service -Name $serviceName
                 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
             }
             })
-            Write-Diagnostic 'The protected previous service image, startup mode, and prior stopped/running state were restored.'
+            if ($rollbackImageIsSnapshot) {
+                Write-Diagnostic 'The protected snapshot of the prior legacy service, startup mode, and running state were restored.'
+            } else {
+                Write-Diagnostic 'The protected previous service image, startup mode, and prior stopped/running state were restored.'
+            }
         } catch {
             Write-Diagnostic ("Automatic service recovery failed: {0}" -f $_)
             throw "Development service synchronization failed and automatic recovery also failed. Original failure: $failure; recovery: $_"

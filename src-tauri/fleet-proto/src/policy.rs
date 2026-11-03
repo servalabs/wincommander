@@ -164,6 +164,9 @@ pub struct ShieldDesiredState {
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct PolicyEnvelope {
+    /// Verified org reporting switch; only sent to content_rules_v1 agents.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clipboard_guard_enabled: bool,
     pub org_id: OrgId,
     pub device_id: DeviceId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,6 +190,7 @@ pub struct PolicyEnvelope {
 /// All fields which are signed for a policy delivery.  Keeping this separate
 /// from [`PolicyEnvelope`] prevents its signature from being self-referential.
 pub struct PolicyEnvelopeSigningInput<'a> {
+    pub clipboard_guard_enabled: bool,
     pub org_id: &'a OrgId,
     pub device_id: &'a DeviceId,
     pub enrollment_generation: Option<&'a str>,
@@ -287,6 +291,7 @@ pub fn policy_envelope_preimage(input: &PolicyEnvelopeSigningInput<'_>) -> Vec<u
     if let Some(revision) = input.resolution_revision {
         envelope["resolution_revision"] = serde_json::json!(revision);
     }
+    if input.clipboard_guard_enabled { envelope["clipboard_guard_enabled"] = serde_json::json!(true); }
     let mut canonical = String::new();
     write_canonical(&envelope, &mut canonical);
     canonical.into_bytes()
@@ -295,6 +300,7 @@ pub fn policy_envelope_preimage(input: &PolicyEnvelopeSigningInput<'_>) -> Vec<u
 impl PolicyEnvelope {
     pub fn signing_input(&self) -> PolicyEnvelopeSigningInput<'_> {
         PolicyEnvelopeSigningInput {
+            clipboard_guard_enabled: self.clipboard_guard_enabled,
             org_id: &self.org_id,
             device_id: &self.device_id,
             enrollment_generation: self.enrollment_generation.as_deref(),
@@ -319,6 +325,7 @@ mod tests {
 
     fn envelope() -> PolicyEnvelope {
         PolicyEnvelope {
+            clipboard_guard_enabled: false,
             org_id: OrgId("local".into()),
             device_id: DeviceId("device-a".into()),
             enrollment_generation: None,
