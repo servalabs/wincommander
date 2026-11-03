@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-test("schedule readback preserves old and current bulk ownership without changing tasks", () => {
+test.skipIf(process.platform !== "win32")("schedule readback preserves old and current bulk ownership without changing tasks", () => {
   const script = String.raw`
 $ProgressPreference = 'SilentlyContinue'
 $path = Join-Path (Get-Location) 'src-tauri/wincmd-shared/scripts/auto-erase.ps1'
