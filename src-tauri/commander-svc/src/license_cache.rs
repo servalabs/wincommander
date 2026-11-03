@@ -21,6 +21,9 @@ use std::{
 #[cfg(feature = "experimental-pq-licence")]
 #[path = "../../runtime-support/license_hybrid_trust.rs"]
 mod hybrid_trust;
+#[cfg(feature = "experimental-pq-licence")]
+#[path = "license_cache_rollback.rs"]
+mod rollback;
 
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
 const MAINLINE_APP_ID: &str = "com.servalabs.wincommander";
@@ -50,6 +53,9 @@ struct StoreLicenseCacheRequest {
 /// claims; trust comes from the Ed25519 signature, not this projection.
 #[derive(Debug, Deserialize)]
 struct SignedClaims {
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(default)]
+    license_id: Option<String>,
     device_hash: String,
     iat: u64,
     exp: u64,
@@ -81,10 +87,9 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     #[cfg(not(feature = "experimental-pq-licence"))]
     validate_request(&request, public_key)?;
     #[cfg(feature = "experimental-pq-licence")]
-    {
-        let trust = hybrid_trust::configured()?;
-        validate_dual_request(&request, public_key, &trust.policy())?;
-    }
+    let trust = hybrid_trust::configured()?;
+    #[cfg(feature = "experimental-pq-licence")]
+    validate_dual_request(&request, public_key, &trust.policy())?;
 
     let persisted = PersistedLicenseCache {
         token: PersistedTokenEnvelope {
@@ -102,8 +107,15 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     };
     let bytes =
         serde_json::to_vec_pretty(&persisted).map_err(|_| "license cache could not be encoded")?;
-    atomic_write(&machine_license_cache_path()?, &bytes)
-        .map_err(|_| "machine license cache is unavailable")
+    let path = machine_license_cache_path()?;
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        rollback::write(&path, &request, &bytes, public_key, &trust.policy())
+    }
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    {
+        atomic_write(&path, &bytes).map_err(|_| "machine license cache is unavailable")
+    }
 }
 
 fn signed_verification_time(payload: &str, now: u64) -> Result<u64, &'static str> {

@@ -265,7 +265,7 @@ jobs:
           if ($code -ne 0) { exit $code }
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
-        run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
       - name: Test experimental desktop licence validation
         shell: pwsh
         run: |
