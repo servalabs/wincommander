@@ -431,7 +431,7 @@ pub(crate) fn install_metadata_has_hash(hash: &str) -> bool {
     };
     #[cfg(feature = "experimental-pq-pro-release")]
     {
-        return pro_install_path().is_ok_and(|path| metadata_hybrid_matches_file(&metadata, hash, &path));
+        pro_install_path().is_ok_and(|path| metadata_hybrid_matches_file(&metadata, hash, &path))
     }
     #[cfg(not(feature = "experimental-pq-pro-release"))]
     metadata_has_signed_hash(&metadata, hash)
@@ -452,24 +452,25 @@ fn verified_metadata_hybrid(metadata: &ProInstallMetadata, hash: &str) -> Result
     verify_hybrid_pro(envelope.as_bytes(), &trust, metadata.version.as_deref(), hash, None)
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
     if !metadata.sha256.eq_ignore_ascii_case(hash) {
         return false;
     }
     #[cfg(feature = "experimental-pq-pro-release")]
     {
-        return verified_metadata_hybrid(metadata, hash).is_ok();
+        verified_metadata_hybrid(metadata, hash).is_ok()
     }
     #[cfg(not(feature = "experimental-pq-pro-release"))]
     {
-    let Some(envelope) = &metadata.signed_manifest else {
-        return false;
-    };
-    if let Ok(release) = crate::investigator_install::manifest::verify_signed_pro(envelope) {
-        return signed_pro_release_matches(&release, metadata.version.as_deref(), hash);
-    }
-    crate::investigator_install::manifest::verify_manifest(envelope)
-        .is_ok_and(|manifest| signed_pro_matches(&manifest, metadata.version.as_deref(), hash))
+        let Some(envelope) = &metadata.signed_manifest else {
+            return false;
+        };
+        if let Ok(release) = crate::investigator_install::manifest::verify_signed_pro(envelope) {
+            return signed_pro_release_matches(&release, metadata.version.as_deref(), hash);
+        }
+        crate::investigator_install::manifest::verify_manifest(envelope)
+            .is_ok_and(|manifest| signed_pro_matches(&manifest, metadata.version.as_deref(), hash))
     }
 }
 
@@ -1045,7 +1046,7 @@ async fn verify_published_pro_request(
         let version = pro_version.ok_or("validation:Pro release version is missing")?;
         let envelope = fetch_hybrid_pro(version).await?;
         let verified = verify_hybrid_pro(envelope.as_bytes(), &trust, pro_version, expected_sha256, Some(download_url))?;
-        return Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope), hybrid_signed_size: Some(verified.size) });
+        Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope), hybrid_signed_size: Some(verified.size) })
     }
     #[cfg(not(feature = "experimental-pq-pro-release"))]
     {
@@ -1075,6 +1076,7 @@ async fn verify_published_pro_request(
     }
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 fn signed_pro_release_matches(
     release: &crate::investigator_install::manifest::SignedProRelease,
     version: Option<&str>,
@@ -1086,6 +1088,7 @@ fn signed_pro_release_matches(
     })
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 fn signed_pro_matches(
     manifest: &crate::investigator_install::manifest::InvestigatorManifest,
     version: Option<&str>,

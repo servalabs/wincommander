@@ -30,6 +30,7 @@ pub struct InvestigatorManifest {
     pub artifacts: Vec<InvestigatorArtifact>,
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SignedProRelease {
@@ -99,12 +100,14 @@ pub fn verify_manifest(envelope: &SignedManifestEnvelope) -> Result<Investigator
     verify_manifest_with_key(envelope.clone(), &manifest_public_key_b64()?)
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 pub(crate) fn verify_signed_pro(
     envelope: &SignedManifestEnvelope,
 ) -> Result<SignedProRelease, String> {
     verify_signed_pro_with_key(envelope, &manifest_public_key_b64()?)
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 fn verify_signed_pro_with_key(
     envelope: &SignedManifestEnvelope,
     key: &str,
@@ -116,6 +119,7 @@ fn verify_signed_pro_with_key(
     Ok(release)
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 pub(crate) fn validate_signed_pro(release: &SignedProRelease) -> Result<(), String> {
     let canonical = canonical_version(&release.version)?;
     let expected_url = format!(
@@ -203,6 +207,7 @@ pub async fn fetch_manifest() -> Result<(SignedManifestEnvelope, InvestigatorMan
 
 /// Fetch the matching version first. Older published releases only have a
 /// latest pointer, which is usable only after the caller checks its version.
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 pub(crate) async fn fetch_manifest_for_pro(
     version: &str,
 ) -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
@@ -210,6 +215,7 @@ pub(crate) async fn fetch_manifest_for_pro(
     fetch_verified_manifest(Some(url)).await
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 fn versioned_manifest_url(version: &str) -> Result<String, String> {
     let canonical = canonical_version(version)?;
     Ok(format!(
@@ -239,6 +245,7 @@ pub(crate) fn canonical_version(version: &str) -> Result<String, String> {
     Ok(canonical)
 }
 
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
 pub(crate) async fn fetch_signed_pro(
     version: &str,
 ) -> Result<Option<SignedManifestEnvelope>, String> {
