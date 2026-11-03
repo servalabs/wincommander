@@ -21,6 +21,8 @@ test("service contact is historical, endpoint-bound, and unavailable on errors",
     mock.module('@tauri-apps/api/core', () => ({invoke: async (_name, {deviceId}) => {
       if (deviceId === 'old') return new Promise(resolve => { resolveOld = resolve; });
       if (deviceId === 'good') return {observation:{observed_unix_ms:1760000000000}};
+      if (deviceId === 'service-good') return {observation:null,serviceReachability:{state:'observed',observed_unix_ms:1760000000000}};
+      if (deviceId === 'network-mismatch') return {observation:null,serviceReachability:{state:'network_configuration_differs'}};
       throw new Error('service offline');
     }}));
     const {FleetServiceContact:Card}=await import('./src/panels/fleet/FleetServiceContact');
@@ -42,6 +44,16 @@ test("service contact is historical, endpoint-bound, and unavailable on errors",
     assert.match(host.textContent,/can differ from the current Fleet connection/);
     await act(async()=>{resolveOld({observation:{observed_unix_ms:1700000000000}});});
     assert.equal(host.querySelector('time').dateTime,new Date(1760000000000).toISOString());
+    const serviceView = (org, generation) => h('div', null, h('p', null, org + '/' + generation), h(Card, {deviceId:'service-good'}));
+    await act(async()=>{root.render(serviceView('org-a','generation-a'));});
+    await act(async()=>{root.render(serviceView('org-b','generation-b'));});
+    assert.match(host.textContent,/Service-verified contact is unconfirmed/);
+    assert.match(host.textContent,/Last service reachability receipt for this machine's Fleet service trust/);
+    assert.match(host.textContent,/history can differ from the current Fleet connection/);
+    await act(async()=>{root.render(h(Card,{deviceId:'network-mismatch'}));});
+    assert.match(host.textContent,/proxy or certificate settings differ/);
+    assert.match(host.textContent,/WinCommander can still check in/);
+    assert.match(host.textContent,/administrator can align/);
     await act(async()=>{root.render(h(Card,{deviceId:'failed'}));});
     assert.match(host.textContent,/unconfirmed/);
     assert.equal(host.querySelector('time'),null);

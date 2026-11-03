@@ -30,6 +30,7 @@ experimental-pq-licence = ["dep:wincmd-pq-experiment"]
 wincmd-shared = { path = "../wincmd-shared" }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
 fleet-proto = { path = "../fleet-proto" }
+fleet-agent-core = { path = "../fleet-agent-core", default-features = false, features = ["types", "transport"] }
 wincmd-volume = { path = "../wincmd-volume" }
 # Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with
 # Fleet and commander-pro, so the per-user helper's on-device matching
@@ -44,7 +45,10 @@ anyhow = "1"
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 zeroize = { version = "1", features = ["alloc"] }
 sha2 = "0.11"
+subtle = "2"
 base64 = "0.22"
+url = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature"] }
 
 [dev-dependencies]

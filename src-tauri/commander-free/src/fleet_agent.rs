@@ -105,6 +105,40 @@ fn normalize_fleet_server_url(raw: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
+/// Only origins already configured for the normal Fleet agent may be staged
+/// by the privileged machine-enrollment operation. Invalid optional mesh
+/// configuration never prevents ordinary desktop enrollment.
+fn enrollment_origins(primary: &str, mesh: Option<&str>) -> Vec<String> {
+    let mut origins = vec![primary.to_string()];
+    let Some(mesh) = mesh else { return origins; };
+    for raw in mesh.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let Ok(origin) = normalize_fleet_server_url(raw) else { return vec![primary.to_string()]; };
+        if !origin.starts_with("https://") { return vec![primary.to_string()]; }
+        if !origins.contains(&origin) { origins.push(origin); }
+        if origins.len() > 8 { return vec![primary.to_string()]; }
+    }
+    origins
+}
+
+fn enrollment_transport_profile() -> Option<Value> {
+    let mut values = Vec::new();
+    for key in wincmd_shared::fleet_transport_profile::ENV_KEYS {
+        let value = match std::env::var_os(key) {
+            None => None,
+            Some(value) => Some(value.into_string().ok()?),
+        };
+        values.push(value);
+    }
+    let refs: Vec<Option<&str>> = values.iter().map(|v| v.as_deref()).collect();
+    let fingerprint = wincmd_shared::fleet_transport_profile::fingerprint(&refs)?;
+    let pins = match std::env::var_os("FLEET_CMD_PIN_SPKI") {
+        None => String::new(),
+        Some(value) => value.into_string().ok()?,
+    };
+    if pins.len() > 4096 { return None; }
+    Some(serde_json::json!({"spki_pins":pins, "environment_fingerprint":fingerprint}))
+}
+
 /// Runtime fleet status snapshot returned from the Pro side.
 /// Mirrors FleetStatus in commander-pro/src/fleet_push.rs.
 // Mirrors Pro's FleetStatus; not constructed in the lib build but exercised by tests.
@@ -367,27 +401,43 @@ async fn fleet_connect_inner(
     if repair_expected_binding.is_some() && previous_trust.is_some() {
         return Err("Machine Fleet trust changed during repair; retry".into());
     }
-    let needs_challenge = plan.needs_service_challenge()
+    let mesh = std::env::var("FLEET_MESH_ENDPOINTS").ok();
+    let origins = enrollment_origins(&server_url, mesh.as_deref());
+    let transport_profile = enrollment_transport_profile();
+    let origin_binding_matches = prior.as_ref().and_then(|value| value.get("origins"))
+        .and_then(Value::as_array)
+        .is_some_and(|stored| stored.len() == origins.len() && stored.iter().zip(&origins).all(|(a, b)| a.as_str() == Some(b.as_str())));
+    let challenge_required = plan.needs_service_challenge()
         || (prior.is_some() && previous_trust.is_none());
+    let transport_binding_matches = prior.as_ref().and_then(|value| value.get("transport_profile")) == transport_profile.as_ref();
+    let service_disabled = prior.as_ref().and_then(|value| value.get("service_enabled")).and_then(Value::as_bool) == Some(false);
+    let needs_challenge = challenge_required || (prior.is_some() && transport_profile.is_some() && (service_disabled || !origin_binding_matches || !transport_binding_matches));
     let service_challenge = if needs_challenge {
-        if previous_trust.is_some() && !plan.allows_trust_replacement() {
+        if challenge_required && previous_trust.is_some() && !plan.allows_trust_replacement() {
             return Err("This machine already has Fleet trust; a confirmed re-enrollment is required".into());
         }
-        let challenge_reply = crate::svc_client::call(
+        let request = crate::svc_client::call(
             "svc.fleet.begin_enrollment",
             serde_json::json!({
                 "device_id": current.device_id,
                 "signer_key": signing_key_pub,
+                "origins": origins,
+                "transport_profile": transport_profile,
             }),
-        )
-        .await?;
-        let challenge = challenge_reply
-            .get("challenge")
+        );
+        let reply = if challenge_required {
+            Some(request.await?)
+        } else {
+            tokio::time::timeout(std::time::Duration::from_millis(100), request).await.ok().and_then(Result::ok)
+        };
+        let challenge = reply.as_ref().and_then(|value| value.get("challenge"))
             .and_then(Value::as_str)
             .filter(|value| uuid::Uuid::parse_str(value).ok().is_some_and(|id| id.to_string() == *value))
-            .ok_or("Fleet service enrollment challenge is invalid")?
-            .to_string();
-        Some((challenge, previous_trust))
+            .map(str::to_owned);
+        if challenge_required && challenge.is_none() {
+            return Err("Fleet service enrollment challenge is invalid".into());
+        }
+        challenge.map(|value| (value, previous_trust))
     } else {
         None
     };
@@ -398,19 +448,22 @@ async fn fleet_connect_inner(
         "dispatch": committed.app.fleet.dispatch,
         "signingKeyPub": committed.app.fleet.signing_key_pub,
         "deviceId": committed.device_id,
+        "meshEndpoints": origins.iter().skip(1).collect::<Vec<_>>(),
     });
     if let Some((challenge, _)) = &service_challenge {
         args["shieldProgressChallenge"] = Value::String(challenge.clone());
     }
     let status = crate::sidecar::dispatch_paid_command("fleet_agent_configure", args).await?;
     if let Some((_, previous_trust)) = service_challenge {
-        establish_service_enrollment_trust(
-            &committed.device_id,
-            &signing_key_pub,
-            previous_trust,
-            plan.allows_trust_replacement() && confirmed,
-        )
-        .await?;
+        if challenge_required {
+            establish_service_enrollment_trust(&committed.device_id, &signing_key_pub, previous_trust, plan.allows_trust_replacement() && confirmed).await?;
+        } else {
+            let device = committed.device_id.clone();
+            let key = signing_key_pub.clone();
+            tokio::spawn(async move {
+                let _ = establish_service_enrollment_trust(&device, &key, previous_trust, false).await;
+            });
+        }
     }
     Ok(status)
 }
@@ -449,7 +502,11 @@ async fn establish_service_enrollment_trust(
                     match service_enrollment_action(
                         previous_trust.as_ref(), replacement, confirmed_identity_change,
                     )? {
-                        None => return Ok(()),
+                        None => {
+                            if crate::svc_client::call("svc.fleet.bind_origins", proof.clone()).await.is_ok() {
+                                return Ok(());
+                            }
+                        },
                         Some("svc.fleet.provision_trust") => {
                             if crate::svc_client::call("svc.fleet.provision_trust", proof.clone()).await.is_ok() {
                                 return Ok(());
@@ -532,7 +589,7 @@ fn bound_service_contact_status(device_id: &str, result: &serde_json::Value) -> 
     if result.get("deviceId").and_then(serde_json::Value::as_str) != Some(device_id) {
         return serde_json::json!({"observation":null});
     }
-    serde_json::json!({"observation":result.get("observation")})
+    serde_json::json!({"observation":result.get("observation"), "serviceReachability":result.get("service_reachability")})
 }
 
 #[derive(Debug, Deserialize)]
@@ -3548,6 +3605,17 @@ pub async fn fleet_unenroll_status() -> Result<serde_json::Value, String> {
 pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
 
+    // Snapshot the optional service credential fence before the server check.
+    // A later enrollment/rotation must not be cleared by this older request.
+    let service_before = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"get"})),
+    ).await.ok().and_then(Result::ok);
+    let expected_device = crate::settings::read_settings().ok().map(|settings| settings.device_id);
+    let service_token = service_before.as_ref().filter(|value| {
+        value.get("deviceId").and_then(Value::as_str) == expected_device.as_deref()
+    }).and_then(|value| value.get("credential_clear_token")).and_then(Value::as_str).map(str::to_owned);
+
     // KT: Ask Pro to poll the server's unenroll-status endpoint.
     // Pro returns `{ "approved": bool }` or errors if the server is unreachable.
     // A 401 from the server means the token was already revoked (approval
@@ -3609,9 +3677,19 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     });
     crate::settings::patch_settings(patch)?;
 
-    let disconnected =
+    let mut disconnected =
         crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null)
             .await?;
+
+    let service_stopped = if let Some(token) = service_token {
+        let reply = crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"clear", "token":token})).await;
+        reply.ok().and_then(|value| value.get("cleared").and_then(Value::as_bool)).unwrap_or(false)
+    } else {
+        false
+    };
+    if let Some(object) = disconnected.as_object_mut() {
+        object.insert("serviceReachabilityStopped".into(), Value::Bool(service_stopped));
+    }
 
     // Clear only the managed source after Pro confirms disconnect. Personal
     // rules stay active; transient status/disconnect failures retain both.
@@ -3622,6 +3700,13 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn service_enrollment_stages_only_configured_valid_origins() {
+        assert_eq!(super::enrollment_origins("http://primary.test", Some("https://mesh.test/; https://mesh.test")), vec!["http://primary.test", "https://mesh.test"]);
+        assert_eq!(super::enrollment_origins("http://primary.test", Some("http://unsafe-failover.test")), vec!["http://primary.test"]);
+        assert_eq!(super::enrollment_origins("http://primary.test", Some("https://mesh.test/path")), vec!["http://primary.test"]);
+    }
 
     #[test]
     fn service_contact_history_is_bound_to_the_requested_endpoint() {

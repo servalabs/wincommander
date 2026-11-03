@@ -901,6 +901,7 @@ pub mod personal_settings;
 /// protocol version, capability-class enum, and `classify_verb` — the shared
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
+pub mod fleet_transport_profile;
 pub mod vault_access;
 pub mod vault_display_path;
 pub mod vault_inventory;

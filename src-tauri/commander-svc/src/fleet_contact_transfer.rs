@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};
+use zeroize::Zeroize;
 
 const CHUNK: usize = 1024 * 1024;
 const REQUEST_MAX: usize = 2 * 1024 * 1024;
@@ -24,7 +25,34 @@ enum Operation {
         nonce: String,
         receipt: String,
     },
+    Offer {
+        credential: CredentialTransfer,
+    },
+    Clear {
+        token: String,
+    },
     Get,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunningTransport {
+    origins: Vec<String>,
+    profile: Option<crate::fleet_machine_policy::TransportProfile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialTransfer {
+    trust: crate::fleet_machine_policy::FleetTrust,
+    transport: RunningTransport,
+    origin: String,
+    secret_b64: String,
+}
+impl Drop for CredentialTransfer {
+    fn drop(&mut self) {
+        self.secret_b64.zeroize();
+    }
 }
 
 struct Transfer {
@@ -104,12 +132,48 @@ pub(crate) fn handle(store: &FleetMachinePolicy, args: Value) -> Result<Value, &
                 store.record_contact(&nonce, &transfer.request, &transfer.response, &receipt)?;
             Ok(json!({"observation": result}))
         }
-        Operation::Get => match store.contact_observation()? {
-            Some((device_id, observation)) => {
-                Ok(json!({"deviceId": device_id, "observation": observation}))
+        Operation::Offer { credential } => {
+            let secret = zeroize::Zeroizing::new(
+                STANDARD
+                    .decode(&credential.secret_b64)
+                    .map_err(|_| "invalid_fleet_credential")?,
+            );
+            if secret.len() != 32 || STANDARD.encode(secret.as_slice()) != credential.secret_b64 {
+                return Err("invalid_fleet_credential");
             }
-            None => Ok(json!({"deviceId": null, "observation": null})),
-        },
+            #[cfg(windows)]
+            {
+                crate::fleet_transport::offer(
+                    store,
+                    credential.trust.clone(),
+                    credential.transport.origins.clone(),
+                    credential.transport.profile.clone(),
+                    credential.origin.clone(),
+                    secret,
+                )?;
+                Ok(json!({"queued":true}))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (credential, secret);
+                Err("fleet_credential_unavailable")
+            }
+        }
+        Operation::Clear { token } => Ok(json!({"cleared":store.clear_credential(&token)?})),
+        Operation::Get => {
+            #[cfg(windows)]
+            let reachability = crate::fleet_transport::status(store);
+            #[cfg(not(windows))]
+            let reachability = json!({"state":"unconfirmed"});
+            match store.contact_state()? {
+                Some((device_id, observation, token)) => Ok(
+                    json!({"deviceId": device_id, "observation": observation, "service_reachability":reachability, "credential_clear_token":token}),
+                ),
+                None => Ok(
+                    json!({"deviceId": null, "observation": null, "service_reachability":reachability, "credential_clear_token":null}),
+                ),
+            }
+        }
     }
 }
 

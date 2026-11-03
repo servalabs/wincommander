@@ -51,7 +51,7 @@ pub(super) fn trust() -> FleetTrust {
 }
 pub(super) fn proof(store: &FleetMachinePolicy, trust: &FleetTrust) -> String {
     let nonce = store
-        .begin_enrollment(trust.device_id.clone(), trust.signer_key.clone())
+        .begin_enrollment(trust.device_id.clone(), trust.signer_key.clone(), Vec::new(), None)
         .unwrap();
     let bytes = serde_json::to_vec(&[
         "wincommander:shield-progress:enrollment:v1",

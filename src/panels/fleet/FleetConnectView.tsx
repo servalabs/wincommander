@@ -261,16 +261,17 @@ export default function FleetConnectView() {
 
   async function finalizeApprovedUnenroll() {
     stopUnenrollPoll();
+    let serviceStopped = false;
     try {
-      await invoke("fleet_disconnect");
+      const result = await invoke<{ serviceReachabilityStopped?: boolean }>("fleet_disconnect");
+      serviceStopped = result?.serviceReachabilityStopped === true;
     } catch {
-      // Server already revoked this device's credentials once approved, so
-      // the local teardown call itself failing here is cosmetic — the next
-      // steady poll will see connected=false and settle the UI correctly.
+      // Server approval does not prove the separate local service stopped.
     }
     setStatus(null);
     setWasEnrolled(false);
     setUnenrollInfo(null);
+    if (!serviceStopped) setError("The device was removed from Fleet, but stopping local service reachability could not be confirmed. An administrator can stop the WinCommander service.");
   }
 
   // Submits (or, if one already exists, refreshes) the managed-device

@@ -651,7 +651,7 @@ async fn dispatch_verb(
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
 
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
 
         "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
@@ -3506,34 +3506,28 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
 }
 
 fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::FleetMachinePolicy,VerbError> {
-    use crate::fleet_machine_policy::{FleetMachinePolicy, WindowsFleetPolicyFs};
-    static STORE: std::sync::OnceLock<Result<FleetMachinePolicy, &'static str>> = std::sync::OnceLock::new();
-    STORE.get_or_init(|| {
-        let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
-        let dir = std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-        FleetMachinePolicy::open(Box::new(WindowsFleetPolicyFs), dir)
-    }).as_ref().map_err(|kind| VerbError::new("fleet_policy_unavailable", *kind))
+    crate::fleet_machine_policy::system_store().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))
 }
 
 fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
-    use crate::fleet_machine_policy::FleetTrust;
+    use crate::fleet_machine_policy::{FleetTrust, TransportProfile};
     let store=fleet_machine_policy_store()?;
     match verb {
         "svc.fleet.begin_enrollment" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request { device_id: String, signer_key: String }
+            struct Request { device_id: String, signer_key: String, #[serde(default)] origins: Vec<String>, #[serde(default)] transport_profile: Option<TransportProfile> }
             let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment binding"))?;
-            let challenge = store.begin_enrollment(request.device_id, request.signer_key)
+            let challenge = store.begin_enrollment(request.device_id, request.signer_key, request.origins, request.transport_profile)
                 .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"challenge": challenge}))
         },
         "svc.fleet.get_trust" => {
             if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let binding = store.trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            let binding = store.trust_with_origins().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             match binding {
-                Some((trust, audit)) => Ok(serde_json::json!({"trust": trust, "audit": audit})),
-                None => Ok(serde_json::json!({"trust": null, "audit": []})),
+                Some((trust, audit, origins, transport_profile, service_enabled)) => Ok(serde_json::json!({"trust": trust, "audit": audit, "origins": origins, "transport_profile": transport_profile, "service_enabled": service_enabled})),
+                None => Ok(serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false})),
             }
         },
         "svc.fleet.provision_trust" => {
@@ -3553,6 +3547,15 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
             let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
             store.replace_trust(request.previous, request.replacement, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"replaced": true}))
+        },
+        "svc.fleet.bind_origins" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request { trust: FleetTrust, signature: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.bind_origins(request.trust, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            Ok(serde_json::json!({"bound": true}))
         },
         "svc.fleet.install_policy" => {
             #[derive(serde::Deserialize)]
@@ -5459,7 +5462,7 @@ mod tests {
 
     #[tokio::test]
     async fn fleet_trust_mutations_require_admin_and_policy_requires_pinned_peer() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.get_trust"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust"] {
             assert!(authorize(verb, false, 1234, &passing_gate()).await.is_err());
             assert_eq!(authorize(verb, true, 1234, &passing_gate()).await, Ok(None));
         }

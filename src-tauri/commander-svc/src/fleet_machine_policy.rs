@@ -9,6 +9,9 @@ use fleet_proto::{EpochSigningInput, PolicyEnvelope};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
 
+#[path = "fleet_origins.rs"]
+mod origins;
+
 #[path = "fleet_contact.rs"]
 mod contact;
 pub use contact::{ContactChallenge, ContactObservation};
@@ -20,6 +23,20 @@ use crate::peer_auth_deployment_acl as protected_acl;
 /// any ACL change or read, preventing adoption of pre-planted trust.
 #[cfg(windows)]
 pub struct WindowsFleetPolicyFs;
+
+#[cfg(windows)]
+pub(crate) fn system_store() -> Result<&'static FleetMachinePolicy, &'static str> {
+    static STORE: std::sync::OnceLock<FleetMachinePolicy> = std::sync::OnceLock::new();
+    static INIT: Mutex<()> = Mutex::new(());
+    if let Some(store) = STORE.get() { return Ok(store); }
+    let _guard = INIT.lock().map_err(|_| "store_unavailable")?;
+    if let Some(store) = STORE.get() { return Ok(store); }
+    let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
+    let dir = PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let store = FleetMachinePolicy::open(Box::new(WindowsFleetPolicyFs), dir)?;
+    let _ = STORE.set(store);
+    STORE.get().ok_or("store_unavailable")
+}
 
 #[cfg(windows)]
 impl PolicyFs for WindowsFleetPolicyFs {
@@ -82,6 +99,52 @@ pub struct FleetTrust {
     pub signer_key: String,
 }
 
+/// Nonsecret transport configuration authorized along with the origin set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportProfile {
+    pub spki_pins: String,
+    pub environment_fingerprint: String,
+}
+
+type TrustWithTransport = (FleetTrust, Vec<TrustAudit>, Vec<String>, Option<TransportProfile>, bool);
+type ContactState = (String, Option<ContactObservation>, Option<String>);
+
+fn default_service_enabled() -> bool { true }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredCredential {
+    origin: String,
+    ciphertext: String,
+}
+
+pub(crate) struct CredentialSnapshot {
+    pub trust: FleetTrust,
+    pub origins: Vec<String>,
+    pub profile: TransportProfile,
+    pub revision: u64,
+    pub secret: zeroize::Zeroizing<Vec<u8>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CandidateContext {
+    pub trust: FleetTrust,
+    pub origins: Vec<String>,
+    pub profile: TransportProfile,
+    pub revision: u64,
+    pub origin: String,
+}
+
+fn validate_transport_profile(profile: &TransportProfile) -> Result<(), &'static str> {
+    if profile.spki_pins.len() > 4096 { return Err("invalid_transport_profile"); }
+    let digest = STANDARD.decode(&profile.environment_fingerprint).map_err(|_| "invalid_transport_profile")?;
+    if digest.len() != 32 || STANDARD.encode(digest) != profile.environment_fingerprint {
+        return Err("invalid_transport_profile");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -90,6 +153,18 @@ struct Record {
     audit: Vec<TrustAudit>,
     #[serde(default)]
     contact: Option<ContactObservation>,
+    #[serde(default)]
+    origins: Vec<String>,
+    #[serde(default)]
+    transport_profile: Option<TransportProfile>,
+    #[serde(default)]
+    credential: Option<StoredCredential>,
+    #[serde(default)]
+    credential_revision: u64,
+    #[serde(default)]
+    runtime_profile_changed: bool,
+    #[serde(default = "default_service_enabled")]
+    service_enabled: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -98,6 +173,10 @@ struct PendingEnrollment {
     device_id: String,
     signer_key: String,
     challenge: String,
+    #[serde(default)]
+    origins: Vec<String>,
+    #[serde(default)]
+    transport_profile: Option<TransportProfile>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -156,7 +235,8 @@ fn valid_uuid(value: &str) -> bool {
 fn validate_trust(trust: &FleetTrust) -> Result<(), &'static str> {
     if trust.org_id.is_empty()
         || trust.org_id.len() > 256
-        || !valid_uuid(&trust.device_id)
+        || trust.device_id.is_empty()
+        || trust.device_id.len() > 128
         || !valid_uuid(&trust.enrollment_generation)
     {
         return Err("invalid_binding");
@@ -273,6 +353,8 @@ impl FleetMachinePolicy {
         &self,
         device_id: String,
         signer_key: String,
+        allowed_origins: Vec<String>,
+        transport_profile: Option<TransportProfile>,
     ) -> Result<String, &'static str> {
         use rand::RngCore;
         let placeholder = FleetTrust {
@@ -282,6 +364,8 @@ impl FleetMachinePolicy {
             enrollment_generation: "00000000-0000-4000-8000-000000000000".into(),
         };
         validate_trust(&placeholder)?;
+        let allowed_origins = origins::normalize(&allowed_origins)?;
+        if let Some(profile) = &transport_profile { validate_transport_profile(profile)?; }
         let mut bytes = [0u8; 16];
         rand::rngs::OsRng
             .try_fill_bytes(&mut bytes)
@@ -303,6 +387,8 @@ impl FleetMachinePolicy {
             device_id,
             signer_key,
             challenge: challenge.clone(),
+            origins: allowed_origins,
+            transport_profile,
         });
         self.persist(&next)?;
         *guard = next;
@@ -315,13 +401,15 @@ impl FleetMachinePolicy {
         signature: &str,
     ) -> Result<(), &'static str> {
         let pending = state.pending.as_ref().ok_or("enrollment_not_started")?;
+        if origins::normalize(&pending.origins)? != pending.origins {
+            return Err("invalid_origin");
+        }
+        if let Some(profile) = &pending.transport_profile { validate_transport_profile(profile)?; }
         if pending.device_id != trust.device_id || pending.signer_key != trust.signer_key {
             return Err("enrollment_binding_mismatch");
         }
-        // Server canonicalizes UUIDs before signing; require canonical inputs.
-        if trust.device_id != trust.device_id.to_ascii_lowercase()
-            || trust.enrollment_generation != trust.enrollment_generation.to_ascii_lowercase()
-        {
+        // The generation is a UUID; device identifiers retain exact case.
+        if trust.enrollment_generation != trust.enrollment_generation.to_ascii_lowercase() {
             return Err("invalid_binding");
         }
         let bytes = serde_json::to_vec(&[
@@ -357,12 +445,20 @@ impl FleetMachinePolicy {
             actor,
             &trust.enrollment_generation,
         )?];
+        let approved_origins = guard.pending.as_ref().ok_or("enrollment_not_started")?.origins.clone();
+        let approved_profile = guard.pending.as_ref().ok_or("enrollment_not_started")?.transport_profile.clone();
         let next = State {
             record: Some(Record {
                 trust,
                 policy: None,
                 audit,
                 contact: None,
+                origins: approved_origins,
+                transport_profile: approved_profile,
+                credential: None,
+                credential_revision: 0,
+                runtime_profile_changed: false,
+                service_enabled: true,
             }),
             pending: None,
             contact_challenge: None,
@@ -404,12 +500,20 @@ impl FleetMachinePolicy {
             actor,
             &replacement.enrollment_generation,
         )?);
+        let approved_origins = guard.pending.as_ref().ok_or("enrollment_not_started")?.origins.clone();
+        let approved_profile = guard.pending.as_ref().ok_or("enrollment_not_started")?.transport_profile.clone();
         let next = State {
             record: Some(Record {
                 trust: replacement,
                 policy: None,
                 audit,
                 contact: None,
+                origins: approved_origins,
+                transport_profile: approved_profile,
+                credential: None,
+                credential_revision: 0,
+                runtime_profile_changed: false,
+                service_enabled: true,
             }),
             pending: None,
             contact_challenge: None,
@@ -417,6 +521,77 @@ impl FleetMachinePolicy {
         self.persist(&next)?;
         *guard = next;
         Ok(())
+    }
+
+    /// Complete a privileged, freshly challenged enrollment for unchanged
+    /// machine trust. This can authorize its configured transport origins
+    /// without changing an otherwise valid signed policy or generation.
+    pub fn bind_origins(
+        &self,
+        expected: FleetTrust,
+        signature: &str,
+        actor: &str,
+    ) -> Result<(), &'static str> {
+        validate_trust(&expected)?;
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.trust != expected { return Err("binding_changed"); }
+        Self::verify_enrollment(&guard, &expected, signature)?;
+        let approved = guard.pending.as_ref().ok_or("enrollment_not_started")?.origins.clone();
+        let approved_profile = guard.pending.as_ref().ok_or("enrollment_not_started")?.transport_profile.clone();
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        if !record.service_enabled || record.origins != approved || record.transport_profile != approved_profile {
+            if record.audit.len() >= 64 { record.audit.remove(0); }
+            record.audit.push(trust_audit("origins", actor, &expected.enrollment_generation)?);
+            record.origins = approved;
+            record.transport_profile = approved_profile;
+            record.credential = None;
+            record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+            record.runtime_profile_changed = false;
+            record.service_enabled = true;
+        }
+        next.pending = None;
+        next.contact_challenge = None;
+        self.persist(&next)?;
+        *guard = next;
+        Ok(())
+    }
+
+    pub fn authorized_origins(&self) -> Result<Option<Vec<String>>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        Ok(guard.record.as_ref().map(|record| record.origins.clone()))
+    }
+
+    /// A running pinned helper may report a mismatch only to suspend service
+    /// transport. It cannot authorize new destinations or security settings.
+    pub(crate) fn observe_runtime_transport(&self, expected: &FleetTrust, observed_origins: &[String], observed_profile: Option<&TransportProfile>) -> Result<bool, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.trust != *expected { return Err("binding_changed"); }
+        if !current.service_enabled { return Err("service_disabled"); }
+        let matches = origins::normalize(observed_origins).ok().as_deref() == Some(current.origins.as_slice())
+            && observed_profile.is_some() && current.transport_profile.as_ref() == observed_profile;
+        if matches { return Ok(true); }
+        if current.runtime_profile_changed { return Ok(false); }
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        record.runtime_profile_changed = true;
+        record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        self.persist(&next)?;
+        *guard = next;
+        Ok(false)
+    }
+
+    pub(crate) fn credential_missing_reason(&self) -> &'static str {
+        let Ok(guard) = self.state.lock() else { return "service_store_unavailable"; };
+        match &guard.record {
+            None => "not_configured",
+            Some(record) if !record.service_enabled => "not_configured",
+            Some(record) if record.runtime_profile_changed => "network_configuration_differs",
+            Some(record) if record.origins.is_empty() || record.transport_profile.is_none() => "not_configured",
+            Some(_) => "credential_unavailable",
+        }
     }
 
     pub fn install(&self, policy: PolicyEnvelope) -> Result<(), &'static str> {
@@ -458,6 +633,12 @@ impl FleetMachinePolicy {
                 policy: Some(policy),
                 audit: current.audit.clone(),
                 contact: current.contact.clone(),
+                origins: current.origins.clone(),
+                transport_profile: current.transport_profile.clone(),
+                credential: current.credential.clone(),
+                credential_revision: current.credential_revision,
+                runtime_profile_changed: current.runtime_profile_changed,
+                service_enabled: current.service_enabled,
             }),
             pending: guard.pending.clone(),
             contact_challenge: guard.contact_challenge.clone(),
@@ -498,6 +679,11 @@ impl FleetMachinePolicy {
             .record
             .as_ref()
             .map(|record| (record.trust.clone(), record.audit.clone())))
+    }
+
+    pub fn trust_with_origins(&self) -> Result<Option<TrustWithTransport>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        Ok(guard.record.as_ref().map(|record| (record.trust.clone(), record.audit.clone(), record.origins.clone(), record.transport_profile.clone(), record.service_enabled)))
     }
 
     fn persist(&self, state: &State) -> Result<(), &'static str> {
@@ -617,6 +803,152 @@ impl FleetMachinePolicy {
                 .map(|observation| (record.trust.device_id.clone(), observation))
         }))
     }
+
+    pub(crate) fn credential_snapshot(
+        &self,
+        protector: &dyn crate::fleet_credential::Protector,
+    ) -> Result<Option<CredentialSnapshot>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record) = &guard.record else { return Ok(None); };
+        if !record.service_enabled { return Ok(None); }
+        if record.runtime_profile_changed { return Err("network_configuration_differs"); }
+        let (Some(profile), Some(credential)) = (&record.transport_profile, &record.credential) else { return Ok(None); };
+        validate_transport_profile(profile)?;
+        if origins::normalize(&record.origins)? != record.origins
+            || !record.origins.contains(&credential.origin) {
+            return Err("origin_not_authorized");
+        }
+        let ciphertext = STANDARD.decode(&credential.ciphertext).map_err(|_| "invalid_fleet_credential")?;
+        if STANDARD.encode(&ciphertext) != credential.ciphertext { return Err("invalid_fleet_credential"); }
+        let binding = crate::fleet_credential::CredentialBinding {
+            org_id: &record.trust.org_id, device_id: &record.trust.device_id,
+            enrollment_generation: &record.trust.enrollment_generation, origin: &credential.origin,
+        };
+        let secret = crate::fleet_credential::unseal(protector, &binding, &ciphertext)?;
+        Ok(Some(CredentialSnapshot {
+            trust: record.trust.clone(), origins: record.origins.clone(), profile: profile.clone(),
+            revision: record.credential_revision, secret,
+        }))
+    }
+
+    pub(crate) fn credential_is_current(&self, snapshot: &CredentialSnapshot) -> bool {
+        let Ok(guard) = self.state.lock() else { return false; };
+        guard.record.as_ref().is_some_and(|record| {
+            record.service_enabled && record.trust == snapshot.trust && record.credential.is_some()
+                && record.credential_revision == snapshot.revision
+                && record.origins == snapshot.origins && record.transport_profile.as_ref() == Some(&snapshot.profile)
+        })
+    }
+
+    pub(crate) fn credential_revision_is_current(&self, trust: &FleetTrust, revision: u64) -> bool {
+        let Ok(guard) = self.state.lock() else { return false; };
+        guard.record.as_ref().is_some_and(|record| {
+            record.service_enabled && record.trust == *trust && record.credential.is_some() && record.credential_revision == revision
+        })
+    }
+
+    pub(crate) fn candidate_is_current(&self, context: &CandidateContext) -> bool {
+        let Ok(guard) = self.state.lock() else { return false; };
+        guard.record.as_ref().is_some_and(|record| {
+            record.service_enabled && record.trust == context.trust && record.origins == context.origins
+                && record.transport_profile.as_ref() == Some(&context.profile)
+                && record.credential_revision == context.revision && record.origins.contains(&context.origin)
+        })
+    }
+
+    pub(crate) fn prepare_candidate(
+        &self, trust: &FleetTrust, observed_origins: &[String], profile: &TransportProfile,
+        origin: &str, secret: &[u8], protector: &dyn crate::fleet_credential::Protector,
+    ) -> Result<Option<CandidateContext>, &'static str> {
+        use subtle::ConstantTimeEq;
+        if secret.len() != 32 { return Err("invalid_fleet_credential"); }
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let record = guard.record.as_ref().ok_or("not_provisioned")?;
+        if !record.service_enabled { return Err("service_disabled"); }
+        if record.trust != *trust || record.transport_profile.as_ref() != Some(profile)
+            || origins::normalize(observed_origins)? != record.origins
+            || !record.origins.iter().any(|allowed| allowed == origin) {
+            return Err("transport_not_authorized");
+        }
+        validate_transport_profile(profile)?;
+        if !record.runtime_profile_changed {
+            if let Some(old) = record.credential.as_ref().filter(|old| old.origin == origin) {
+                let binding = crate::fleet_credential::CredentialBinding { org_id:&trust.org_id, device_id:&trust.device_id,
+                    enrollment_generation:&trust.enrollment_generation, origin };
+                if let Ok(ciphertext) = STANDARD.decode(&old.ciphertext) {
+                    if let Ok(existing) = crate::fleet_credential::unseal(protector, &binding, &ciphertext) {
+                        if bool::from(existing.as_slice().ct_eq(secret)) { return Ok(None); }
+                    }
+                }
+            }
+        }
+        Ok(Some(CandidateContext { trust:trust.clone(), origins:record.origins.clone(), profile:profile.clone(),
+            revision:record.credential_revision, origin:origin.to_owned() }))
+    }
+
+    /// Called only after the service has verified a fresh signed presence
+    /// response for this exact origin and candidate secret.
+    pub(crate) fn commit_candidate(
+        &self, context: &CandidateContext, secret: &[u8], protector: &dyn crate::fleet_credential::Protector,
+    ) -> Result<u64, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if !current.service_enabled || current.trust != context.trust || current.origins != context.origins
+            || current.transport_profile.as_ref() != Some(&context.profile)
+            || current.credential_revision != context.revision || !current.origins.contains(&context.origin) {
+            return Err("binding_changed");
+        }
+        let binding = crate::fleet_credential::CredentialBinding { org_id:&context.trust.org_id,
+            device_id:&context.trust.device_id, enrollment_generation:&context.trust.enrollment_generation, origin:&context.origin };
+        let ciphertext = crate::fleet_credential::seal(protector, &binding, secret)?;
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.credential = Some(StoredCredential { origin:context.origin.clone(), ciphertext:STANDARD.encode(ciphertext) });
+        record.runtime_profile_changed = false;
+        let revision = record.credential_revision;
+        self.persist(&next)?;
+        *guard = next;
+        Ok(revision)
+    }
+
+    fn clear_token(record: &Record) -> Result<String, &'static str> {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(&["wincommander:fleet-service-clear:v1", &record.trust.org_id,
+            &record.trust.device_id, &record.trust.enrollment_generation, &record.trust.signer_key,
+            &record.credential_revision.to_string()]).map_err(|_| "invalid_store")?;
+        Ok(STANDARD.encode(Sha256::digest(bytes)))
+    }
+
+    pub(crate) fn credential_clear_token(&self) -> Result<Option<String>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        guard.record.as_ref().map(Self::clear_token).transpose()
+    }
+
+    pub(crate) fn contact_state(&self) -> Result<Option<ContactState>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        guard.record.as_ref().map(|record| {
+            let token = Some(Self::clear_token(record)?);
+            Ok((record.trust.device_id.clone(), record.contact.clone(), token))
+        }).transpose()
+    }
+
+    pub(crate) fn clear_credential(&self, token: &str) -> Result<bool, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record) = &guard.record else { return Ok(false); };
+        if Self::clear_token(record)? != token {
+            return Ok(false);
+        }
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        record.credential = None;
+        record.service_enabled = false;
+        record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        next.pending = None;
+        self.persist(&next)?;
+        *guard = next;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -631,6 +963,9 @@ mod contact_binding_tests;
 #[cfg(test)]
 #[path = "fleet_contact_bridge_tests.rs"]
 mod contact_bridge_tests;
+#[cfg(test)]
+#[path = "fleet_credential_integration_tests.rs"]
+pub(crate) mod credential_integration_tests;
 
 #[cfg(test)]
 mod tests {
@@ -705,8 +1040,11 @@ mod tests {
         FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap()
     }
     fn proof(store: &FleetMachinePolicy, trust: &FleetTrust) -> String {
+        proof_with_origins(store, trust, Vec::new())
+    }
+    fn proof_with_origins(store: &FleetMachinePolicy, trust: &FleetTrust, origins: Vec<String>) -> String {
         let challenge = store
-            .begin_enrollment(trust.device_id.clone(), trust.signer_key.clone())
+            .begin_enrollment(trust.device_id.clone(), trust.signer_key.clone(), origins, None)
             .unwrap();
         let bytes = serde_json::to_vec(&[
             "wincommander:shield-progress:enrollment:v1",
@@ -743,6 +1081,43 @@ mod tests {
             store.provision(replacement, &signature, "S-1-5-18"),
             Err("already_provisioned")
         );
+    }
+
+    #[test]
+    fn privileged_enrollment_binds_only_staged_origins_and_fences_stale_updates() {
+        let fs = MemoryFs::default();
+        let store = store(fs.clone());
+        let binding = trust();
+        let initial = vec!["http://Fleet.Example:80".into(), "https://mesh.example".into()];
+        let signature = proof_with_origins(&store, &binding, initial);
+        store.provision(binding.clone(), &signature, "S-1-5-18").unwrap();
+        assert_eq!(store.authorized_origins().unwrap().unwrap(), vec!["http://fleet.example", "https://mesh.example"]);
+        let old = proof_with_origins(&store, &binding, vec!["https://old.example".into()]);
+        let fresh = proof_with_origins(&store, &binding, vec!["https://new.example".into()]);
+        assert_eq!(store.bind_origins(binding.clone(), &old, "S-1-5-18"), Err("invalid_proof"));
+        let mut wrong = binding.clone(); wrong.org_id = "other".into();
+        assert_eq!(store.bind_origins(wrong, &fresh, "S-1-5-18"), Err("binding_changed"));
+        store.bind_origins(binding.clone(), &fresh, "S-1-5-18").unwrap();
+        assert_eq!(store.authorized_origins().unwrap().unwrap(), vec!["https://new.example"]);
+        assert_eq!(store.bind_origins(binding, &fresh, "S-1-5-18"), Err("enrollment_not_started"));
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.authorized_origins().unwrap().unwrap(), vec!["https://new.example"]);
+    }
+
+    #[test]
+    fn transport_profile_is_validated_and_persisted_only_with_enrollment_proof() {
+        let fs = MemoryFs::default();
+        let store = store(fs.clone());
+        let binding = trust();
+        let profile = TransportProfile { spki_pins: "a".repeat(64), environment_fingerprint: STANDARD.encode([7u8; 32]) };
+        let challenge = store.begin_enrollment(binding.device_id.clone(), binding.signer_key.clone(), vec!["https://fleet.example".into()], Some(profile.clone())).unwrap();
+        let bytes = serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1", &binding.org_id, &binding.device_id, &binding.enrollment_generation, &challenge]).unwrap();
+        let signature = STANDARD.encode(signing_key().sign(&bytes).to_bytes());
+        store.provision(binding.clone(), &signature, "S-1-5-18").unwrap();
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.trust_with_origins().unwrap().unwrap().3, Some(profile));
+        let invalid = TransportProfile { spki_pins: String::new(), environment_fingerprint: "invalid".into() };
+        assert_eq!(reopened.begin_enrollment(binding.device_id, binding.signer_key, Vec::new(), Some(invalid)), Err("invalid_transport_profile"));
     }
 
     #[test]
@@ -800,6 +1175,20 @@ mod tests {
             Err("invalid_proof")
         );
         assert_eq!(store.provision(trust(), &signature, "S-1-5-18"), Ok(()));
+    }
+
+    #[test]
+    fn device_binding_preserves_existing_fleet_identifier_semantics() {
+        let store = store(MemoryFs::default());
+        let mut binding = trust();
+        binding.device_id = "Device-Alpha_42".into();
+        let signature = proof(&store, &binding);
+        store.provision(binding.clone(), &signature, "S-1-5-18").unwrap();
+        assert_eq!(store.trust_snapshot().unwrap().unwrap().0.device_id, "Device-Alpha_42");
+        binding.device_id.clear();
+        assert_eq!(validate_trust(&binding), Err("invalid_binding"));
+        binding.device_id = "x".repeat(129);
+        assert_eq!(validate_trust(&binding), Err("invalid_binding"));
     }
 
     #[test]

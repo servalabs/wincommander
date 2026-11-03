@@ -651,9 +651,12 @@ async fn reader_loop<R>(
                     // Never hold the reader while a service call or its disk I/O is pending.
                     // Only one observation request per process may be in flight.
                     let token = session_token.clone();
-                    crate::fleet_contact_relay::try_spawn(async move {
+                    let is_offer = request.args.get("operation").and_then(serde_json::Value::as_str) == Some("offer");
+                    let work = async move {
                         let _ = respond_to_free_request(request, token, writer).await;
-                    });
+                    };
+                    if is_offer { crate::fleet_contact_relay::try_spawn_offer(work); }
+                    else { crate::fleet_contact_relay::try_spawn(work); }
                     continue;
                 }
                 if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE
