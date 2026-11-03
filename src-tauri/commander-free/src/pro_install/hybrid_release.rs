@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Clone)]
 pub(super) struct HybridProTrust {
     pub(super) ed_key: [u8; 32],
     pub(super) pq_key: [u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN],
@@ -72,7 +73,10 @@ pub(super) fn verify_hybrid_pro(
     {
         return Err("Hybrid Pro release does not match the requested artifact".into());
     }
-    Ok(VerifiedHybridPro { epoch, size: release.size })
+    Ok(VerifiedHybridPro {
+        epoch,
+        size: release.size,
+    })
 }
 
 pub(super) async fn fetch_hybrid_pro(version: &str) -> Result<String, String> {

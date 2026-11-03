@@ -61,6 +61,23 @@ fn signed_record_rejects_replay_and_allows_retry_and_channel_promotion() {
     assert!(check(Some(&stored), &old, &trust).is_ok()); // failed installation can retry
     assert!(check(Some(&stored), &make("3.7.0", "stable", 7, &hash), &trust).is_ok());
     assert!(check(Some(&stored), &make("3.8.0", "stable", 8, &hash), &trust).is_ok());
+    let raised = Trust {
+        ed: trust.ed,
+        pq: trust.pq,
+        ed_id: trust.ed_id,
+        pq_id: trust.pq_id,
+        epoch: 8,
+    };
+    assert!(check(Some(&stored), &make("3.8.0", "stable", 8, &hash), &raised).is_ok());
+    assert!(check(Some(&stored), &make("3.8.0", "stable", 7, &hash), &raised).is_err());
+    assert!(check(None, &old, &raised).is_err());
+    let newer_floor = serde_json::to_vec(&make("3.7.0", "stable", 9, &hash)).unwrap();
+    assert!(check(
+        Some(&newer_floor),
+        &make("3.8.0", "stable", 8, &hash),
+        &raised
+    )
+    .is_err());
     assert!(check(Some(&stored), &make("3.6.9", "stable", 8, &hash), &trust).is_err());
     assert!(check(Some(&stored), &make("3.8.0", "stable", 6, &hash), &trust).is_err());
     assert!(check(
@@ -76,6 +93,22 @@ fn signed_record_rejects_replay_and_allows_retry_and_channel_promotion() {
     corrupt.envelope = "invalid".into();
     assert!(check(None, &corrupt, &trust).is_err());
     assert!(check(Some(&serde_json::to_vec(&corrupt).unwrap()), &old, &trust).is_err());
+    assert!(check(
+        Some(&serde_json::to_vec(&corrupt).unwrap()),
+        &make("3.8.0", "stable", 8, &hash),
+        &raised
+    )
+    .is_err());
+    let mut forged: Record = serde_json::from_slice(&stored).unwrap();
+    let mut envelope: serde_json::Value = serde_json::from_str(&forged.envelope).unwrap();
+    envelope["signatures"][1]["signature"] = "invalid".into();
+    forged.envelope = envelope.to_string();
+    assert!(check(
+        Some(&serde_json::to_vec(&forged).unwrap()),
+        &make("3.8.0", "stable", 8, &hash),
+        &raised
+    )
+    .is_err());
 }
 
 // Child processes isolate the ProgramData override from the running application.

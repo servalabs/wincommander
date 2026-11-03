@@ -25,7 +25,7 @@ struct Floor {
     hash: String,
 }
 
-fn verify(record: &Record, trust: &Trust) -> Result<Floor, String> {
+fn verify(record: &Record, trust: &Trust, historical: bool) -> Result<Floor, String> {
     if !matches!(record.channel.as_str(), "stable" | "beta") {
         return Err("Free update record has an invalid channel".into());
     }
@@ -33,12 +33,17 @@ fn verify(record: &Record, trust: &Trust) -> Result<Floor, String> {
         "https://winupdates.servalabs.com/free/v{0}/WinCommander_{0}_x64-setup.exe",
         record.version
     );
+    let mut policy = trust.policy();
+    if historical {
+        // A stored proof is evidence of the old floor, not permission to install it.
+        policy.minimum_epoch = 1;
+    }
     let (release, epoch) = wincmd_pq_experiment::free_release::verify_metadata(
         record.envelope.as_bytes(),
         &record.version,
         &record.channel,
         &url,
-        &trust.policy(),
+        &policy,
     )
     .map_err(|_| "Free update record is not trusted")?;
     let parts: Vec<u32> = release
@@ -58,7 +63,7 @@ fn verify(record: &Record, trust: &Trust) -> Result<Floor, String> {
 }
 
 fn check(previous: Option<&[u8]>, candidate: &Record, trust: &Trust) -> Result<(), String> {
-    let next = verify(candidate, trust)?;
+    let next = verify(candidate, trust, false)?;
     let Some(previous) = previous else {
         return Ok(());
     };
@@ -67,7 +72,7 @@ fn check(previous: Option<&[u8]>, candidate: &Record, trust: &Trust) -> Result<(
     }
     let previous: Record =
         serde_json::from_slice(previous).map_err(|_| "Free update record is invalid")?;
-    let old = verify(&previous, trust)?;
+    let old = verify(&previous, trust, true)?;
     if next.version < old.version
         || next.epoch < old.epoch
         || (next.version == old.version && next.hash != old.hash)

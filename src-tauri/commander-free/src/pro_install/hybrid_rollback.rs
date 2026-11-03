@@ -37,9 +37,13 @@ fn check_previous(
     let Some(old_record) = previous.hybrid_manifest.as_deref() else {
         return Ok(());
     };
+    // Authenticate old evidence with the same keys even after the build's
+    // candidate minimum increases; the candidate still meets current policy.
+    let mut historical_trust = trust.clone();
+    historical_trust.minimum_epoch = 1;
     let previous_epoch = verify_hybrid_pro(
         old_record.as_bytes(),
-        trust,
+        &historical_trust,
         previous.version.as_deref(),
         &previous.sha256,
         None,
@@ -155,6 +159,57 @@ mod tests {
             &trust
         )
         .is_ok());
+        let raised = hybrid_release::HybridProTrust {
+            minimum_epoch: 8,
+            ..trust.clone()
+        };
+        assert!(check_previous(
+            &previous,
+            &candidate("3.8.0", 8, &hash),
+            Some("3.8.0"),
+            &hash,
+            &raised
+        )
+        .is_ok());
+        assert!(check_previous(
+            &previous,
+            &candidate("3.8.0", 7, &hash),
+            Some("3.8.0"),
+            &hash,
+            &raised
+        )
+        .is_err());
+        let newer_floor = ProInstallMetadata {
+            version: previous.version.clone(),
+            sha256: hash.clone(),
+            signed_manifest: None,
+            hybrid_manifest: Some(make("3.7.0", 9, &hash)),
+        };
+        assert!(check_previous(
+            &newer_floor,
+            &candidate("3.8.0", 8, &hash),
+            Some("3.8.0"),
+            &hash,
+            &raised
+        )
+        .is_err());
+        let mut forged_envelope: serde_json::Value =
+            serde_json::from_str(previous.hybrid_manifest.as_deref().unwrap()).unwrap();
+        forged_envelope["signatures"][1]["signature"] = "invalid".into();
+        let forged = ProInstallMetadata {
+            version: previous.version.clone(),
+            sha256: hash.clone(),
+            signed_manifest: None,
+            hybrid_manifest: Some(forged_envelope.to_string()),
+        };
+        assert!(check_previous(
+            &forged,
+            &candidate("3.8.0", 8, &hash),
+            Some("3.8.0"),
+            &hash,
+            &raised
+        )
+        .is_err());
         assert!(check_previous(
             &previous,
             &candidate("3.6.9", 8, &hash),
@@ -184,6 +239,14 @@ mod tests {
             hybrid_manifest: Some("not a signed record".into()),
             ..previous
         };
+        assert!(check_previous(
+            &corrupt,
+            &candidate("3.8.0", 8, &hash),
+            Some("3.8.0"),
+            &hash,
+            &raised
+        )
+        .is_err());
         assert!(check_previous(
             &corrupt,
             &candidate("3.8.0", 8, &hash),
