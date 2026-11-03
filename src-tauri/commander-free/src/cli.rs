@@ -1280,68 +1280,6 @@ mod tests {
         assert_eq!(backend["names"], r#"["a","b"]"#);
     }
 
-    #[test]
-    fn every_registered_tauri_handler_is_cli_executable() {
-        let catalog = catalog().expect("catalog parses");
-        let tauri_commands: Vec<_> = catalog
-            .commands
-            .iter()
-            .filter(|entry| entry.transport == Transport::Tauri)
-            .collect();
-        // Keep this snapshot count intentional: the generated catalog is the
-        // authority, but a count change must be reviewed with the handler
-        // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 524);
-        assert!(!tauri_commands
-            .iter()
-            .any(|entry| entry.name == "apply_admin_config_cmd"));
-        assert!(tauri_commands.iter().all(|entry| entry.registered));
-        for name in [
-            "decoy_read_audit_status",
-            "fleet_report_local_alert",
-            "fleet_report_privacy_shield_status",
-            "fleet_sync_shield_state",
-            "list_search_known_folders",
-            "list_search_storage_roots",
-            "open_event_log",
-            "set_decoy_read_audit_enabled",
-            "set_update_channel",
-            "get_content_detector_catalog",
-            "test_local_content_rules",
-            "reconcile_shared_shortcut_claim",
-            "require_calculator_peek_hotkey",
-            "vault_enroll_personal_syncthing",
-            "vault_manage_personal_syncthing",
-        ] {
-            assert!(
-                tauri_commands.iter().any(|entry| entry.name == name),
-                "generated CLI catalog is missing registered handler {name}"
-            );
-        }
-        assert_eq!(
-            tauri_commands
-                .iter()
-                .filter(|entry| entry.debug_only)
-                .count(),
-            4
-        );
-        assert!(tauri_commands
-            .iter()
-            .filter(|entry| available_in_this_build(entry))
-            .all(|entry| match classify_risk(entry) {
-                Risk::ReadOnly => classify_headless_support(entry) == HeadlessSupport::Executable,
-                Risk::Mutating | Risk::Destructive => {
-                    classify_headless_support(entry) == HeadlessSupport::UiOnly
-                }
-            }));
-        assert_eq!(
-            tauri_commands
-                .iter()
-                .filter(|entry| available_in_this_build(entry))
-                .count(),
-            if cfg!(debug_assertions) { 524 } else { 520 }
-        );
-    }
 
     #[test]
     fn catalog_audit_does_not_call_intentional_ui_only_commands_missing() {
@@ -1444,3 +1382,7 @@ mod tests {
         assert_eq!(backend_script_risk("not-a-registered-command"), None);
     }
 }
+
+#[cfg(test)]
+#[path = "cli_catalog_tests.rs"]
+mod catalog_tests;
