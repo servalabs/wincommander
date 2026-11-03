@@ -3182,7 +3182,8 @@ function Test-AutoEraseCurrentPayload {
     if ([IO.Path]::GetDirectoryName($path) -ine $root) { throw 'The cleanup task payload path is not owned.' }
     $parent = [IO.Directory]::GetParent($path)
     while ($parent) {
-        $directory = Get-Item -LiteralPath $parent.FullName -Force -ErrorAction Stop
+        try { $directory = Get-Item -LiteralPath $parent.FullName -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { return $false }
         if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The cleanup task payload directory cannot be verified.' }
         $parent = $parent.Parent
     }

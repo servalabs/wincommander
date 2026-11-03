@@ -6,6 +6,10 @@ try {
     $script:mode = 'valid'
     function Get-Item {
         param([string]$LiteralPath, [switch]$Force, $ErrorAction)
+        if ($LiteralPath -like '*\auto-erase\scripts') {
+            if ($script:mode -eq 'missingParent') { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent payload directory.') }
+            if ($script:mode -eq 'parentDenied') { throw [UnauthorizedAccessException]::new('Synthetic denied payload directory.') }
+        }
         if ($LiteralPath -like '*.ps1') {
             if ($script:mode -eq 'missing') { throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic absent payload.') }
             if ($script:mode -eq 'denied') { throw [UnauthorizedAccessException]::new('Synthetic denied payload.') }
@@ -24,7 +28,9 @@ try {
     if (-not (Test-AutoEraseCurrentPayload $task $identity)) { throw 'Valid current payload was not verified.' }
     $script:mode = 'missing'
     if (Test-AutoEraseCurrentPayload $task $identity) { throw 'A missing payload was treated as verified.' }
-    foreach ($case in @('denied','reparse','unreadable','wrongCategory')) {
+    $script:mode = 'missingParent'
+    if (Test-AutoEraseCurrentPayload $task $identity) { throw 'A missing payload directory was treated as verified.' }
+    foreach ($case in @('denied','parentDenied','reparse','unreadable','wrongCategory')) {
         $script:mode = $case; $failed = $false
         try { $null = Test-AutoEraseCurrentPayload $task $identity } catch { $failed = $true }
         if (-not $failed) { throw "Unsafe payload case '$case' did not fail closed." }
