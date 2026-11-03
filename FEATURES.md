@@ -293,6 +293,9 @@ restricted to authorized administrators. Seeing a group does not grant access
 to its Vaults.
 
 Fleet enrollment is an administrative boundary. The device enrollment card
+shows active agent retries with the last reported error, including from another
+Windows account; terminal errors still allow explicit enrollment. Retrying does not
+confirm a current connection or completed enrollment. The card
 displays the last recorded signed Fleet contact when available. It is a
 historical device-clock observation, not current link health.
 

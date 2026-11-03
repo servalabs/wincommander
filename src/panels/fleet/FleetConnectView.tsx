@@ -32,14 +32,7 @@ interface FleetStatus extends FleetLinkStatus {
 const STEADY_POLL_MS = 4_000;
 // Aggressive poll run after clicking "Connect" — catches async enrollment.
 const ENROLL_POLL_MS = 1_000;
-// How long to keep polling aggressively before giving up and dropping back.
-// Must comfortably exceed Pro's own enroll self-retry envelope (fleet_push.rs:
-// ENROLL_MAX_ATTEMPTS=5, capped-exponential-with-full-jitter backoff up to a
-// 30s cap between attempts — worst case approaches ~60s before Pro itself
-// gives up). At the old 30_000 this timer routinely fired BEFORE Pro finished
-// retrying, so the UI fell back to the blank "Connect to Fleet" form while
-// enrollment was still in flight, then silently flipped to "Enrolled" a few
-// seconds later once the steady poll caught up — looked like the click failed.
+// Return to steady polling after this interval; live agent status still owns retry state.
 const ENROLL_TIMEOUT_MS = 75_000;
 // Refresh cadence while a managed-device unenroll request is awaiting admin
 // approval. Refreshes use the status endpoint: resubmitting after approval
@@ -523,7 +516,7 @@ export default function FleetConnectView() {
             </div>
           </dl>
           <p className="fleet-connect-enrolling">
-            <Icon icon="refresh" size={13} /> Reconnecting to the fleet server — this device stays enrolled while it retries.
+            <Icon icon="refresh" size={13} /> Retrying contact with the fleet server. A current connection is not yet confirmed.
           </p>
           {agentError && (
             <p className="fleet-connect-error" role="alert">
