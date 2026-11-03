@@ -2,7 +2,7 @@
 use super::*;
 use crate::fleet_machine_policy::credential_integration_tests::{setup_store_for, TestProtector};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 async fn wait_for_request(rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -23,7 +23,68 @@ async fn wait_for_rejection() {
         }
         tokio::task::yield_now().await;
     }
-    panic!("worker did not process the local rejection");
+    panic!(
+        "worker did not process the local rejection; status={}",
+        status_slot().lock().unwrap().state
+    );
+}
+
+// Consume the entire request before closing. Closing with unread request bytes
+// can reset TCP on Windows, hiding the intended HTTP rejection from reqwest.
+async fn reject_complete_request(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut content_length = None;
+    let mut header_bytes = 0;
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line).await.unwrap();
+        assert_ne!(read, 0, "incomplete fixture request headers");
+        header_bytes += read;
+        assert!(header_bytes <= 8192, "fixture request headers too large");
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                assert!(content_length.is_none(), "duplicate fixture content length");
+                content_length = Some(value.trim().parse::<usize>().unwrap());
+            }
+        }
+    }
+    let length = content_length.expect("fixture request must have a content length");
+    assert!(length <= 4096, "fixture request body too large");
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).await.unwrap();
+    reader
+        .get_mut()
+        .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    reader.get_mut().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn rejection_fixture_waits_for_the_complete_declared_body() {
+    let (mut client, mut server) = tokio::io::duplex(4096);
+    let task = tokio::spawn(async move {
+        reject_complete_request(&mut server).await;
+    });
+    client
+        .write_all(b"POST / HTTP/1.1\r\nContent-Length: 7\r\n\r\n{\"a")
+        .await
+        .unwrap();
+    let mut byte = [0];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.read(&mut byte))
+            .await
+            .is_err()
+    );
+    client.write_all(b"\":1}").await.unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
+    task.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -34,12 +95,7 @@ async fn committed_rotation_interrupts_the_real_worker_backoff() {
     let server = tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
-            stream
-                .write_all(
-                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                )
-                .await
-                .unwrap();
+            reject_complete_request(&mut stream).await;
             let _ = seen.send(());
         }
     });
