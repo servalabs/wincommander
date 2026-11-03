@@ -276,19 +276,6 @@ jobs:
           $env:WINCMD_PQ_LIC_MLDSA_ID = "pq-key"
           $env:WINCMD_PQ_LIC_EPOCH = "7"
           cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p commander-free --lib --features experimental-pq-licence license::refresh_history::tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $old = Get-Content commander-svc/src/fixtures/workers-hybrid-licence.json -Raw | ConvertFrom-Json
-          $env:WINCMD_PQ_LIC_EPOCH = "8"
-          $env:WINCMD_PQ_LIC_OLD_ED_KEY = $old.publicEd
-          $env:WINCMD_PQ_LIC_OLD_MLDSA_KEY = $old.publicPq
-          $env:WINCMD_PQ_LIC_OLD_ED_ID = "ed-key"
-          $env:WINCMD_PQ_LIC_OLD_MLDSA_ID = "pq-key"
-          $env:WINCMD_PQ_LIC_OLD_MAX_EPOCH = "7"
-          $env:WINCMD_PQ_LIC_OLD_REFRESH_UNTIL = "4102444800"
-          $env:WINCMD_PQ_LIC_TEST_TRANSITION = "1"
-          cargo test --locked -p commander-free --lib --features experimental-pq-licence license::refresh_history::tests::configured_old_worker_fixture_can_only_request_refresh -- --exact
       - name: Test experimental hybrid Pro release validation
         shell: pwsh
         run: |

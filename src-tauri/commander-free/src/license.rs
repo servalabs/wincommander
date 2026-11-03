@@ -13,9 +13,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(feature = "experimental-pq-licence")]
 #[path = "../../runtime-support/license_hybrid_trust.rs"]
 mod hybrid_trust;
-#[cfg(feature = "experimental-pq-licence")]
-#[path = "license_refresh_history.rs"]
-mod refresh_history;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -1224,25 +1221,6 @@ fn verify_token_claims(token: &SignedTokenEnvelope, public_key: &str) -> Result<
     Ok(claims)
 }
 
-// Retired proofs can request a new licence during a configured overlap, but
-// may not grant features or authorize any other operation.
-fn verify_token_for_refresh(token: &SignedTokenEnvelope, public_key: &str) -> Result<(LicenseClaims, bool), String> {
-    match verify_token_claims(token, public_key) {
-        Ok(claims) => Ok((claims, false)),
-        Err(error) => {
-            #[cfg(feature = "experimental-pq-licence")]
-            {
-                let trust = hybrid_trust::configured().map_err(str::to_owned)?;
-                let old = refresh_history::configured(&trust.policy()).map_err(str::to_owned)?;
-                if let Some(old) = old {
-                    return refresh_history::verify(token, public_key, &trust.policy(), &old, now_unix()).map(|claims| (claims, true));
-                }
-            }
-            Err(error)
-        }
-    }
-}
-
 // An administrator may use a legacy token only to remove its seat;
 // it never grants features or authorizes refresh in a hybrid build.
 fn verify_token_for_removal(token: &SignedTokenEnvelope, public_key: &str) -> Result<LicenseClaims, String> {
@@ -1446,8 +1424,8 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
                 configured: true,
                 licensed: true,
                 valid: false,
-                reason: Some(if cfg!(feature = "experimental-pq-licence") && cached.token.hybrid.is_none() {
-                    "This older licence needs authenticated reactivation for the new security mode.".to_string()
+                reason: Some(if cfg!(feature = "experimental-pq-licence") {
+                    "This licence needs reactivation. Enter your licence key to restore access; your existing licence is kept until then.".to_string()
                 } else {
                     format!("Token verification failed (key mismatch): {}. Use Refresh to recover or re-activate.", e)
                 }),
@@ -1583,17 +1561,13 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
     let Some(cached) = load_cached_license()? else {
         return get_license_status_inner().await;
     };
-    let (claims, historical) = verify_token_for_refresh(&cached.token, &public_key_b64)?;
+    let claims = verify_token_claims(&cached.token, &public_key_b64)?;
     if !device_hash_matches(&claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
         );
     }
 
-    if historical {
-        if claims.plan == "trial" { return Err("Reactivate this trial with current licence security.".to_string()); }
-        return refresh_license().await;
-    }
     let status = status_from_cached(&cached, &claims, None);
     if claims.plan == "trial" {
         return serde_json::to_value(status).map_err(|e| e.to_string());
@@ -1612,7 +1586,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to refresh.".to_string())?;
-    let (cached_claims, historical) = verify_token_for_refresh(&cached.token, &public_key_b64)?;
+    let cached_claims = verify_token_claims(&cached.token, &public_key_b64)?;
     if !device_hash_matches(&cached_claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1626,7 +1600,6 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     // A trial is a fixed, worker-signed 16-day token. It does not consume a
     // paid licence seat and must never hit the paid refresh endpoint.
     if cached_claims.plan == "trial" {
-        if historical { return Err("Reactivate this trial with current licence security.".to_string()); }
         let status = status_from_cached(&cached, &cached_claims, None);
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
@@ -1918,23 +1891,6 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-    #[cfg(not(feature = "experimental-pq-licence"))]
-    #[test]
-    fn current_classical_licence_remains_eligible_for_refresh() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../commander-svc/src/fixtures/workers-hybrid-licence.json")).unwrap();
-        let mut token = SignedTokenEnvelope {
-            payload: fixture["payload"].as_str().unwrap().to_owned(),
-            signature: fixture["signature"].as_str().unwrap().to_owned(),
-            hybrid: None,
-        };
-        let public = fixture["publicClassical"].as_str().unwrap();
-        let (claims, historical) = verify_token_for_refresh(&token, public).unwrap();
-        assert_eq!(claims.device_hash, "device-test");
-        assert!(!historical);
-        token.payload.push('x');
-        assert!(verify_token_for_refresh(&token, public).is_err());
-    }
-
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
     fn hybrid_licence_worker_output_is_accepted_by_desktop() {
@@ -1953,6 +1909,22 @@ mod tests {
         assert!(verify_matching_hybrid(&token, &trust).is_ok());
         token.hybrid = None;
         assert!(verify_matching_hybrid(&token, &trust).is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_licence_retired_proof_cannot_authorize_refresh() {
+        let retired: serde_json::Value = serde_json::from_str(include_str!("../../commander-svc/src/fixtures/workers-hybrid-licence.json")).unwrap();
+        let token = SignedTokenEnvelope {
+            payload: retired["payload"].as_str().unwrap().to_owned(),
+            signature: retired["signature"].as_str().unwrap().to_owned(),
+            hybrid: Some(retired["hybrid"].as_str().unwrap().to_owned()),
+        };
+        let current: serde_json::Value = serde_json::from_str(include_str!("../../commander-svc/src/fixtures/hybrid-licence-test.json")).unwrap();
+        if option_env!("WINCMD_PQ_LIC_ED_KEY") == current["publicEd"].as_str()
+            && option_env!("WINCMD_PQ_LIC_MLDSA_KEY") == current["publicPq"].as_str() {
+            assert!(verify_token_claims(&token, retired["publicClassical"].as_str().unwrap()).is_err());
+        }
     }
 
     #[cfg(feature = "experimental-pq-licence")]
