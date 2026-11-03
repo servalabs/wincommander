@@ -154,6 +154,7 @@ once_cell = "1"
 url = "2"
 
 [dev-dependencies]
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }
 tauri = { version = "^2.12", features = ["test"] }
 # Cross-version test oracle for keys written by released versions only.
 argon2-legacy = { package = "argon2", version = "=0.5.3" }

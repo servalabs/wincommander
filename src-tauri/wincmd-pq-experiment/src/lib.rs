@@ -2,8 +2,8 @@
 //! Experimental, unintegrated hybrid verification. This is not a release format.
 //!
 //! Callers must obtain trusted public keys and the minimum epoch independently.
-//! This module does not implement issuance, persistent rollback protection,
-//! key rotation, expiry, or any existing licence, update, or recovery format.
+//! An opt-in signing rehearsal exists; no production issuer, persistent rollback
+//! protection, key rotation, expiry, or product format is implemented.
 
 pub mod jws;
 

@@ -188,6 +188,49 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_signing_rehearsal_produces_verifiable_pro_release() {
+        use super::*;
+        use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+        use ed25519_dalek::{Signer, SigningKey};
+        use wincmd_pq_experiment::{jws, Purpose, VerifyError};
+        let ed = SigningKey::from_bytes(&[42; 32]);
+        let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+        let trust = HybridProTrust {
+            ed_key: ed.verifying_key().to_bytes(),
+            pq_key: pq.public_key().as_ref().try_into().unwrap(),
+            ed_id: "ed-key".into(),
+            pq_id: "pq-key".into(),
+            minimum_epoch: 7,
+        };
+        let policy = jws::Trust {
+            purpose: Purpose::Release,
+            minimum_epoch: 7,
+            ed_key_id: &trust.ed_id,
+            ed25519_public: &trust.ed_key,
+            pq_key_id: &trust.pq_id,
+            ml_dsa_65_public: &trust.pq_key,
+        };
+        let url = "https://winupdates.servalabs.com/pro/v3.7.0/wincommander-pro.exe";
+        let hash = "a".repeat(64);
+        let payload = serde_json::to_vec(&serde_json::json!({"format":"wincommander-pro-release-v1", "version":"3.7.0", "url":url, "sha256":hash, "size":1234})).unwrap();
+        let envelope = jws::sign::assemble(
+            &payload,
+            7,
+            &policy,
+            |data| Ok(ed.sign(data).to_bytes().to_vec()),
+            |data| {
+                let mut signature = vec![0; 3309];
+                pq.sign(data, &mut signature)
+                    .map_err(|_| VerifyError::InvalidSignature)?;
+                Ok(signature)
+            },
+        )
+        .unwrap();
+        assert!(verify_hybrid_pro(&envelope, &trust, Some("3.7.0"), &hash, Some(url)).is_ok());
+        assert!(verify_hybrid_pro(&envelope, &trust, Some("3.7.1"), &hash, Some(url)).is_err());
+    }
+
+    #[test]
     fn hybrid_mode_does_not_accept_classical_only_metadata() {
         use super::*;
         let envelope = serde_json::from_str(include_str!(

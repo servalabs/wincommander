@@ -5,6 +5,9 @@
 //! both independently trusted signatures and rejects unsupported headers.
 //! Callers must enforce persistent rollback, key lifecycle and claim semantics.
 
+#[cfg(any(test, feature = "experimental-signer"))]
+pub mod sign;
+
 use aws_lc_rs::signature::{UnparsedPublicKey, ML_DSA_65};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey};
