@@ -92,6 +92,30 @@ mod tests {
         )
         .unwrap();
         assert!(verify_artifact(&signed_release, &bytes[..], "3.7.0", &trust).is_ok());
+        // Separate signing steps permit independently controlled key providers.
+        let messages =
+            crate::release::prepare_release(&payload, &bytes[..], "3.7.0", 7, &trust).unwrap();
+        let ed_signature = ed.sign(&messages.ed).to_bytes().to_vec();
+        let mut pq_signature = vec![0; 3309];
+        pq.sign(&messages.pq, &mut pq_signature).unwrap();
+        let finish = |artifact: &[u8], epoch| {
+            crate::release::sign_release(
+                &payload,
+                artifact,
+                "3.7.0",
+                epoch,
+                &trust,
+                |_| Ok(ed_signature.clone()),
+                |_| Ok(pq_signature.clone()),
+            )
+        };
+        let detached = finish(bytes, 7).unwrap();
+        assert!(verify_artifact(&detached, &bytes[..], "3.7.0", &trust).is_ok());
+        assert!(finish(b"changed", 7).is_err());
+        assert!(finish(bytes, 8).is_err());
+        assert!(
+            crate::release::prepare_release(&payload, &b"changed"[..], "3.7.0", 7, &trust).is_err()
+        );
 
         assert!(verify_artifact(&signed, &bytes[..], " V3.7.0.0 ", &trust).is_ok());
         // Even correctly signed records must satisfy the shared release policy.

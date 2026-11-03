@@ -114,6 +114,29 @@ pub(crate) fn check_artifact<R: std::io::Read>(
     Ok(())
 }
 
+/// Prepare public signing messages after validating the staged artifact.
+/// The artifact must remain immutable until signatures are assembled and published.
+#[cfg(feature = "experimental-signer")]
+pub fn prepare_release<R: std::io::Read>(
+    payload: &[u8],
+    artifact: R,
+    expected_version: &str,
+    epoch: u64,
+    trust: &jws::Trust<'_>,
+) -> Result<jws::sign::SigningInputs, &'static str> {
+    if payload.len() > crate::MAX_PAYLOAD_LEN
+        || epoch == 0
+        || epoch < trust.minimum_epoch
+        || trust.purpose != Purpose::Release
+        || trust.minimum_epoch == 0
+    {
+        return Err("invalid release policy");
+    }
+    let release = validate_payload(payload, expected_version)?;
+    check_artifact(&release, artifact)?;
+    jws::sign::signing_inputs(payload, epoch, trust).map_err(|_| "invalid signing parameters")
+}
+
 /// Experimental issuer boundary. Validate the exact artifact before invoking either signer.
 /// Caller must keep the artifact immutable through publication. Private-key custody,
 /// revocation, persistent rollback and publication are separate.

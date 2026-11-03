@@ -22,3 +22,8 @@ hex = { version = "0.4", optional = true }
 name = "wincmd-pq-release-check"
 path = "src/bin/release_check.rs"
 required-features = ["experimental-offline-verifier"]
+
+[[bin]]
+name = "wincmd-pq-release-prepare"
+path = "src/bin/release_prepare.rs"
+required-features = ["experimental-signer"]

@@ -5,20 +5,18 @@ use crate::{Purpose, VerifyError, MAX_PAYLOAD_LEN};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::json;
 
-/// Assemble and independently verify both signatures before returning any bytes.
-/// Signer callbacks are responsible for private-key custody and access control.
-/// This does not enforce claim semantics, persistent rollback, or key rotation.
-pub fn assemble<E, P>(
+/// Exact JWS signing messages for independently held signing keys.
+pub struct SigningInputs {
+    pub ed: Vec<u8>,
+    pub pq: Vec<u8>,
+}
+
+/// Prepare signing inputs without accessing or choosing private keys.
+pub fn signing_inputs(
     payload: &[u8],
     epoch: u64,
     trust: &Trust<'_>,
-    sign_ed: E,
-    sign_pq: P,
-) -> Result<Vec<u8>, VerifyError>
-where
-    E: FnOnce(&[u8]) -> Result<Vec<u8>, VerifyError>,
-    P: FnOnce(&[u8]) -> Result<Vec<u8>, VerifyError>,
-{
+) -> Result<SigningInputs, VerifyError> {
     if payload.len() > MAX_PAYLOAD_LEN
         || epoch == 0
         || epoch < trust.minimum_epoch
@@ -46,11 +44,36 @@ where
     let ed_header = header("Ed25519", trust.ed_key_id)?;
     let pq_header = header("ML-DSA-65", trust.pq_key_id)?;
     let encoded_payload = URL_SAFE_NO_PAD.encode(payload);
-    let ed_signature = sign_ed(format!("{ed_header}.{encoded_payload}").as_bytes())?;
+    Ok(SigningInputs {
+        ed: format!("{ed_header}.{encoded_payload}").into_bytes(),
+        pq: format!("{pq_header}.{encoded_payload}").into_bytes(),
+    })
+}
+
+/// Assemble and independently verify both signatures before returning any bytes.
+/// Signer callbacks are responsible for private-key custody and access control.
+/// This does not enforce claim semantics, persistent rollback, or key rotation.
+pub fn assemble<E, P>(
+    payload: &[u8],
+    epoch: u64,
+    trust: &Trust<'_>,
+    sign_ed: E,
+    sign_pq: P,
+) -> Result<Vec<u8>, VerifyError>
+where
+    E: FnOnce(&[u8]) -> Result<Vec<u8>, VerifyError>,
+    P: FnOnce(&[u8]) -> Result<Vec<u8>, VerifyError>,
+{
+    let inputs = signing_inputs(payload, epoch, trust)?;
+    let ed_input = std::str::from_utf8(&inputs.ed).map_err(|_| VerifyError::Malformed)?;
+    let pq_input = std::str::from_utf8(&inputs.pq).map_err(|_| VerifyError::Malformed)?;
+    let (ed_header, encoded_payload) = ed_input.split_once('.').ok_or(VerifyError::Malformed)?;
+    let (pq_header, _) = pq_input.split_once('.').ok_or(VerifyError::Malformed)?;
+    let ed_signature = sign_ed(&inputs.ed)?;
     if ed_signature.len() != 64 {
         return Err(VerifyError::InvalidSignature);
     }
-    let pq_signature = sign_pq(format!("{pq_header}.{encoded_payload}").as_bytes())?;
+    let pq_signature = sign_pq(&inputs.pq)?;
     if pq_signature.len() != 3309 {
         return Err(VerifyError::InvalidSignature);
     }

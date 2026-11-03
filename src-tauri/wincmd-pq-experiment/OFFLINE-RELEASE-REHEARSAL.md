@@ -32,3 +32,20 @@ which checks release metadata and the exact artifact before calling either
 signing callback. It does not provide a key store or publisher. Callers must
 keep the verified artifact immutable through publication; this helper alone
 does not establish a safe release process.
+
+A separate opt-in `wincmd-pq-release-prepare` command rehearses detached
+signing without loading private keys. Build with `--features experimental-signer
+--bin wincmd-pq-release-prepare`. Given the same independently trusted key file:
+
+```text
+wincmd-pq-release-prepare prepare payload.json pro.exe trusted-keys.json 3.7.0 7 ed.msg pq.msg
+wincmd-pq-release-prepare finish payload.json pro.exe trusted-keys.json 3.7.0 7 ed.sig pq.sig hybrid.json
+```
+
+The first step validates the file and emits the exact binary messages for the
+Ed25519 and ML-DSA-65 signing providers. Each provider must review the release
+and sign its respective bytes; the signatures are raw binary (64 and 3309
+bytes). The second step rechecks the file and both signatures, and refuses to
+overwrite existing outputs. These commands do not load or manage signing keys,
+publish files, prevent later file replacement, or establish a production
+signing ceremony. Keep the artifact immutable until publication.
