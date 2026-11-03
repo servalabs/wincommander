@@ -277,14 +277,8 @@ export default function FleetConnectView() {
     const epoch = unenrollEpochRef.current;
     let serviceStopped = false;
     try {
-      const result = await invoke<{ ok?: boolean; agentStopped?: boolean; sharedCleanupUnconfirmed?: boolean; serviceReachabilityStopped?: boolean; cleanupRetryable?: boolean }>("fleet_disconnect");
+      const result = await invoke<{ ok?: boolean; serviceReachabilityStopped?: boolean; cleanupRetryable?: boolean }>("fleet_disconnect");
       if (epoch !== unenrollEpochRef.current) return;
-      if (result?.sharedCleanupUnconfirmed === true && result.agentStopped === true) {
-        setCleanupRetry(true);
-        setUnenrollInfo(null);
-        setError("The Fleet agent stopped, but shared settings and service cleanup could not be confirmed because another Windows user may be connecting. Retry local cleanup.");
-        return;
-      }
       if (result?.ok !== true) throw new Error(UNENROLL_UNCONFIRMED);
       serviceStopped = result?.serviceReachabilityStopped === true;
       setCleanupRetry(result?.cleanupRetryable === true);
@@ -292,7 +286,9 @@ export default function FleetConnectView() {
       if (epoch !== unenrollEpochRef.current) return;
       setUnenrollInfo(null);
       setCleanupRetry(true);
-      setError(typeof reason === "string" && reason.startsWith("Fleet agent stopped,")
+      setError(typeof reason === "string" && (reason.startsWith("Fleet agent stopped,")
+        || reason.startsWith("Fleet connection coordination")
+        || reason.startsWith("A Fleet connection change"))
         ? reason : UNENROLL_UNCONFIRMED);
       return;
     }
@@ -477,7 +473,7 @@ export default function FleetConnectView() {
       </div>
 
       {cleanupRetry && <div className="fleet-connect-status">
-        <p className="fleet-connect-enrolling">Local Fleet cleanup is not fully confirmed. Another Windows user may be connecting. Retry while this app remains open, or contact your administrator.</p>
+        <p className="fleet-connect-enrolling">Local Fleet cleanup is not fully confirmed. Retry while this app remains open, or contact your administrator.</p>
         <Button variant="outline" size="sm" disabled={busy} onClick={async () => {
           setBusy(true);
           setError(null);

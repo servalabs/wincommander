@@ -34,6 +34,8 @@ use wincmd_shared::fleet::{
 
 #[path = "fleet_lifecycle_lease.rs"]
 pub(crate) mod lifecycle_lease;
+#[path = "fleet_lifecycle_mutex.rs"]
+mod lifecycle_mutex;
 #[path = "fleet_removal.rs"]
 mod removal;
 use removal::PendingRemoval;
@@ -368,6 +370,7 @@ async fn fleet_connect_inner_locked(
         .map_err(|_| "A Fleet connection change is already in progress".to_string())?;
     let server_url = normalize_fleet_server_url(&server_url)?;
     // A failed read cannot prove this device is unenrolled.
+    crate::settings::invalidate_cache();
     let current = crate::settings::read_settings()?;
     let plan = crate::settings::fleet_enrollment::ConnectionPlan::new(
         &current,
@@ -3737,9 +3740,6 @@ impl removal::RemovalBackend for RemovalBackend {
         crate::sidecar::dispatch_paid_command(
             "fleet_agent_disconnect", serde_json::json!({"sessionFence":fence}),
         ).await
-    }
-    fn shared_cleanup_allowed(&self) -> bool {
-        lifecycle_lease::shared_lease_held()
     }
     fn disable(&self, binding: &Value) -> Result<(), String> {
         crate::settings::invalidate_cache();

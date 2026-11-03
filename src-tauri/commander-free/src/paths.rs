@@ -431,7 +431,7 @@ fn acquire_machine_state_lock_with_timeout(resource: &str, timeout_ms: u32) -> R
     }
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED};
+        use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 
         const WAIT_OBJECT_0: u32 = 0;
@@ -442,9 +442,6 @@ fn acquire_machine_state_lock_with_timeout(resource: &str, timeout_ms: u32) -> R
             .collect();
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
         if handle.is_null() {
-            if unsafe { GetLastError() } == ERROR_ACCESS_DENIED {
-                return Err("machine-state lock access denied".to_string());
-            }
             return Err("machine-state lock is unavailable".to_string());
         }
         match unsafe { WaitForSingleObject(handle, timeout_ms) } {

@@ -33,7 +33,7 @@ test("unenroll requires an explicit approved response and a successful final rec
         if(pollResult==='pending') return {approved:false,status:'pending',approvals:0,required_approvals:2};
         return {approved:true,status:'approved',approvals:0,required_approvals:0};
       }
-      if(command==='fleet_disconnect') { disconnectCalls++; if(disconnectFails) throw new Error('HTTP 401'); if(sharedFallback) return {ok:false,agentStopped:true,sharedCleanupUnconfirmed:true,cleanupRetryable:true}; return {ok:!disconnectMalformed,serviceReachabilityStopped:!partial,cleanupRetryable:partial}; }
+      if(command==='fleet_disconnect') { disconnectCalls++; if(disconnectFails) throw new Error('HTTP 401'); if(sharedFallback) throw 'Fleet connection coordination is unavailable or unsafe. Close older WinCommander sessions and retry.'; return {ok:!disconnectMalformed,serviceReachabilityStopped:!partial,cleanupRetryable:partial}; }
       throw new Error('unexpected command: '+command);
     }}));
     mock.module('@/hooks/useSettings',()=>({getSettingsOnce:async()=>({deviceId:'device-123',app:{fleet:{enabled:true}}})}));
@@ -91,7 +91,7 @@ test("unenroll requires an explicit approved response and a successful final rec
     assert.match(host.textContent,/Could not verify Fleet removal status/);
     disconnectMalformed=false; sharedFallback=true; await request(); await poll();
     assert.equal(disconnectCalls,3);
-    assert.match(host.textContent,/shared settings and service cleanup could not be confirmed/);
+    assert.match(host.textContent,/Fleet connection coordination is unavailable or unsafe/);
     assert.doesNotMatch(host.textContent,/device was removed from Fleet/);
     sharedFallback=false;
     const retryFallback=[...host.querySelectorAll('button')].find(button=>button.textContent==='Retry local cleanup');

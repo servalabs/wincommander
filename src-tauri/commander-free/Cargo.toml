@@ -228,6 +228,7 @@ windows-sys = { version = "0.61", features = [
   # config it protects can't be read from a raw disk image. (LocalFree, used to
   # free the DPAPI output blob, lives in the already-enabled Win32_Foundation.)
   "Win32_Security_Cryptography",
+  "Win32_Security_Authorization",
   # storage_probe.rs — READ-ONLY drive capability detection. DeviceIoControl
   # (Win32_System_IO); IOCTL_STORAGE_QUERY_PROPERTY + STORAGE_DEVICE_DESCRIPTOR
   # + STORAGE_PROTOCOL_*_DATA (Win32_System_Ioctl); ATA_PASS_THROUGH_EX +

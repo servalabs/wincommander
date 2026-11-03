@@ -125,16 +125,18 @@ async fn a_launch_inside_the_lifecycle_lease_is_reentrant() {
     assert!(!held.load(Ordering::SeqCst));
 }
 
-#[test]
-fn inaccessible_cross_user_mutex_falls_back_without_masking_other_failures() {
-    assert!(
-        optional_machine_lock::<()>(Err("machine-state lock access denied".into()))
-            .unwrap()
-            .is_none()
-    );
-    assert!(optional_machine_lock::<()>(Err(
-        "machine-state operation is busy; retry shortly".into()
-    ))
-    .is_err());
-    assert!(optional_machine_lock(Ok(())).unwrap().is_some());
+#[tokio::test]
+async fn inaccessible_machine_mutex_never_runs_the_operation() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let operation_ran = ran.clone();
+    let result = run_with(
+        || Err::<(), _>("Fleet connection coordination is unavailable or unsafe".into()),
+        async move {
+            operation_ran.store(true, Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(!ran.load(Ordering::SeqCst));
 }

@@ -223,6 +223,21 @@ jobs:
         run: bun run encrypt-backend
         working-directory: .
       - run: cargo test --workspace --no-fail-fast
+      - name: Test elevated-to-standard Fleet mutex access when available
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Host '::notice::Elevated Fleet mutex acceptance was not run: this runner is not elevated.'
+            exit 0
+          }
+          $test = 'fleet_agent::lifecycle_mutex::tests::security_tests::elevated_first_and_restricted_medium_second_share_the_same_mutex'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Fleet mutex acceptance test did not run.' }
       - name: Test experimental offline hybrid release verification
         run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
       - name: Test experimental service licence validation

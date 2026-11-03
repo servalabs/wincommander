@@ -9,7 +9,7 @@ struct State {
     fail_stop: bool,
     clear: bool,
     reject: bool,
-    fallback: bool,
+    stops: usize,
     disables: usize,
     clears: usize,
     saved: Option<PendingRemoval>,
@@ -17,14 +17,12 @@ struct State {
 struct Backend(Mutex<State>);
 impl RemovalBackend for Backend {
     async fn stop(&self, fence: &str) -> Result<Value, String> {
-        let state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap();
+        state.stops += 1;
         if state.fail_stop || fence != state.fence {
             return Err("stop unconfirmed or stale".into());
         }
         Ok(json!({"ok":true,"agentStopped":true,"sessionFence":fence}))
-    }
-    fn shared_cleanup_allowed(&self) -> bool {
-        !self.0.lock().unwrap().fallback
     }
     fn disable(&self, _: &Value) -> Result<(), String> {
         self.0.lock().unwrap().disables += 1;
@@ -109,30 +107,18 @@ async fn stale_service_token_is_not_retried_or_refreshed() {
 }
 
 #[tokio::test]
-async fn inaccessible_machine_mutex_does_not_turn_unavailable_service_into_success() {
-    let result = super::super::lifecycle_lease::run_with_scope(
-        || {
-            let guard = super::super::lifecycle_lease::optional_machine_lock::<()>(Err(
-                "machine-state lock access denied".into(),
-            ))?;
-            Ok((guard, false))
-        },
-        async {
-            let backend = Backend(Mutex::new(State {
-                fence: "one".into(),
-                fallback: !super::super::lifecycle_lease::shared_lease_held(),
-                ..State::default()
-            }));
-            let result = finish(&backend, pending(Some("old-token"))).await?;
-            assert_eq!(backend.0.lock().unwrap().disables, 0);
-            assert_eq!(backend.0.lock().unwrap().clears, 0);
-            Ok(result)
-        },
+async fn unsafe_coordination_object_prevents_all_removal_effects() {
+    let backend = std::sync::Arc::new(Backend(Mutex::new(State {
+        fence: "one".into(),
+        ..State::default()
+    })));
+    let task_backend = backend.clone();
+    let result = super::super::lifecycle_lease::run_with(
+        || Err::<(), _>("Fleet connection coordination is unavailable or unsafe".into()),
+        async move { finish(&*task_backend, pending(Some("old-token"))).await },
     )
-    .await
-    .unwrap();
-    assert_eq!(result["ok"], false);
-    assert_eq!(result["agentStopped"], true);
-    assert_eq!(result["cleanupRetryable"], true);
-    assert_eq!(result["serviceReachabilityStopped"], false);
+    .await;
+    assert!(result.is_err());
+    let state = backend.0.lock().unwrap();
+    assert_eq!((state.stops, state.disables, state.clears), (0, 0, 0));
 }

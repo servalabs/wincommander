@@ -13,7 +13,6 @@ pub(super) struct PendingRemoval {
 
 pub(super) trait RemovalBackend {
     async fn stop(&self, fence: &str) -> Result<Value, String>;
-    fn shared_cleanup_allowed(&self) -> bool;
     fn disable(&self, binding: &Value) -> Result<(), String>;
     fn save(&self, pending: Option<PendingRemoval>) -> Result<(), String>;
     async fn clear(&self, token: &str, connection_token: &str) -> ClearResult;
@@ -35,10 +34,6 @@ pub(super) async fn finish<B: RemovalBackend>(
         || stopped.get("sessionFence").and_then(Value::as_str) != Some(pending.fence.as_str())
     {
         return Err("Could not confirm the original Fleet agent stopped; retry removal.".into());
-    }
-    if !backend.shared_cleanup_allowed() {
-        return Ok(serde_json::json!({"ok":false,"agentStopped":true,
-            "serviceReachabilityStopped":false,"cleanupRetryable":true,"sharedCleanupUnconfirmed":true}));
     }
     if !pending.settings_disabled {
         backend.disable(&pending.settings_binding)?;
