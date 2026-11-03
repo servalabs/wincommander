@@ -91,7 +91,7 @@ base64 = "0.22"
 minisign-verify = "0.3.0"
 # Per-install key derivation for the app-data store (datastore.rs).
 # argon2id params: 64 MiB / 2 iterations / 1 lane — interactive tuning.
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = "0.6"
 dotenvy = "0.15"
 # In-memory passphrase zeroization on lock — profile session lifecycle (P1).
 zeroize = { version = "1", features = ["alloc"] }
@@ -149,6 +149,8 @@ url = "2"
 
 [dev-dependencies]
 tauri = { version = "^2.12", features = ["test"] }
+# Cross-version test oracle for keys written by released versions only.
+argon2-legacy = { package = "argon2", version = "=0.5.3" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 

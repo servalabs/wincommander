@@ -477,6 +477,25 @@ fn derive_section_key(
     Ok(out)
 }
 
+#[cfg(test)]
+#[test]
+fn section_key_matches_pre_upgrade_argon2_for_existing_stores() {
+    let material = [0x42; 32];
+    let params = argon2_legacy::Params::new(65_536, 2, 1, Some(32)).unwrap();
+    let legacy = argon2_legacy::Argon2::new(
+        argon2_legacy::Algorithm::Argon2id,
+        argon2_legacy::Version::V0x13,
+        params,
+    );
+    for password in [None, Some("existing-user-passphrase")] {
+        let mut expected = [0; 32];
+        legacy
+            .hash_password_into(password.unwrap_or("").as_bytes(), &material, &mut expected)
+            .unwrap();
+        assert_eq!(derive_section_key(&material, password).unwrap(), expected);
+    }
+}
+
 fn section_aad(scope: &str) -> String {
     format!("{AAD_PREFIX}{scope}")
 }
