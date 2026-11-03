@@ -1893,6 +1893,26 @@ mod tests {
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
+    fn hybrid_licence_worker_output_is_accepted_by_desktop() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../commander-svc/src/fixtures/workers-hybrid-licence.json")).unwrap();
+        let ed: [u8; 32] = URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+        let mut token = SignedTokenEnvelope {
+            payload: fixture["payload"].as_str().unwrap().to_owned(),
+            signature: fixture["signature"].as_str().unwrap().to_owned(),
+            hybrid: Some(fixture["hybrid"].as_str().unwrap().to_owned()),
+        };
+        let claims = parse_and_verify_claims(&token.payload, &token.signature, fixture["publicClassical"].as_str().unwrap()).unwrap();
+        assert_eq!(claims.device_hash, "device-test");
+        assert!(verify_matching_hybrid(&token, &trust).is_ok());
+        token.hybrid = None;
+        assert!(verify_matching_hybrid(&token, &trust).is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
     fn hybrid_licence_cache_requires_matching_proof_and_allows_legacy_removal_only() {
         use ed25519_dalek::{Signer, SigningKey};
         use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};

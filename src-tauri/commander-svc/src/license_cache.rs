@@ -262,6 +262,29 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn worker_issued_hybrid_licence_is_accepted_by_service() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/workers-hybrid-licence.json")).unwrap();
+        let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+        let mut request = StoreLicenseCacheRequest {
+            payload: fixture["payload"].as_str().unwrap().to_owned(),
+            signature: fixture["signature"].as_str().unwrap().to_owned(),
+            hybrid: Some(fixture["hybrid"].as_str().unwrap().to_owned()),
+            seats_used: None, seat_limit: None,
+        };
+        let public = fixture["publicClassical"].as_str().unwrap();
+        assert!(validate_dual_request(&request, public, &trust).is_ok());
+        request.hybrid = None;
+        assert!(validate_dual_request(&request, public, &trust).is_err());
+        request.hybrid = Some(fixture["hybrid"].as_str().unwrap().to_owned());
+        request.payload.push(' ');
+        assert!(validate_dual_request(&request, public, &trust).is_err());
+    }
+
     fn signed_request() -> (StoreLicenseCacheRequest, String) {
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
         let payload = serde_json::json!({
