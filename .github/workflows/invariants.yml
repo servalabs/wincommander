@@ -227,6 +227,16 @@ jobs:
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation
         run: cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence_claims_require_both_signatures_and_local_policy
+      - name: Test experimental hybrid Pro release validation
+        shell: pwsh
+        run: |
+          $fixture = Get-Content commander-free/tests/fixtures/hybrid-pro-disposable.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_PRO_ED_KEY = $fixture.publicEd
+          $env:WINCMD_PQ_PRO_MLDSA_KEY = $fixture.publicPq
+          $env:WINCMD_PQ_PRO_ED_ID = "ed-key"
+          $env:WINCMD_PQ_PRO_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_PRO_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-pro-release hybrid_
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
   # its TypeScript check + dependency audit run in THAT repo's CI, not here. A

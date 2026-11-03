@@ -930,6 +930,7 @@ dependencies = [
  "aes-gcm",
  "argon2 0.5.3",
  "argon2 0.6.0",
+ "aws-lc-rs",
  "base64 0.22.1",
  "blake3",
  "chrono",

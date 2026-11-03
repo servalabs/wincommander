@@ -34,6 +34,8 @@ test = false
 portable = []
 # Isolated validation only; this does not enable licence issuance or caching.
 experimental-pq-licence = ["dep:wincmd-pq-experiment"]
+# Opt-in integration rehearsal only; requires separately provisioned trust keys.
+experimental-pq-pro-release = ["dep:wincmd-pq-experiment"]
 # Closed lab controls for debug artifacts only. This intentionally adds no
 # generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
@@ -157,6 +159,7 @@ tauri = { version = "^2.12", features = ["test"] }
 argon2-legacy = { package = "argon2", version = "=0.5.3" }
 rand10 = { package = "rand", version = "0.10" }
 rcgen = "0.14"
+aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 

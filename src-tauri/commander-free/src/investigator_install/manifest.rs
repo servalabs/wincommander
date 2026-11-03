@@ -116,7 +116,7 @@ fn verify_signed_pro_with_key(
     Ok(release)
 }
 
-fn validate_signed_pro(release: &SignedProRelease) -> Result<(), String> {
+pub(crate) fn validate_signed_pro(release: &SignedProRelease) -> Result<(), String> {
     let canonical = canonical_version(&release.version)?;
     let expected_url = format!(
         "https://{}/pro/v{canonical}/wincommander-pro.exe",
@@ -218,7 +218,7 @@ fn versioned_manifest_url(version: &str) -> Result<String, String> {
     ))
 }
 
-fn canonical_version(version: &str) -> Result<String, String> {
+pub(crate) fn canonical_version(version: &str) -> Result<String, String> {
     let parts: Vec<_> = version.split('.').collect();
     if !(parts.len() == 3 || parts.len() == 4)
         || parts

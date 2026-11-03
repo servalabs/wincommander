@@ -257,7 +257,7 @@ fn debug_pro_hash_bypass_message(actual: &str) -> String {
 
 fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     // Debug builds skip hash pinning entirely — .pro_hash may be stale during local dev.
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) && !cfg!(feature = "experimental-pq-pro-release") {
         crate::log_message("info", &debug_pro_hash_bypass_message(actual));
         return Ok(());
     }
@@ -269,7 +269,7 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     }
 
     // Path A: compile-time pinned hash (primary gate — set by tools/hash-pro.ts at build time).
-    if pro_hash_is_accepted(actual) {
+    if !cfg!(feature = "experimental-pq-pro-release") && pro_hash_is_accepted(actual) {
         return Ok(());
     }
 
@@ -2167,6 +2167,11 @@ async fn close_pro_session_inner() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "experimental-pq-pro-release")]
+    #[test]
+    fn hybrid_mode_does_not_apply_debug_hash_bypass() {
+        assert!(super::verify_pro_binary_hash("").is_err());
+    }
     use super::*;
 
     #[cfg(windows)]

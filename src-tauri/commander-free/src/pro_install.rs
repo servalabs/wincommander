@@ -268,6 +268,14 @@ struct ProInstallMetadata {
     sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hybrid_manifest: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct ProReleaseProof {
+    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+    hybrid_manifest: Option<String>,
 }
 
 /// Hash the resolved Pro EXE on disk so the frontend can compare against
@@ -414,6 +422,16 @@ fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
     if !metadata.sha256.eq_ignore_ascii_case(hash) {
         return false;
     }
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        return metadata.hybrid_manifest.as_deref().is_some_and(|envelope| {
+            hybrid_pro_trust().and_then(|trust| {
+                verify_hybrid_pro(envelope.as_bytes(), &trust, metadata.version.as_deref(), hash, None)
+            }).is_ok()
+        });
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    {
     let Some(envelope) = &metadata.signed_manifest else {
         return false;
     };
@@ -422,6 +440,7 @@ fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
     }
     crate::investigator_install::manifest::verify_manifest(envelope)
         .is_ok_and(|manifest| signed_pro_matches(&manifest, metadata.version.as_deref(), hash))
+    }
 }
 
 /// Replace the shared version/hash record without leaving a partially-written
@@ -478,13 +497,14 @@ fn atomic_replace_shared_file(path: &std::path::Path, bytes: &[u8]) -> Result<()
 fn write_pro_install_metadata(
     version: Option<String>,
     sha256: &str,
-    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+    proof: ProReleaseProof,
 ) -> Result<(), String> {
     let path = pro_install_metadata_path()?;
     let metadata = ProInstallMetadata {
         version,
         sha256: sha256.to_ascii_lowercase(),
-        signed_manifest,
+        signed_manifest: proof.signed_manifest,
+        hybrid_manifest: proof.hybrid_manifest,
     };
     let bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| format!("disk:metadata encode: {}", e))?;
@@ -673,6 +693,10 @@ pub async fn get_pro_install_status() -> Result<serde_json::Value, String> {
     let local_sha256 = managed_install
         .and_then(|p| compute_pro_sha256_at(p))
         .or_else(compute_local_pro_sha256);
+    // In the opt-in hybrid rehearsal, an old file without a hybrid proof
+    // must not look current to the install/recovery UI.
+    #[cfg(feature = "experimental-pq-pro-release")]
+    let local_sha256 = local_sha256.filter(|hash| install_metadata_has_hash(hash));
     let metadata = read_pro_install_metadata(local_sha256.as_deref());
     let local_version = metadata
         .and_then(|m| m.version)
@@ -965,11 +989,81 @@ fn verify_pro_manifest_request(
     Ok(())
 }
 
+#[cfg(feature = "experimental-pq-pro-release")]
+struct HybridProTrust {
+    ed_key: [u8; 32],
+    pq_key: [u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN],
+    ed_id: String,
+    pq_id: String,
+    minimum_epoch: u64,
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn hybrid_pro_trust() -> Result<HybridProTrust, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let decode = |value: Option<&str>| -> Result<Vec<u8>, String> {
+        URL_SAFE_NO_PAD.decode(value.ok_or("Hybrid Pro release trust is not configured")?)
+            .map_err(|_| "Hybrid Pro release key is invalid".to_string())
+    };
+    let ed_key = decode(option_env!("WINCMD_PQ_PRO_ED_KEY"))?.try_into()
+        .map_err(|_| "Hybrid Pro release key length is invalid")?;
+    let pq_key = decode(option_env!("WINCMD_PQ_PRO_MLDSA_KEY"))?.try_into()
+        .map_err(|_| "Hybrid Pro release key length is invalid")?;
+    let ed_id = option_env!("WINCMD_PQ_PRO_ED_ID").filter(|value| !value.is_empty())
+        .ok_or("Hybrid Pro release trust is not configured")?.to_string();
+    let pq_id = option_env!("WINCMD_PQ_PRO_MLDSA_ID").filter(|value| !value.is_empty())
+        .ok_or("Hybrid Pro release trust is not configured")?.to_string();
+    let minimum_epoch = option_env!("WINCMD_PQ_PRO_EPOCH").and_then(|value| value.parse().ok())
+        .filter(|epoch: &u64| *epoch > 0).ok_or("Hybrid Pro release epoch is invalid")?;
+    Ok(HybridProTrust { ed_key, pq_key, ed_id, pq_id, minimum_epoch })
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn verify_hybrid_pro(
+    envelope: &[u8], trust: &HybridProTrust, version: Option<&str>, sha256: &str,
+    expected_url: Option<&str>,
+) -> Result<(), String> {
+    use wincmd_pq_experiment::{jws, Purpose};
+    let policy = jws::Trust {
+        purpose: Purpose::Release, minimum_epoch: trust.minimum_epoch,
+        ed_key_id: &trust.ed_id, ed25519_public: &trust.ed_key,
+        pq_key_id: &trust.pq_id, ml_dsa_65_public: &trust.pq_key,
+    };
+    let verified = jws::verify(envelope, &policy).map_err(|_| "Hybrid Pro release signature is invalid")?;
+    let release: crate::investigator_install::manifest::SignedProRelease =
+        serde_json::from_slice(&verified.payload).map_err(|_| "Hybrid Pro release payload is invalid")?;
+    crate::investigator_install::manifest::validate_signed_pro(&release)?;
+    if !signed_pro_release_matches(&release, version, sha256)
+        || expected_url.is_some_and(|url| release.url != url) {
+        return Err("Hybrid Pro release does not match the requested artifact".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+async fn fetch_hybrid_pro(version: &str) -> Result<String, String> {
+    let version = crate::investigator_install::manifest::canonical_version(version)?;
+    let url = format!("https://{ALLOWED_UPDATE_HOST}/pro/v{version}/hybrid.json");
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))?;
+    let mut response = client.get(url).send().await.map_err(|e| format!("network:{e}"))?;
+    if !response.status().is_success() { return Err(format!("network:hybrid release returned HTTP {}", response.status())); }
+    const LIMIT: usize = 32 * 1024;
+    if response.content_length().is_some_and(|length| length > LIMIT as u64) {
+        return Err("Hybrid Pro release exceeds size limit".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("network:{e}"))? {
+        if chunk.len() > LIMIT.saturating_sub(body.len()) { return Err("Hybrid Pro release exceeds size limit".into()); }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| "Hybrid Pro release is not UTF-8".into())
+}
+
 async fn verify_published_pro_request(
     download_url: &str,
     expected_sha256: &str,
     pro_version: Option<&str>,
-) -> Result<Option<crate::investigator_install::manifest::SignedManifestEnvelope>, String> {
+) -> Result<ProReleaseProof, String> {
     let channel = crate::updater::selected_update_channel()?;
     let pinned_url = format!(
         "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
@@ -986,8 +1080,18 @@ async fn verify_published_pro_request(
         Err(error) => return Err(error),
     };
     verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        let trust = hybrid_pro_trust()?;
+        let version = pro_version.ok_or("validation:Pro release version is missing")?;
+        let envelope = fetch_hybrid_pro(version).await?;
+        verify_hybrid_pro(envelope.as_bytes(), &trust, pro_version, expected_sha256, Some(download_url))?;
+        return Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope) });
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    {
     if crate::sidecar::pro_hash_is_accepted(expected_sha256) {
-        return Ok(None);
+        return Ok(ProReleaseProof::default());
     }
     let version = pro_version.ok_or("validation:Pro release version is missing")?;
     if let Some(envelope) = crate::investigator_install::manifest::fetch_signed_pro(version)
@@ -1000,7 +1104,7 @@ async fn verify_published_pro_request(
         {
             return Err("validation:Pro release does not match its signed record.".into());
         }
-        return Ok(Some(envelope));
+        return Ok(ProReleaseProof { signed_manifest: Some(envelope), hybrid_manifest: None });
     }
     let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest_for_pro(version)
         .await
@@ -1008,7 +1112,8 @@ async fn verify_published_pro_request(
     if !signed_pro_matches(&signed, pro_version, expected_sha256) {
         return Err("validation:Pro release does not match the independently signed manifest. Update Free or retry after the release is published.".to_string());
     }
-    Ok(Some(envelope))
+    Ok(ProReleaseProof { signed_manifest: Some(envelope), hybrid_manifest: None })
+    }
 }
 
 fn signed_pro_release_matches(
@@ -1595,6 +1700,102 @@ async fn install_pro_binary_machine(
 
 #[cfg(test)]
 mod machine_update_tests {
+    #[cfg(feature = "experimental-pq-pro-release")]
+    #[test]
+    fn hybrid_pro_requires_both_signatures_and_binds_release() {
+        use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        use ed25519_dalek::{Signer, SigningKey};
+        use super::*;
+
+        let ed = SigningKey::from_bytes(&[42; 32]);
+        let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+        let trust = HybridProTrust {
+            ed_key: ed.verifying_key().to_bytes(),
+            pq_key: pq.public_key().as_ref().try_into().unwrap(),
+            ed_id: "ed-key".into(), pq_id: "pq-key".into(), minimum_epoch: 7,
+        };
+        let url = "https://winupdates.servalabs.com/pro/v3.7.0/wincommander-pro.exe";
+        let hash = "a".repeat(64);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({
+            "format":"wincommander-pro-release-v1", "version":"3.7.0",
+            "url":url, "sha256":hash, "size":1234
+        })).unwrap());
+        let header = |alg: &str, kid: &str| URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({
+            "alg":alg, "kid":kid, "typ":"application/wincmd-experimental+jws",
+            "crit":["profile","purpose","epoch"], "profile":"experimental-ed25519-mldsa65-v1",
+            "purpose":"release", "epoch":7
+        })).unwrap());
+        let ed_header = header("Ed25519", "ed-key");
+        let pq_header = header("ML-DSA-65", "pq-key");
+        let ed_signature = ed.sign(format!("{ed_header}.{payload}").as_bytes());
+        let mut pq_signature = vec![0; 3309];
+        pq.sign(format!("{pq_header}.{payload}").as_bytes(), &mut pq_signature).unwrap();
+        let envelope = serde_json::json!({"payload":payload, "signatures":[
+            {"protected":ed_header,"signature":URL_SAFE_NO_PAD.encode(ed_signature.to_bytes())},
+            {"protected":pq_header,"signature":URL_SAFE_NO_PAD.encode(pq_signature)}
+        ]});
+        let verify = |value: &serde_json::Value, policy: &HybridProTrust, version, digest: &str, target| {
+            verify_hybrid_pro(&serde_json::to_vec(value).unwrap(), policy, version, digest, target)
+        };
+        assert!(verify(&envelope, &trust, Some("3.7.0"), &hash, Some(url)).is_ok());
+        for index in 0..2 {
+            let mut changed = envelope.clone();
+            changed["signatures"][index]["signature"] = serde_json::json!("invalid");
+            assert!(verify(&changed, &trust, Some("3.7.0"), &hash, Some(url)).is_err());
+        }
+        let mut missing = envelope.clone();
+        missing["signatures"].as_array_mut().unwrap().pop();
+        assert!(verify(&missing, &trust, Some("3.7.0"), &hash, Some(url)).is_err());
+        assert!(verify(&envelope, &trust, Some("3.7.1"), &hash, Some(url)).is_err());
+        assert!(verify(&envelope, &trust, Some("3.7.0"), &"b".repeat(64), Some(url)).is_err());
+        assert!(verify(&envelope, &trust, Some("3.7.0"), &hash, Some("https://evil.example/")).is_err());
+        let stale = HybridProTrust { minimum_epoch: 8, ..trust };
+        assert!(verify(&envelope, &stale, Some("3.7.0"), &hash, Some(url)).is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-pro-release")]
+    #[test]
+    fn hybrid_mode_does_not_accept_classical_only_metadata() {
+        use super::*;
+        let envelope = serde_json::from_str(include_str!(
+            "../tests/fixtures/pro-signed-release-3.6.7.json"
+        )).unwrap();
+        let hash = "1681e4a9005ef22b4bf011510ac7a7d1cc6a3f8f16ae57cb31dbb1153279c45e";
+        let metadata = ProInstallMetadata {
+            version: Some("3.6.7".into()), sha256: hash.into(),
+            signed_manifest: Some(envelope), hybrid_manifest: None,
+        };
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+    }
+
+    #[cfg(feature = "experimental-pq-pro-release")]
+    #[test]
+    fn hybrid_fixture_is_rechecked_from_persisted_metadata() {
+        use super::*;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/hybrid-pro-disposable.json"
+        )).unwrap();
+        let hash = "a".repeat(64);
+        let mut metadata = ProInstallMetadata {
+            version: Some("3.7.0".into()), sha256: hash.clone(), signed_manifest: None,
+            hybrid_manifest: Some(serde_json::to_string(&fixture["jws"]).unwrap()),
+        };
+        // CI sets these explicitly from the disposable fixture. A feature build
+        // without provisioned trust must fail closed rather than accept legacy.
+        if option_env!("WINCMD_PQ_PRO_ED_KEY").is_none() {
+            assert!(hybrid_pro_trust().is_err());
+            assert!(!metadata_has_signed_hash(&metadata, &hash));
+            return;
+        }
+        assert_eq!(option_env!("WINCMD_PQ_PRO_ED_KEY"), fixture["publicEd"].as_str());
+        assert_eq!(option_env!("WINCMD_PQ_PRO_MLDSA_KEY"), fixture["publicPq"].as_str());
+        let restored: ProInstallMetadata = serde_json::from_slice(&serde_json::to_vec(&metadata).unwrap()).unwrap();
+        assert!(metadata_has_signed_hash(&restored, &hash));
+        metadata.hybrid_manifest.as_mut().unwrap().push('x');
+        assert!(!metadata_has_signed_hash(&metadata, &hash));
+    }
+
     #[tokio::test]
     #[ignore = "requires network access to the live update service"]
     async fn live_signed_manifest_binds_published_pro() {
@@ -1643,6 +1844,7 @@ mod machine_update_tests {
         ));
     }
 
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
     #[test]
     fn signed_pro_metadata_rejects_legacy_and_tampered_claims() {
         use super::*;
@@ -1656,6 +1858,7 @@ mod machine_update_tests {
             version: Some("3.6.7".into()),
             sha256: hash.into(),
             signed_manifest: Some(envelope.clone()),
+            hybrid_manifest: None,
         };
         assert!(metadata_has_signed_hash(&metadata, hash));
         let encoded = serde_json::to_vec(&metadata).unwrap();
