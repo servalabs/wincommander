@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 const directory = mkdtempSync(join(tmpdir(), "wincommander-beta-pair-"));
 const binaryPath = join(directory, "wincommander-pro.exe");
@@ -60,14 +61,23 @@ function verify() {
   });
 }
 
+function normalizeError(stderr: string) {
+  return stripVTControlCharacters(stderr).replace(/\r?\n\s*\|\s*/g, " ").replace(/\s+/g, " ");
+}
+
 function expectRejected(result: ReturnType<typeof verify>) {
   expect(result.signalCode).toBeUndefined();
   expect(result.exitCode).toBe(1);
-  const error = result.stderr.toString().replace(/\r?\n\s*\|\s*/g, " ").replace(/\s+/g, " ");
+  const error = normalizeError(result.stderr.toString());
   expect(error).toContain("Pro release receipt, manifest, and binary do not match the selected Free beta commit.");
 }
 
 describe("Free beta requires the exact paired Pro release", () => {
+  test("normalizes colored and wrapped PowerShell diagnostics", () => {
+    const error = "\u001b[31;1mPro release receipt, manifest, and binary do not match the selected Free\u001b[0m\n\u001b[36;1m | \u001b[31;1mbeta commit.\u001b[0m";
+    expect(normalizeError(error)).toBe("Pro release receipt, manifest, and binary do not match the selected Free beta commit.");
+  });
+
   test("accepts the matching commit, manifest, binary, and receipt", () => {
     writeFixture();
     const result = verify();
