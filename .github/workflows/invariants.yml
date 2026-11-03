@@ -166,6 +166,17 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run gen:types:check
+      - name: Verify Fleet v2 JavaScript wire vectors
+        run: node --test src-tauri/fleet-proto/tests/fixtures/windows_v2.test.mjs
+      - name: Verify isolated Fleet JSON feature combinations
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
+        run: |
+          manifest=src-tauri/fleet-proto/tests/feature-matrix/Cargo.toml
+          cargo test --locked --manifest-path "$manifest"
+          cargo test --locked --manifest-path "$manifest" --features precise
+          cargo test --locked --manifest-path "$manifest" --features raw
+          cargo test --locked --manifest-path "$manifest" --features precise,raw
       - run: git diff --check && git diff --exit-code
 
   cargo-check:

@@ -1,0 +1,78 @@
+{
+  "description": "Public test seeds: device 7, authority 11, operator 13, each repeated 32 bytes. Independently generated with Python cryptography Ed25519 and hashlib SHA256.",
+  "device_key": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "command": {
+    "version": 2,
+    "binding": {
+      "org_id": "org-alpha",
+      "device_id": "Desk/Łaptop?1",
+      "enrollment_generation": "11111111-1111-4111-8111-111111111111",
+      "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+    },
+    "command_id": "delivery-1",
+    "idempotency_key": "request-1",
+    "catalog_id": "fixture.inspect",
+    "action_class": "safe",
+    "payload": "{\"z\":false,\"a\":[\"é\",null,7],\"big\":12345678901234567890123456789012345678901234567890,\"exponent\":1e400,\"escape\":\"line\\nslash\\\\🔒\"}",
+    "epoch_version": "4",
+    "signature": "etCCdyVuglvsiUI3U/Kboe4HeAfnsWlJaQcJISgqWX1+b36f2sI1UhpQucipmldRYnzsGClz7/yMTderDiRWDQ==",
+    "signer_key": "kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo="
+  },
+  "command_preimage": "[\"fleet.windows.command.v2\",{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"request-1\",\"fixture.inspect\",\"safe\",\"{\\\"z\\\":false,\\\"a\\\":[\\\"é\\\",null,7],\\\"big\\\":12345678901234567890123456789012345678901234567890,\\\"exponent\\\":1e400,\\\"escape\\\":\\\"line\\\\nslash\\\\\\\\🔒\\\"}\",\"4\"]",
+  "outcome": {
+    "version": 2,
+    "binding": {
+      "org_id": "org-alpha",
+      "device_id": "Desk/Łaptop?1",
+      "enrollment_generation": "11111111-1111-4111-8111-111111111111",
+      "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+    },
+    "receipt_id": "receipt-1",
+    "sequence": "1",
+    "previous_hash": null,
+    "command_id": "delivery-1",
+    "catalog_id": "fixture.inspect",
+    "action_class": "safe",
+    "outcome": "unknown",
+    "failure_stage": "report",
+    "observed_at": "2026-01-01T00:00:00.123456789Z",
+    "result_digest": "{\"detail\":\"fixture\",\"typed_result_sha256\":\"abababababababababababababababababababababababababababababababab\"}",
+    "record_hash": "0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e",
+    "signature": "4BVRXt0zzFZnec35QS3uMiZNLrG19K9ACwWKb7g2gDKVkVEPSdDmxTCSHCehIsNPQroP+kFNgkQey+Krth2sBw=="
+  },
+  "outcome_preimage": "[\"fleet.windows.action-outcome.v2\",2,{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"receipt-1\",\"1\",null,\"delivery-1\",\"fixture.inspect\",\"safe\",\"unknown\",\"report\",\"2026-01-01T00:00:00.123456789Z\",\"{\\\"detail\\\":\\\"fixture\\\",\\\"typed_result_sha256\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\"]",
+  "ack": {
+    "binding": {
+      "org_id": "org-alpha",
+      "device_id": "Desk/Łaptop?1",
+      "enrollment_generation": "11111111-1111-4111-8111-111111111111",
+      "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+    },
+    "command_id": "delivery-1",
+    "report_id": "report-1",
+    "success": false,
+    "detail": "fixture",
+    "result": "{\"error\":\"fixture\"}",
+    "phase": null,
+    "terminal_reason": null
+  },
+  "result_hash": "e2e175b1ff3fbd206e4a3a6a2aa2cdecaf9442e3ea391d043085e14ef158de5e",
+  "ack_hash": "606448b3df48327c4443d728e17431bae5782239f11a3a7f9b3b38aadc3b5f98",
+  "request_bytes": "{\"nonce\":\"nonce-1\",\"windows_v2\":{\"acks\":[{\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"command_id\":\"delivery-1\",\"detail\":\"fixture\",\"phase\":null,\"report_id\":\"report-1\",\"result\":\"{\\\"error\\\":\\\"fixture\\\"}\",\"success\":false,\"terminal_reason\":null}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"outcomes\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"failure_stage\":\"report\",\"observed_at\":\"2026-01-01T00:00:00.123456789Z\",\"outcome\":\"unknown\",\"previous_hash\":null,\"receipt_id\":\"receipt-1\",\"record_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\",\"result_digest\":\"{\\\"detail\\\":\\\"fixture\\\",\\\"typed_result_sha256\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\",\"sequence\":\"1\",\"signature\":\"4BVRXt0zzFZnec35QS3uMiZNLrG19K9ACwWKb7g2gDKVkVEPSdDmxTCSHCehIsNPQroP+kFNgkQey+Krth2sBw==\",\"version\":2}],\"version\":2}}",
+  "response_bytes": "{\"windows_v2\":{\"ack_receipts\":[{\"command_id\":\"delivery-1\",\"disposition\":\"accepted\",\"report_id\":\"report-1\",\"report_sha256\":\"606448b3df48327c4443d728e17431bae5782239f11a3a7f9b3b38aadc3b5f98\",\"resulting_status\":\"failed\"}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"commands\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"epoch_version\":\"4\",\"idempotency_key\":\"request-1\",\"payload\":\"{\\\"z\\\":false,\\\"a\\\":[\\\"é\\\",null,7],\\\"big\\\":12345678901234567890123456789012345678901234567890,\\\"exponent\\\":1e400,\\\"escape\\\":\\\"line\\\\nslash\\\\\\\\🔒\\\"}\",\"signature\":\"etCCdyVuglvsiUI3U/Kboe4HeAfnsWlJaQcJISgqWX1+b36f2sI1UhpQucipmldRYnzsGClz7/yMTderDiRWDQ==\",\"signer_key\":\"kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=\",\"version\":2}],\"head\":{\"last_sequence\":\"1\",\"previous_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\"},\"outcome_receipts\":[{\"disposition\":\"accepted\",\"receipt_id\":\"receipt-1\",\"record_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\",\"sequence\":\"1\"}],\"version\":2}}",
+  "proof": {
+    "version": 2,
+    "binding": {
+      "org_id": "org-alpha",
+      "device_id": "Desk/Łaptop?1",
+      "enrollment_generation": "11111111-1111-4111-8111-111111111111",
+      "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+    },
+    "nonce": "nonce-1",
+    "request_sha256": "+CRGAxj4pYYep8Dgp9PN5PS/rd9POe1jeOg7O37RS98=",
+    "http_status": 200,
+    "response_sha256": "n7rQMm6Yv0jtiW34bgHa6ilsNFUNlagMhjclkibiYnk=",
+    "signature": "o2+BQGt3PU0m69SVn/KArXba63JK9IDgMwm4DJEoq0Hes/ppnsQy+WVKrd0geaGhG7+JZtip2t3mfVcV95tIBQ=="
+  },
+  "proof_preimage": "[\"fleet.windows.outcome-receipt.v2\",{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"nonce-1\",\"+CRGAxj4pYYep8Dgp9PN5PS/rd9POe1jeOg7O37RS98=\",200,\"n7rQMm6Yv0jtiW34bgHa6ilsNFUNlagMhjclkibiYnk=\"]"
+}

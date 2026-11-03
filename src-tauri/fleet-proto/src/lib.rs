@@ -20,6 +20,8 @@ mod deployment_digest;
 pub mod events;
 pub mod outcomes;
 pub mod policy;
+#[cfg(feature = "windows-v2")]
+pub mod windows_v2;
 
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;

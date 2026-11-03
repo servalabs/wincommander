@@ -695,6 +695,13 @@ attributes: number, };
 export type Finding = { ruleId: RuleId, ruleRevision: number, detectorId: string, category: DetectorCategory, score: number, count: number, reasons: Array<Reason>, severity: Severity, actions: Array<Action>, };
 
 /**
+ * Select this context from verified enrollment, never from an incoming record.
+ * The authority is established by the configured enrollment transport and any
+ * configured signing-key pin; this type does not require an additional pin.
+ */
+export type FleetEnrollmentBinding = { org_id: OrgId, device_id: DeviceId, enrollment_generation: string, authority_key_b64: string, };
+
+/**
  * Typed failure surface shared with the admin panel so the UI can branch on
  * the kind rather than parsing error strings.
  */
@@ -838,6 +845,15 @@ export type LoginRequest = { email: string, password: string, };
  * (re-read from the DB) on every request.
  */
 export type LoginResponse = { token: string, role: AdminRole, expires_at: string, };
+
+/**
+ * Exact JSON text, transported as a string to preserve numbers in every
+ * language. Verify its enclosing signature before interpreting it; do not
+ * parse/reserialize it to reconstruct signing bytes. Persist this exact text
+ * separately from any parsed/JSONB validation view; storage round-trips must
+ * not change whitespace, escaping, object order or numeric spelling.
+ */
+export type LosslessJson = string;
 
 /**
  * What a rule matches against clipboard text.
@@ -1388,3 +1404,49 @@ export type StructuredKind = "payment_card" | "iban";
  * Change an admin's role (super_admin only).
  */
 export type UpdateAdminRoleRequest = { role: AdminRole, };
+
+/**
+ * Rejected is definitive refusal, not durable retention. Storage errors omit
+ * the receipt so the exact report remains retryable.
+ */
+export type WindowsAckDisposition = "accepted" | "duplicate" | "rejected";
+
+export type WindowsAckReceiptV2 = { command_id: string, report_id: string, report_sha256: string, disposition: WindowsAckDisposition, resulting_status: CommandStatus | null, };
+
+/**
+ * Persist this binding with the ACK; never relabel an older queued report.
+ */
+export type WindowsAckV2 = { binding: FleetEnrollmentBinding, command_id: string, report_id: string, success: boolean, detail: string | null, result: LosslessJson | null, phase: string | null, terminal_reason: string | null, };
+
+export type WindowsActionOutcomeV2 = { version: number, binding: FleetEnrollmentBinding, receipt_id: string, sequence: string, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, failure_stage: CommandFailureStage | null, observed_at: string, result_digest: LosslessJson, record_hash: string, signature: string, };
+
+/**
+ * Carry under windows_v2 in the existing full-body HMAC-v2 check-in envelope.
+ */
+export type WindowsCheckinRequestV2 = { version: number, binding: FleetEnrollmentBinding, acks: Array<WindowsAckV2>, outcomes: Array<WindowsActionOutcomeV2>, };
+
+export type WindowsCheckinResponseV2 = { version: number, binding: FleetEnrollmentBinding, commands: Array<WindowsCommandV2>, ack_receipts: Array<WindowsAckReceiptV2>, outcome_receipts: Array<WindowsOutcomeReceiptV2>, head: WindowsOutcomeHeadV2, };
+
+export type WindowsCommandV2 = { version: number, binding: FleetEnrollmentBinding, command_id: string, idempotency_key: string, catalog_id: string, action_class: ActionClass, payload: LosslessJson, epoch_version: string, signature: string, signer_key: string, };
+
+/**
+ * Accepted, Quarantined and Orphaned assert durable exact-record retention.
+ * Rejected asserts refusal only; transient storage failures omit the receipt.
+ */
+export type WindowsOutcomeDisposition = "accepted" | "quarantined" | "orphaned" | "rejected";
+
+/**
+ * Verified durable per-binding head: 0/None is empty; positive sequence
+ * requires its last record hash. u64::MAX is a valid exhausted head. Derive a
+ * next cursor only with checked_add; never wrap or discard pending records.
+ */
+export type WindowsOutcomeHeadV2 = { last_sequence: string, previous_hash: string | null, };
+
+export type WindowsOutcomeReceiptV2 = { receipt_id: string, sequence: string, record_hash: string, disposition: WindowsOutcomeDisposition, };
+
+/**
+ * Detached from the response body to avoid a self-referential body hash.
+ * Asserts committed receipt state; cryptographic verification cannot establish
+ * physical durability, service liveness, or action success.
+ */
+export type WindowsReceiptProofV2 = { version: number, binding: FleetEnrollmentBinding, nonce: string, request_sha256: string, http_status: number, response_sha256: string, signature: string, };
