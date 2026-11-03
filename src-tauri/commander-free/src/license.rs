@@ -912,10 +912,14 @@ fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
     atomic_write(&path, data.as_bytes())
 }
 
+#[cfg(windows)]
+fn direct_cache_write_permitted(elevated: bool) -> bool {
+    elevated && !cfg!(feature = "experimental-pq-licence")
+}
+
 /// Persist a verified signed token without granting a standard user write
-/// access to the shared ProgramData cache. A legacy/dev service that does not
-/// understand this narrow verb may be bypassed only by an already-elevated
-/// desktop process; a normal user gets a truthful retryable error instead.
+/// access to the shared ProgramData cache. Only classical builds may use an
+/// elevated fallback; hybrid builds must retain the service's replay checks.
 async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -930,7 +934,7 @@ async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
         .map_err(|_| "License cache request could not be encoded.".to_string())?;
         match crate::svc_client::call(wincmd_shared::svc::STORE_LICENSE_CACHE_VERB, args).await {
             Ok(_) => Ok(()),
-            Err(_error) if crate::startup_elevation::is_current_process_elevated() => {
+            Err(_error) if direct_cache_write_permitted(crate::startup_elevation::is_current_process_elevated()) => {
                 save_cached_license_direct(cached)
             }
             Err(error) => Err(format!(
@@ -1890,6 +1894,16 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[cfg(windows)]
+    #[test]
+    fn hybrid_licence_service_rejection_cannot_be_bypassed_by_elevation() {
+        assert!(!direct_cache_write_permitted(false));
+        assert_eq!(
+            direct_cache_write_permitted(true),
+            !cfg!(feature = "experimental-pq-licence")
+        );
+    }
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
