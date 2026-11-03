@@ -142,16 +142,24 @@ function Get-UpdateRestartPolicyState {
     $mode = Get-UpdateRestartRegistryValue $policyKey 'AUOptions'
     $disabled = Get-UpdateRestartRegistryValue $policyKey 'NoAutoUpdate'
     $marker = Get-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
+    $scheduleMarker = Get-UpdateRestartRegistryValue $markerKey 'CreatedSchedule'
     $reserved = $marker.exists -and $marker.kind -eq 'DWord' -and $marker.value -eq 1
     $owned = $marker.exists -and $marker.kind -eq 'DWord' -and $marker.value -eq 2
+    $scheduleReserved = $scheduleMarker.exists -and $scheduleMarker.kind -eq 'DWord' -and $scheduleMarker.value -eq 1
+    $scheduleOwned = $scheduleMarker.exists -and $scheduleMarker.kind -eq 'DWord' -and $scheduleMarker.value -eq 2
+    $updatesAllowed = -not $disabled.exists -or ($disabled.kind -eq 'DWord' -and $disabled.value -eq 0)
+    $scheduleConflict = ($scheduleMarker.exists -and -not ($scheduleReserved -or $scheduleOwned)) -or ($scheduleReserved -and $mode.exists) -or ($scheduleOwned -and (-not $mode.exists -or $mode.kind -ne 'DWord' -or $mode.value -ne 4))
     return @{
         isAdmin = [bool](Test-IsAdmin)
         configured = [bool]($policy.exists -and $policy.kind -eq 'DWord' -and $policy.value -eq 1)
         policyExists = [bool]$policy.exists
         owned = [bool]$owned
         reserved = [bool]$reserved
-        conflict = [bool](($marker.exists -and -not ($owned -or $reserved)) -or ($reserved -and $policy.exists) -or ($owned -and $policy.exists -and ($policy.kind -ne 'DWord' -or $policy.value -ne 1)))
-        scheduledMode = [bool]($mode.exists -and $mode.kind -eq 'DWord' -and $mode.value -eq 4 -and (-not $disabled.exists -or ($disabled.kind -eq 'DWord' -and $disabled.value -eq 0)))
+        scheduleOwned = [bool]$scheduleOwned
+        scheduleReserved = [bool]$scheduleReserved
+        canPrepareSchedule = [bool](-not $mode.exists -and $updatesAllowed -and (-not $scheduleMarker.exists -or $scheduleReserved))
+        conflict = [bool]($scheduleConflict -or ($marker.exists -and -not ($owned -or $reserved)) -or ($reserved -and $policy.exists) -or ($owned -and $policy.exists -and ($policy.kind -ne 'DWord' -or $policy.value -ne 1)))
+        scheduledMode = [bool]($mode.exists -and $mode.kind -eq 'DWord' -and $mode.value -eq 4 -and $updatesAllowed)
     }
 }
 
@@ -160,16 +168,32 @@ function Get-UpdateRestartPolicyStatus {
 }
 
 function Set-UpdateRestartPolicy {
-    param([Parameter(Mandatory = $true)][ValidateSet('apply', 'revert')][string]$Mode)
+    param([Parameter(Mandatory = $true)][ValidateSet('apply', 'applyWithSchedule', 'revert')][string]$Mode)
     Assert-IsAdmin
     return Invoke-WithUpdateRestartMutex {
         $policyKey = 'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
         $markerKey = 'SOFTWARE\WinCommander\UpdateRestartPolicy'
         $state = Get-UpdateRestartPolicyState
         if ($state.conflict) { throw 'The policy changed outside WinCommander. No settings were changed.' }
-        if ($Mode -eq 'apply') {
-            if (-not $state.scheduledMode) { throw 'Windows Update is not set to scheduled installation. This policy would not apply; no settings were changed.' }
+        if ($Mode -in @('apply', 'applyWithSchedule')) {
             if ($state.policyExists -and -not $state.owned) { throw 'An existing administrator policy controls this setting. No settings were changed.' }
+            if ($Mode -eq 'applyWithSchedule' -and -not $state.scheduledMode) {
+                if (-not $state.canPrepareSchedule) { throw 'An existing update setting prevents changing the schedule. No settings were changed.' }
+                if (-not $state.scheduleReserved) {
+                    Set-UpdateRestartRegistryValue $markerKey 'CreatedSchedule' 1
+                    $state = Get-UpdateRestartPolicyState
+                    if (-not $state.scheduleReserved -or $state.conflict) { throw 'Windows could not verify the schedule backup.' }
+                }
+                $currentMode = Get-UpdateRestartRegistryValue $policyKey 'AUOptions'
+                if ($currentMode.exists) { throw 'The update schedule changed while applying. It was not overwritten.' }
+                Set-UpdateRestartRegistryValue $policyKey 'AUOptions' 4
+                $modeReadback = Get-UpdateRestartRegistryValue $policyKey 'AUOptions'
+                if (-not $modeReadback.exists -or $modeReadback.kind -ne 'DWord' -or $modeReadback.value -ne 4) { throw 'Windows could not verify the update schedule.' }
+                Set-UpdateRestartRegistryValue $markerKey 'CreatedSchedule' 2
+                $state = Get-UpdateRestartPolicyState
+                if (-not $state.scheduleOwned -or $state.conflict) { throw 'Windows could not confirm the update schedule change.' }
+            }
+            if (-not $state.scheduledMode) { throw 'Windows Update is not set to scheduled installation. This policy would not apply; no restart policy was changed.' }
             if (-not $state.owned -and -not $state.reserved) {
                 Set-UpdateRestartRegistryValue $markerKey 'CreatedPolicy' 1
                 $marker = Get-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
@@ -186,14 +210,21 @@ function Set-UpdateRestartPolicy {
                 Set-UpdateRestartRegistryValue $markerKey 'CreatedPolicy' 2
             }
         } else {
-            if (-not ($state.owned -or $state.reserved)) { throw 'WinCommander did not create this policy; it will not remove it.' }
+            if (-not ($state.owned -or $state.reserved -or $state.scheduleOwned -or $state.scheduleReserved)) { throw 'WinCommander did not create this policy; it will not remove it.' }
+            if ($state.policyExists -and -not $state.owned) { throw 'A separate restart policy appeared. No settings were changed.' }
             if ($state.policyExists) { Remove-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers' }
             $current = Get-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers'
             if ($current.exists) { throw 'Windows could not verify policy removal.' }
+            if ($state.scheduleOwned) {
+                Remove-UpdateRestartRegistryValue $policyKey 'AUOptions'
+                $currentMode = Get-UpdateRestartRegistryValue $policyKey 'AUOptions'
+                if ($currentMode.exists) { throw 'Windows could not verify restoration of the update schedule.' }
+            }
+            if ($state.scheduleOwned -or $state.scheduleReserved) { Remove-UpdateRestartRegistryValue $markerKey 'CreatedSchedule' }
             Remove-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
         }
         $result = Get-UpdateRestartPolicyState
-        if (($Mode -eq 'apply' -and (-not $result.configured -or -not $result.owned)) -or ($Mode -eq 'revert' -and ($result.policyExists -or $result.owned -or $result.reserved))) { throw 'Windows could not verify the policy change.' }
+        if (($Mode -in @('apply', 'applyWithSchedule') -and (-not $result.configured -or -not $result.owned)) -or ($Mode -eq 'revert' -and ($result.policyExists -or $result.owned -or $result.reserved -or $result.scheduleOwned -or $result.scheduleReserved))) { throw 'Windows could not verify the policy change.' }
         return $result
     }
 }

@@ -17,6 +17,7 @@ function Reset-Fixture {
     $script:ignoreRemove = $false
     $script:failPolicyWrite = $false
     $script:failFinalMarker = $false
+    $script:failScheduleMarker = $false
 }
 function Test-IsAdmin { $script:admin }
 function Assert-IsAdmin { if (-not $script:admin) { throw 'Administrator privileges required.' } }
@@ -31,6 +32,7 @@ function Set-UpdateRestartRegistryValue {
     param([string]$Key, [string]$Name, [int]$Value)
     if ($script:failPolicyWrite -and $Name -eq 'NoAutoRebootWithLoggedOnUsers') { throw 'Simulated policy write failure.' }
     if ($script:failFinalMarker -and $Name -eq 'CreatedPolicy' -and $Value -eq 2) { throw 'Simulated ownership write failure.' }
+    if ($script:failScheduleMarker -and $Name -eq 'CreatedSchedule' -and $Value -eq 2) { throw 'Simulated schedule ownership failure.' }
     if (-not $script:ignoreWrite) { $script:registry["$Key|$Name"] = @{ exists = $true; kind = 'DWord'; value = $Value } }
 }
 function Remove-UpdateRestartRegistryValue {
@@ -49,6 +51,54 @@ if (-not ($result.owned -and $result.configured -and $result.scheduledMode)) { t
 $result = Set-UpdateRestartPolicy revert
 if ($result.owned -or $result.policyExists -or $result.reserved) { throw 'Revert was not verified.' }
 if ($script:registry["$script:policyKey|AUOptions"].value -ne 4) { throw 'Changed update scheduling.' }
+
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+if (-not (Get-UpdateRestartPolicyStatus).canPrepareSchedule) { throw 'Absent schedule was not offered.' }
+$result = Set-UpdateRestartPolicy applyWithSchedule
+if (-not ($result.scheduleOwned -and $result.scheduledMode -and $result.configured -and $result.owned)) { throw 'Schedule and policy were not verified.' }
+$result = Set-UpdateRestartPolicy revert
+if ($result.scheduleOwned -or $result.policyExists -or $script:registry.ContainsKey("$script:policyKey|AUOptions")) { throw 'Original unconfigured schedule was not restored.' }
+Reset-Fixture
+$script:registry["$script:policyKey|AUOptions"].value = 3
+Expect-Failure { Set-UpdateRestartPolicy applyWithSchedule }
+if ($script:registry["$script:policyKey|AUOptions"].value -ne 3) { throw 'Overwrote an existing schedule.' }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+$script:registry["$script:policyKey|NoAutoUpdate"] = @{exists=$true;kind='DWord';value=1}
+Expect-Failure { Set-UpdateRestartPolicy applyWithSchedule }
+if ($script:registry.ContainsKey("$script:policyKey|AUOptions")) { throw 'Changed a disabled update policy.' }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+$script:registry["$script:policyKey|NoAutoRebootWithLoggedOnUsers"] = @{exists=$true;kind='DWord';value=0}
+Expect-Failure { Set-UpdateRestartPolicy applyWithSchedule }
+if ($script:registry.ContainsKey("$script:policyKey|AUOptions")) { throw 'Changed schedule despite an external restart policy.' }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+$script:failPolicyWrite = $true
+Expect-Failure { Set-UpdateRestartPolicy applyWithSchedule }
+if (-not (Get-UpdateRestartPolicyStatus).scheduleOwned) { throw 'Schedule ownership was lost after failure.' }
+$script:failPolicyWrite = $false
+if (-not (Set-UpdateRestartPolicy revert).canPrepareSchedule) { throw 'Could not restore after a failed policy write.' }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+$script:failScheduleMarker = $true
+Expect-Failure { Set-UpdateRestartPolicy applyWithSchedule }
+if (-not (Get-UpdateRestartPolicyStatus).conflict) { throw 'Uncertain schedule ownership was not reported.' }
+Expect-Failure { Set-UpdateRestartPolicy revert }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+Set-UpdateRestartPolicy applyWithSchedule | Out-Null
+$script:registry["$script:policyKey|AUOptions"].value = 3
+Expect-Failure { Set-UpdateRestartPolicy revert }
+if ($script:registry["$script:policyKey|AUOptions"].value -ne 3) { throw 'Overwrote a later schedule change.' }
+Reset-Fixture
+$script:registry.Remove("$script:policyKey|AUOptions")
+$script:registry["$script:markerKey|CreatedSchedule"] = @{exists=$true;kind='DWord';value=2}
+$script:registry["$script:policyKey|AUOptions"] = @{exists=$true;kind='DWord';value=4}
+$script:registry["$script:policyKey|NoAutoRebootWithLoggedOnUsers"] = @{exists=$true;kind='DWord';value=1}
+Expect-Failure { Set-UpdateRestartPolicy revert }
+if ($script:registry["$script:policyKey|NoAutoRebootWithLoggedOnUsers"].value -ne 1) { throw 'Removed another administrator restart policy.' }
 
 foreach ($value in @(0, 1, 2)) {
     Reset-Fixture

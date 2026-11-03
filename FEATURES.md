@@ -45,8 +45,9 @@ the backend and private component before execution.
   and offer restoration from the account that made the change; Windows menus
   can vary by version and account.
 - Optional Windows Update policy to avoid scheduled update restarts while a
-  user is signed in. It requires Windows' scheduled-install setting and does
-  not prevent all restarts. Existing administrator policies are preserved.
+  user is signed in. It requires Windows' scheduled-install setting; when no
+  schedule is configured, users can explicitly add and later restore one. It
+  does not prevent all restarts. Existing administrator policies are preserved.
 - Dashboard Bluetooth uses Windows machine policy, with administrator approval
   and the matching local service. It does not disable adapters. Policy control
   checks eligible Windows client editions and Server 2025 or later against the
