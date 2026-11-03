@@ -146,7 +146,10 @@ exclusive handle before removing that same file. Failed checks preserve it.
 After migration, an unavailable service produces a temporary read-only session
 rather than making the stale legacy copy authoritative again. Corrupt or denied
 service records fail closed. The inactivity watchdog pauses while personal
-settings are unavailable or recovery remains unresolved.
+settings are unavailable or recovery remains unresolved. It runs only while
+WinCommander is running, and launching the app resets its activity baseline,
+including on automatic startup. A recorded trigger marks an attempt, not proof
+that Lockdown completed; the self-destruct opt-in still governs whether it runs.
 
 This boundary does not protect against an administrator/SYSTEM attacker,
 restore keys lost with Windows machine protection, or transfer ownership to a

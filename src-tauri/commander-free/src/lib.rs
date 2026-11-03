@@ -3128,6 +3128,7 @@ pub fn run() {
             // Feature 5 — crypto-erase: delete TPM vault key (irreversible, paid)
             evidence_vault::delete_vault_tpm_key,
             inactivity_timer::get_dead_mans_switch_config,
+            inactivity_timer::get_dead_mans_switch_status,
             inactivity_timer::set_dead_mans_switch_config,
             inactivity_timer::reset_dead_mans_switch_timer,
             inactivity_timer::clear_dead_mans_switch_fired,

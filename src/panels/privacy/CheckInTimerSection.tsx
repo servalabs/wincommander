@@ -1,15 +1,12 @@
 // src/panels/privacy/CheckInTimerSection.tsx
 //
-// "Dead Man's Switch" — triggers the Lockdown / self-destruct cascade if
-// WinCommander doesn't see the operator for N days. Useful for
-// journalists/activists/investigators: if the operator disappears
-// (arrest, seizure, …) the device destroys itself rather than sitting
-// accessible.
+// Local app-owned inactivity timer. Startup resets its baseline.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button, Icon } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
+import { inactivityPresentation } from './inactivityPresentation';
 
 interface DeadMansSwitchConfig {
   enabled: boolean;
@@ -17,6 +14,24 @@ interface DeadMansSwitchConfig {
   flowIdToFire: string | null;
   lastActivityAt: string;
   lastFiredAt: string | null;
+}
+
+interface DeadMansSwitchStatus {
+  config: DeadMansSwitchConfig;
+  state: unknown;
+  startupResetFailed: boolean;
+}
+
+function isTimerStatus(value: unknown): value is DeadMansSwitchStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  if (!result.config || typeof result.config !== 'object' || Array.isArray(result.config)) return false;
+  const config = result.config as Record<string, unknown>;
+  return typeof config.enabled === 'boolean' && typeof config.thresholdDays === 'number' &&
+    Number.isFinite(config.thresholdDays) && typeof config.lastActivityAt === 'string' &&
+    (config.lastFiredAt === null || typeof config.lastFiredAt === 'string') &&
+    (config.flowIdToFire === null || typeof config.flowIdToFire === 'string') &&
+    typeof result.state === 'string' && typeof result.startupResetFailed === 'boolean';
 }
 
 function daysSince(iso: string): number | null {
@@ -33,6 +48,7 @@ function daysSince(iso: string): number | null {
 function formatRelative(iso: string): string {
   const d = daysSince(iso);
   if (d === null) return '—';
+  if (d < 0) return 'activity time is ahead of the device clock';
   if (d === 0) return 'today';
   if (d === 1) return '1 day ago';
   return `${d} days ago`;
@@ -42,24 +58,42 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
   const [config, setConfig] = useState<DeadMansSwitchConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<unknown>(null);
+  const [startupResetFailed, setStartupResetFailed] = useState(false);
+  const sequence = useRef(0);
+  const savingRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    setError(null);
+    const current = ++sequence.current;
     try {
-      const c = await invoke<DeadMansSwitchConfig>('get_dead_mans_switch_config');
-      setConfig(c);
+      const result = await invoke<unknown>('get_dead_mans_switch_status');
+      if (current !== sequence.current) return;
+      if (!isTimerStatus(result)) throw new Error('Invalid local timer status');
+      setConfig(result.config);
+      setState(result.state);
+      setStartupResetFailed(result.startupResetFailed === true);
+      setError(null);
     } catch (err) {
+      if (current !== sequence.current) return;
+      setState(null);
+      setStartupResetFailed(false);
       setError(String(err));
     }
   }, []);
 
   useEffect(() => {
+    const activeSequence = sequence;
     void refresh();
+    const interval = setInterval(() => { if (!savingRef.current) void refresh(); }, 30_000);
+    return () => { clearInterval(interval); activeSequence.current++; };
   }, [refresh]);
 
   const saveConfig = useCallback(
     async (patch: Partial<DeadMansSwitchConfig>) => {
-      if (!config) return;
+      if (!config || savingRef.current) return;
+      savingRef.current = true;
+      sequence.current++;
+      setState(null);
       setSaving(true);
       setError(null);
       try {
@@ -68,67 +102,83 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
           config: next,
         });
         setConfig(saved);
+        await refresh();
       } catch (err) {
         setError(String(err));
       } finally {
+        savingRef.current = false;
         setSaving(false);
       }
     },
-    [config],
+    [config, refresh],
   );
 
   const handleReset = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    sequence.current++;
+    setState(null);
     setSaving(true);
     setError(null);
     try {
       const c = await invoke<DeadMansSwitchConfig>('reset_dead_mans_switch_timer');
       setConfig(c);
+      await refresh();
     } catch (err) {
       setError(String(err));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, []);
+  }, [refresh]);
 
   const handleClearFired = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    sequence.current++;
+    setState(null);
     setSaving(true);
     setError(null);
     try {
       const c = await invoke<DeadMansSwitchConfig>('clear_dead_mans_switch_fired');
       setConfig(c);
+      await refresh();
     } catch (err) {
       setError(String(err));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, []);
+  }, [refresh]);
 
   if (!config) {
-    return null;
+    const message = <p role={error ? 'alert' : 'status'}>{error ? 'Inactivity timer status could not be confirmed.' : 'Loading inactivity timer…'}</p>;
+    return bare ? <div className="lockdown-trigger-block">{message}</div> : <SectionCard title="Inactivity Check-In" icon="time">{message}</SectionCard>;
   }
 
   const daysIdle = daysSince(config.lastActivityAt);
   const daysRemaining =
-    daysIdle === null ? null : Math.max(0, config.thresholdDays - daysIdle);
+    daysIdle === null || daysIdle < 0 ? null : Math.max(0, config.thresholdDays - daysIdle);
 
-  const statusTag = config.lastFiredAt ? (
-    <span className="lockdown-trigger-status" style={{ background: 'var(--color-danger-dim)', color: 'var(--color-danger)' }}>Tripped</span>
-  ) : config.enabled ? (
-    <span className="lockdown-trigger-status">Active</span>
-  ) : null;
+  const status = inactivityPresentation(state);
+  const statusTag = <span className="lockdown-trigger-status">{status.label}</span>;
 
   const inner = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {config.lastFiredAt && (
         <div style={{ padding: '8px 10px', background: 'var(--color-danger-dim)', border: '1px solid color-mix(in srgb, var(--color-danger) 50%, transparent)', borderRadius: 4 }}>
           <div style={{ fontWeight: 700, color: 'var(--color-danger)', fontSize: 11 }}>
-            Tripped · {new Date(config.lastFiredAt).toLocaleDateString()}
+            Trigger recorded · {new Date(config.lastFiredAt).toLocaleDateString()}
           </div>
           <Button intent="danger" small icon="reset" onClick={handleClearFired} disabled={saving} style={{ marginTop: 6 }}>
             Rearm
           </Button>
         </div>
       )}
+
+      <p role="status">{status.message}</p>
+      {startupResetFailed && <p role="alert">The timer could not reset when WinCommander started. Check the activity time; the watchdog may still run.</p>}
+      <p>The timer runs only while WinCommander and personal automation are available. Starting WinCommander resets the activity time, including automatic startup; it does not prove that a person checked in.</p>
 
       <div className="lockdown-trigger-row">
         <input
@@ -144,11 +194,11 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
           className="lockdown-trigger-input"
           style={{ width: 64 }}
         />
-        <span>days idle → fire</span>
+        <span>days since activity → trigger attempt</span>
       </div>
 
       <div className="lockdown-trigger-row">
-        <span style={{ color: 'var(--color-text-secondary)', fontSize: 11 }}>→ fires Lockdown (self-destruct cascade)</span>
+        <span style={{ color: 'var(--color-text-secondary)', fontSize: 11 }}>→ requests the configured Lockdown when enabled</span>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 8px', background: 'var(--color-bg-tertiary)', borderRadius: 4 }}>
@@ -186,7 +236,7 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
           />
         </div>
         <p className="lockdown-trigger-desc">
-          Triggers the Lockdown cascade if there's no activity for N days. Click "I'm alive" to reset the timer.
+          Requests Lockdown after the configured inactivity period while the app is running. Click "I'm alive" to reset the timer.
         </p>
         {inner}
       </div>
