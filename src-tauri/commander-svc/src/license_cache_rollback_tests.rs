@@ -272,3 +272,41 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     anchor::remove_test_key(&anchor_path).unwrap();
     fs::remove_dir(dir).unwrap();
 }
+
+#[test]
+fn worker_issued_licence_survives_history_reload_and_rejects_tampering() {
+    use wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN;
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/workers-hybrid-licence.json")).unwrap();
+    let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+    let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+    let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+    let public = fixture["publicClassical"].as_str().unwrap();
+    let request = StoreLicenseCacheRequest {
+        payload: fixture["payload"].as_str().unwrap().to_owned(),
+        signature: fixture["signature"].as_str().unwrap().to_owned(),
+        hybrid: Some(fixture["hybrid"].as_str().unwrap().to_owned()),
+        seats_used: None, seat_limit: None,
+    };
+    let verified_at = serde_json::from_str::<serde_json::Value>(&request.payload).unwrap()["iat"].as_u64().unwrap();
+    let cache = serde_json::to_vec(&serde_json::json!({"token":{"payload":request.payload,"signature":request.signature,"hybrid":request.hybrid},"last_verified_at":verified_at})).unwrap();
+    let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wincmd-worker-history-{}-{id}", std::process::id()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("license_cache.json");
+    let anchor_path = format!(r"SOFTWARE\WinCommanderWorkerHistoryTest-{}-{id}", std::process::id());
+    let anchor = anchor::Anchor::test_user(anchor_path.clone());
+    write_with_anchor(&path, &request, &cache, public, &trust, &anchor).unwrap();
+    drop(anchor);
+    let reopened = anchor::Anchor::test_user(anchor_path.clone());
+    verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).unwrap();
+    assert!(verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err());
+    let mut tampered: serde_json::Value = serde_json::from_slice(&cache).unwrap();
+    tampered["last_verified_at"] = (verified_at + 1).into();
+    fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err());
+    fs::write(&path, &cache).unwrap();
+    anchor::remove_test_key(&anchor_path).unwrap();
+    assert!(verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).is_err());
+    fs::remove_file(path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
