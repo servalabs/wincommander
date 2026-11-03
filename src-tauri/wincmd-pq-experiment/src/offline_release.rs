@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Offline rehearsal only. Trust must be obtained separately from release files.
 use crate::{jws, release};
-use sha2::{Digest, Sha256};
 use std::io::Read;
 
 /// Verify both signatures, the release's purpose and metadata, and the exact
@@ -9,33 +8,12 @@ use std::io::Read;
 /// This experimental profile does not supply revocation or persistent rollback.
 pub fn verify_artifact<R: Read>(
     envelope: &[u8],
-    mut artifact: R,
+    artifact: R,
     expected_version: &str,
     trust: &jws::Trust<'_>,
 ) -> Result<(), &'static str> {
     let (release, _) = release::verify_metadata(envelope, expected_version, trust)?;
-    let mut digest = Sha256::new();
-    let mut total = 0_u64;
-    let mut buffer = [0_u8; 65536];
-    loop {
-        let count = artifact
-            .read(&mut buffer)
-            .map_err(|_| "cannot read release file")?;
-        if count == 0 {
-            break;
-        }
-        total = total
-            .checked_add(count as u64)
-            .ok_or("release file too large")?;
-        if total > release.size {
-            return Err("release file size mismatch");
-        }
-        digest.update(&buffer[..count]);
-    }
-    if total != release.size || hex::encode(digest.finalize()) != release.sha256 {
-        return Err("release file does not match signed size and hash");
-    }
-    Ok(())
+    release::check_artifact(&release, artifact)
 }
 
 #[cfg(test)]
@@ -44,6 +22,7 @@ mod tests {
     use crate::{jws::sign::assemble, Purpose, VerifyError, ML_DSA_65_PUBLIC_KEY_LEN};
     use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
     use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn verifies_signed_file_and_rejects_tampering_and_wrong_policy() {
@@ -76,6 +55,44 @@ mod tests {
         )
         .unwrap();
         assert!(verify_artifact(&signed, &bytes[..], "3.7.0", &trust).is_ok());
+        let emitted = std::cell::Cell::new(false);
+        let refused = crate::release::sign_release(
+            &payload,
+            &b"modified"[..],
+            "3.7.0",
+            7,
+            &trust,
+            |_| {
+                emitted.set(true);
+                Err(VerifyError::InvalidSignature)
+            },
+            |_| {
+                emitted.set(true);
+                Err(VerifyError::InvalidSignature)
+            },
+        );
+        assert!(refused.is_err());
+        assert!(
+            !emitted.get(),
+            "signing keys were called for a mismatched file"
+        );
+        let signed_release = crate::release::sign_release(
+            &payload,
+            &bytes[..],
+            "3.7.0",
+            7,
+            &trust,
+            |m| Ok(ed.sign(m).to_bytes().to_vec()),
+            |m| {
+                let mut signature = vec![0; 3309];
+                pq.sign(m, &mut signature)
+                    .map_err(|_| VerifyError::InvalidSignature)?;
+                Ok(signature)
+            },
+        )
+        .unwrap();
+        assert!(verify_artifact(&signed_release, &bytes[..], "3.7.0", &trust).is_ok());
+
         assert!(verify_artifact(&signed, &bytes[..], " V3.7.0.0 ", &trust).is_ok());
         // Even correctly signed records must satisfy the shared release policy.
         const MAX_RELEASE_TEST: u64 = 4 * 1024 * 1024 * 1024;

@@ -26,3 +26,9 @@ Ed25519 keys are 32 bytes and ML-DSA-65 keys are 1952 bytes. The key file and
 minimum epoch must come from a separately trusted source, never the download
 or record being checked. The caller must obtain fresh revocation and rollback
 policy independently; this tool cannot enforce those requirements.
+
+The opt-in `experimental-signer` library also exposes `release::sign_release`,
+which checks release metadata and the exact artifact before calling either
+signing callback. It does not provide a key store or publisher. Callers must
+keep the verified artifact immutable through publication; this helper alone
+does not establish a safe release process.
