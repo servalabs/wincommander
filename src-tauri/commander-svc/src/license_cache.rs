@@ -93,7 +93,10 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
             #[cfg(feature = "experimental-pq-licence")]
             hybrid: request.hybrid.as_deref().ok_or("hybrid license is required")?,
         },
-        last_verified_at: now_unix(),
+        // The caller can replay a signed token. Only its signed issuance time
+        // proves when the server last issued it; storing the current time
+        // would let a replay repeatedly restart the offline grace period.
+        last_verified_at: signed_verification_time(&request.payload, now_unix())?,
         seats_used: request.seats_used,
         seat_limit: request.seat_limit,
     };
@@ -101,6 +104,13 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
         serde_json::to_vec_pretty(&persisted).map_err(|_| "license cache could not be encoded")?;
     atomic_write(&machine_license_cache_path()?, &bytes)
         .map_err(|_| "machine license cache is unavailable")
+}
+
+fn signed_verification_time(payload: &str, now: u64) -> Result<u64, &'static str> {
+    let claims: SignedClaims =
+        serde_json::from_str(payload).map_err(|_| "license cache payload is invalid")?;
+    // A server clock ahead of the device must not create a future grace start.
+    Ok(claims.iat.min(now))
 }
 
 fn validate_request(
@@ -278,6 +288,11 @@ mod tests {
         };
         let public = fixture["publicClassical"].as_str().unwrap();
         assert!(validate_dual_request(&request, public, &trust).is_ok());
+        let claims: SignedClaims = serde_json::from_str(&request.payload).unwrap();
+        assert_eq!(
+            signed_verification_time(&request.payload, claims.iat + 1_000_000).unwrap(),
+            claims.iat
+        );
         request.hybrid = None;
         assert!(validate_dual_request(&request, public, &trust).is_err());
         request.hybrid = Some(fixture["hybrid"].as_str().unwrap().to_owned());
@@ -323,6 +338,42 @@ mod tests {
         assert_eq!(
             validate_request(&forged, &public_key),
             Err("license cache signature is invalid")
+        );
+    }
+
+    #[test]
+    fn signed_issuance_bounds_cache_freshness_for_replay_and_clock_skew() {
+        let (request, public_key) = signed_request();
+        validate_request(&request, &public_key).unwrap();
+        let claims: SignedClaims = serde_json::from_str(&request.payload).unwrap();
+        // Replaying the same authenticated token later never refreshes it.
+        assert_eq!(
+            signed_verification_time(&request.payload, claims.iat + 10).unwrap(),
+            claims.iat
+        );
+        assert_eq!(
+            signed_verification_time(&request.payload, claims.iat + 1_000_000).unwrap(),
+            claims.iat
+        );
+        // A behind-clock device cannot grant future-dated offline grace.
+        assert_eq!(
+            signed_verification_time(&request.payload, claims.iat - 1).unwrap(),
+            claims.iat - 1
+        );
+        // A normally issued replacement advances freshness to its signed time.
+        let mut renewal = request;
+        renewal.payload = format!(
+            r#"{{"device_hash":"device","iat":{},"exp":{}}}"#,
+            claims.iat + 20,
+            claims.iat + 100
+        );
+        renewal.signature = general_purpose::URL_SAFE_NO_PAD.encode(
+            SigningKey::from_bytes(&[7; 32]).sign(renewal.payload.as_bytes()).to_bytes(),
+        );
+        validate_request(&renewal, &public_key).unwrap();
+        assert_eq!(
+            signed_verification_time(&renewal.payload, claims.iat + 21).unwrap(),
+            claims.iat + 20
         );
     }
 
