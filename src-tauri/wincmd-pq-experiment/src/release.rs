@@ -114,6 +114,41 @@ pub(crate) fn check_artifact<R: std::io::Read>(
     Ok(())
 }
 
+/// Convert the existing staged Pro manifest into an experimental signing
+/// payload, only after verifying the staged executable's size and hash.
+#[cfg(feature = "experimental-signer")]
+pub fn stage_payload<R: std::io::Read>(
+    manifest: &[u8],
+    artifact: R,
+    expected_version: &str,
+) -> Result<Vec<u8>, &'static str> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StagedManifest {
+        version: String,
+        url: String,
+        sha256: String,
+        size: u64,
+        #[serde(default, rename = "pub_date")]
+        _pub_date: Option<String>,
+        #[serde(default, rename = "notes")]
+        _notes: Option<String>,
+    }
+    if manifest.len() > 32768 {
+        return Err("staged manifest exceeds size limit");
+    }
+    let staged: StagedManifest =
+        serde_json::from_slice(manifest).map_err(|_| "invalid staged manifest")?;
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "format": "wincommander-pro-release-v1", "version": staged.version,
+        "url": staged.url, "sha256": staged.sha256, "size": staged.size
+    }))
+    .map_err(|_| "invalid staged manifest")?;
+    let release = validate_payload(&payload, expected_version)?;
+    check_artifact(&release, artifact)?;
+    Ok(payload)
+}
+
 /// Prepare public signing messages after validating the staged artifact.
 /// The artifact must remain immutable until signatures are assembled and published.
 #[cfg(feature = "experimental-signer")]

@@ -55,12 +55,22 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
 }
 fn run(args: &[String]) -> Result<(), String> {
     if args.len() < 2 {
-        return Err("expected prepare or finish".into());
+        return Err("expected stage, prepare or finish".into());
+    }
+    if args[1] == "stage" {
+        if args.len() != 6 {
+            return Err("usage: stage <latest.pro.json> <pro.exe> <version> <payload.json>".into());
+        }
+        let manifest = read_bounded(&args[2], 32768)?;
+        let artifact = File::open(&args[3]).map_err(|e| format!("cannot open artifact: {e}"))?;
+        let payload =
+            release::stage_payload(&manifest, artifact, &args[4]).map_err(str::to_owned)?;
+        return write_new(&args[5], &payload);
     }
     let expected = match args[1].as_str() {
         "prepare" => 9,
         "finish" => 10,
-        _ => return Err("expected prepare or finish".into()),
+        _ => return Err("expected stage, prepare or finish".into()),
     };
     if args.len() != expected {
         return Err("usage: prepare <payload.json> <pro.exe> <trust.json> <version> <epoch> <ed-message> <pq-message>; finish <payload.json> <pro.exe> <trust.json> <version> <epoch> <ed-signature> <pq-signature> <signed-record>".into());
@@ -143,9 +153,32 @@ mod tests {
         let data = b"disposable release file";
         let payload = serde_json::json!({"format":"wincommander-pro-release-v1", "version":"3.7.0", "url":"https://winupdates.servalabs.com/pro/v3.7.0/wincommander-pro.exe", "size":data.len(), "sha256":hex::encode(Sha256::digest(data))});
         let config = serde_json::json!({"ed_key_id":"ed", "ed_public":URL_SAFE_NO_PAD.encode(ed.verifying_key().to_bytes()), "pq_key_id":"pq", "pq_public":URL_SAFE_NO_PAD.encode(pq.public_key().as_ref()), "minimum_epoch":7});
-        std::fs::write(path("payload"), serde_json::to_vec(&payload).unwrap()).unwrap();
-        std::fs::write(path("binary"), data).unwrap();
+        let mut staged = payload.clone();
+        staged.as_object_mut().unwrap().remove("format");
+        staged["pub_date"] = "2026-11-03T00:00:00Z".into();
+        staged["notes"] = "WinCommander Pro v3.7.0".into();
+        std::fs::write(path("manifest"), serde_json::to_vec(&staged).unwrap()).unwrap();
+        std::fs::write(path("binary"), b"wrong file").unwrap();
         std::fs::write(path("trust"), serde_json::to_vec(&config).unwrap()).unwrap();
+        let stage = vec![
+            "tool".into(),
+            "stage".into(),
+            path("manifest"),
+            path("binary"),
+            "3.7.0".into(),
+            path("payload"),
+        ];
+        assert!(run(&stage).is_err());
+        assert!(!std::path::Path::new(&path("payload")).exists());
+        std::fs::write(path("binary"), data).unwrap();
+        let mut wrong_version = stage.clone();
+        wrong_version[4] = "3.7.1".into();
+        assert!(run(&wrong_version).is_err());
+        assert!(run(&stage).is_ok());
+        assert!(run(&stage).is_err());
+        let prepared_payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path("payload")).unwrap()).unwrap();
+        assert_eq!(prepared_payload, payload);
         let prepare = vec![
             "tool".into(),
             "prepare".into(),
@@ -184,7 +217,8 @@ mod tests {
         assert!(run(&finish).is_ok());
         assert!(run(&finish).is_err());
         for name in [
-            "payload", "binary", "trust", "ed-msg", "pq-msg", "ed-sig", "pq-sig", "signed",
+            "manifest", "payload", "binary", "trust", "ed-msg", "pq-msg", "ed-sig", "pq-sig",
+            "signed",
         ] {
             std::fs::remove_file(path(name)).unwrap();
         }

@@ -38,11 +38,14 @@ signing without loading private keys. Build with `--features experimental-signer
 --bin wincmd-pq-release-prepare`. Given the same independently trusted key file:
 
 ```text
+wincmd-pq-release-prepare stage latest.pro.json pro.exe 3.7.0 payload.json
 wincmd-pq-release-prepare prepare payload.json pro.exe trusted-keys.json 3.7.0 7 ed.msg pq.msg
 wincmd-pq-release-prepare finish payload.json pro.exe trusted-keys.json 3.7.0 7 ed.sig pq.sig hybrid.json
 ```
 
-The first step validates the file and emits the exact binary messages for the
+The stage step reads the existing Pro release manifest and checks the staged
+executable before creating the payload. The prepare step checks the file again
+and emits the exact binary messages for the
 Ed25519 and ML-DSA-65 signing providers. Each provider must review the release
 and sign its respective bytes; the signatures are raw binary (64 and 3309
 bytes). The second step rechecks the file and both signatures, and refuses to
