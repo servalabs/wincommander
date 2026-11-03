@@ -22,8 +22,13 @@ rust-version = "1.77"
 name = "wincommander-svc"
 path = "src/main.rs"
 
+[features]
+# Compile-only migration work; this does not enable issuance or cache writes.
+experimental-pq-licence = ["dep:wincmd-pq-experiment"]
+
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
 fleet-proto = { path = "../fleet-proto" }
 wincmd-volume = { path = "../wincmd-volume" }
 # Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with

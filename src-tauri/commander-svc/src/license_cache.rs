@@ -118,12 +118,39 @@ fn validate_request(
         .verify(request.payload.as_bytes(), &signature)
         .map_err(|_| "license cache signature is invalid")?;
 
+    validate_claims(request.payload.as_bytes())
+}
+
+fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
+    if payload.is_empty() || payload.len() > MAX_SIGNED_PAYLOAD_BYTES {
+        return Err("license cache payload is invalid");
+    }
     let claims: SignedClaims =
-        serde_json::from_str(&request.payload).map_err(|_| "license cache payload is invalid")?;
+        serde_json::from_slice(payload).map_err(|_| "license cache payload is invalid")?;
     if claims.device_hash.trim().is_empty() || claims.exp == 0 || claims.iat > claims.exp {
         return Err("license cache payload is invalid");
     }
     Ok(())
+}
+
+/// Experimental validation only: no service verb, key loading or cache write.
+/// Rollback protection and every licence reader must be implemented before use.
+#[cfg(feature = "experimental-pq-licence")]
+#[allow(dead_code)]
+fn validate_hybrid_request(
+    envelope: &[u8],
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<wincmd_pq_experiment::jws::Verified, &'static str> {
+    if envelope.is_empty()
+        || envelope.len() > 32 * 1024
+        || trust.purpose != wincmd_pq_experiment::Purpose::Licence
+    {
+        return Err("license cache request is invalid");
+    }
+    let verified = wincmd_pq_experiment::jws::verify(envelope, trust)
+        .map_err(|_| "license cache signature is invalid")?;
+    validate_claims(&verified.payload)?;
+    Ok(verified)
 }
 
 fn service_public_key() -> Option<&'static str> {
@@ -260,5 +287,99 @@ mod tests {
             "path": "C:\\\\not-accepted"
         });
         assert!(serde_json::from_value::<StoreLicenseCacheRequest>(malformed).is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_validation_checks_both_signatures_and_legacy_claim_constraints() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/hybrid-licence-test.json")).unwrap();
+        let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD
+            .decode(fixture["publicEd"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD
+            .decode(fixture["publicPq"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let trust = jws::Trust {
+            purpose: Purpose::Licence,
+            minimum_epoch: 7,
+            ed_key_id: "ed-key",
+            ed25519_public: &ed,
+            pq_key_id: "pq-key",
+            ml_dsa_65_public: &pq,
+        };
+        let token = serde_json::to_vec(&fixture["jws"]).unwrap();
+        assert_eq!(validate_hybrid_request(&token, &trust).unwrap().epoch, 7);
+        for index in 0..2 {
+            let mut changed = fixture["jws"].clone();
+            let mut signature = general_purpose::URL_SAFE_NO_PAD
+                .decode(changed["signatures"][index]["signature"].as_str().unwrap())
+                .unwrap();
+            signature[0] ^= 1;
+            changed["signatures"][index]["signature"] =
+                general_purpose::URL_SAFE_NO_PAD.encode(signature).into();
+            assert_eq!(
+                validate_hybrid_request(&serde_json::to_vec(&changed).unwrap(), &trust).err(),
+                Some("license cache signature is invalid")
+            );
+        }
+        let stale = jws::Trust {
+            minimum_epoch: 8,
+            ..trust
+        };
+        assert_eq!(
+            validate_hybrid_request(&token, &stale).err(),
+            Some("license cache signature is invalid")
+        );
+        assert_eq!(
+            validate_hybrid_request(&vec![b' '; 32 * 1024 + 1], &stale).err(),
+            Some("license cache request is invalid")
+        );
+        assert_eq!(
+            validate_claims(br#"{"device_hash":"","iat":1,"exp":2}"#),
+            Err("license cache payload is invalid")
+        );
+        assert_eq!(
+            validate_claims(br#"{"device_hash":"x","iat":3,"exp":2}"#),
+            Err("license cache payload is invalid")
+        );
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_signature_does_not_make_malformed_claims_valid() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/hybrid-licence-invalid-test.json"))
+                .unwrap();
+        let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD
+            .decode(fixture["publicEd"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD
+            .decode(fixture["publicPq"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let trust = jws::Trust {
+            purpose: Purpose::Licence,
+            minimum_epoch: 7,
+            ed_key_id: "ed-key",
+            ed25519_public: &ed,
+            pq_key_id: "pq-key",
+            ml_dsa_65_public: &pq,
+        };
+        let token = serde_json::to_vec(&fixture["jws"]).unwrap();
+        assert!(jws::verify(&token, &trust).is_ok());
+        assert_eq!(
+            validate_hybrid_request(&token, &trust).err(),
+            Some("license cache payload is invalid")
+        );
     }
 }
