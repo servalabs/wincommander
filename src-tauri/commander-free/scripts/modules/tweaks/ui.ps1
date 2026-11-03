@@ -3,6 +3,164 @@
 # Windows interface and personalization tweaks
 # ============================================================================
 
+function Get-ShellVisibilityValue {
+    param([string]$Hive, [string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ exists = $false; value = $null; kind = $null } }
+        try {
+            if ($Name -notin $sub.GetValueNames()) { return @{ exists = $false; value = $null; kind = $null } }
+            return @{ exists = $true; value = $sub.GetValue($Name, $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind($Name) }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-ShellVisibilityValue {
+    param([string]$Key, [string]$Name, $Value, [string]$Kind)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.CreateSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'Windows denied the policy write.' }
+        try { $sub.SetValue($Name, $Value, $Kind); $sub.Flush() } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-ShellVisibilityValue {
+    param([string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -ne $sub) { try { $sub.DeleteValue($Name, $false); $sub.Flush() } finally { $sub.Dispose() } }
+    } finally { $base.Dispose() }
+}
+
+function Invoke-WithShellVisibilityMutex {
+    param([scriptblock]$Action)
+    $mutex = [Threading.Mutex]::new($false, 'Global\WinCommander_ShellVisibility')
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Timed out waiting for the Windows appearance lock.' }
+        & $Action
+    } finally { if ($acquired) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+}
+
+function Get-ShellVisibilityPlatform {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $edition = Get-ShellVisibilityValue 'LocalMachine' 'SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'EditionID'
+        $eligibleEdition = $edition.exists -and $edition.kind -eq 'String' -and $edition.value -match '^(Professional|Enterprise|Education|IoTEnterprise)'
+        return [bool]($os.ProductType -eq 1 -and [int]$os.BuildNumber -ge 22621 -and $eligibleEdition)
+    } catch { return $false }
+}
+
+function Get-ShellVisibilitySpec {
+    param([string]$Item)
+    switch ($Item) {
+        'StartRecommended' { return @{ Key = 'SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'HideRecommendedSection'; Kind = 'DWord' } }
+        'SettingsHome' { return @{ Key = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'SettingsPageVisibility'; Kind = 'String' } }
+        default { throw 'Unknown appearance setting.' }
+    }
+}
+
+function Test-ShellVisibilityValue {
+    param($Actual, [string]$Kind, [string]$Value)
+    if ($Kind -eq 'Absent') { return -not $Actual.exists }
+    return $Actual.exists -and $Actual.kind -eq $Kind -and [string]$Actual.value -ceq $Value
+}
+
+function Get-ShellVisibilityState {
+    param([string]$Item, [bool]$Eligible)
+    $spec = Get-ShellVisibilitySpec $Item
+    $snapshot = "SOFTWARE\WinCommander\ShellVisibility\$Item"
+    $current = Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name
+    $userPolicy = Get-ShellVisibilityValue 'CurrentUser' $spec.Key $spec.Name
+    $phase = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Phase'
+    $beforeKind = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'BeforeKind'
+    $before = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'BeforeValue'
+    $applied = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'AppliedValue'
+    $valid = $phase.exists -and $phase.kind -eq 'DWord' -and $phase.value -in @(1,2) -and $beforeKind.exists -and $beforeKind.kind -eq 'String' -and $beforeKind.value -in @('Absent',$spec.Kind) -and $before.exists -and $before.kind -eq 'String' -and $applied.exists -and $applied.kind -eq 'String'
+    if ($valid) {
+        if ($beforeKind.value -eq 'Absent' -and $before.value -cne '') { $valid = $false }
+        if ($Item -eq 'StartRecommended' -and ($applied.value -cne '1' -or $beforeKind.value -ne 'Absent')) { $valid = $false }
+        if ($Item -eq 'SettingsHome') {
+            $appliedPages = if ($applied.value -match '^hide:') { @($applied.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() }) } else { @() }
+            if ($appliedPages -notcontains 'home' -or ($beforeKind.value -eq 'String' -and $before.value -notmatch '^hide:')) { $valid = $false }
+        }
+    }
+    $owned = $valid -and $phase.value -eq 2
+    $pending = $valid -and $phase.value -eq 1
+    $conflict = (($phase.exists -or $beforeKind.exists -or $before.exists -or $applied.exists) -and -not $valid) -or ($owned -and -not (Test-ShellVisibilityValue $current $spec.Kind $applied.value)) -or ($pending -and -not (Test-ShellVisibilityValue $current $beforeKind.value $before.value))
+    $externalHidden = $false
+    $canApply = -not $current.exists
+    if ($current.exists -and $Item -eq 'StartRecommended') { $externalHidden = $current.kind -eq 'DWord' -and $current.value -eq 1 }
+    if ($current.exists -and $Item -eq 'SettingsHome' -and $current.kind -eq 'String' -and $current.value -match '^hide:') {
+        $pages = @($current.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $externalHidden = $pages -contains 'home'
+        $canApply = -not $externalHidden
+    }
+    return @{ item = $Item; eligible = $Eligible; owned = [bool]$owned; pending = [bool]$pending; conflict = [bool]$conflict; userPolicy = [bool]$userPolicy.exists; existing = [bool]$current.exists; externalHidden = [bool]($externalHidden -and -not $owned); canApply = [bool]($canApply -or $pending); beforeKind = if ($valid) { [string]$beforeKind.value } else { $null }; beforeValue = if ($valid) { [string]$before.value } else { $null }; appliedValue = if ($valid) { [string]$applied.value } else { $null } }
+}
+
+function Get-ShellVisibilityStatus {
+    return Invoke-WithShellVisibilityMutex {
+        $eligible = Get-ShellVisibilityPlatform
+        @{ isAdmin = [bool](Test-IsAdmin); items = @((Get-ShellVisibilityState 'StartRecommended' $eligible), (Get-ShellVisibilityState 'SettingsHome' $eligible)) }
+    }
+}
+
+function Set-ShellVisibility {
+    param([Parameter(Mandatory = $true)][ValidateSet('StartRecommended','SettingsHome')][string]$Item, [Parameter(Mandatory = $true)][ValidateSet('hide','restore')][string]$Mode)
+    Assert-IsAdmin
+    return Invoke-WithShellVisibilityMutex {
+        $spec = Get-ShellVisibilitySpec $Item
+        $snapshot = "SOFTWARE\WinCommander\ShellVisibility\$Item"
+        $state = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)
+        if ($state.conflict) { throw 'The setting or backup changed outside WinCommander. No policy was changed.' }
+        if ($state.userPolicy) { throw 'A separate account policy controls this setting. No policy was changed.' }
+        if ($Mode -eq 'hide') {
+            if (-not $state.eligible) { throw 'This Windows edition or version is not supported for this policy.' }
+            if (-not $state.owned -and -not $state.canApply) { throw 'An existing policy controls this setting. No policy was changed.' }
+            if (-not $state.owned -and -not $state.pending) {
+                $current = Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name
+                if ($Item -eq 'StartRecommended' -and $current.exists) { throw 'The policy changed before it could be saved.' }
+                if ($Item -eq 'SettingsHome' -and $current.exists) {
+                    if ($current.kind -ne 'String' -or $current.value -notmatch '^hide:') { throw 'The Settings policy changed before it could be saved.' }
+                    $pages = @($current.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                    if ($pages -contains 'home') { throw 'Settings Home was already hidden outside WinCommander.' }
+                }
+                $beforeKind = if ($current.exists) { $current.kind } else { 'Absent' }
+                $beforeValue = if ($current.exists) { [string]$current.value } else { '' }
+                $applied = if ($Item -eq 'StartRecommended') { '1' } elseif (-not $current.exists -or $beforeValue -match '^hide:\s*;*\s*$') { 'hide:home' } else { $beforeValue.TrimEnd(';') + ';home' }
+                Set-ShellVisibilityValue $snapshot 'BeforeKind' $beforeKind 'String'
+                Set-ShellVisibilityValue $snapshot 'BeforeValue' $beforeValue 'String'
+                Set-ShellVisibilityValue $snapshot 'AppliedValue' $applied 'String'
+                Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+                $state = Get-ShellVisibilityState $Item $true
+                if (-not $state.pending -or $state.conflict) { throw 'Windows could not confirm the policy backup.' }
+            }
+            if (-not $state.owned) {
+                $value = if ($spec.Kind -eq 'DWord') { [int]$state.appliedValue } else { $state.appliedValue }
+                Set-ShellVisibilityValue $spec.Key $spec.Name $value $spec.Kind
+                if (-not (Test-ShellVisibilityValue (Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name) $spec.Kind $state.appliedValue)) { throw 'Windows could not verify the policy write.' }
+                Set-ShellVisibilityValue $snapshot 'Phase' 2 'DWord'
+            }
+            $result = Get-ShellVisibilityState $Item $true
+            if (-not $result.owned -or $result.conflict) { throw 'Windows could not verify the policy change.' }
+        } else {
+            if (-not $state.owned) { throw 'WinCommander has no confirmed change to restore.' }
+            if ($state.beforeKind -eq 'Absent') { Remove-ShellVisibilityValue $spec.Key $spec.Name }
+            else { $value = if ($state.beforeKind -eq 'DWord') { [int]$state.beforeValue } else { $state.beforeValue }; Set-ShellVisibilityValue $spec.Key $spec.Name $value $state.beforeKind }
+            if (-not (Test-ShellVisibilityValue (Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name) $state.beforeKind $state.beforeValue)) { throw 'Windows could not verify restoration.' }
+            foreach ($name in @('Phase','BeforeKind','BeforeValue','AppliedValue')) { Remove-ShellVisibilityValue $snapshot $name }
+            $result = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)
+            if ($result.owned -or $result.pending -or $result.conflict) { throw 'The policy was restored, but its backup could not be cleared.' }
+        }
+        @{ status = 'updated'; verified = $true; item = $result; requiresSignOut = $true }
+    }
+}
+
 # --- BACKGROUND APPS ---
 
 function Disable-BackgroundApps {

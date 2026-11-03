@@ -11,6 +11,7 @@ import PowerGraphicsCard from "../../components/tweaks/PowerGraphicsCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
 import LocalPasswordExpiryCard from "../../components/tweaks/LocalPasswordExpiryCard";
 import UpdateRestartCard from "../../components/tweaks/UpdateRestartCard";
+import ShellVisibilityCard, { shellVisibilityMatches } from "../../components/tweaks/ShellVisibilityCard";
 import RdpRedirectionCard from "../privacy/RdpRedirectionCard";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
@@ -89,7 +90,7 @@ export default function TweaksPanel() {
         // shows an empty screen instead.
         return TWEAKS_TOGGLES.some(
             (t) => (isServerSku || t.section !== "server") && toggleMatchesQuery(t, q),
-        ) || matchesContextMenu || "windows update scheduled restart signed in".includes(q);
+        ) || matchesContextMenu || shellVisibilityMatches(q) || "windows update scheduled restart signed in".includes(q);
     }, [searchQuery, isServerSku]);
 
     const isAdvanced = visibility.density === "expert";
@@ -123,7 +124,7 @@ export default function TweaksPanel() {
         const tabMatches = (tab: TweaksTab): boolean => {
             switch (tab) {
                 case "appearance":
-                    return sectionHasMatch("ui", q) ||
+                    return sectionHasMatch("ui", q) || shellVisibilityMatches(q) ||
                         "context menu secure delete".includes(q) || "secure right-click".includes(q);
                 case "performance":
                     return sectionHasMatch("power", q) || sectionHasMatch("performance", q) ||
@@ -246,6 +247,7 @@ function AppearanceExplorerTab({ isAdvanced, showExpertSpeed, searchQuery, handl
                 searchQuery={searchQuery}
                 getExternalActiveConflicts={getNotificationExternalConflicts}
             />
+            {shellVisibilityMatches(searchQuery) && <ShellVisibilityCard searchQuery={searchQuery} />}
 
             {/* Context Menu Integration (expert) — same gate as before the move. */}
             {showExpertSpeed && (

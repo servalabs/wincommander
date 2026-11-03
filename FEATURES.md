@@ -37,6 +37,9 @@ the backend and private component before execution.
   confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
+- Optional policies to hide the Start recommended section and Settings Home
+  on supported Windows 11 editions. Existing Settings page restrictions are
+  retained, and WinCommander changes can be restored to their previous state.
 - Optional Windows Update policy to avoid scheduled update restarts while a
   user is signed in. It requires Windows' scheduled-install setting and does
   not prevent all restarts. Existing administrator policies are preserved.

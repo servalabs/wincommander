@@ -5540,6 +5540,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dShellVisibilityStatus",
+      "name": "Get\u002dShellVisibilityStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ShellVisibilityCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dSpotlightCacheInfo",
       "name": "Get\u002dSpotlightCacheInfo",
       "transport": "backend\u002dscript",
@@ -6989,6 +6999,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Set\u002dShellVisibility",
+      "name": "Set\u002dShellVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ShellVisibilityCard.tsx"
+      ]
     },
     {
       "id": "backend:Set\u002dShredPolicy",

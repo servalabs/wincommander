@@ -2600,6 +2600,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-Notifications" => Some("tweaks/ui"),
         "Enable-Notifications" => Some("tweaks/ui"),
         "Enable-ClassicContextMenu" => Some("tweaks/ui"),
+        "Get-ShellVisibilityStatus" | "Set-ShellVisibility" => Some("tweaks/ui"),
         "Disable-ClassicContextMenu" => Some("tweaks/ui"),
         "Enable-EndTaskOnTaskbar" => Some("tweaks/ui"),
         "Disable-EndTaskOnTaskbar" => Some("tweaks/ui"),
@@ -4722,6 +4723,7 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Undo-HostsBlocklistChange",
     "Set-HostsRecommendedProtection",
     "Set-UpdateRestartPolicy",
+    "Set-ShellVisibility",
 ];
 
 fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool, String> {
@@ -5787,6 +5789,7 @@ pub(crate) async fn run_backend_script_with_timeout(
                     | "Add-IPFirewallRule"
                     | "Remove-IPFirewallRule"
                     | "Set-AdditionalAppPermission"
+                    | "Set-ShellVisibility"
             );
         if mutating {
             let msg = format!(
