@@ -40,6 +40,10 @@ mod lifecycle_mutex;
 mod removal;
 use removal::PendingRemoval;
 
+#[path = "fleet_startup.rs"]
+mod startup;
+pub(crate) use startup::resume_from_settings;
+
 fn record_fleet_lifecycle(
     operation_id: &str,
     lifecycle: DiagnosticLifecycle,
@@ -475,6 +479,7 @@ async fn fleet_connect_inner_locked(
         "signingKeyPub": committed.app.fleet.signing_key_pub,
         "deviceId": committed.device_id,
         "meshEndpoints": origins.iter().skip(1).collect::<Vec<_>>(),
+        "enrollmentIntent": if repair_expected_binding.is_some() { "resume" } else { "explicit_connect" },
     });
     if let Some((challenge, _)) = &service_challenge {
         args["shieldProgressChallenge"] = Value::String(challenge.clone());

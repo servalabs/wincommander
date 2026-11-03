@@ -2340,30 +2340,10 @@ pub fn run() {
                 // calls PowerShell on a cold boot (can take seconds) — gate it
                 // inside the spawned task so the setup thread is never blocked.
                 if s.app.fleet.enabled && !s.app.fleet.server_url.is_empty() {
-                    // Clone the cheap string fields needed inside the task.
-                    let fleet_server_url   = s.app.fleet.server_url.clone();
-                    let fleet_dispatch     = s.app.fleet.dispatch;
-                    let fleet_signing_key  = s.app.fleet.signing_key_pub.clone();
-                    let fleet_device_id    = s.device_id.clone();
                     tauri::async_runtime::spawn(async move {
-                        // Gate the startup path on the explicit Fleet service claim — the
-                        // command wrappers use the same central service gate, but this path
-                        // goes straight to the sidecar, so a lapsed-Fleet user with
-                        // fleet.enabled in settings
-                        // must NOT silently re-enroll. Checked off-thread so PowerShell
-                        // (current_device_hash) never runs on the setup thread.
+                        // Entitlement and lease acquisition stay off the setup thread.
                         if license::require_service_feature("fleet").is_err() { return; }
-                        let args = serde_json::json!({
-                            "serverUrl": fleet_server_url,
-                            "dispatch": fleet_dispatch,
-                            "signingKeyPub": fleet_signing_key,
-                            // Stable device id so the runtime auto-connect re-enrolls
-                            // the SAME fleet row (dedup — matches fleet_connect).
-                            "deviceId": fleet_device_id,
-                        });
-                        if let Err(e) =
-                            sidecar::dispatch_paid_command("fleet_agent_configure", args).await
-                        {
+                        if let Err(e) = fleet_agent::resume_from_settings().await {
                             log_message(
                                 "warn",
                                 &format!("[Fleet] startup auto-connect failed: {e}"),

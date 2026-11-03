@@ -366,6 +366,12 @@ export default function FleetConnectView() {
     }
   }
 
+  async function checkRemoval() {
+    setBusy(true);
+    setError(null);
+    try { await finalizeApprovedUnenroll(); } finally { setBusy(false); }
+  }
+
   // Purpose-built loading state: mirrors the real card's shape (header +
   // badge + two meta rows) so nothing jumps when the first poll settles,
   // instead of the generic cross-panel PanelSkeleton.
@@ -587,7 +593,9 @@ export default function FleetConnectView() {
           <p className="fleet-connect-enrolling">
             <Icon icon="offline" size={13} /> This device is known to Fleet but is not currently checking in.
           </p>
+          {fleetEntitled && wasEnrolled && <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>}
           {agentError && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {agentError}</p>}
+          {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
           {!fleetEntitled && <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
       ) : (
@@ -663,6 +671,9 @@ export default function FleetConnectView() {
           >
             {busy ? "Connecting…" : enrolling ? "Enrolling…" : "Connect to Fleet"}
           </Button>
+          {fleetEntitled && wasEnrolled && isRemoved && (
+            <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>
+          )}
         </div>
       )}
       {status?.deviceId && <><FleetSignedContact timestamp={status.lastSignedContactAt} /><FleetServiceContact deviceId={status.deviceId} /></>}
