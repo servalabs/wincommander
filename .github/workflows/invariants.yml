@@ -248,7 +248,7 @@ jobs:
           & pwsh -NoProfile -File ../tools/stage-hybrid-free.test.ps1 -ToolPath (Join-Path $PWD 'target/debug/wincmd-pq-free-release-prepare.exe')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test experimental Free updater verification
-        run: cargo test --locked -p commander-free --lib --features experimental-pq-free-release updater::hybrid_free::
+        run: 'cargo test --locked -p commander-free --lib --features experimental-pq-free-release updater::hybrid_free::'
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation
