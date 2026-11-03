@@ -28,12 +28,12 @@ export default function ShellVisibilityCard({ searchQuery }: { searchQuery: stri
     setStatus(result.data);
   }, []);
   useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [refresh]);
-  const change = async (item: VisibilityItem) => {
+  const change = async (item: VisibilityItem, mode: "hide" | "restore") => {
     if (running.current) return;
     running.current = true; setBusy(true); setError(null);
     let failure: string | null = null;
     try {
-      const result = await executeBackendCommand<VisibilityReceipt>("Set-ShellVisibility", { Item: item.item, Mode: item.owned ? "restore" : "hide" });
+      const result = await executeBackendCommand<VisibilityReceipt>("Set-ShellVisibility", { Item: item.item, Mode: mode });
       if (!result.success || result.data?.verified !== true) throw new Error(result.error || "Windows could not verify the change.");
     } catch (e) { failure = String(e); }
     try { await refresh(); } catch (e) { failure = failure ? `${failure} Refresh also failed: ${String(e)}` : String(e); }
@@ -49,7 +49,11 @@ export default function ShellVisibilityCard({ searchQuery }: { searchQuery: stri
         if (!item) return null;
         const reading = item.conflict ? "Changed elsewhere — review needed" : item.userPolicy ? "Controlled by an account policy" : !item.eligible ? "Not supported on this edition or version" : item.owned ? "Hide policy set by WinCommander" : item.pending ? "Previous change interrupted" : item.externalHidden ? "Already hidden by another policy" : item.existing && !item.canApply ? "Controlled by another policy" : "Not hidden by WinCommander";
         const disabled = busy || isInvestigator || !status.isAdmin || item.conflict || item.userPolicy || (!item.owned && (!item.eligible || !item.canApply));
-        return <div key={key} className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-medium">{label}</div><div className="text-xs text-[var(--text-mute)]">{reading}</div></div><Button small disabled={disabled} onClick={() => void change(item)}>{item.owned ? "Restore" : item.pending ? "Retry hide" : "Hide"}</Button></div>;
+        const cancelDisabled = busy || isInvestigator || !status.isAdmin || item.conflict;
+        return <div key={key} className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-medium">{label}</div><div className="text-xs text-[var(--text-mute)]">{reading}</div></div><div className="flex gap-2">
+          {!item.owned && <Button small disabled={disabled} onClick={() => void change(item, "hide")}>{item.pending ? "Retry hide" : "Hide"}</Button>}
+          {(item.owned || item.pending) && <Button small disabled={item.pending ? cancelDisabled : disabled} onClick={() => void change(item, "restore")}>{item.pending ? "Cancel change" : "Restore"}</Button>}
+        </div></div>;
       })}
       {status && !status.isAdmin && <p className="text-xs text-[var(--color-warning)]">Open WinCommander as administrator to change these settings for the PC.</p>}
       {isInvestigator && <p>Changes are unavailable while Investigator mode is active.</p>}

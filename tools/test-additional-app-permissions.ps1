@@ -83,6 +83,13 @@ if (-not (Get-AdditionalPermissionState bluetooth User).pending) { throw 'Interr
 $script:failDeny = $false
 if (-not (Set-AdditionalAppPermission bluetooth User deny).verified) { throw 'Could not retry safely.' }
 Reset-Fixture
+$script:failDeny = $true
+Expect-Failure { Set-AdditionalAppPermission humanPresence User deny }
+$script:keys["Machine|$policyKey"] = $true
+$script:values["Machine|$policyKey|LetAppsAccessHumanPresence"] = @{value=2;kind='DWord'}
+if (-not (Set-AdditionalAppPermission humanPresence User restore).verified) { throw 'Could not cancel an unchanged pending permission.' }
+if ($script:values.ContainsKey("User|$script:root\humanPresence|Value")) { throw 'Cancel modified the original permission.' }
+Reset-Fixture
 $script:failFinalize = $true
 Expect-Failure { Set-AdditionalAppPermission bluetooth User deny }
 if (-not (Get-AdditionalPermissionState bluetooth User).conflict) { throw 'Uncertain ownership was not reported.' }

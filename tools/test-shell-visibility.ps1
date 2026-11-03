@@ -70,6 +70,13 @@ if (-not (Get-ShellVisibilityState StartRecommended $true).pending) { throw 'Int
 $script:failWrite = $false
 if (-not (Set-ShellVisibility StartRecommended hide).verified) { throw 'Retry failed.' }
 Reset-Fixture
+$script:failWrite = $true
+Expect-Failure { Set-ShellVisibility StartRecommended hide }
+$script:values["CurrentUser|$script:startKey|HideRecommendedSection"] = @{kind='DWord';value=0}
+$script:eligible = $false
+if (-not (Set-ShellVisibility StartRecommended restore).verified) { throw 'Could not cancel an unchanged pending policy.' }
+if ($script:values.ContainsKey("LocalMachine|$script:startKey|HideRecommendedSection")) { throw 'Cancel changed the original policy.' }
+Reset-Fixture
 $script:failFinalize = $true
 Expect-Failure { Set-ShellVisibility StartRecommended hide }
 if (-not (Get-ShellVisibilityState StartRecommended $true).conflict) { throw 'Uncertain ownership was not reported.' }

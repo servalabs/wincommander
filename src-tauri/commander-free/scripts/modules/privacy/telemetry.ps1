@@ -495,7 +495,7 @@ function Set-AdditionalAppPermission {
         $snapshot = "SOFTWARE\WinCommander\AdditionalAppPermissions\$Capability"
         $state = Get-AdditionalPermissionState $Capability $Scope
         if ($state.conflict) { throw 'The setting or its backup changed outside WinCommander. No setting was changed.' }
-        if ($state.managed) { throw 'An administrator policy controls this permission. No setting was changed.' }
+        if ($state.managed -and -not ($Mode -eq 'restore' -and $state.pending)) { throw 'An administrator policy controls this permission. No setting was changed.' }
         if ($Mode -eq 'deny') {
             if (-not $state.available) { throw 'Windows has not exposed this permission on this PC.' }
             if ($state.value -eq 'Unknown') { throw 'Windows returned an unsupported permission value.' }
@@ -516,9 +516,11 @@ function Set-AdditionalAppPermission {
             $result = Get-AdditionalPermissionState $Capability $Scope
             if (-not $result.owned -or $result.value -ne 'Deny' -or $result.conflict) { throw 'Windows could not verify this permission change.' }
         } else {
-            if (-not $state.owned) { throw 'WinCommander has no confirmed change to restore.' }
-            if ($state.previousPresent) { Set-AdditionalPermissionRegistryValue $Scope $key 'Value' $state.previousValue 'String' }
-            else { Remove-AdditionalPermissionRegistryValue $Scope $key 'Value' }
+            if (-not ($state.owned -or $state.pending)) { throw 'WinCommander has no change to restore.' }
+            if ($state.owned) {
+                if ($state.previousPresent) { Set-AdditionalPermissionRegistryValue $Scope $key 'Value' $state.previousValue 'String' }
+                else { Remove-AdditionalPermissionRegistryValue $Scope $key 'Value' }
+            }
             $restored = Get-AdditionalPermissionRegistryValue $Scope $key 'Value'
             if (($state.previousPresent -and (-not $restored.exists -or $restored.kind -ne 'String' -or $restored.value -cne $state.previousValue)) -or (-not $state.previousPresent -and $restored.exists)) { throw 'Windows could not verify restoration.' }
             foreach ($name in @('Phase', 'HadValue', 'PreviousValue')) { Remove-AdditionalPermissionRegistryValue $Scope $snapshot $name }

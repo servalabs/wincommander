@@ -42,18 +42,19 @@ function Get-TestKey([string]$Scope, [string]$Key) {
 }
 function Test-IsAdmin { return $true }
 function Assert-IsAdmin {}
-function Get-ShellVisibilityPlatform { return $true }
+$script:failPermission = $false; $script:failShell = $false; $script:eligible = $true
+function Get-ShellVisibilityPlatform { return $script:eligible }
 function Invoke-WithAdditionalPermissionMutex { param([scriptblock]$Action) & $Action }
 function Invoke-WithUpdateRestartMutex { param([scriptblock]$Action) & $Action }
 function Invoke-WithShellVisibilityMutex { param([scriptblock]$Action) & $Action }
 function Get-AdditionalPermissionRegistryValue { param([string]$Scope,[string]$Key,[string]$Name) Get-AdditionalPermissionRegistryValueImpl 'User' (Get-TestKey $Scope $Key) $Name }
-function Set-AdditionalPermissionRegistryValue { param([string]$Scope,[string]$Key,[string]$Name,$Value,[string]$Kind) Set-AdditionalPermissionRegistryValueImpl 'User' (Get-TestKey $Scope $Key) $Name $Value $Kind }
+function Set-AdditionalPermissionRegistryValue { param([string]$Scope,[string]$Key,[string]$Name,$Value,[string]$Kind) if ($script:failPermission -and $Name -eq 'Value' -and $Value -eq 'Deny') { throw 'Simulated write failure.' }; Set-AdditionalPermissionRegistryValueImpl 'User' (Get-TestKey $Scope $Key) $Name $Value $Kind }
 function Remove-AdditionalPermissionRegistryValue { param([string]$Scope,[string]$Key,[string]$Name) Remove-AdditionalPermissionRegistryValueImpl 'User' (Get-TestKey $Scope $Key) $Name }
 function Get-UpdateRestartRegistryValue { param([string]$Key,[string]$Name) Get-UpdateRestartRegistryValueImpl (Get-TestKey 'Machine' $Key) $Name }
 function Set-UpdateRestartRegistryValue { param([string]$Key,[string]$Name,[int]$Value) Set-UpdateRestartRegistryValueImpl (Get-TestKey 'Machine' $Key) $Name $Value }
 function Remove-UpdateRestartRegistryValue { param([string]$Key,[string]$Name) Remove-UpdateRestartRegistryValueImpl (Get-TestKey 'Machine' $Key) $Name }
 function Get-ShellVisibilityValue { param([string]$Hive,[string]$Key,[string]$Name) Get-ShellVisibilityValueImpl 'CurrentUser' (Get-TestKey $Hive $Key) $Name }
-function Set-ShellVisibilityValue { param([string]$Key,[string]$Name,$Value,[string]$Kind) Set-ShellVisibilityValueImpl (Get-TestKey 'LocalMachine' $Key) $Name $Value $Kind }
+function Set-ShellVisibilityValue { param([string]$Key,[string]$Name,$Value,[string]$Kind) if ($script:failShell -and $Name -eq 'HideRecommendedSection') { throw 'Simulated write failure.' }; Set-ShellVisibilityValueImpl (Get-TestKey 'LocalMachine' $Key) $Name $Value $Kind }
 function Remove-ShellVisibilityValue { param([string]$Key,[string]$Name) Remove-ShellVisibilityValueImpl (Get-TestKey 'LocalMachine' $Key) $Name }
 function Expect-Failure([scriptblock]$Action) { $failed=$false; try { & $Action | Out-Null } catch { $failed=$true }; if (-not $failed) { throw 'Expected the operation to fail.' } }
 
@@ -73,6 +74,12 @@ try {
     if ((Set-AdditionalAppPermission bluetooth User restore).permission.value -cne 'Prompt') { throw 'User permission was not restored.' }
     if (-not (Set-AdditionalAppPermission bluetooth Machine deny).verified) { throw 'Machine permission change failed.' }
     if ((Set-AdditionalAppPermission bluetooth Machine restore).permission.value -cne 'Allow') { throw 'Machine permission was not restored.' }
+    $script:failPermission = $true
+    Expect-Failure { Set-AdditionalAppPermission bluetooth User deny }
+    if (-not (Get-AdditionalPermissionState bluetooth User).pending) { throw 'Interrupted permission was not recorded.' }
+    if (-not (Set-AdditionalAppPermission bluetooth User restore).verified) { throw 'Pending permission could not be cancelled.' }
+    if ((Get-AdditionalPermissionRegistryValue User $permissionKey 'Value').value -cne 'Prompt') { throw 'Cancelling changed the prior permission.' }
+    $script:failPermission = $false
 
     $settingsKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
     Set-ShellVisibilityValue $settingsKey 'SettingsPageVisibility' 'hide:privacy;bluetooth;' 'String'
@@ -84,6 +91,12 @@ try {
     Expect-Failure { Set-ShellVisibility SettingsHome hide }
     if ((Get-ShellVisibilityValue LocalMachine $settingsKey 'SettingsPageVisibility').value -cne 'showonly:privacy') { throw 'External Settings policy was changed.' }
     if (-not (Set-ShellVisibility StartRecommended hide).verified -or -not (Set-ShellVisibility StartRecommended restore).verified) { throw 'Start visibility round trip failed.' }
+    $script:failShell = $true
+    Expect-Failure { Set-ShellVisibility StartRecommended hide }
+    $script:eligible = $false
+    if (-not (Set-ShellVisibility StartRecommended restore).verified) { throw 'Pending Start policy could not be cancelled.' }
+    if ((Get-ShellVisibilityValue LocalMachine 'SOFTWARE\Policies\Microsoft\Windows\Explorer' 'HideRecommendedSection').exists) { throw 'Cancelling changed the Start policy.' }
+    $script:failShell = $false; $script:eligible = $true
 
     $updateKey = 'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
     if (-not (Set-UpdateRestartPolicy applyWithSchedule).configured) { throw 'Update policy round trip could not apply.' }

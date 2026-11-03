@@ -118,7 +118,7 @@ function Set-ShellVisibility {
         $snapshot = "SOFTWARE\WinCommander\ShellVisibility\$Item"
         $state = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)
         if ($state.conflict) { throw 'The setting or backup changed outside WinCommander. No policy was changed.' }
-        if ($state.userPolicy) { throw 'A separate account policy controls this setting. No policy was changed.' }
+        if ($state.userPolicy -and -not ($Mode -eq 'restore' -and $state.pending)) { throw 'A separate account policy controls this setting. No policy was changed.' }
         if ($Mode -eq 'hide') {
             if (-not $state.eligible) { throw 'This Windows edition or version is not supported for this policy.' }
             if (-not $state.owned -and -not $state.canApply) { throw 'An existing policy controls this setting. No policy was changed.' }
@@ -149,9 +149,11 @@ function Set-ShellVisibility {
             $result = Get-ShellVisibilityState $Item $true
             if (-not $result.owned -or $result.conflict) { throw 'Windows could not verify the policy change.' }
         } else {
-            if (-not $state.owned) { throw 'WinCommander has no confirmed change to restore.' }
-            if ($state.beforeKind -eq 'Absent') { Remove-ShellVisibilityValue $spec.Key $spec.Name }
-            else { $value = if ($state.beforeKind -eq 'DWord') { [int]$state.beforeValue } else { $state.beforeValue }; Set-ShellVisibilityValue $spec.Key $spec.Name $value $state.beforeKind }
+            if (-not ($state.owned -or $state.pending)) { throw 'WinCommander has no change to restore.' }
+            if ($state.owned) {
+                if ($state.beforeKind -eq 'Absent') { Remove-ShellVisibilityValue $spec.Key $spec.Name }
+                else { $value = if ($state.beforeKind -eq 'DWord') { [int]$state.beforeValue } else { $state.beforeValue }; Set-ShellVisibilityValue $spec.Key $spec.Name $value $state.beforeKind }
+            }
             if (-not (Test-ShellVisibilityValue (Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name) $state.beforeKind $state.beforeValue)) { throw 'Windows could not verify restoration.' }
             foreach ($name in @('Phase','BeforeKind','BeforeValue','AppliedValue')) { Remove-ShellVisibilityValue $snapshot $name }
             $result = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)

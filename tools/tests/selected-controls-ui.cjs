@@ -87,6 +87,14 @@ const assert = require('node:assert/strict');
     await investigatorUpdate.getByText('Changes are unavailable while Investigator mode is active.').waitFor();
     assert.equal(await investigatorUpdate.getByRole('button', {name:'Set schedule and prevent restart'}).isDisabled(), true);
     assert.equal(await card('IP firewall rules').getByRole('button', {name:'Add rule'}).isDisabled(), true);
+    await page.goto(url + '?pending', { waitUntil:'domcontentloaded' });
+    const pendingStart = card('Start and Settings visibility').locator('div.flex.flex-wrap.items-center.justify-between').filter({hasText:'Start recommended section'});
+    await pendingStart.getByRole('button', {name:'Cancel change'}).click();
+    await pendingStart.getByText('Not hidden by WinCommander').waitFor();
+    const pendingBluetooth = card('More app-permission defaults').getByRole('row').filter({hasText:'Bluetooth devices'});
+    await pendingBluetooth.getByRole('button', {name:'Cancel change'}).click();
+    assert.equal(await pendingBluetooth.getByText('Default allows').count(), 2);
+    assert.equal(await page.evaluate(() => window.selectedCalls.filter(call => /^(Set-ShellVisibility|Set-AdditionalAppPermission)$/.test(call.command) && call.params.Mode === 'restore').length), 2);
     assert.deepEqual(errors, []);
     console.log('PASS: synthetic controls apply, restore, preserve confirmation, show errors, export history and fit narrow screens.');
   } finally { await browser.close(); }

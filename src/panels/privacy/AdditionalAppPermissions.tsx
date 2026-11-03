@@ -40,13 +40,13 @@ export default function AdditionalAppPermissions({ searchQuery }: { searchQuery:
   }, []);
   useEffect(() => { void refresh().catch((e: unknown) => setError(String(e))); }, [refresh]);
 
-  const change = async (row: PermissionState) => {
+  const change = async (row: PermissionState, mode: "deny" | "restore") => {
     if (running.current) return;
     running.current = true; setBusy(true); setError(null);
     let failure: string | null = null;
     try {
       const result = await executeBackendCommand<ChangeResult>("Set-AdditionalAppPermission", {
-        Capability: row.capability, Scope: row.scope, Mode: row.owned ? "restore" : "deny",
+        Capability: row.capability, Scope: row.scope, Mode: mode,
       });
       if (!result.success || result.data?.verified !== true) throw new Error(result.error || "Windows could not verify the change.");
     } catch (e) { failure = String(e); }
@@ -68,7 +68,11 @@ export default function AdditionalAppPermissions({ searchQuery }: { searchQuery:
     const row = data?.permissions.find(p => p.capability === key && p.scope === scope);
     if (!row) return <span>Unavailable</span>;
     const disabled = busy || isInvestigator || !row.available || row.conflict || row.managed || row.value === "Unknown" || (scope === "Machine" && !data?.isAdmin) || (!row.owned && !row.pending && row.value === "Deny");
-    return <div className="flex flex-wrap items-center gap-2"><span>{describe(row)}</span><Button small disabled={disabled} onClick={() => void change(row)}>{row.owned ? "Restore" : row.pending ? "Retry block" : "Block default"}</Button></div>;
+    const cancelDisabled = busy || isInvestigator || row.conflict || (scope === "Machine" && !data?.isAdmin);
+    return <div className="flex flex-wrap items-center gap-2"><span>{describe(row)}</span>
+      {!row.owned && <Button small disabled={disabled} onClick={() => void change(row, "deny")}>{row.pending ? "Retry block" : "Block default"}</Button>}
+      {(row.owned || row.pending) && <Button small disabled={row.pending ? cancelDisabled : disabled} onClick={() => void change(row, "restore")}>{row.pending ? "Cancel change" : "Restore"}</Button>}
+    </div>;
   };
   return <SectionCard title="More app-permission defaults" icon="applications">
     <div className="flex flex-col gap-3 text-sm">

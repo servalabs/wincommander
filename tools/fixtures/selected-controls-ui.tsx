@@ -24,6 +24,7 @@ const shell = ['StartRecommended', 'SettingsHome'].map(item => ({ item, eligible
 const context = ['IncludeLibrary', 'GiveAccess', 'Share'].map(item => ({ item, detected: 1, owned: false, pending: false, conflict: false, otherAccount: false }));
 const caps = ['humanPresence','passkeys','bluetooth','humanInterfaceDevice','passkeysEnumeration','sensors.custom','serialCommunication','usb','wifiData','wiFiDirect'].flatMap(capability => ['User','Machine'].map(scope => ({ capability, scope, available: true, value: 'Allow', owned: false, pending: false, conflict: false, managed: false })));
 if (limited) { shell[0].eligible = false; shell[1].userPolicy = true; context[0].conflict = true; context[2].detected = 0; caps.filter(row => row.capability === 'humanPresence').forEach(row => { row.available = false; }); }
+if (fixtureMode.has('pending')) { shell[0].pending = true; const row = caps.find(item => item.capability === 'bluetooth' && item.scope === 'User'); if (row) row.pending = true; }
 let ipRules: {Id:string;RemoteAddress:string;Direction:string;Action:string;Enabled:boolean;Active:boolean;ScopeMatches:boolean}[] = [];
 fixture.__TAURI_INTERNALS__ = {
   transformCallback: () => 1, unregisterCallback: () => {},
@@ -40,11 +41,11 @@ fixture.__TAURI_INTERNALS__ = {
       return structuredClone(restart);
     }
     if (name === 'Get-ShellVisibilityStatus') return {isAdmin:!limited,items:structuredClone(shell)};
-    if (name === 'Set-ShellVisibility') { const row=shell.find(item=>item.item===params.Item); if (!row) throw new Error('bad item'); row.owned=params.Mode==='hide'; return {verified:true}; }
+    if (name === 'Set-ShellVisibility') { const row=shell.find(item=>item.item===params.Item); if (!row) throw new Error('bad item'); row.owned=params.Mode==='hide'; row.pending=false; return {verified:true}; }
     if (name === 'Get-ContextItemVisibility') return {isAdmin:!limited,items:structuredClone(context)};
     if (name === 'Set-ContextItemVisibility') { const row=context.find(item=>item.item===params.Item); if (!row) throw new Error('bad item'); row.owned=params.Mode==='hide'; row.detected=row.owned?0:1; return {verified:true}; }
     if (name === 'Get-AdditionalAppPermissions') return {isAdmin:!limited,permissions:structuredClone(caps)};
-    if (name === 'Set-AdditionalAppPermission') { const row=caps.find(item=>item.capability===params.Capability && item.scope===params.Scope); if (!row) throw new Error('bad item'); row.owned=params.Mode==='deny'; row.value=row.owned?'Deny':'Allow'; return {verified:true}; }
+    if (name === 'Set-AdditionalAppPermission') { const row=caps.find(item=>item.capability===params.Capability && item.scope===params.Scope); if (!row) throw new Error('bad item'); row.owned=params.Mode==='deny'; row.pending=false; row.value=row.owned?'Deny':'Allow'; return {verified:true}; }
     if (name === 'Get-IPFirewallRules') return {readbackComplete:true,rules:structuredClone(ipRules)};
     if (name === 'Add-IPFirewallRule') { if (params.Address === 'bad') return {error:true,message:'Invalid IP address'}; ipRules=[{Id:'fixture-rule',RemoteAddress:params.Address,Direction:params.Direction,Action:params.Action,Enabled:true,Active:true,ScopeMatches:true}]; return {verified:true}; }
     if (name === 'Remove-IPFirewallRule') { ipRules=[]; return {verified:true}; }
