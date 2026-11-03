@@ -7438,7 +7438,10 @@ name = "wincmd-pq-experiment"
 version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
+ "base64 0.22.1",
  "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

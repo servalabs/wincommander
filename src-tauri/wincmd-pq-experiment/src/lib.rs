@@ -5,6 +5,8 @@
 //! This module does not implement issuance, persistent rollback protection,
 //! key rotation, expiry, or any existing licence, update, or recovery format.
 
+pub mod jws;
+
 use aws_lc_rs::signature::{UnparsedPublicKey, ML_DSA_65};
 use ed25519_dalek::{Signature, VerifyingKey};
 
