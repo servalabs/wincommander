@@ -238,38 +238,42 @@ pub async fn enroll(
     // `rotate_key` may change a key). The operator key may legitimately be
     // absent (`None`) until the org configures it — an operator-control-only
     // agent then can't verify those commands yet (fail-closed at dispatch).
+    // Validate the complete response before persisting either pin. A weak or
+    // malformed second key must not leave a partial first pin behind.
+    for key in [
+        resp.command_pubkey_b64.as_deref(),
+        resp.server_signing_key_b64.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        decode_verifying_key(key)?;
+    }
     {
         let mut state = fleet_state.lock().unwrap();
-        if let Some(ref op_key) = resp.command_pubkey_b64 {
-            if let Some(ref existing) = state.pinned_pubkey_b64 {
-                if existing != op_key {
-                    let msg = format!(
-                        "fleet server returned a different operator command_pubkey on \
-                         re-enroll — REFUSING (pinned={existing}, server={op_key})"
-                    );
-                    warn!("{msg}");
-                    return Err(msg);
-                }
-            } else {
-                decode_verifying_key(op_key)?;
-                info!("fleet: operator command key pinned");
-                state.pinned_pubkey_b64 = Some(op_key.clone());
+        if let (Some(existing), Some(received)) =
+            (&state.pinned_pubkey_b64, &resp.command_pubkey_b64)
+        {
+            if existing != received {
+                return Err(
+                    "fleet server returned a different operator command_pubkey on re-enroll — REFUSING".to_string(),
+                );
             }
         }
-        if let Some(ref srv_key) = resp.server_signing_key_b64 {
-            if let Some(ref existing) = state.pinned_server_key_b64 {
-                if existing != srv_key {
-                    let msg = "fleet server returned a different server signing key on \
-                               re-enroll — REFUSING"
-                        .to_string();
-                    warn!("{msg}");
-                    return Err(msg);
-                }
-            } else {
-                decode_verifying_key(srv_key)?;
-                info!("fleet: server signing key pinned");
-                state.pinned_server_key_b64 = Some(srv_key.clone());
+        if let (Some(existing), Some(received)) =
+            (&state.pinned_server_key_b64, &resp.server_signing_key_b64)
+        {
+            if existing != received {
+                return Err(
+                    "fleet server returned a different server signing key on re-enroll — REFUSING".to_string(),
+                );
             }
+        }
+        if state.pinned_pubkey_b64.is_none() {
+            state.pinned_pubkey_b64 = resp.command_pubkey_b64.clone();
+        }
+        if state.pinned_server_key_b64.is_none() {
+            state.pinned_server_key_b64 = resp.server_signing_key_b64.clone();
         }
         info!("fleet: enrolled as {}", resp.device_id);
         state.device_id = Some(resp.device_id.clone());
@@ -907,3 +911,7 @@ mod tests {
         assert_ne!(req_a.hmac, req_b.hmac);
     }
 }
+
+#[cfg(test)]
+#[path = "transport_enrollment_key_tests.rs"]
+mod enrollment_key_tests;
