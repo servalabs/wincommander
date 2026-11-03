@@ -95,7 +95,15 @@ pub(super) fn record(
     candidate: &VerifiedUpdate,
     trust: &Trust,
 ) -> Result<crate::paths::MachineStateLock, String> {
-    let lock = crate::paths::acquire_machine_state_lock("hybrid-free-update")?;
+    record_with_lock(candidate, trust, "hybrid-free-update")
+}
+
+fn record_with_lock(
+    candidate: &VerifiedUpdate,
+    trust: &Trust,
+    lock_name: &str,
+) -> Result<crate::paths::MachineStateLock, String> {
+    let lock = crate::paths::acquire_machine_state_lock(lock_name)?;
     let path = crate::paths::machine_state_file(NAME)?;
     let old = read_record(&path)?;
     let record = Record {
