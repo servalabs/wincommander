@@ -111,8 +111,9 @@ fn secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl() {
         use windows_sys::Win32::{
             Foundation::ERROR_ACCESS_DENIED,
             System::Registry::{
-                RegDeleteKeyExW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_CREATE_SUB_KEY,
-                KEY_QUERY_VALUE, KEY_SET_VALUE, KEY_WOW64_64KEY,
+                RegDeleteKeyExW, RegDeleteTreeW, RegOpenKeyExW, RegRenameKey, HKEY_CURRENT_USER,
+                KEY_ALL_ACCESS, KEY_CREATE_SUB_KEY, KEY_QUERY_VALUE, KEY_SET_VALUE,
+                KEY_WOW64_64KEY,
             },
         };
         let mut parent = ptr::null_mut();
@@ -163,7 +164,36 @@ fn secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl() {
             status, ERROR_ACCESS_DENIED,
             "restricted token deleted the anchor key"
         );
+        // The restricted user owns and can modify this isolated parent. It
+        // must still be unable to remove or move the protected child via it.
+        let mut parent = ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                wide(&parent_path).as_ptr(),
+                0,
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+                &mut parent,
+            )
+        };
+        assert_eq!(status, 0, "test requires full access to the parent");
+        let deleted = unsafe { RegDeleteTreeW(parent, wide("Anchor").as_ptr()) };
+        let leaf = parent_path.rsplit('\\').next().unwrap();
+        let renamed =
+            unsafe { RegRenameKey(parent, ptr::null(), wide(&format!("{leaf}-moved")).as_ptr()) };
+        unsafe {
+            RegCloseKey(parent);
+        }
+        assert_ne!(
+            deleted, 0,
+            "restricted token deleted the protected child through its parent"
+        );
+        assert_ne!(renamed, 0, "restricted token moved the protected subtree");
     });
+    assert_eq!(
+        secure.read().unwrap().as_deref(),
+        Some(&b"signed record"[..])
+    );
     remove_test_key(&path).unwrap();
     remove_test_key(&parent_path).unwrap();
 
