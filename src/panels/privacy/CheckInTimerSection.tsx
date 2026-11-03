@@ -7,6 +7,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button, Icon } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { inactivityPresentation } from './inactivityPresentation';
+import { createInactivityStatusReader } from './inactivityStatusReader';
+
+const readInactivityStatus = createInactivityStatusReader(() => invoke<unknown>('get_dead_mans_switch_status'));
 
 interface DeadMansSwitchConfig {
   enabled: boolean;
@@ -20,6 +23,7 @@ interface DeadMansSwitchStatus {
   config: DeadMansSwitchConfig;
   state: unknown;
   startupResetFailed: boolean;
+  lastIterationCompletedAt: string | null;
 }
 
 function isTimerStatus(value: unknown): value is DeadMansSwitchStatus {
@@ -31,7 +35,8 @@ function isTimerStatus(value: unknown): value is DeadMansSwitchStatus {
     Number.isFinite(config.thresholdDays) && typeof config.lastActivityAt === 'string' &&
     (config.lastFiredAt === null || typeof config.lastFiredAt === 'string') &&
     (config.flowIdToFire === null || typeof config.flowIdToFire === 'string') &&
-    typeof result.state === 'string' && typeof result.startupResetFailed === 'boolean';
+    typeof result.state === 'string' && typeof result.startupResetFailed === 'boolean' &&
+    (result.lastIterationCompletedAt === null || typeof result.lastIterationCompletedAt === 'string');
 }
 
 function daysSince(iso: string): number | null {
@@ -60,23 +65,26 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<unknown>(null);
   const [startupResetFailed, setStartupResetFailed] = useState(false);
+  const [lastIterationCompletedAt, setLastIterationCompletedAt] = useState<string | null>(null);
   const sequence = useRef(0);
   const savingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const current = ++sequence.current;
     try {
-      const result = await invoke<unknown>('get_dead_mans_switch_status');
+      const result = await readInactivityStatus();
       if (current !== sequence.current) return;
       if (!isTimerStatus(result)) throw new Error('Invalid local timer status');
       setConfig(result.config);
       setState(result.state);
       setStartupResetFailed(result.startupResetFailed === true);
+      setLastIterationCompletedAt(result.lastIterationCompletedAt);
       setError(null);
     } catch (err) {
       if (current !== sequence.current) return;
       setState(null);
       setStartupResetFailed(false);
+      setLastIterationCompletedAt(null);
       setError(String(err));
     }
   }, []);
@@ -177,6 +185,7 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
       )}
 
       <p role="status">{status.message}</p>
+      {lastIterationCompletedAt && Number.isFinite(new Date(lastIterationCompletedAt).getTime()) && <p>Last completed iteration: <time dateTime={lastIterationCompletedAt}>{new Date(lastIterationCompletedAt).toLocaleString()}</time> (historical).</p>}
       {startupResetFailed && <p role="alert">The timer could not reset when WinCommander started. Check the activity time; the watchdog may still run.</p>}
       <p>The timer runs only while WinCommander and personal automation are available. Starting WinCommander resets the activity time, including automatic startup; it does not prove that a person checked in.</p>
 

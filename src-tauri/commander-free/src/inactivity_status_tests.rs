@@ -9,6 +9,7 @@ fn input() -> Inputs {
         baseline_valid: true,
         lockdown_enabled: true,
         last_check: Check::Succeeded,
+        check_recent: true,
     }
 }
 
@@ -79,4 +80,37 @@ fn reports_actual_watchdog_preconditions_without_asserting_action_completion() {
         }),
         State::CheckFailed
     );
+    assert_eq!(
+        evaluate(Inputs {
+            last_check: Check::InProgress,
+            ..input()
+        }),
+        State::Checking
+    );
+    assert_eq!(
+        evaluate(Inputs {
+            last_check: Check::InProgress,
+            check_recent: false,
+            ..input()
+        }),
+        State::CheckStale
+    );
+    assert_eq!(
+        evaluate(Inputs {
+            last_check: Check::Succeeded,
+            check_recent: false,
+            ..input()
+        }),
+        State::CheckStale
+    );
+}
+
+#[test]
+fn old_or_clock_rolled_back_iterations_are_not_current() {
+    assert!(recent(Check::InProgress, Some(100), 400));
+    assert!(!recent(Check::InProgress, Some(100), 401));
+    assert!(recent(Check::Succeeded, Some(100), 7300));
+    assert!(!recent(Check::Succeeded, Some(100), 7301));
+    assert!(!recent(Check::Succeeded, Some(101), 100));
+    assert!(!recent(Check::Succeeded, None, 100));
 }

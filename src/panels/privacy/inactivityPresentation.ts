@@ -1,4 +1,4 @@
-export type InactivityState = "disabled" | "triggered" | "watchdog_stopped" | "settings_unavailable" | "invalid_baseline" | "lockdown_disabled" | "starting" | "check_failed" | "monitoring";
+export type InactivityState = "disabled" | "triggered" | "watchdog_stopped" | "settings_unavailable" | "invalid_baseline" | "lockdown_disabled" | "starting" | "checking" | "check_stale" | "check_failed" | "monitoring";
 
 export function inactivityPresentation(value: unknown): { label: string; message: string } {
   switch (value) {
@@ -9,8 +9,10 @@ export function inactivityPresentation(value: unknown): { label: string; message
     case "invalid_baseline": return { label: "Unavailable", message: "The last activity time is invalid or ahead of the device clock. Check the timer before relying on it." };
     case "lockdown_disabled": return { label: "Lockdown off", message: "Self-destruct is not enabled. The timer can still record a trigger, but Lockdown will refuse to run." };
     case "starting": return { label: "Starting", message: "The watchdog is running and has not yet completed its first check." };
+    case "checking": return { label: "Checking", message: "A watchdog iteration is in progress; its outcome is not yet known." };
+    case "check_stale": return { label: "Unconfirmed", message: "A watchdog check is delayed, its last result is old, or the device clock changed. Current evaluation cannot be confirmed." };
     case "check_failed": return { label: "Check failed", message: "The latest watchdog check failed. The next check may retry." };
-    case "monitoring": return { label: "Running", message: "The watchdog is running; its latest iteration returned without an error." };
+    case "monitoring": return { label: "Running", message: "The watchdog task is running. Its last completed iteration is historical and may have skipped evaluation; it does not confirm future checks or Lockdown." };
     default: return { label: "Unknown", message: "The local timer status could not be confirmed." };
   }
 }

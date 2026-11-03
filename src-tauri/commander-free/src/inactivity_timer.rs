@@ -100,6 +100,8 @@ fn default_threshold_days() -> u32 {
 struct WatchdogRuntime {
     task: Option<tauri::async_runtime::JoinHandle<()>>,
     last_check: status::Check,
+    check_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_completed_at: Option<chrono::DateTime<chrono::Utc>>,
     startup_reset_failed: bool,
 }
 
@@ -130,6 +132,10 @@ pub fn init(app: &AppHandle) {
         // with `init`'s reset.
         tokio::time::sleep(WATCHDOG_INTERVAL / 2).await;
         loop {
+            if let Ok(mut runtime) = WATCHDOG.lock() {
+                runtime.last_check = status::Check::InProgress;
+                runtime.check_changed_at = Some(chrono::Utc::now());
+            }
             let checked = tick(&app).await;
             if let Ok(mut runtime) = WATCHDOG.lock() {
                 runtime.last_check = if checked.is_ok() {
@@ -137,6 +143,9 @@ pub fn init(app: &AppHandle) {
                 } else {
                     status::Check::Failed
                 };
+                let completed = chrono::Utc::now();
+                runtime.check_changed_at = Some(completed);
+                runtime.last_completed_at = Some(completed);
             }
             if let Err(e) = checked {
                 crate::log_message(
@@ -259,6 +268,7 @@ pub struct DeadMansSwitchStatus {
     config: DeadMansSwitchConfig,
     state: status::State,
     startup_reset_failed: bool,
+    last_iteration_completed_at: Option<String>,
 }
 
 /// A snapshot of local readiness; it is not a receipt for any Lockdown effect.
@@ -281,11 +291,17 @@ pub fn get_dead_mans_switch_status() -> Result<DeadMansSwitchStatus, String> {
             .is_some_and(|time| time <= chrono::Utc::now()),
         lockdown_enabled: settings.ideal.privacy.self_destruct.enabled == Some(true),
         last_check: runtime.last_check,
+        check_recent: status::recent(
+            runtime.last_check,
+            runtime.check_changed_at.map(|time| time.timestamp()),
+            chrono::Utc::now().timestamp(),
+        ),
     });
     Ok(DeadMansSwitchStatus {
         config,
         state,
         startup_reset_failed: runtime.startup_reset_failed,
+        last_iteration_completed_at: runtime.last_completed_at.map(|time| time.to_rfc3339()),
     })
 }
 

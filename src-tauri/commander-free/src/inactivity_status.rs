@@ -6,6 +6,7 @@ use serde::Serialize;
 pub(super) enum Check {
     #[default]
     Never,
+    InProgress,
     Succeeded,
     Failed,
 }
@@ -20,6 +21,8 @@ pub(super) enum State {
     InvalidBaseline,
     LockdownDisabled,
     Starting,
+    Checking,
+    CheckStale,
     CheckFailed,
     Monitoring,
 }
@@ -32,6 +35,20 @@ pub(super) struct Inputs {
     pub baseline_valid: bool,
     pub lockdown_enabled: bool,
     pub last_check: Check,
+    pub check_recent: bool,
+}
+
+/// This only limits what the UI may infer; it does not affect the watchdog.
+pub(super) fn recent(check: Check, changed_at: Option<i64>, now: i64) -> bool {
+    let Some(age) = changed_at.and_then(|then| now.checked_sub(then)) else {
+        return false;
+    };
+    let limit = match check {
+        Check::InProgress => 5 * 60,
+        Check::Succeeded => 2 * 60 * 60,
+        _ => return false,
+    };
+    (0..=limit).contains(&age)
 }
 
 pub(super) fn evaluate(input: Inputs) -> State {
@@ -50,8 +67,11 @@ pub(super) fn evaluate(input: Inputs) -> State {
     } else {
         match input.last_check {
             Check::Never => State::Starting,
+            Check::InProgress if input.check_recent => State::Checking,
+            Check::InProgress => State::CheckStale,
             Check::Failed => State::CheckFailed,
-            Check::Succeeded => State::Monitoring,
+            Check::Succeeded if input.check_recent => State::Monitoring,
+            Check::Succeeded => State::CheckStale,
         }
     }
 }

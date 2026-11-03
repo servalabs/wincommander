@@ -17,7 +17,7 @@ test("inactivity card presents watchdog state, launch reset and unknown status h
     globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     const React = await import('react'); const { act, createElement: h } = React;
     const { createRoot } = await import('react-dom/client');
-    let status = { config: { enabled: true, thresholdDays: 14, flowIdToFire: null, lastActivityAt: '2026-01-01T00:00:00Z', lastFiredAt: null }, state: 'lockdown_disabled', startupResetFailed: true };
+    let status = { config: { enabled: true, thresholdDays: 14, flowIdToFire: null, lastActivityAt: '2026-01-01T00:00:00Z', lastFiredAt: null }, state: 'lockdown_disabled', startupResetFailed: true, lastIterationCompletedAt: null };
     let fail = false;
     mock.module('@tauri-apps/api/core', () => ({ invoke: async (name, args) => {
       if (name === 'get_dead_mans_switch_status') { if (fail) throw new Error('offline'); return status; }
@@ -58,6 +58,25 @@ test("inactivity card presents watchdog state, launch reset and unknown status h
     await act(async () => { root.render(h(Panel, { bare: true })); });
     assert.match(host.textContent, /Trigger recorded/);
     assert.match(host.textContent, /does not confirm that Lockdown completed/);
+    await act(async () => { root.unmount(); });
+    status = { ...status, config: { ...status.config, lastFiredAt: null }, state: 'checking', lastIterationCompletedAt: '2026-01-01T00:00:00Z' };
+    root = createRoot(host);
+    await act(async () => { root.render(h(Panel, { bare: true })); });
+    assert.match(host.textContent, /iteration is in progress/);
+    assert.doesNotMatch(host.textContent, /watchdog task is running/);
+    await act(async () => { root.unmount(); });
+    status = { ...status, state: 'check_stale' };
+    root = createRoot(host);
+    await act(async () => { root.render(h(Panel, { bare: true })); });
+    assert.match(host.textContent, /Current evaluation cannot be confirmed/);
+    assert.doesNotMatch(host.textContent, /watchdog task is running/);
+    await act(async () => { root.unmount(); });
+    // A completed iteration predates this new configuration and must be described as historical.
+    status = { ...status, config: { ...status.config, thresholdDays: 3 }, state: 'monitoring' };
+    root = createRoot(host);
+    await act(async () => { root.render(h(Panel, { bare: true })); });
+    assert.match(host.textContent, /historical and may have skipped evaluation/);
+    assert.match(host.textContent, /Last completed iteration/);
     await act(async () => { root.unmount(); }); dom.window.close();
   `;
   const process = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
