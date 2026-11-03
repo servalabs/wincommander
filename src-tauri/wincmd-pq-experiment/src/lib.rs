@@ -6,6 +6,8 @@
 //! protection, key rotation, expiry, or product format is implemented.
 
 pub mod jws;
+#[cfg(feature = "experimental-offline-verifier")]
+pub mod offline_release;
 
 use aws_lc_rs::signature::{UnparsedPublicKey, ML_DSA_65};
 use ed25519_dalek::{Signature, VerifyingKey};

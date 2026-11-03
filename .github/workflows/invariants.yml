@@ -223,6 +223,8 @@ jobs:
         run: bun run encrypt-backend
         working-directory: .
       - run: cargo test --workspace --no-fail-fast
+      - name: Test experimental offline hybrid release verification
+        run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation
