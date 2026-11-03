@@ -5,6 +5,9 @@
   "license": "AGPL-3.0",
   "description": "WinCommander Free — open-source primary",
   "type": "module",
+  "overrides": {
+    "minimatch@10": "11.0.1"
+  },
   "scripts": {
     "encrypt-backend": "bun run tools/encrypt.ts",
     "fetch-icons": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/fetch-app-icons.ps1",
