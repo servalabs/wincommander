@@ -3,6 +3,30 @@
 use crate::fleet_machine_policy::{FleetMachinePolicy, FleetTrust, TransportProfile};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
+
+fn credential_updates() -> &'static watch::Sender<()> {
+    static UPDATES: OnceLock<watch::Sender<()>> = OnceLock::new();
+    UPDATES.get_or_init(|| watch::channel(()).0)
+}
+
+async fn wait_for_retry(updates: &mut watch::Receiver<()>, delay: Duration) {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => {},
+        _ = updates.changed() => {},
+    }
+}
+
+fn reset_failures_on_new_credential(
+    previous: &mut Option<(FleetTrust, u64)>,
+    current: &(FleetTrust, u64),
+    failures: &mut u32,
+) {
+    if previous.as_ref() != Some(current) {
+        *failures = 0;
+        *previous = Some(current.clone());
+    }
+}
 
 #[derive(Clone)]
 struct Status {
@@ -130,22 +154,47 @@ async fn attempt(
 #[cfg(windows)]
 pub(crate) async fn run() {
     tokio::spawn(candidate_worker());
+    let mut updates = credential_updates().subscribe();
+    run_with(
+        crate::fleet_machine_policy::system_store,
+        &crate::fleet_credential::MachineDpapi,
+        crate::fleet_runtime_env::fingerprint,
+        fleet_agent_core::build_client_without_redirects,
+        &mut updates,
+    )
+    .await;
+}
+
+// The installed service supplies its protected store, DPAPI and network
+// profile. Tests can run this same loop against a disposable local endpoint.
+#[cfg(any(windows, test))]
+async fn run_with<'a>(
+    get_store: impl Fn() -> Result<&'a FleetMachinePolicy, &'static str>,
+    protector: &(dyn crate::fleet_credential::Protector + Sync),
+    runtime_fingerprint: impl Fn() -> Option<String>,
+    build_client: impl Fn(Option<fleet_agent_core::SpkiPinSet>) -> Result<reqwest::Client, String>,
+    updates: &mut watch::Receiver<()>,
+) {
     let mut cached: Option<(TransportProfile, reqwest::Client)> = None;
     let mut failures: u32 = 0;
+    let mut previous_credential = None;
     loop {
-        let store = match crate::fleet_machine_policy::system_store() {
+        // Acknowledge prior changes before reading the store. A commit at any
+        // point after this read remains visible to the following retry wait.
+        updates.borrow_and_update();
+        let store = match get_store() {
             Ok(store) => store,
             Err(_) => {
                 set_status("service_store_unavailable", None, None);
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                wait_for_retry(updates, Duration::from_secs(10)).await;
                 continue;
             }
         };
-        let snapshot = match store.credential_snapshot(&crate::fleet_credential::MachineDpapi) {
+        let snapshot = match store.credential_snapshot(protector) {
             Ok(Some(value)) => value,
             Ok(None) => {
                 set_status(store.credential_missing_reason(), None, None);
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                wait_for_retry(updates, Duration::from_secs(10)).await;
                 continue;
             }
             Err(reason) => {
@@ -158,16 +207,22 @@ pub(crate) async fn run() {
                     None,
                     None,
                 );
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                wait_for_retry(updates, Duration::from_secs(10)).await;
                 continue;
             }
         };
-        let fence = Some((snapshot.trust.clone(), snapshot.revision));
-        if crate::fleet_runtime_env::fingerprint().as_deref()
+        let current_credential = (snapshot.trust.clone(), snapshot.revision);
+        reset_failures_on_new_credential(
+            &mut previous_credential,
+            &current_credential,
+            &mut failures,
+        );
+        let fence = Some(current_credential);
+        if runtime_fingerprint().as_deref()
             != Some(snapshot.profile.environment_fingerprint.as_str())
         {
             set_status("network_configuration_differs", None, fence);
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            wait_for_retry(updates, Duration::from_secs(10)).await;
             continue;
         }
         if cached
@@ -177,14 +232,14 @@ pub(crate) async fn run() {
             let pins = fleet_agent_core::SpkiPinSet::from_hex_list(&snapshot.profile.spki_pins);
             if !snapshot.profile.spki_pins.trim().is_empty() && pins.is_none() {
                 set_status("transport_security_invalid", None, fence);
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                wait_for_retry(updates, Duration::from_secs(10)).await;
                 continue;
             }
-            match fleet_agent_core::build_client_without_redirects(pins) {
+            match build_client(pins) {
                 Ok(client) => cached = Some((snapshot.profile.clone(), client)),
                 Err(_) => {
                     set_status("transport_security_invalid", None, fence);
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    wait_for_retry(updates, Duration::from_secs(10)).await;
                     continue;
                 }
             }
@@ -234,7 +289,7 @@ pub(crate) async fn run() {
         let extra = failures.saturating_sub(1).min(5);
         let seconds = (10_u64 << extra).min(300);
         let jitter = u64::from(rand::random::<u8>()) % (seconds / 10 + 1);
-        tokio::time::sleep(Duration::from_secs(seconds + jitter)).await;
+        wait_for_retry(updates, Duration::from_secs(seconds + jitter)).await;
     }
 }
 

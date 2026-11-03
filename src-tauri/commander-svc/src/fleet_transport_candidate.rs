@@ -76,9 +76,17 @@ fn finish_candidate(
     observed: bool,
     store: &FleetMachinePolicy,
     protector: &dyn crate::fleet_credential::Protector,
+    updates: &tokio::sync::watch::Sender<()>,
 ) {
-    if observed && slot.sequence == candidate.sequence {
-        let _ = store.commit_candidate(&candidate.context, &candidate.secret, protector);
+    if observed
+        && slot.sequence == candidate.sequence
+        && store
+            .commit_candidate(&candidate.context, &candidate.secret, protector)
+            .is_ok()
+    {
+        // Notify only after durable installation. Failed or superseded offers
+        // cannot interrupt the current credential's bounded retry cadence.
+        updates.send_replace(());
     }
     slot.finish(candidate.sequence);
 }
@@ -203,6 +211,7 @@ pub(super) async fn candidate_worker() {
                         observed,
                         store,
                         &crate::fleet_credential::MachineDpapi,
+                        credential_updates(),
                     );
                 } else {
                     slot.finish(candidate.sequence);
@@ -220,3 +229,7 @@ pub(super) async fn candidate_worker() {
 #[cfg(test)]
 #[path = "fleet_transport_candidate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fleet_transport_worker_tests.rs"]
+mod worker_tests;

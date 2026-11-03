@@ -5,6 +5,26 @@ use std::sync::{
     Arc,
 };
 
+#[test]
+fn new_credential_resets_only_its_own_retry_backoff() {
+    let trust = FleetTrust {
+        org_id: "org".into(),
+        device_id: "device".into(),
+        enrollment_generation: "generation".into(),
+        signer_key: "key".into(),
+    };
+    let mut previous = None;
+    let mut failures = 8;
+    let first = (trust.clone(), 1);
+    reset_failures_on_new_credential(&mut previous, &first, &mut failures);
+    assert_eq!(failures, 0);
+    failures = 4;
+    reset_failures_on_new_credential(&mut previous, &first, &mut failures);
+    assert_eq!(failures, 4);
+    reset_failures_on_new_credential(&mut previous, &(trust, 2), &mut failures);
+    assert_eq!(failures, 0);
+}
+
 #[tokio::test]
 async fn disconnect_during_first_request_prevents_old_failover_request() {
     let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

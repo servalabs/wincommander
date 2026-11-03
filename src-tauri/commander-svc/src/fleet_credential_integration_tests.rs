@@ -22,6 +22,10 @@ impl Protector for TestProtector {
 }
 
 fn setup() -> (FleetMachinePolicy, MemoryFs) {
+    setup_for("https://fleet.test")
+}
+
+fn setup_for(origin: &str) -> (FleetMachinePolicy, MemoryFs) {
     let fs = MemoryFs::default();
     let store =
         FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("credential-test")).unwrap();
@@ -34,7 +38,7 @@ fn setup() -> (FleetMachinePolicy, MemoryFs) {
         .begin_enrollment(
             binding.device_id.clone(),
             binding.signer_key.clone(),
-            vec!["https://fleet.test".into()],
+            vec![origin.into()],
             Some(profile),
         )
         .unwrap();
@@ -53,6 +57,10 @@ fn setup() -> (FleetMachinePolicy, MemoryFs) {
 
 pub(crate) fn setup_store() -> FleetMachinePolicy {
     setup().0
+}
+
+pub(crate) fn setup_store_for(origin: &str) -> FleetMachinePolicy {
+    setup_for(origin).0
 }
 
 fn submit(store: &FleetMachinePolicy, origin: &str, secret: &[u8]) -> Result<u64, &'static str> {
