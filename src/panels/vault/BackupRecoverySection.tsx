@@ -37,13 +37,14 @@ export default function BackupRecoverySection() {
           {field("Existing container…", source, setSource, false)}
           {field("Backup location…", copyParent, setCopyParent)}
           <p>A new copy folder is created under the selected local, mapped-drive or network-share location. Existing copies are never overwritten.</p>
-          <Button intent="primary" disabled={busy || !source || !copyParent} onClick={() => void backupTask.run("copied", () => backend.exportEncryptedBackup(source, copyParent), copyParent)}>Copy and check container</Button>
+          <Button intent="primary" disabled={busy || !source || !copyParent} onClick={() => void backupTask.run("copied", () => backend.exportEncryptedBackup(source, copyParent), { destinationParent: copyParent })}>Copy and check container</Button>
         </fieldset>
         <fieldset disabled={busy}>
           <legend>Check a retrieved copy</legend>
           {field("Exported copy folder…", copy, setCopy)}
           <p>Choose the folder containing container.bin and container-copy-v1.json. Then mount container.bin read-only with Encrypted Volumes above and your existing credentials.</p>
-          <Button disabled={busy || !copy} onClick={() => void backupTask.run("checked", () => backend.verifyEncryptedBackup(copy))}>Check copy</Button>
+          <Button disabled={busy || !copy} onClick={() => void backupTask.run("checked", () => backend.verifyEncryptedBackup(copy), { checkedCopy: copy })}>Check copy</Button>
+          {task.state === "done" && task.action === "checked" && copy && copy !== task.checkedCopy && <p>The displayed result does not cover the newly selected folder. Check this selection before using it.</p>}
         </fieldset>
         <fieldset disabled={busy}>
           <legend>Restore backed-up files</legend>
@@ -51,14 +52,16 @@ export default function BackupRecoverySection() {
           {field("Restore location…", restoreParent, setRestoreParent)}
           <Checkbox checked={legacy} onChange={(event) => setLegacy(event.currentTarget.checked)} label="Legacy recovery: original per-file hashes are unavailable" />
           <p>A new folder is created. Restored files are plaintext: choose a private or encrypted location. Empty directories, ACLs, timestamps and alternate streams are not restored.</p>
-          <Button disabled={busy || !generation || !restoreParent} onClick={() => void backupTask.run("restored", () => backend.restoreBackupGeneration(generation, restoreParent, legacy), restoreParent)}>Check and restore files</Button>
+          <Button disabled={busy || !generation || !restoreParent} onClick={() => void backupTask.run("restored", () => backend.restoreBackupGeneration(generation, restoreParent, legacy), { destinationParent: restoreParent })}>Check and restore files</Button>
         </fieldset>
       </div>
       {pickerError && <div role="alert"><Callout intent="warning">{pickerError}</Callout></div>}
-      {busy && <div role="status" className="backup-recovery-status">{task.action === "copied" ? "Copying and checking the container…" : task.action === "restored" ? "Checking and restoring file contents…" : "Checking the retrieved copy…"} Keep WinCommander open. Other protection commands remain available; closing the app can leave an incomplete copy.</div>}
-      {(task.state === "failed" || task.state === "unknown") && <div role="alert"><Callout intent="warning">{task.message}{task.destinationParent && <p className="backup-recovery-path">Selected destination parent: {task.destinationParent}</p>}</Callout></div>}
+      {busy && <div role="status" className="backup-recovery-status">{task.action === "copied" ? "Copying and checking the container…" : task.action === "restored" ? "Checking and restoring file contents…" : "Checking the retrieved copy…"} Keep WinCommander open. Other protection commands remain available; closing the app can leave an incomplete copy.{task.checkedCopy && <p className="backup-recovery-path">Copy folder submitted for checking: {task.checkedCopy}</p>}</div>}
+      {(task.state === "failed" || task.state === "unknown") && <div role="alert"><Callout intent="warning">{task.message}{task.checkedCopy && <p className="backup-recovery-path">Copy folder submitted for checking: {task.checkedCopy}</p>}{task.destinationParent && <p className="backup-recovery-path">Selected destination parent: {task.destinationParent}</p>}</Callout></div>}
       {task.state === "done" && task.result && <div role="status"><Callout title={task.action === "restored" ? "File contents restored and checked" : "Container bytes checked"}>
         <p>{task.result.bytes} bytes checked.{task.result.files !== undefined ? ` ${task.result.files} files restored.` : ""} {task.result.legacy ? "Legacy recovery checked current bytes only; original hashes were unavailable." : ""}</p>
+        {task.checkedCopy && <p className="backup-recovery-path">Checked copy folder: {task.checkedCopy}</p>}
+        {task.receivedAt !== undefined && <p>Result received <time dateTime={new Date(task.receivedAt).toISOString()}>{new Date(task.receivedAt).toLocaleString()}</time> (this device’s clock). Contents may have changed since this check.</p>}
         {task.destination && <p className="backup-recovery-path">Destination: {task.destination}</p>}
         {task.action === "restored" && <p>Destination contains plaintext file contents. Original filesystem metadata was not restored.</p>}
       </Callout></div>}

@@ -34,9 +34,10 @@ test("rendered backup pickers dispatch once, survive navigation, and explain rec
       Icon: () => null, ProgressBar: () => null, Spinner: () => null, Tooltip: ({ children }) => children,
     }));
     let complete;
+    let checkResponse = { success: true, data: { operation: 'checked', bytes: '123', legacy: false } };
     const backend = {
       exportEncryptedBackup: (...args) => { calls.push(['copy', ...args]); return new Promise(resolve => { complete = resolve; }); },
-      verifyEncryptedBackup: async (...args) => { calls.push(['check', ...args]); return { success: false, error: 'backup_rejected: incomplete private-path' }; },
+      verifyEncryptedBackup: async (...args) => { calls.push(['check', ...args]); return checkResponse; },
       restoreBackupGeneration: async (...args) => { calls.push(['restore', ...args]); return args[2] ? { success: true, data: { operation: 'restored', bytes: '15', files: 1, legacy: true, directoryName: 'WinCommander-Restored-Files-00000000-0000-4000-8000-000000000001' } } : { success: false, error: 'backup_legacy_required' }; },
     };
     mock.module('./src/hooks/useBackend', () => ({ default: () => backend }));
@@ -63,6 +64,23 @@ test("rendered backup pickers dispatch once, survive navigation, and explain rec
     assert.match(host.querySelector('[role="status"]').textContent, /123 bytes checked/);
     assert.ok(host.textContent.includes(copyParent + slash + 'WinCommander-Container-Copy-'));
     choices.push(['D:', 'retrieved'].join(slash)); await click('Exported copy folder…'); await click('Check copy');
+    const checkedPath = ['D:', 'retrieved'].join(slash);
+    assert.ok(host.querySelector('[role="status"]').textContent.includes(checkedPath));
+    const receivedAt = host.querySelector('[role="status"] time').getAttribute('datetime');
+    assert.ok(Number.isFinite(Date.parse(receivedAt)));
+    const laterPath = ['D:', 'another-copy'].join(slash);
+    choices.push(laterPath); await click('Exported copy folder…');
+    assert.ok(host.querySelector('[role="status"]').textContent.includes(checkedPath));
+    assert.ok(!host.querySelector('[role="status"]').textContent.includes(laterPath));
+    assert.match(host.textContent, /result does not cover the newly selected folder/);
+    const checks = calls.filter(value => value[0] === 'check').length;
+    await act(async () => { root.unmount(); }); root = createRoot(host);
+    await act(async () => { root.render(h(Panel)); });
+    assert.ok(host.querySelector('[role="status"]').textContent.includes(checkedPath));
+    assert.equal(host.querySelector('[role="status"] time').getAttribute('datetime'), receivedAt);
+    assert.equal(calls.filter(value => value[0] === 'check').length, checks);
+    checkResponse = { success: false, error: 'backup_rejected: incomplete private-path' };
+    choices.push(laterPath); await click('Exported copy folder…'); await click('Check copy');
     assert.match(host.querySelector('[role="alert"]').textContent, /Incomplete files may remain/);
     assert.ok(!host.textContent.includes('private-path'));
     choices.push(generation, restoreParent);

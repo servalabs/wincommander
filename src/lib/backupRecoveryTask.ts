@@ -1,7 +1,8 @@
 // Explicit local backup tasks survive panel navigation, never application restart.
 export type BackupAction = "copied" | "checked" | "restored";
 export type BackupResult = { operation: BackupAction; bytes: string; files?: number; directoryName?: string; legacy: boolean };
-export type BackupTask = { state: "idle" | "running" | "done" | "failed" | "unknown"; action?: BackupAction; result?: BackupResult; destination?: string; destinationParent?: string; message?: string };
+type BackupContext = { destinationParent?: string; checkedCopy?: string };
+export type BackupTask = BackupContext & { state: "idle" | "running" | "done" | "failed" | "unknown"; action?: BackupAction; result?: BackupResult; destination?: string; receivedAt?: number; message?: string };
 type Response = { success: boolean; data?: unknown; error?: string };
 
 export function parseBackupResult(value: unknown, action: BackupAction): BackupResult | null {
@@ -34,27 +35,32 @@ export function backupFailure(error: unknown): { state: "failed" | "unknown"; me
   return { state: "unknown", message: "Completion could not be confirmed. The operation was not replayed. Keep the destination and check its files before use." };
 }
 
-export function createBackupTaskStore() {
+export function createBackupTaskStore(now: () => number = Date.now) {
   let snapshot: BackupTask = { state: "idle" };
   const listeners = new Set<() => void>();
   const update = (value: BackupTask) => { snapshot = value; for (const listener of listeners) listener(); };
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    async run(action: BackupAction, request: () => Promise<Response>, parent?: string) {
+    async run(action: BackupAction, request: () => Promise<Response>, context: BackupContext = {}) {
       if (snapshot.state === "running") return false;
-      update({ state: "running", action, destinationParent: parent });
+      const { destinationParent: parent, checkedCopy } = context;
+      const submitted = { action, destinationParent: parent, ...(action === "checked" ? { checkedCopy } : {}) };
+      if (action === "checked" && !checkedCopy) {
+        update({ state: "failed", action, message: "Choose a copy folder to check." }); return false;
+      }
+      update({ state: "running", ...submitted });
       try {
         const response = await request();
-        if (!response.success) { update({ action, destinationParent: parent, ...backupFailure(response.error) }); return false; }
+        if (!response.success) { update({ ...submitted, ...backupFailure(response.error) }); return false; }
         const result = parseBackupResult(response.data, action);
-        if (!result) { update({ state: "unknown", action, destinationParent: parent, message: "No valid completion receipt was returned. Keep the destination and verify it before use; do not assume the operation failed." }); return false; }
+        if (!result) { update({ state: "unknown", ...submitted, message: "No valid completion receipt was returned. Keep the destination and verify it before use; do not assume the operation failed." }); return false; }
         const destination = parent && result.directoryName ? `${parent.replace(/[\\/]$/, "")}\\${result.directoryName}` : undefined;
-        update({ state: "done", action, result, destination });
+        update({ state: "done", ...submitted, result, destination, ...(action === "checked" ? { receivedAt: now() } : {}) });
         return true;
       } catch {
         // A transport exception cannot establish whether the child completed.
-        update({ action, destinationParent: parent, ...backupFailure("backup_outcome_unknown") }); return false;
+        update({ ...submitted, ...backupFailure("backup_outcome_unknown") }); return false;
       }
     },
   };

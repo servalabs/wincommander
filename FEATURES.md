@@ -235,6 +235,10 @@ operational risk, or proprietary enforcement logic.
   to a new folder; legacy recovery requires an explicit choice. These checks do
   not prove remote durability or retention. Requires a matching updated Pro;
   availability starts with a future release containing this paired app change.
+  Copy-check results identify the submitted folder and when the app received
+  the result using this device's clock. They remain scoped to that check across
+  picker changes and panel navigation; they do not track later file changes or
+  establish the latest scheduled export. This result state clears on restart.
 - Personal Vault folder sync through Syncthing. Explicit setup installs a
   verified per-user engine if needed, retains existing sync identities, and
   follows the same container when its drive letter changes. After mounting,

@@ -4,12 +4,43 @@ const id = "00000000-0000-4000-8000-000000000001";
 const copied = { operation: "copied", bytes: "19", directoryName: `WinCommander-Container-Copy-${id}`, legacy: false };
 
 describe("explicit backup task lifecycle", () => {
+  test("copy-check results retain the submitted subject and receipt time", async () => {
+    const receivedAt = 1_800_000_000_000;
+    const store = createBackupTaskStore(() => receivedAt);
+    const context = { checkedCopy: "D:/retrieved-first" };
+    let resolve!: (value: { success: boolean; data: unknown }) => void;
+    const pending = new Promise<{ success: boolean; data: unknown }>((done) => { resolve = done; });
+    const check = store.run("checked", () => pending, context);
+    context.checkedCopy = "D:/selected-later";
+    resolve({ success: true, data: { operation: "checked", bytes: "19", legacy: false, checkedCopy: "not-the-submitted-folder", receivedAt: -1 } });
+    expect(await check).toBe(true);
+    expect(store.getSnapshot().checkedCopy).toBe("D:/retrieved-first");
+    expect(store.getSnapshot().receivedAt).toBe(receivedAt);
+    expect(createBackupTaskStore().getSnapshot().state).toBe("idle");
+  });
+  test("a new failed or unknown check cannot retain a previous successful observation", async () => {
+    for (const response of [{ success: false, error: "backup_rejected: invalid receipt" }, { success: true, data: {} }]) {
+      const store = createBackupTaskStore(() => 1_800_000_000_000);
+      await store.run("checked", async () => ({ success: true, data: { operation: "checked", bytes: "19", legacy: false } }), { checkedCopy: "D:/first" });
+      await store.run("checked", async () => response, { checkedCopy: "D:/second" });
+      expect(store.getSnapshot().state).not.toBe("done");
+      expect(store.getSnapshot().checkedCopy).toBe("D:/second");
+      expect(store.getSnapshot().receivedAt).toBeUndefined();
+      expect(store.getSnapshot().result).toBeUndefined();
+    }
+  });
+  test("a check without a selected subject is not dispatched or presented as success", async () => {
+    const store = createBackupTaskStore(); let calls = 0;
+    expect(await store.run("checked", async () => { calls++; return { success: true }; })).toBe(false);
+    expect(calls).toBe(0);
+    expect(store.getSnapshot().state).toBe("failed");
+  });
   test("duplicate clicks do not replay; panel resubscription observes the same running operation", async () => {
     const store = createBackupTaskStore();
     let resolve!: (value: { success: boolean; data: unknown }) => void;
     let calls = 0;
     const pending = new Promise<{ success: boolean; data: unknown }>((done) => { resolve = done; });
-    const first = store.run("copied", () => { calls++; return pending; }, "\\\\server\\share\\");
+    const first = store.run("copied", () => { calls++; return pending; }, { destinationParent: "\\\\server\\share\\" });
     expect(store.getSnapshot().state).toBe("running");
     const unsubscribe = store.subscribe(() => {}); unsubscribe();
     expect(await store.run("copied", () => { calls++; return pending; })).toBe(false);
@@ -30,7 +61,7 @@ describe("explicit backup task lifecycle", () => {
   test("a drive-root destination retains its separator", async () => {
     const root = "C:" + String.fromCharCode(92);
     const store = createBackupTaskStore();
-    await store.run("copied", async () => ({ success: true, data: copied }), root);
+    await store.run("copied", async () => ({ success: true, data: copied }), { destinationParent: root });
     expect(store.getSnapshot().destination).toBe(root + copied.directoryName);
   });
   test("a success flag without a valid matching receipt cannot become success", async () => {
@@ -43,7 +74,7 @@ describe("explicit backup task lifecycle", () => {
   });
   test("unexpected transport exceptions retain an unknown outcome and destination", async () => {
     const store = createBackupTaskStore(); let calls = 0;
-    await store.run("restored", async () => { calls++; throw new Error("untrusted transport body"); }, "C:\\private");
+    await store.run("restored", async () => { calls++; throw new Error("untrusted transport body"); }, { destinationParent: "C:\\private" });
     expect(calls).toBe(1);
     expect(store.getSnapshot().state).toBe("unknown");
     expect(store.getSnapshot().destinationParent).toBe("C:\\private");
