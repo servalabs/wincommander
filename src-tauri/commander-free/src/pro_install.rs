@@ -6,22 +6,17 @@
 // When a paid feature is invoked and the Pro binary isn't installed (or
 // doesn't match the pinned hash), commander-free walks the user through:
 //
-//   1. Confirmation gatewall — "WinCommander Pro is signed by ServaLabs.
-//      Defender / SmartScreen will flag it because it contains
-//      Privacy Clean code. Add a folder exclusion?" — explicit consent
-//      required.
-//   2. Defender exclusion for "%ProgramData%\WinCommander\bin" via
-//      PowerShell, after explicit consent.
-//   3. Signed-URL fetch from the licence server — the worker returns a
-//      time-bound URL for the Pro binary version that matches the
-//      user's licence cohort.
-//   4. Download to %ProgramData%\WinCommander\bin\wincommander-pro.exe.tmp
+//   1. A user may explicitly opt in to a Defender exclusion for the managed
+//      Pro folder. The exclusion is not required for installation.
+//   2. Fetch the selected release metadata from the approved update host.
+//      Its hash is not an independent signature on the Pro artifact.
+//   3. Download to %ProgramData%\WinCommander\bin\wincommander-pro.exe.tmp
 //      with a SHA-256 checksum verification on the way in.
-//   5. Atomic rename to the final path; pin the verified hash so the
-//      sidecar handshake check can compare.
+//   4. Atomic rename to the final path and record the checked hash for the
+//      sidecar handshake.
 //
 // All of the above is implemented and live: `install_pro_binary` runs the
-// full host-pinned download + SHA-256 verify flow and calls
+// full host-pinned download + SHA-256 verify flow and may call
 // `add_defender_exclusion` after explicit consent.
 
 use std::{collections::BTreeMap, path::PathBuf};
@@ -52,7 +47,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 // is shared by every interactive Windows user.  A standard token may read and
 // run that verified artifact, but it must never replace it.  The foreground
 // application therefore hands the narrow, validated update request to a
-// second copy of this signed executable through Windows UAC.
+// second copy of the foreground executable through Windows UAC.
 const MACHINE_PRO_UPDATE_FLAG: &str = "--machine-pro-update";
 const MACHINE_PRO_UPDATE_JOB_FLAG: &str = "--machine-pro-job";
 const MACHINE_PRO_UPDATE_URL_FLAG: &str = "--machine-pro-url";
@@ -1411,7 +1406,7 @@ async fn install_pro_binary_machine(
 
     // 1. Defender exclusion is best-effort and only runs after explicit
     //    opt-in.  Tamper Protection or a managed Defender policy must never
-    //    block the signed Pro install itself.
+    //    block the Pro install itself.
     let mut defender_exclusion_warning = None;
     #[cfg(windows)]
     if !exclusion_already_set && consent_defender_exclusion {
