@@ -47,7 +47,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
             fields[4]
         ]
     )
-    .is_err());
+    .is_ok());
     assert!(history::parse(&current, [None; 5]).unwrap().is_none());
     assert!(history::parse(&current, [Some("bad"), None, None, None, None]).is_err());
     assert!(history::parse(

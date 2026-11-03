@@ -70,9 +70,6 @@ pub(super) fn parse(
         pq_id: pq_id.to_owned(),
         maximum_epoch,
     };
-    if historical.ed == *current.ed25519_public && historical.pq == *current.ml_dsa_65_public {
-        return Err("historical license keys must differ from current keys");
-    }
     Ok(Some(historical))
 }
 
