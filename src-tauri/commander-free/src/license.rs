@@ -938,7 +938,7 @@ async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
                 save_cached_license_direct(cached)
             }
             Err(error) => Err(format!(
-                "The local WinCommander service must be running to save this device license. Retry after it has started. {error}"
+                "The local WinCommander service could not save this device license. Check the service and retry. {error}"
             )),
         }
     }

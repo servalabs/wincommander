@@ -58,6 +58,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let public = general_purpose::URL_SAFE_NO_PAD.encode(classic.verifying_key().to_bytes());
     let make = |id: &str,
                 iat: u64,
+                exp: u64,
                 epoch: u64,
                 ed: &SigningKey,
                 pq: &PqdsaKeyPair,
@@ -74,7 +75,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
             ml_dsa_65_public: pq_public,
         };
         let payload =
-            serde_json::json!({"license_id":id,"device_hash":"device", "iat":iat, "exp":10000})
+            serde_json::json!({"license_id":id,"device_hash":"device", "iat":iat, "exp":exp})
                 .to_string();
         let hybrid = jws::sign::assemble(
             payload.as_bytes(),
@@ -101,8 +102,8 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let cache = |request: &StoreLicenseCacheRequest| {
         serde_json::to_vec(&serde_json::json!({"token":{"payload":request.payload,"signature":request.signature,"hybrid":request.hybrid}})).unwrap()
     };
-    let previous = make("lic-a", 100, 7, &old_ed, &old_pq, "old-ed", "old-pq");
-    let next = make("lic-a", 101, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let previous = make("lic-a", 100, 10000, 7, &old_ed, &old_pq, "old-ed", "old-pq");
+    let next = make("lic-a", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     let old_bytes = cache(&previous);
     assert!(validate_dual_request(&next, &public, &current).is_ok());
     assert!(
@@ -110,20 +111,20 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
             .is_ok()
     );
     assert!(check_previous_with_history(&old_bytes, &next, &public, &current, None).is_err());
-    let same_keys_old = make("lic-a", 100, 7, &new_ed, &new_pq, "new-ed", "new-pq");
+    let same_keys_old = make("lic-a", 100, 10000, 7, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(check_previous(&cache(&same_keys_old), &next, &public, &current).is_ok());
-    let replay = make("lic-a", 99, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let replay = make("lic-a", 99, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(
         check_previous_with_history(&old_bytes, &replay, &public, &current, Some(&historical))
             .is_err()
     );
-    let other = make("lic-b", 99, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let other = make("lic-b", 99, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(
         check_previous_with_history(&old_bytes, &other, &public, &current, Some(&historical))
             .is_ok()
     );
     assert!(validate_dual_request(&previous, &public, &current).is_err());
-    let old_too_late = make("lic-a", 100, 8, &old_ed, &old_pq, "old-ed", "old-pq");
+    let old_too_late = make("lic-a", 100, 10000, 8, &old_ed, &old_pq, "old-ed", "old-pq");
     assert!(check_previous_with_history(
         &cache(&old_too_late),
         &next,
@@ -132,9 +133,18 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         Some(&historical)
     )
     .is_err());
-    let previous_epoch9 = make("lic-a", 100, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    let previous_epoch9 = make("lic-a", 100, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     let high_bytes = cache(&previous_epoch9);
     assert!(check_previous(&high_bytes, &next, &public, &current).is_err());
+    let same_second = make("lic-a", 100, 9999, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    let exact_retry = make("lic-a", 100, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    let later = make("lic-a", 101, 9999, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    let other_same_second = make("lic-b", 100, 9999, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    assert!(validate_dual_request(&same_second, &public, &current).is_ok());
+    assert!(check_previous(&high_bytes, &same_second, &public, &current).is_err());
+    assert!(check_previous(&high_bytes, &exact_retry, &public, &current).is_ok());
+    assert!(check_previous(&high_bytes, &later, &public, &current).is_ok());
+    assert!(check_previous(&high_bytes, &other_same_second, &public, &current).is_ok());
     let mut forged = previous;
     forged.hybrid.as_mut().unwrap().push('x');
     assert!(check_previous_with_history(
@@ -159,6 +169,8 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     fs::create_dir(&dir).unwrap();
     let path = dir.join("license_cache.json");
     fs::write(&path, &high_bytes).unwrap();
+    assert!(write(&path, &same_second, b"replacement", &public, &current).is_err());
+    assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write(&path, &next, b"replacement", &public, &current).is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write(&path, &previous_epoch9, &high_bytes, &public, &current).is_ok());

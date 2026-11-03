@@ -109,6 +109,13 @@ fn check_previous_with_history(
     if same_licence && new.iat < old.iat {
         return Err("license cache would restore an older signed licence");
     }
+    // Issuance timestamps have one-second resolution. Different payloads at
+    // the same timestamp have no trustworthy ordering; retain the existing
+    // proof and allow the issuer to retry in a later second. Exact retries,
+    // including signatures regenerated over identical claims, remain valid.
+    if same_licence && new.iat == old.iat && candidate.payload != previous.payload {
+        return Err("license cache has conflicting licences issued in the same second; retry");
+    }
     Ok(())
 }
 
