@@ -290,6 +290,20 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires network access to the live licence service"]
+    async fn live_commerce_catalog_accepts_hybrid_only_tls() {
+        let response = licence_http_client()
+            .unwrap()
+            .get("https://wincommander-licensing.servalabs.com/v1/catalog")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
     #[ignore = "requires network access to the live update service"]
     async fn live_update_manifests_and_artifacts_accept_hybrid_only_tls() {
         let client = required_hybrid_http_client(Duration::from_secs(15)).unwrap();
