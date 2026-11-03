@@ -33,6 +33,8 @@ mod hybrid_rollback;
 
 #[path = "../../runtime-support/pro_update_guard.rs"]
 pub(crate) mod update_guard;
+#[path = "pro_download.rs"]
+mod pro_download;
 #[path = "pro_update_process.rs"]
 mod update_process;
 #[path = "pro_update_replace.rs"]
@@ -292,16 +294,7 @@ struct ProReleaseProof {
 /// the manifest's `sha256` and decide whether to auto-upgrade. Returns
 /// None if the binary isn't present or can't be read.
 fn compute_local_pro_sha256() -> Option<String> {
-    let path = pro_resolve_path()?;
-    let bytes = std::fs::read(&path).ok()?;
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    Some(
-        h.finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>(),
-    )
+    compute_pro_sha256_at(&pro_resolve_path()?)
 }
 
 fn pro_install_metadata_path() -> Result<PathBuf, String> {
@@ -361,15 +354,16 @@ fn clear_disabled_markers() {
 }
 
 fn compute_pro_sha256_at(path: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
     let mut h = Sha256::new();
-    h.update(&bytes);
-    Some(
-        h.finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>(),
-    )
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 { break; }
+        h.update(&buffer[..count]);
+    }
+    Some(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 async fn remove_existing_pro_binary(path: &std::path::Path) -> Result<(), String> {
@@ -925,7 +919,6 @@ pub async fn get_defender_status() -> Result<DefenderStatus, String> {
 //      try a handshake.
 
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300; // 5 min
 
@@ -1555,40 +1548,11 @@ async fn install_pro_binary_machine(
         .send()
         .await
         .map_err(|e| format!("download:GET failed: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("download:HTTP {}", resp.status()));
-    }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("download:body read failed: {}", e))?;
-
-    // 3. Verify SHA-256 before touching disk.
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let actual = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
-    if actual != expected_sha256.to_lowercase() {
-        return Err(format!(
-            "sha256_mismatch:expected {}, downloaded {}. Refusing to install.",
-            expected_sha256, actual
-        ));
-    }
-
-    // 4. Write to .tmp, fsync, rename atomically.
-    let mut f = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(|e| format!("disk:tmp create: {}", e))?;
-    f.write_all(&bytes)
-        .await
-        .map_err(|e| format!("disk:tmp write: {}", e))?;
-    f.sync_all()
-        .await
-        .map_err(|e| format!("disk:tmp fsync: {}", e))?;
-    drop(f);
+    // Stream to a unique temporary file, checking the limit and digest before
+    // the existing atomic replacement can touch the installed image.
+    pro_download::download_verified(
+        resp, tmp_path, &expected_sha256, crate::investigator_install::manifest::MAX_ARTIFACT_BYTES,
+    ).await?;
 
     if let Err(error) = verify_pro_package_version(tmp_path, pro_version.as_deref()) {
         let _ = std::fs::remove_file(tmp_path);

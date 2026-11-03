@@ -2,7 +2,7 @@ use base64::{engine::general_purpose, Engine as _};
 use minisign_verify::{PublicKey, Signature};
 
 const MANIFEST_PATH: &str = "/investigator/latest.json";
-const MAX_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub(crate) const MAX_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const INVESTIGATOR_BINARY_NAME: &str = "wincommander-investigator.exe";
 pub const PRO_SIDECAR_NAME: &str = "wincommander-pro.exe";
