@@ -24,6 +24,7 @@ const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// read-only at the licensing worker.  D1 mutations are reserved for a real
 /// lifecycle change such as a new activation or an explicit deactivation.
 const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 4 * 60 * 60;
+const LICENSE_NETWORK_HINT: &str = "Check your connection or try another network; the licence service requires a quantum-resistant secure connection.";
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[cfg(test)]
 const TRIAL_DURATION_SECONDS: u64 = 16 * 24 * 60 * 60; // 16 days
@@ -767,7 +768,7 @@ async fn trial_available_from_worker(
     api_base: &str,
     device_hash: &str,
 ) -> Option<TrialAvailability> {
-    let client = crate::net::doh_http_client().ok()?;
+    let client = crate::net::licence_http_client().ok()?;
     let response = client
         .post(format!("{}/trial/status", api_base))
         .json(&WorkerTrialRequest {
@@ -1444,7 +1445,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
     // DoH-aware client routes name resolution through Cloudflare so an
     // ISP-level DNS block on the license host (same problem we hit for
     // the update host) doesn't kill activation.
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
 
     let response = client
         .post(format!("{}/license/activate", api_base))
@@ -1462,7 +1463,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
                 "error",
                 &format!("[License] Activation request failed: {}", e),
             );
-            format!("License server request failed: {}", e)
+            format!("License server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
         })?;
 
     let payload: WorkerTokenResponse = response
@@ -1570,7 +1571,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
 
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
 
     let response = client
         .post(format!("{}/license/refresh", api_base))
@@ -1584,7 +1585,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         })
         .send()
         .await
-        .map_err(|e| format!("License refresh request failed: {}", e))?;
+        .map_err(|e| format!("License refresh request failed: {}. {}", e, LICENSE_NETWORK_HINT))?;
 
     let payload: WorkerTokenResponse = response
         .json()
@@ -1708,7 +1709,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
 
         let (api_base, public_key_b64) = get_config()?;
         let device_hash = current_device_hash();
-        let client = crate::net::doh_http_client()?;
+        let client = crate::net::licence_http_client()?;
 
         // A prior advisory result must not outlive an actual trial request.
         // The worker remains the sole once-per-device authority.
@@ -1726,7 +1727,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             .await
             .map_err(|e| {
                 crate::log_message("error", &format!("[License] Trial request failed: {}", e));
-                format!("Trial server request failed: {}", e)
+                format!("Trial server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
             })?;
 
         let payload: WorkerTokenResponse = response
@@ -1798,7 +1799,7 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
     .map(|claims| claims.device_hash.clone())
     .unwrap_or_else(current_device_hash);
 
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
 
     let response = client
         .post(format!("{}/license/deactivate", api_base))
@@ -1812,8 +1813,8 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
         .await
         .map_err(|e| {
             format!(
-                "Deactivation request failed; the licence was kept so you can retry: {}",
-                e
+                "Deactivation request failed; the licence was kept so you can retry: {}. {}",
+                e, LICENSE_NETWORK_HINT
             )
         })?;
 

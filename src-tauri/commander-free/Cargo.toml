@@ -81,6 +81,7 @@ tauri-plugin-notification = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 # Prefer hybrid post-quantum key exchange when the server supports it.
 rustls = { version = "0.23", default-features = false, features = ["prefer-post-quantum"] }
+rustls-platform-verifier = "0.7"
 # Cloudflare DoH resolver to circumvent ISP-level DNS blocks of our update
 # host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
 # transitively and we need binary-compatible TLS roots.
