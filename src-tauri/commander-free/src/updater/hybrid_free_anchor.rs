@@ -33,19 +33,10 @@ fn wide(value: &str) -> Vec<u16> {
 }
 
 impl Anchor {
-    #[cfg(feature = "experimental-pq-free-release")]
-    pub(crate) fn machine() -> Self {
+    pub(crate) fn machine_named(path: &str) -> Self {
         Self {
             root: HKEY_LOCAL_MACHINE,
-            path: r"SOFTWARE\ServaLabs\WinCommander\HybridFreeUpdate".into(),
-            secured: true,
-        }
-    }
-    #[cfg(feature = "experimental-pq-pro-release")]
-    pub(crate) fn machine_pro() -> Self {
-        Self {
-            root: HKEY_LOCAL_MACHINE,
-            path: r"SOFTWARE\ServaLabs\WinCommander\HybridProUpdate".into(),
+            path: path.into(),
             secured: true,
         }
     }

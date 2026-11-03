@@ -52,6 +52,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature"] }
 
 [dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["test-util"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }

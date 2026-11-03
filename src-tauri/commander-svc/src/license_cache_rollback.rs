@@ -5,6 +5,8 @@ use std::{io::Read, sync::Mutex};
 
 #[path = "license_cache_history.rs"]
 mod history;
+#[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
+mod anchor;
 
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -29,6 +31,18 @@ pub(super) fn write(
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    write_with_anchor(path, candidate, bytes, public_key, trust, &anchor)
+}
+
+fn write_with_anchor(
+    path: &Path,
+    candidate: &StoreLicenseCacheRequest,
+    bytes: &[u8],
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor,
+) -> Result<(), &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
@@ -50,6 +64,13 @@ pub(super) fn write(
     if let Some(existing) = existing {
         check_previous_with_history(&existing, candidate, public_key, trust, old_trust.as_ref())?;
     }
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?;
+    if let Some(retained) = retained {
+        check_previous_with_history(&retained, candidate, public_key, trust, old_trust.as_ref())?;
+    }
+    // Record the authenticated candidate first. If the cache write is interrupted,
+    // a retry of the same candidate is allowed while an older one remains blocked.
+    anchor.write(bytes).map_err(|_| "license security record is unavailable")?;
     atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
 }
 

@@ -1014,6 +1014,7 @@ dependencies = [
  "subtle",
  "tokio",
  "url",
+ "uuid",
  "wincmd-clip-rules",
  "wincmd-pq-experiment",
  "wincmd-shared",
