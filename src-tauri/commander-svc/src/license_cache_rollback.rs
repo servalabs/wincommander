@@ -83,16 +83,18 @@ fn read_cache(path: &Path) -> Result<Option<Vec<u8>>, &'static str> {
 pub(super) fn verify_current(
     path: &Path,
     candidate: &StoreLicenseCacheRequest,
+    expected_time: u64,
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
-    verify_with_anchor(path, candidate, public_key, trust, &anchor)
+    verify_with_anchor(path, candidate, expected_time, public_key, trust, &anchor)
 }
 
 fn verify_with_anchor(
     path: &Path,
     candidate: &StoreLicenseCacheRequest,
+    expected_time: u64,
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     anchor: &anchor::Anchor,
@@ -102,7 +104,7 @@ fn verify_with_anchor(
     let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
-    ledger::verify_current(&retained, candidate, &bytes, public_key, trust, old_trust.as_ref())
+    ledger::verify_current(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())
 }
 
 #[cfg(test)]

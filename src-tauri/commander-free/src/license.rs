@@ -915,15 +915,19 @@ fn load_cached_license() -> Result<Option<CachedLicense>, String> {
 }
 
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn cache_history_request(cached: &CachedLicense) -> Option<serde_json::Value> {
+    let hybrid = cached.token.hybrid.as_deref()?;
+    Some(serde_json::json!({
+        "payload": cached.token.payload,
+        "signature": cached.token.signature,
+        "hybrid": hybrid,
+        "lastVerifiedAt": cached.last_verified_at,
+    }))
+}
+
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
 fn cache_history_verified(cached: &CachedLicense) -> bool {
-    let request = ServiceLicenseCacheWriteRequest {
-        payload: &cached.token.payload,
-        signature: &cached.token.signature,
-        hybrid: cached.token.hybrid.as_deref(),
-        seats_used: None,
-        seat_limit: None,
-    };
-    serde_json::to_value(request).is_ok_and(hybrid_history::verify)
+    cache_history_request(cached).is_some_and(hybrid_history::verify)
 }
 
 #[cfg(all(not(windows), feature = "experimental-pq-licence"))]
@@ -1951,6 +1955,20 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    #[test]
+    fn hybrid_licence_history_request_binds_observed_verification_time() {
+        let mut cached = CachedLicense {
+            token: SignedTokenEnvelope { payload: "p".into(), signature: "s".into(), hybrid: Some("h".into()) },
+            last_verified_at: 99,
+            seats_used: None,
+            seat_limit: None,
+        };
+        assert_eq!(cache_history_request(&cached).unwrap()["lastVerifiedAt"], 99);
+        cached.token.hybrid = None;
+        assert!(cache_history_request(&cached).is_none());
+    }
 
     #[test]
     fn hybrid_licence_unconfirmed_history_never_grants_features_or_updates() {

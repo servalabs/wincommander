@@ -222,6 +222,15 @@ jobs:
       - name: Generate encrypted backend modules
         run: bun run encrypt-backend
         working-directory: .
+      - name: Test failed Shield start with a live descendant
+        shell: pwsh
+        run: |
+          $test = 'backend::process::tests::failed_shield_runner_returns_without_waiting_for_descendant'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The isolated Shield process test did not run.' }
       - run: cargo test --workspace --no-fail-fast
       - name: Test elevated-to-standard Fleet mutex access when available
         shell: pwsh

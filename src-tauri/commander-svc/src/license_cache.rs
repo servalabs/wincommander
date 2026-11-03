@@ -48,6 +48,16 @@ struct StoreLicenseCacheRequest {
     hybrid: Option<String>,
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VerifyLicenseCacheRequest {
+    payload: String,
+    signature: String,
+    hybrid: String,
+    last_verified_at: u64,
+}
+
 /// The parts of the signed worker claim needed to reject malformed envelopes.
 /// Unknown fields deliberately remain forward-compatible with future worker
 /// claims; trust comes from the Ed25519 signature, not this projection.
@@ -121,11 +131,19 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
 /// Read-only confirmation that the current signed cache matches protected history.
 #[cfg(feature = "experimental-pq-licence")]
 pub fn verify_current(args: serde_json::Value) -> Result<(), &'static str> {
-    let request: StoreLicenseCacheRequest =
+    let request: VerifyLicenseCacheRequest =
         serde_json::from_value(args).map_err(|_| "license cache request is invalid")?;
+    let expected_time = request.last_verified_at;
+    let request = StoreLicenseCacheRequest {
+        payload: request.payload,
+        signature: request.signature,
+        hybrid: Some(request.hybrid),
+        seats_used: None,
+        seat_limit: None,
+    };
     let public_key = service_public_key().ok_or("license verification is unavailable")?;
     let trust = hybrid_trust::configured()?;
-    rollback::verify_current(&machine_license_cache_path()?, &request, public_key, &trust.policy())
+    rollback::verify_current(&machine_license_cache_path()?, &request, expected_time, public_key, &trust.policy())
 }
 
 #[cfg(not(feature = "experimental-pq-licence"))]
@@ -297,6 +315,16 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_history_request_requires_exact_verification_time() {
+        let mut request = serde_json::json!({"payload":"p","signature":"s","hybrid":"h","lastVerifiedAt":99});
+        let parsed: VerifyLicenseCacheRequest = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(parsed.last_verified_at, 99);
+        request.as_object_mut().unwrap().remove("lastVerifiedAt");
+        assert!(serde_json::from_value::<VerifyLicenseCacheRequest>(request).is_err());
+    }
     use ed25519_dalek::{Signer, SigningKey};
 
     #[cfg(feature = "experimental-pq-licence")]

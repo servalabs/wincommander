@@ -28,6 +28,7 @@ struct LegacyCache {
 pub(super) fn verify_current(
     retained: &[u8],
     candidate: &StoreLicenseCacheRequest,
+    expected_time: u64,
     bytes: &[u8],
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
@@ -48,6 +49,9 @@ pub(super) fn verify_current(
     let verified_at = current
         .last_verified_at
         .ok_or("license cache verification time is missing")?;
+    if verified_at != expected_time {
+        return Err("license cache changed during verification");
+    }
     let records = match serde_json::from_slice::<Ledger>(retained) {
         Ok(ledger) => ledger.records,
         Err(_) => {
