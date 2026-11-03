@@ -7434,6 +7434,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wincmd-pq-experiment"
+version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "ed25519-dalek 3.0.0",
+]
+
+[[package]]
 name = "wincmd-search"
 version = "0.1.0"
 dependencies = [

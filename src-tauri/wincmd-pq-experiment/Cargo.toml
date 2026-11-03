@@ -1,0 +1,10 @@
+[package]
+name = "wincmd-pq-experiment"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["alloc", "aws-lc-sys"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc"] }
