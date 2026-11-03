@@ -58,13 +58,11 @@ pub(super) fn verify_hybrid_pro(
         pq_key_id: &trust.pq_id,
         ml_dsa_65_public: &trust.pq_key,
     };
-    let verified =
-        jws::verify(envelope, &policy).map_err(|_| "Hybrid Pro release signature is invalid")?;
-    let release: crate::investigator_install::manifest::SignedProRelease =
-        serde_json::from_slice(&verified.payload)
-            .map_err(|_| "Hybrid Pro release payload is invalid")?;
-    crate::investigator_install::manifest::validate_signed_pro(&release)?;
-    if !signed_pro_release_matches(&release, version, sha256)
+    let expected_version = version.ok_or("Hybrid Pro release version is missing")?;
+    let release =
+        wincmd_pq_experiment::release::verify_metadata(envelope, expected_version, &policy)
+            .map_err(|_| "Hybrid Pro release signature or metadata is invalid")?;
+    if !release.sha256.eq_ignore_ascii_case(sha256)
         || expected_url.is_some_and(|url| release.url != url)
     {
         return Err("Hybrid Pro release does not match the requested artifact".into());
@@ -162,6 +160,7 @@ mod tests {
                 )
             };
         assert!(verify(&envelope, &trust, Some("3.7.0"), &hash, Some(url)).is_ok());
+        assert!(verify(&envelope, &trust, Some(" V3.7.0.0 "), &hash, Some(url)).is_ok());
         for index in 0..2 {
             let mut changed = envelope.clone();
             changed["signatures"][index]["signature"] = serde_json::json!("invalid");

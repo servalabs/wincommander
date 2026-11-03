@@ -1,42 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Offline rehearsal only. Trust must be obtained separately from release files.
-use crate::{jws, Purpose};
-use serde::Deserialize;
+use crate::{jws, release};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-
-const MAX_RELEASE: u64 = 4 * 1024 * 1024 * 1024;
-const MAX_ENVELOPE: usize = 32 * 1024;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProRelease {
-    format: String,
-    version: String,
-    url: String,
-    sha256: String,
-    size: u64,
-}
-
-fn canonical_version(version: &str) -> Option<String> {
-    let parts: Vec<u64> = version
-        .split('.')
-        .map(|p| {
-            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            p.parse().ok()
-        })
-        .collect::<Option<_>>()?;
-    if !(3..=4).contains(&parts.len()) {
-        return None;
-    }
-    let mut canonical = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-    if parts.get(3).is_some_and(|r| *r != 0) {
-        canonical.push_str(&format!(".{}", parts[3]));
-    }
-    Some(canonical)
-}
 
 /// Verify both signatures, the release's purpose and metadata, and the exact
 /// file bytes. The caller must provide independent trust and version policy.
@@ -47,31 +13,7 @@ pub fn verify_artifact<R: Read>(
     expected_version: &str,
     trust: &jws::Trust<'_>,
 ) -> Result<(), &'static str> {
-    if envelope.len() > MAX_ENVELOPE
-        || trust.purpose != Purpose::Release
-        || trust.minimum_epoch == 0
-    {
-        return Err("invalid release policy or envelope");
-    }
-    let verified =
-        jws::verify(envelope, trust).map_err(|_| "release signatures or policy are invalid")?;
-    let release: ProRelease =
-        serde_json::from_slice(&verified.payload).map_err(|_| "invalid release payload")?;
-    let canonical = canonical_version(&release.version).ok_or("invalid release version")?;
-    if canonical_version(expected_version).as_deref() != Some(canonical.as_str())
-        || release.format != "wincommander-pro-release-v1"
-        || release.url
-            != format!("https://winupdates.servalabs.com/pro/v{canonical}/wincommander-pro.exe")
-        || release.size == 0
-        || release.size > MAX_RELEASE
-        || release.sha256.len() != 64
-        || !release
-            .sha256
-            .bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-    {
-        return Err("release metadata does not match policy");
-    }
+    let release = release::verify_metadata(envelope, expected_version, trust)?;
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 65536];
@@ -99,7 +41,7 @@ pub fn verify_artifact<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{jws::sign::assemble, VerifyError, ML_DSA_65_PUBLIC_KEY_LEN};
+    use crate::{jws::sign::assemble, Purpose, VerifyError, ML_DSA_65_PUBLIC_KEY_LEN};
     use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
     use ed25519_dalek::{Signer, SigningKey};
 
@@ -134,6 +76,42 @@ mod tests {
         )
         .unwrap();
         assert!(verify_artifact(&signed, &bytes[..], "3.7.0", &trust).is_ok());
+        assert!(verify_artifact(&signed, &bytes[..], " V3.7.0.0 ", &trust).is_ok());
+        // Even correctly signed records must satisfy the shared release policy.
+        const MAX_RELEASE_TEST: u64 = 4 * 1024 * 1024 * 1024;
+        for (field, value) in [
+            ("format", serde_json::json!("unexpected")),
+            (
+                "url",
+                serde_json::json!("https://example.com/wincommander-pro.exe"),
+            ),
+            ("sha256", serde_json::json!("A".repeat(64))),
+            ("size", serde_json::json!(0)),
+            ("size", serde_json::json!(MAX_RELEASE_TEST + 1)),
+            ("version", serde_json::json!("3.7.1")),
+            ("unexpected", serde_json::json!(true)),
+        ] {
+            let mut bad: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            bad[field] = value;
+            let forged = assemble(
+                &serde_json::to_vec(&bad).unwrap(),
+                7,
+                &trust,
+                |m| Ok(ed.sign(m).to_bytes().to_vec()),
+                |m| {
+                    let mut s = vec![0; 3309];
+                    pq.sign(m, &mut s)
+                        .map_err(|_| VerifyError::InvalidSignature)?;
+                    Ok(s)
+                },
+            )
+            .unwrap();
+            assert!(
+                verify_artifact(&forged, &bytes[..], "3.7.0", &trust).is_err(),
+                "accepted invalid field {field}"
+            );
+        }
+
         assert!(verify_artifact(&signed, &bytes[..], "3.7.1", &trust).is_err());
         assert!(verify_artifact(&signed, &b"test release byteX"[..], "3.7.0", &trust).is_err());
         assert!(verify_artifact(&signed, &bytes[..bytes.len() - 1], "3.7.0", &trust).is_err());

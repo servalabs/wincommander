@@ -6,6 +6,7 @@
 //! protection, key rotation, expiry, or product format is implemented.
 
 pub mod jws;
+pub mod release;
 #[cfg(feature = "experimental-offline-verifier")]
 pub mod offline_release;
 
