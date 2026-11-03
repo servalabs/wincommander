@@ -266,6 +266,8 @@ pub struct ProInstallStatus {
 struct ProInstallMetadata {
     version: Option<String>,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
 }
 
 /// Hash the resolved Pro EXE on disk so the frontend can compare against
@@ -399,12 +401,26 @@ pub(crate) fn compute_install_path_sha256() -> Option<String> {
     compute_pro_sha256_at(&path)
 }
 
-/// Check whether `hash` appears in the official install metadata.
-/// Returns Some(metadata) only when wincommander-pro.json exists, parses correctly,
-/// and records `hash` as the expected sha256. Does NOT verify the on-disk binary —
-/// callers must pair this with `compute_install_path_sha256()` for a complete check.
+/// Require a signed manifest binding the recorded version and hash. Callers
+/// must still compare the managed binary's on-disk hash independently.
 pub(crate) fn install_metadata_has_hash(hash: &str) -> bool {
-    read_pro_install_metadata(Some(hash)).is_some()
+    let Some(metadata) = read_pro_install_metadata(Some(hash)) else {
+        return false;
+    };
+    metadata_has_signed_hash(&metadata, hash)
+}
+
+fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
+    if !metadata.sha256.eq_ignore_ascii_case(hash) {
+        return false;
+    }
+    let Some(envelope) = &metadata.signed_manifest else {
+        return false;
+    };
+    let Ok(manifest) = crate::investigator_install::manifest::verify_manifest(envelope) else {
+        return false;
+    };
+    signed_pro_matches(&manifest, metadata.version.as_deref(), hash)
 }
 
 /// Replace the shared version/hash record without leaving a partially-written
@@ -458,11 +474,16 @@ fn atomic_replace_shared_file(path: &std::path::Path, bytes: &[u8]) -> Result<()
     Ok(())
 }
 
-fn write_pro_install_metadata(version: Option<String>, sha256: &str) -> Result<(), String> {
+fn write_pro_install_metadata(
+    version: Option<String>,
+    sha256: &str,
+    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+) -> Result<(), String> {
     let path = pro_install_metadata_path()?;
     let metadata = ProInstallMetadata {
         version,
         sha256: sha256.to_ascii_lowercase(),
+        signed_manifest,
     };
     let bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| format!("disk:metadata encode: {}", e))?;
@@ -947,7 +968,7 @@ async fn verify_published_pro_request(
     download_url: &str,
     expected_sha256: &str,
     pro_version: Option<&str>,
-) -> Result<(), String> {
+) -> Result<Option<crate::investigator_install::manifest::SignedManifestEnvelope>, String> {
     let channel = crate::updater::selected_update_channel()?;
     let pinned_url = format!(
         "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
@@ -963,7 +984,31 @@ async fn verify_published_pro_request(
         }
         Err(error) => return Err(error),
     };
-    verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)
+    verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)?;
+    if crate::sidecar::pro_hash_is_accepted(expected_sha256) {
+        return Ok(None);
+    }
+    let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest()
+        .await
+        .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?;
+    if !signed_pro_matches(&signed, pro_version, expected_sha256) {
+        return Err("validation:Pro release does not match the independently signed manifest. Update Free or retry after the release is published.".to_string());
+    }
+    Ok(Some(envelope))
+}
+
+fn signed_pro_matches(
+    manifest: &crate::investigator_install::manifest::InvestigatorManifest,
+    version: Option<&str>,
+    sha256: &str,
+) -> bool {
+    use crate::investigator_install::manifest::PRO_SIDECAR_NAME;
+    version.and_then(parse_semver).is_some_and(|expected| {
+        parse_semver(&manifest.version) == Some(expected)
+            && manifest.artifacts.iter().any(|artifact| {
+                artifact.name == PRO_SIDECAR_NAME && artifact.sha256.eq_ignore_ascii_case(sha256)
+            })
+    })
 }
 
 fn verify_pro_package_version(
@@ -1363,7 +1408,8 @@ async fn install_pro_binary_machine(
 
     // The renderer cannot make an old artifact current by relabeling its version or hash.
     let channel = crate::updater::selected_update_channel()?;
-    verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
+    let signed_manifest =
+        verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
 
     #[cfg(windows)]
     let exclusion_already_set = defender_exclusion_already_set();
@@ -1383,7 +1429,7 @@ async fn install_pro_binary_machine(
     {
         verify_pro_package_version(&install_path, pro_version.as_deref())?;
         clear_disabled_markers();
-        write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256, signed_manifest.clone())?;
         // KT: clean up legacy Roaming copy even on the already-installed fast-path.
         if let Ok(legacy) = crate::paths::legacy_pro_sidecar_path() {
             if legacy.exists() {
@@ -1485,7 +1531,7 @@ async fn install_pro_binary_machine(
     }
     crate::updater::require_selected_channel(channel)?;
     update_replace::replace_with_metadata(&install_path, tmp_path, || {
-        write_pro_install_metadata(pro_version.clone(), &expected_sha256)
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256, signed_manifest.clone())
     })?;
     clear_disabled_markers();
 
@@ -1524,6 +1570,65 @@ async fn install_pro_binary_machine(
 
 #[cfg(test)]
 mod machine_update_tests {
+    #[tokio::test]
+    #[ignore = "requires network access to the live update service"]
+    async fn live_signed_manifest_binds_published_pro() {
+        let (_, signed) = crate::investigator_install::manifest::fetch_manifest()
+            .await
+            .unwrap();
+        let client =
+            crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15)).unwrap();
+        let published: serde_json::Value = client
+            .get("https://winupdates.servalabs.com/pro/latest.json")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(super::signed_pro_matches(
+            &signed,
+            published["version"].as_str(),
+            published["sha256"].as_str().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn signed_pro_metadata_rejects_legacy_and_tampered_claims() {
+        use super::*;
+        let envelope: crate::investigator_install::manifest::SignedManifestEnvelope =
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/pro-signed-release-3.6.7.json"
+            ))
+            .unwrap();
+        let hash = "1681e4a9005ef22b4bf011510ac7a7d1cc6a3f8f16ae57cb31dbb1153279c45e";
+        let mut metadata = ProInstallMetadata {
+            version: Some("3.6.7".into()),
+            sha256: hash.into(),
+            signed_manifest: Some(envelope.clone()),
+        };
+        assert!(metadata_has_signed_hash(&metadata, hash));
+        let encoded = serde_json::to_vec(&metadata).unwrap();
+        let persisted: ProInstallMetadata = serde_json::from_slice(&encoded).unwrap();
+        assert!(metadata_has_signed_hash(&persisted, hash));
+        assert!(!metadata_has_signed_hash(&metadata, &"a".repeat(64)));
+        metadata.version = Some("3.6.8".into());
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        metadata.version = Some("3.6.7".into());
+        let mut tampered = envelope.clone();
+        tampered.payload.push(' ');
+        metadata.signed_manifest = Some(tampered);
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        let mut invalid_signature = envelope;
+        invalid_signature.signature.clear();
+        metadata.signed_manifest = Some(invalid_signature);
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        metadata.signed_manifest = None;
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+    }
+
     #[cfg(windows)]
     #[test]
     fn failed_atomic_metadata_publication_keeps_previous_metadata() {

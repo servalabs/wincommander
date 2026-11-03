@@ -236,7 +236,7 @@ fn current_pro_spawn_cooldown_error() -> Option<String> {
 const ACCEPTED_PRO_SHA256_CURRENT: Option<&str> = option_env!("WINCMD_PRO_SHA256_CURRENT");
 const ACCEPTED_PRO_SHA256_PREVIOUS: Option<&str> = option_env!("WINCMD_PRO_SHA256_PREVIOUS");
 
-fn pro_hash_is_accepted(actual: &str) -> bool {
+pub(crate) fn pro_hash_is_accepted(actual: &str) -> bool {
     let matches = |expected: Option<&str>| -> bool {
         expected
             .map(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(actual))
@@ -273,15 +273,8 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    // Path B: install-metadata acceptance. install_pro_binary() writes the SHA-256 it
-    // verified during download to wincommander-pro.json. Accept the reported hash if:
-    //   1. The install metadata records this exact hash (proves the install was official
-    //      and the hash was verified against the manifest at install time).
-    //   2. The managed install-path binary's current on-disk hash also equals `actual`
-    //      (proves the binary file hasn't been swapped on disk since install, closing
-    //      the metadata-spoof + binary-swap attack vector).
-    // This path bridges the gap between a user updating Pro via the UI and the older
-    // Free binary that was compiled before that Pro version's hash was known.
+    // Newer Pro releases may be accepted offline when the persisted metadata
+    // contains an independently signed manifest binding the exact binary hash.
     if crate::pro_install::install_metadata_has_hash(actual)
         && crate::pro_install::compute_install_path_sha256()
             .map(|h| h.eq_ignore_ascii_case(actual))
@@ -290,7 +283,7 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
         crate::log_message(
             "info",
             &format!(
-                "[Sidecar] Pro accepted via install metadata (hash {})",
+                "[Sidecar] Pro accepted via signed release metadata (hash {})",
                 actual
             ),
         );
@@ -308,8 +301,8 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     if !configured {
         return Err(
             "Pro binary hash verification is not configured in this release build \
-             (WINCMD_PRO_SHA256_CURRENT missing) and no install metadata matched; \
-             run Install Pro from settings to register the binary."
+             (WINCMD_PRO_SHA256_CURRENT missing) and no signed install metadata matched; \
+             update Free and reinstall Pro from settings."
                 .to_string(),
         );
     }
@@ -323,7 +316,7 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     }
     Err(format!(
         "Pro binary hash {} is not in the accepted set — refuse handshake. \
-         If you just updated Pro, reinstall it from Settings → Pro.",
+         Update Free, then reinstall Pro from Settings → Pro.",
         actual
     ))
 }
