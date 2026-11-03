@@ -288,6 +288,8 @@ struct ProInstallMetadata {
 struct ProReleaseProof {
     signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
     hybrid_manifest: Option<String>,
+    #[cfg(feature = "experimental-pq-pro-release")]
+    hybrid_signed_size: Option<u64>,
 }
 
 /// Hash the resolved Pro EXE on disk so the frontend can compare against
@@ -366,6 +368,14 @@ fn compute_pro_sha256_at(path: &std::path::Path) -> Option<String> {
     Some(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
+fn verify_installed_signed_size(path: &std::path::Path, expected: Option<u64>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let actual = std::fs::metadata(path).map_err(|_| "validation:Cannot inspect installed Pro size")?.len();
+        if actual != expected { return Err("validation:Installed Pro size does not match the signed release".into()); }
+    }
+    Ok(())
+}
+
 async fn remove_existing_pro_binary(path: &std::path::Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
@@ -419,7 +429,27 @@ pub(crate) fn install_metadata_has_hash(hash: &str) -> bool {
     let Some(metadata) = read_pro_install_metadata(Some(hash)) else {
         return false;
     };
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        return pro_install_path().is_ok_and(|path| metadata_hybrid_matches_file(&metadata, hash, &path));
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
     metadata_has_signed_hash(&metadata, hash)
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn metadata_hybrid_matches_file(metadata: &ProInstallMetadata, hash: &str, path: &std::path::Path) -> bool {
+    verified_metadata_hybrid(metadata, hash)
+        .and_then(|verified| verify_installed_signed_size(path, Some(verified.size)))
+        .is_ok()
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn verified_metadata_hybrid(metadata: &ProInstallMetadata, hash: &str) -> Result<hybrid_release::VerifiedHybridPro, String> {
+    if !metadata.sha256.eq_ignore_ascii_case(hash) { return Err("validation:Pro hash mismatch".into()); }
+    let envelope = metadata.hybrid_manifest.as_deref().ok_or("validation:Hybrid Pro release is missing")?;
+    let trust = hybrid_pro_trust()?;
+    verify_hybrid_pro(envelope.as_bytes(), &trust, metadata.version.as_deref(), hash, None)
 }
 
 fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
@@ -428,11 +458,7 @@ fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
     }
     #[cfg(feature = "experimental-pq-pro-release")]
     {
-        return metadata.hybrid_manifest.as_deref().is_some_and(|envelope| {
-            hybrid_pro_trust().and_then(|trust| {
-                verify_hybrid_pro(envelope.as_bytes(), &trust, metadata.version.as_deref(), hash, None)
-            }).is_ok()
-        });
+        return verified_metadata_hybrid(metadata, hash).is_ok();
     }
     #[cfg(not(feature = "experimental-pq-pro-release"))]
     {
@@ -1018,8 +1044,8 @@ async fn verify_published_pro_request(
         let trust = hybrid_pro_trust()?;
         let version = pro_version.ok_or("validation:Pro release version is missing")?;
         let envelope = fetch_hybrid_pro(version).await?;
-        verify_hybrid_pro(envelope.as_bytes(), &trust, pro_version, expected_sha256, Some(download_url))?;
-        return Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope) });
+        let verified = verify_hybrid_pro(envelope.as_bytes(), &trust, pro_version, expected_sha256, Some(download_url))?;
+        return Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope), hybrid_signed_size: Some(verified.size) });
     }
     #[cfg(not(feature = "experimental-pq-pro-release"))]
     {
@@ -1489,11 +1515,16 @@ async fn install_pro_binary_machine(
     hybrid_rollback::check_installed_floor(
         &pro_install_metadata_path()?, &signed_manifest, pro_version.as_deref(), &expected_sha256,
     )?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    let signed_size = Some(signed_manifest.hybrid_signed_size.ok_or("validation:Hybrid Pro release size is missing")?);
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    let signed_size = None;
     if install_path.exists()
         && compute_pro_sha256_at(&install_path)
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))
             .unwrap_or(false)
     {
+        verify_installed_signed_size(&install_path, signed_size)?;
         verify_pro_package_version(&install_path, pro_version.as_deref())?;
         clear_disabled_markers();
         write_pro_install_metadata(pro_version.clone(), &expected_sha256, signed_manifest.clone())?;
@@ -1551,7 +1582,7 @@ async fn install_pro_binary_machine(
     // Stream to a unique temporary file, checking the limit and digest before
     // the existing atomic replacement can touch the installed image.
     pro_download::download_verified(
-        resp, tmp_path, &expected_sha256, crate::investigator_install::manifest::MAX_ARTIFACT_BYTES,
+        resp, tmp_path, &expected_sha256, crate::investigator_install::manifest::MAX_ARTIFACT_BYTES, signed_size,
     ).await?;
 
     if let Err(error) = verify_pro_package_version(tmp_path, pro_version.as_deref()) {

@@ -8,6 +8,11 @@ pub(super) struct HybridProTrust {
     pub(super) minimum_epoch: u64,
 }
 
+pub(super) struct VerifiedHybridPro {
+    pub(super) epoch: u64,
+    pub(super) size: u64,
+}
+
 pub(super) fn hybrid_pro_trust() -> Result<HybridProTrust, String> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let decode = |value: Option<&str>| -> Result<Vec<u8>, String> {
@@ -48,7 +53,7 @@ pub(super) fn verify_hybrid_pro(
     version: Option<&str>,
     sha256: &str,
     expected_url: Option<&str>,
-) -> Result<u64, String> {
+) -> Result<VerifiedHybridPro, String> {
     use wincmd_pq_experiment::{jws, Purpose};
     let policy = jws::Trust {
         purpose: Purpose::Release,
@@ -67,7 +72,7 @@ pub(super) fn verify_hybrid_pro(
     {
         return Err("Hybrid Pro release does not match the requested artifact".into());
     }
-    Ok(epoch)
+    Ok(VerifiedHybridPro { epoch, size: release.size })
 }
 
 pub(super) async fn fetch_hybrid_pro(version: &str) -> Result<String, String> {
@@ -159,7 +164,8 @@ mod tests {
                     target,
                 )
             };
-        assert!(verify(&envelope, &trust, Some("3.7.0"), &hash, Some(url)).is_ok());
+        let verified = verify(&envelope, &trust, Some("3.7.0"), &hash, Some(url)).unwrap();
+        assert_eq!((verified.epoch, verified.size), (7, 1234));
         assert!(verify(&envelope, &trust, Some(" V3.7.0.0 "), &hash, Some(url)).is_ok());
         for index in 0..2 {
             let mut changed = envelope.clone();
@@ -276,6 +282,12 @@ mod tests {
         let restored: ProInstallMetadata =
             serde_json::from_slice(&serde_json::to_vec(&metadata).unwrap()).unwrap();
         assert!(metadata_has_signed_hash(&restored, &hash));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pro.exe");
+        std::fs::write(&path, vec![0; 1234]).unwrap();
+        assert!(metadata_hybrid_matches_file(&restored, &hash, &path));
+        std::fs::write(&path, vec![0; 1233]).unwrap();
+        assert!(!metadata_hybrid_matches_file(&restored, &hash, &path));
         metadata.hybrid_manifest.as_mut().unwrap().push('x');
         assert!(!metadata_has_signed_hash(&metadata, &hash));
     }

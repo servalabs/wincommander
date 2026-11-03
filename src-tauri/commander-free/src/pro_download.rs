@@ -9,15 +9,22 @@ pub(super) async fn download_verified(
     path: &Path,
     expected_sha256: &str,
     maximum_bytes: u64,
+    signed_size: Option<u64>,
 ) -> Result<(), String> {
     if !response.status().is_success() {
         return Err(format!("download:HTTP {}", response.status()));
+    }
+    if signed_size.is_some_and(|size| size == 0 || size > maximum_bytes) {
+        return Err("validation:Signed Pro size is invalid".into());
     }
     if response
         .content_length()
         .is_some_and(|length| length > maximum_bytes)
     {
         return Err("download:Pro executable exceeds size limit".into());
+    }
+    if response.content_length().zip(signed_size).is_some_and(|(actual, expected)| actual != expected) {
+        return Err("download:Pro executable does not match signed size".into());
     }
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -35,13 +42,16 @@ pub(super) async fn download_verified(
         total = total
             .checked_add(chunk.len() as u64)
             .ok_or("download:Pro executable exceeds size limit")?;
-        if total > maximum_bytes {
+        if total > maximum_bytes || signed_size.is_some_and(|size| total > size) {
             return Err("download:Pro executable exceeds size limit".into());
         }
         digest.update(&chunk);
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("disk:tmp write: {e}"))?;
+    }
+    if signed_size.is_some_and(|size| total != size) {
+        return Err("download:Pro executable does not match signed size".into());
     }
     let actual = hex::encode(digest.finalize());
     if !actual.eq_ignore_ascii_case(expected_sha256) {
@@ -98,7 +108,7 @@ mod tests {
         let resp =
             response(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\npayload")
                 .await;
-        download_verified(resp, &tmp.0, &hash, 100).await.unwrap();
+        download_verified(resp, &tmp.0, &hash, 100, None).await.unwrap();
         assert_eq!(std::fs::read(&tmp.0).unwrap(), b"payload");
         assert_eq!(
             super::super::compute_pro_sha256_at(&tmp.0).as_deref(),
@@ -122,7 +132,7 @@ mod tests {
             let tmp = stage();
             let path = tmp.0.clone();
             assert!(
-                download_verified(response(wire).await, &tmp.0, &"a".repeat(64), limit)
+                download_verified(response(wire).await, &tmp.0, &"a".repeat(64), limit, None)
                     .await
                     .is_err()
             );
@@ -136,9 +146,38 @@ mod tests {
         let resp =
             response(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .await;
-        assert!(download_verified(resp, &tmp.0, &"a".repeat(64), 100)
+        assert!(download_verified(resp, &tmp.0, &"a".repeat(64), 100, None)
             .await
             .is_err());
         assert!(!tmp.0.exists());
+    }
+
+    #[tokio::test]
+    async fn signed_size_is_enforced_for_fixed_and_chunked_downloads() {
+        let hash = hex::encode(Sha256::digest(b"payload"));
+        let fixed = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\npayload";
+        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n7\r\npayload\r\n0\r\n\r\n";
+        for wire in [fixed.as_slice(), chunked.as_slice()] {
+            let tmp = stage();
+            assert!(download_verified(response(wire).await, &tmp.0, &hash, 100, Some(7)).await.is_ok());
+            for size in [6, 8] {
+                let failed = stage();
+                let path = failed.0.clone();
+                assert!(download_verified(response(wire).await, &failed.0, &hash, 100, Some(size)).await.is_err());
+                drop(failed);
+                assert!(!path.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn installed_fast_path_checks_signed_size_without_affecting_classic_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pro.exe");
+        std::fs::write(&path, b"payload").unwrap();
+        assert!(super::super::verify_installed_signed_size(&path, Some(7)).is_ok());
+        assert!(super::super::verify_installed_signed_size(&path, Some(6)).is_err());
+        assert!(super::super::verify_installed_signed_size(&path, Some(8)).is_err());
+        assert!(super::super::verify_installed_signed_size(&path, None).is_ok());
     }
 }

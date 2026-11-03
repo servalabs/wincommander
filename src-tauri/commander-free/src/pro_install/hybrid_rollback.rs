@@ -58,7 +58,7 @@ fn check_previous(
     let new_version = version
         .and_then(parse_semver)
         .ok_or("validation:New Pro version is invalid")?;
-    if new_epoch < previous_epoch
+    if new_epoch.epoch < previous_epoch.epoch
         || new_version < old_version
         || (new_version == old_version && !previous.sha256.eq_ignore_ascii_case(sha256))
     {
@@ -137,6 +137,7 @@ mod tests {
         let candidate = |version, epoch, digest: &str| ProReleaseProof {
             signed_manifest: None,
             hybrid_manifest: Some(make(version, epoch, digest)),
+            hybrid_signed_size: Some(1234),
         };
         assert!(check_previous(
             &previous,
