@@ -43,6 +43,11 @@ pub(super) fn verify_current(
         trust,
         old_trust,
     )?;
+    let current: ExistingCache =
+        serde_json::from_slice(bytes).map_err(|_| "license security record is invalid")?;
+    let verified_at = current
+        .last_verified_at
+        .ok_or("license cache verification time is missing")?;
     let records = match serde_json::from_slice::<Ledger>(retained) {
         Ok(ledger) => ledger.records,
         Err(_) => {
@@ -59,6 +64,7 @@ pub(super) fn verify_current(
         if old.token.payload == candidate.payload
             && old.token.signature == candidate.signature
             && old.token.hybrid == candidate.hybrid
+            && old.last_verified_at == Some(verified_at)
         {
             return Ok(());
         }

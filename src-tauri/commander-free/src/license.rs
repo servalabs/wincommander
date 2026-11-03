@@ -13,6 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(feature = "experimental-pq-licence")]
 #[path = "../../runtime-support/license_hybrid_trust.rs"]
 mod hybrid_trust;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[path = "license_history.rs"]
+mod hybrid_history;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -124,7 +127,7 @@ struct LicenseClaims {
     sub: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct LicenseStatus {
     configured: bool,
     licensed: bool,
@@ -404,6 +407,9 @@ pub fn has_update_entitlement() -> bool {
     let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return false;
     };
+    if !cache_history_verified(&cached) {
+        return false;
+    }
     device_hash_matches(&claims.device_hash)
         && features_from_verified_claims(&claims, cached.last_verified_at, now_unix())
             .iter()
@@ -456,6 +462,9 @@ fn current_features_raw() -> Vec<String> {
     let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return Vec::new();
     };
+    if !cache_history_verified(&cached) {
+        return Vec::new();
+    }
 
     if !device_hash_matches(&claims.device_hash) {
         return Vec::new();
@@ -903,6 +912,44 @@ fn load_cached_license() -> Result<Option<CachedLicense>, String> {
     let parsed: CachedLicense =
         serde_json::from_str(&raw).map_err(|e| format!("Invalid cached license format: {}", e))?;
     Ok(Some(parsed))
+}
+
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn cache_history_verified(cached: &CachedLicense) -> bool {
+    let request = ServiceLicenseCacheWriteRequest {
+        payload: &cached.token.payload,
+        signature: &cached.token.signature,
+        hybrid: cached.token.hybrid.as_deref(),
+        seats_used: None,
+        seat_limit: None,
+    };
+    serde_json::to_value(request).is_ok_and(hybrid_history::verify)
+}
+
+#[cfg(all(not(windows), feature = "experimental-pq-licence"))]
+fn cache_history_verified(_cached: &CachedLicense) -> bool { false }
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn cache_history_verified(_cached: &CachedLicense) -> bool { true }
+
+#[cfg(feature = "experimental-pq-licence")]
+async fn cache_history_verified_async(cached: &CachedLicense) -> bool {
+    let cached = cached.clone();
+    tokio::task::spawn_blocking(move || cache_history_verified(&cached))
+        .await.unwrap_or(false)
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+async fn cache_history_verified_async(_cached: &CachedLicense) -> bool { true }
+
+fn deny_unconfirmed_history(status: &mut LicenseStatus) {
+    status.valid = false;
+    status.features.clear();
+    status.base_features.clear();
+    status.active_service_features.clear();
+    status.update_entitled = false;
+    status.trial_active = false;
+    status.reason = Some("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
 }
 
 fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
@@ -1458,6 +1505,10 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
     };
     let mut status = status_from_cached(&cached, &claims, None);
     status.device_hash = device_hash;
+    if !cache_history_verified_async(&cached).await {
+        deny_unconfirmed_history(&mut status);
+        return serde_json::to_value(status).map_err(|e| e.to_string());
+    }
 
     let now = now_unix();
     if !status.valid {
@@ -1566,6 +1617,9 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
         return get_license_status_inner().await;
     };
     let claims = verify_token_claims(&cached.token, &public_key_b64)?;
+    if !cache_history_verified_async(&cached).await {
+        return Err("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
+    }
     if !device_hash_matches(&claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1591,6 +1645,9 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to refresh.".to_string())?;
     let cached_claims = verify_token_claims(&cached.token, &public_key_b64)?;
+    if !cache_history_verified_async(&cached).await {
+        return Err("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
+    }
     if !device_hash_matches(&cached_claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1894,6 +1951,25 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[test]
+    fn hybrid_licence_unconfirmed_history_never_grants_features_or_updates() {
+        let mut status = LicenseStatus {
+            licensed: true,
+            valid: true,
+            features: vec!["paid".into()],
+            base_features: vec!["paid".into()],
+            active_service_features: vec!["advanced".into()],
+            update_entitled: true,
+            trial_active: true,
+            ..LicenseStatus::default()
+        };
+        deny_unconfirmed_history(&mut status);
+        assert!(status.licensed);
+        assert!(!status.valid && !status.update_entitled && !status.trial_active);
+        assert!(status.features.is_empty() && status.base_features.is_empty() && status.active_service_features.is_empty());
+        assert!(status.reason.is_some());
+    }
 
     #[cfg(windows)]
     #[test]

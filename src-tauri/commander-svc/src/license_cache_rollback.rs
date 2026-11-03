@@ -16,6 +16,8 @@ static WRITE_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Deserialize)]
 struct ExistingCache {
     token: ExistingToken,
+    #[serde(default)]
+    last_verified_at: Option<u64>,
 }
 
 #[derive(Deserialize)]

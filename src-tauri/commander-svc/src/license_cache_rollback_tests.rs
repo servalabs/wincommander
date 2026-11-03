@@ -100,7 +100,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         }
     };
     let cache = |request: &StoreLicenseCacheRequest| {
-        serde_json::to_vec(&serde_json::json!({"token":{"payload":request.payload,"signature":request.signature,"hybrid":request.hybrid}})).unwrap()
+        serde_json::to_vec(&serde_json::json!({"token":{"payload":request.payload,"signature":request.signature,"hybrid":request.hybrid},"last_verified_at":99})).unwrap()
     };
     let previous = make("lic-a", 100, 10000, 7, &old_ed, &old_pq, "old-ed", "old-pq");
     let next = make("lic-a", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
@@ -188,6 +188,14 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let retained_before_check = anchor.read().unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_ok());
     assert_eq!(anchor.read().unwrap(), retained_before_check);
+    let mut changed_time: serde_json::Value = serde_json::from_slice(&high_bytes).unwrap();
+    changed_time["last_verified_at"] = 9999.into();
+    fs::write(&path, serde_json::to_vec(&changed_time).unwrap()).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
+    changed_time.as_object_mut().unwrap().remove("last_verified_at");
+    fs::write(&path, serde_json::to_vec(&changed_time).unwrap()).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
+    fs::write(&path, &high_bytes).unwrap();
     assert!(verify_with_anchor(&path, &same_second, &public, &current, &anchor).is_err());
     fs::remove_file(&path).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
