@@ -3,6 +3,8 @@
 use crate::{jws, Purpose};
 use aws_lc_rs::digest::{digest, SHA256};
 use serde::Deserialize;
+#[cfg(feature = "experimental-signer")]
+use std::io::Read;
 
 const MAX_ENVELOPE: usize = 32 * 1024;
 const MAX_INSTALLER: u64 = 4 * 1024 * 1024 * 1024;
@@ -113,6 +115,87 @@ pub fn prepare_release(
     epoch: u64,
     trust: &jws::Trust<'_>,
 ) -> Result<jws::sign::SigningInputs, &'static str> {
+    prepare_release_from_reader(payload, bytes, version, channel, url, epoch, trust)
+}
+
+#[cfg(feature = "experimental-signer")]
+fn read_artifact(mut reader: impl Read) -> Result<(u64, String), &'static str> {
+    let mut ctx = aws_lc_rs::digest::Context::new(&SHA256);
+    let mut buf = [0u8; 65536];
+    let mut size = 0u64;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|_| "cannot read Free installer")?;
+        if n == 0 {
+            break;
+        }
+        size = size
+            .checked_add(n as u64)
+            .ok_or("Free installer is too large")?;
+        if size > MAX_INSTALLER {
+            return Err("Free installer is too large");
+        }
+        ctx.update(&buf[..n]);
+    }
+    let hash = ctx
+        .finish()
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok((size, hash))
+}
+
+/// Derive an unsigned Free payload from the staged Tauri manifest and file.
+#[cfg(feature = "experimental-signer")]
+pub fn stage_payload(
+    manifest: &[u8],
+    artifact: impl Read,
+    version: &str,
+    channel: &str,
+) -> Result<Vec<u8>, &'static str> {
+    if manifest.len() > 32768 {
+        return Err("Free manifest is too large");
+    }
+    #[derive(Deserialize)]
+    struct Manifest {
+        version: String,
+        platforms: std::collections::HashMap<String, Platform>,
+    }
+    #[derive(Deserialize)]
+    struct Platform {
+        url: String,
+        signature: String,
+    }
+    let manifest: Manifest =
+        serde_json::from_slice(manifest).map_err(|_| "invalid Free manifest")?;
+    let platform = manifest
+        .platforms
+        .get("windows-x86_64")
+        .ok_or("Free Windows platform missing")?;
+    if manifest.version != version || platform.signature.is_empty() {
+        return Err("Free manifest does not match release");
+    }
+    let (size, sha256) = read_artifact(artifact)?;
+    let payload = serde_json::to_vec(&serde_json::json!({"format":"wincommander-free-release-v1", "version": version,
+        "channel":channel, "platform":"windows-x86_64", "url":platform.url, "size":size, "sha256":sha256}))
+        .map_err(|_| "cannot encode Free release")?;
+    validate_payload(&payload, version, channel, &platform.url)?;
+    Ok(payload)
+}
+
+/// Stream and verify the installer before generating either signing message.
+#[cfg(feature = "experimental-signer")]
+pub fn prepare_release_from_reader(
+    payload: &[u8],
+    artifact: impl Read,
+    version: &str,
+    channel: &str,
+    url: &str,
+    epoch: u64,
+    trust: &jws::Trust<'_>,
+) -> Result<jws::sign::SigningInputs, &'static str> {
     if payload.len() > crate::MAX_PAYLOAD_LEN
         || trust.purpose != Purpose::Release
         || trust.minimum_epoch == 0
@@ -120,8 +203,38 @@ pub fn prepare_release(
         return Err("invalid Free release policy");
     }
     let release = validate_payload(payload, version, channel, url)?;
-    verify_artifact(&release, bytes)?;
+    let (size, hash) = read_artifact(artifact)?;
+    if size != release.size || hash != release.sha256 {
+        return Err("Free installer does not match signed metadata");
+    }
     jws::sign::signing_inputs(payload, epoch, trust).map_err(|_| "invalid Free signing parameters")
+}
+
+/// Recheck the file, assemble the supplied signatures and verify both before returning.
+#[cfg(feature = "experimental-signer")]
+pub fn finish_release(
+    payload: &[u8],
+    artifact: impl Read,
+    version: &str,
+    channel: &str,
+    epoch: u64,
+    trust: &jws::Trust<'_>,
+    signatures: (Vec<u8>, Vec<u8>),
+) -> Result<Vec<u8>, &'static str> {
+    let url = format!(
+        "https://winupdates.servalabs.com/free/v{version}/WinCommander_{version}_x64-setup.exe"
+    );
+    prepare_release_from_reader(payload, artifact, version, channel, &url, epoch, trust)?;
+    let envelope = jws::sign::assemble(
+        payload,
+        epoch,
+        trust,
+        |_| Ok(signatures.0),
+        |_| Ok(signatures.1),
+    )
+    .map_err(|_| "Free release signing failed")?;
+    verify_metadata(&envelope, version, channel, &url, trust)?;
+    Ok(envelope)
 }
 
 #[cfg(test)]

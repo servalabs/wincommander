@@ -27,3 +27,8 @@ required-features = ["experimental-offline-verifier"]
 name = "wincmd-pq-release-prepare"
 path = "src/bin/release_prepare.rs"
 required-features = ["experimental-signer"]
+
+[[bin]]
+name = "wincmd-pq-free-release-prepare"
+path = "src/bin/free_release_prepare.rs"
+required-features = ["experimental-signer"]
