@@ -4622,6 +4622,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dContextItemVisibility",
+      "name": "Get\u002dContextItemVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ContextItemVisibilityCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dCrashDumpList",
       "name": "Get\u002dCrashDumpList",
       "transport": "backend\u002dscript",
@@ -6832,6 +6842,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Set\u002dContextItemVisibility",
+      "name": "Set\u002dContextItemVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ContextItemVisibilityCard.tsx"
       ]
     },
     {

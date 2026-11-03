@@ -40,6 +40,10 @@ the backend and private component before execution.
 - Optional policies to hide the Start recommended section and Settings Home
   on supported Windows 11 editions. Existing Settings page restrictions are
   retained, and WinCommander changes can be restored to their previous state.
+- Separate controls for the Include in library, Give access to and Share
+  right-click registrations when detected. They preserve other registry data
+  and offer restoration from the account that made the change; Windows menus
+  can vary by version and account.
 - Optional Windows Update policy to avoid scheduled update restarts while a
   user is signed in. It requires Windows' scheduled-install setting and does
   not prevent all restarts. Existing administrator policies are preserved.
@@ -58,6 +62,10 @@ the backend and private component before execution.
 - Active Ports can copy the currently visible connection snapshot as a text
   report. It reflects the selected filters and scan cap; it is not packet
   capture or a history of past connections.
+- Port Guard can copy its retained inbound observation history with coverage,
+  dropped-event and retention information. It covers watched ports rather than
+  all network traffic, and repeated observations are not necessarily separate
+  connections or logins.
 
 - Local ransomware-style mass-change alerting.
 - Basic USB attach/detach timeline, observed volume mounts/unmounts, and device

@@ -161,6 +161,175 @@ function Set-ShellVisibility {
     }
 }
 
+# These three Windows handlers are changed only at their exact registration
+# values. Their keys, other values, and globally shared COM classes are kept.
+function Get-ContextItemSpec {
+    param([string]$Item)
+    switch ($Item) {
+        'IncludeLibrary' { return @{ Id = '{3dad6c5d-2167-4cae-9914-f99e41c12cfa}'; Paths = @('SOFTWARE\Classes\Folder\ShellEx\ContextMenuHandlers\Library Location') } }
+        'GiveAccess' { return @{ Id = '{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}'; Paths = @('SOFTWARE\Classes\*\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Directory\Background\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\LibraryFolder\background\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\UserLibraryFolder\shellex\ContextMenuHandlers\Sharing') } }
+        'Share' { return @{ Id = '{e2bf9676-5f8f-435c-97eb-11607a5bedf7}'; Paths = @('SOFTWARE\Classes\*\shellex\ContextMenuHandlers\ModernSharing') } }
+        default { throw 'Unknown right-click item.' }
+    }
+}
+
+function Get-ContextItemAccountSid { return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+
+function Get-ContextHandlerValue {
+    param([string]$Hive, [string]$Key)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ keyExists = $false; exists = $false; value = $null; kind = $null } }
+        try {
+            if ('' -notin $sub.GetValueNames()) { return @{ keyExists = $true; exists = $false; value = $null; kind = $null } }
+            return @{ keyExists = $true; exists = $true; value = $sub.GetValue('', $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind('') }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-ContextHandlerValue {
+    param([string]$Hive, [string]$Key, [string]$Value)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'A right-click registration no longer exists.' }
+        try {
+            if ('' -in $sub.GetValueNames()) { throw 'A right-click registration appeared before restoration.' }
+            $sub.SetValue('', $Value, 'String'); $sub.Flush()
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-ContextHandlerValue {
+    param([string]$Hive, [string]$Key, [string]$Expected)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'A right-click registration no longer exists.' }
+        try {
+            if ('' -notin $sub.GetValueNames() -or $sub.GetValueKind('') -ne 'String' -or [string]$sub.GetValue('') -ine $Expected) { throw 'A right-click registration changed before removal.' }
+            $sub.DeleteValue('', $false); $sub.Flush()
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Get-ContextItemState {
+    param([string]$Item)
+    $spec = Get-ContextItemSpec $Item
+    $snapshot = "SOFTWARE\WinCommander\ContextItemVisibility\$Item"
+    $phase = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Phase'
+    $saved = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Snapshot'
+    $targets = @(
+        foreach ($path in $spec.Paths) {
+            foreach ($hive in @('LocalMachine','CurrentUser')) {
+                $current = Get-ContextHandlerValue $hive $path
+                [pscustomobject]@{ Hive = $hive; Path = $path; Current = $current }
+            }
+        }
+    )
+    $hasSnapshot = $phase.exists -or $saved.exists
+    $valid = $phase.exists -and $phase.kind -eq 'DWord' -and $phase.value -in @(1,2) -and $saved.exists -and $saved.kind -eq 'String' -and $saved.value.Length -le 16384
+    $records = @(); $sameAccount = $true
+    if ($valid) {
+        try {
+            $document = $saved.value | ConvertFrom-Json -ErrorAction Stop
+            $sameAccount = [string]$document.accountSid -ceq (Get-ContextItemAccountSid)
+            $records = @($document.records)
+            if ($records.Count -ne $targets.Count) { $valid = $false }
+            if (@($records | Where-Object { $_.present -eq $true }).Count -eq 0) { $valid = $false }
+            if ($valid) {
+                for ($i = 0; $i -lt $targets.Count; $i++) {
+                    $record = $records[$i]; $target = $targets[$i]
+                    if ($record.hive -cne $target.Hive -or $record.path -cne $target.Path -or $record.present -isnot [bool] -or ($record.present -and ($record.value -isnot [string] -or $record.value -ine $spec.Id)) -or (-not $record.present -and $null -ne $record.value)) { $valid = $false; break }
+                }
+            }
+        } catch { $valid = $false }
+    }
+    $conflict = $hasSnapshot -and (-not $valid -or -not $sameAccount)
+    $detected = 0
+    for ($i = 0; $i -lt $targets.Count; $i++) {
+        $current = $targets[$i].Current
+        if ($current.exists) { $detected++ }
+        if (-not $valid) {
+            if ($current.exists -and ($current.kind -ne 'String' -or [string]$current.value -ine $spec.Id)) { $conflict = $true }
+        } else {
+            $record = $records[$i]
+            if ($record.present -and -not $current.keyExists) { $conflict = $true }
+            if ($current.exists -and (-not $record.present -or $current.kind -ne 'String' -or [string]$current.value -cne [string]$record.value -or $phase.value -eq 2)) { $conflict = $true }
+        }
+    }
+    return @{ item = $Item; detected = $detected; owned = [bool]($valid -and $sameAccount -and $phase.value -eq 2); pending = [bool]($valid -and $sameAccount -and $phase.value -eq 1); conflict = [bool]$conflict; otherAccount = [bool]($valid -and -not $sameAccount); records = if ($valid -and $sameAccount) { $records } else { @() } }
+}
+
+function Get-ContextItemVisibility {
+    return Invoke-WithShellVisibilityMutex {
+        @{ isAdmin = [bool](Test-IsAdmin); items = @((Get-ContextItemState 'IncludeLibrary'), (Get-ContextItemState 'GiveAccess'), (Get-ContextItemState 'Share')) }
+    }
+}
+
+function Set-ContextItemVisibility {
+    param([Parameter(Mandatory = $true)][ValidateSet('IncludeLibrary','GiveAccess','Share')][string]$Item, [Parameter(Mandatory = $true)][ValidateSet('hide','restore')][string]$Mode)
+    Assert-IsAdmin
+    return Invoke-WithShellVisibilityMutex {
+        $spec = Get-ContextItemSpec $Item
+        $snapshot = "SOFTWARE\WinCommander\ContextItemVisibility\$Item"
+        $state = Get-ContextItemState $Item
+        if ($state.conflict) { throw 'A right-click registration or its backup changed outside WinCommander. No entry was changed.' }
+        if ($Mode -eq 'hide') {
+            if (-not $state.owned -and -not $state.pending) {
+                if ($state.detected -eq 0) { throw 'This right-click registration was not detected on this PC.' }
+                $records = @(
+                    foreach ($path in $spec.Paths) {
+                        foreach ($hive in @('LocalMachine','CurrentUser')) {
+                            $value = Get-ContextHandlerValue $hive $path
+                            if ($value.exists -and ($value.kind -ne 'String' -or [string]$value.value -ine $spec.Id)) { throw 'A right-click registration changed before it could be saved.' }
+                            [pscustomobject]@{ hive = $hive; path = $path; present = [bool]$value.exists; value = if ($value.exists) { [string]$value.value } else { $null } }
+                        }
+                    }
+                )
+                $json = ConvertTo-Json -InputObject @{ accountSid = Get-ContextItemAccountSid; records = $records } -Depth 5 -Compress
+                Set-ShellVisibilityValue $snapshot 'Snapshot' $json 'String'
+                Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+                $state = Get-ContextItemState $Item
+                if (-not $state.pending -or $state.conflict) { throw 'Windows could not confirm the right-click backup.' }
+            }
+            if (-not $state.owned) {
+                foreach ($record in $state.records) {
+                    if ($record.present) {
+                        $current = Get-ContextHandlerValue $record.hive $record.path
+                        if ($current.exists) { Remove-ContextHandlerValue $record.hive $record.path $record.value }
+                    }
+                }
+                $state = Get-ContextItemState $Item
+                if ($state.conflict -or $state.detected -ne 0) { throw 'Windows could not verify that the selected registrations were hidden.' }
+                Set-ShellVisibilityValue $snapshot 'Phase' 2 'DWord'
+            }
+            $result = Get-ContextItemState $Item
+            if (-not $result.owned -or $result.conflict) { throw 'Windows could not verify the right-click change.' }
+        } else {
+            if (-not ($state.owned -or $state.pending)) { throw 'WinCommander has no right-click change to restore.' }
+            Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+            foreach ($record in $state.records) {
+                if ($record.present) {
+                    $current = Get-ContextHandlerValue $record.hive $record.path
+                    if (-not $current.exists) { Set-ContextHandlerValue $record.hive $record.path $record.value }
+                }
+            }
+            $state = Get-ContextItemState $Item
+            if ($state.conflict) { throw 'Windows could not verify the restored registrations.' }
+            foreach ($record in $state.records) {
+                $current = Get-ContextHandlerValue $record.hive $record.path
+                if ($record.present -ne $current.exists -or ($record.present -and [string]$record.value -cne [string]$current.value)) { throw 'Windows could not verify the restored registrations.' }
+            }
+            foreach ($name in @('Phase','Snapshot')) { Remove-ShellVisibilityValue $snapshot $name }
+            $result = Get-ContextItemState $Item
+            if ($result.owned -or $result.pending -or $result.conflict) { throw 'The entries were restored, but their backup could not be cleared.' }
+        }
+        @{ status = 'updated'; verified = $true; item = $result; requiresSignOut = $true }
+    }
+}
+
 # --- BACKGROUND APPS ---
 
 function Disable-BackgroundApps {
