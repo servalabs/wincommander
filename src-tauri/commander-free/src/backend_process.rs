@@ -275,7 +275,7 @@ $detector.StandardInput.Close()
         let script = r#"
 $info = New-Object System.Diagnostics.ProcessStartInfo
 $info.FileName = 'powershell.exe'
-$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 8"'
+$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardInput = $true
@@ -294,7 +294,7 @@ exit 7
             child,
             script.into(),
             "Start-PrivacyShield",
-            Duration::from_secs(5),
+            Duration::from_secs(15),
         )
         .await
         .unwrap();
