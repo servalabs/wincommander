@@ -141,7 +141,8 @@ pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> 
 }
 
 pub async fn fetch_manifest() -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
-    let client = crate::net::doh_http_client().map_err(|e| format!("network:{}", e))?;
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))
+        .map_err(|e| format!("network:{}", e))?;
     let response = client
         .get(manifest_url())
         .send()

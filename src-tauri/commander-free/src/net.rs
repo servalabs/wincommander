@@ -128,37 +128,45 @@ pub fn doh_http_client() -> Result<Client, String> {
         .map_err(|e| format!("Failed to build hybrid HTTP client: {}", e))
 }
 
-/// Licence traffic must not fall back to a classical-only key exchange.
-fn licence_tls_provider() -> rustls::crypto::CryptoProvider {
+/// Sensitive product traffic must not fall back to a classical-only key exchange.
+fn required_hybrid_tls_provider() -> rustls::crypto::CryptoProvider {
     let mut provider = rustls::crypto::aws_lc_rs::default_provider();
     provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
     provider
 }
 
-pub(crate) fn licence_http_client() -> Result<Client, String> {
+pub(crate) fn required_hybrid_tls_config() -> Result<rustls::ClientConfig, String> {
     use rustls_platform_verifier::BuilderVerifierExt;
 
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(licence_tls_provider()))
+    rustls::ClientConfig::builder_with_provider(Arc::new(required_hybrid_tls_provider()))
         .with_protocol_versions(&[&rustls::version::TLS13])
-        .map_err(|e| format!("Licence TLS configuration failed: {e}"))?
+        .map_err(|e| format!("Secure TLS configuration failed: {e}"))?
         .with_platform_verifier()
-        .map_err(|e| format!("Licence certificate verifier unavailable: {e}"))?
-        .with_no_client_auth();
-    Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .connect_timeout(CONNECT_TIMEOUT)
+        .map_err(|e| format!("Certificate verifier unavailable: {e}"))
+        .map(|builder| builder.with_no_client_auth())
+}
+
+pub(crate) fn configure_required_hybrid_client(
+    builder: reqwest::ClientBuilder,
+    config: rustls::ClientConfig,
+) -> reqwest::ClientBuilder {
+    builder
         .dns_resolver(Arc::new(HybridResolver::new()))
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .use_preconfigured_tls(config)
-        .build()
-        .map_err(|e| format!("Licence HTTP client failed: {e}"))
 }
 
-/// Returns an `Arc<dyn Resolve>` for callers that build their own
-/// reqwest client (Tauri updater plugin via its `configure_client` hook).
-pub fn doh_resolver() -> Arc<dyn Resolve> {
-    Arc::new(HybridResolver::new())
+pub(crate) fn required_hybrid_http_client(timeout: Duration) -> Result<Client, String> {
+    configure_required_hybrid_client(Client::builder(), required_hybrid_tls_config()?)
+        .timeout(timeout)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Secure HTTP client failed: {e}"))
+}
+
+pub(crate) fn licence_http_client() -> Result<Client, String> {
+    required_hybrid_http_client(REQUEST_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -191,12 +199,13 @@ mod tests {
         let trusted_client = || {
             let mut roots = rustls::RootCertStore::empty();
             roots.add(cert.der().clone()).unwrap();
-            let config =
-                rustls::ClientConfig::builder_with_provider(Arc::new(licence_tls_provider()))
-                    .with_protocol_versions(&[&rustls::version::TLS13])
-                    .unwrap()
-                    .with_root_certificates(roots)
-                    .with_no_client_auth();
+            let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                required_hybrid_tls_provider(),
+            ))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
             Client::builder()
                 .no_proxy()
                 .use_preconfigured_tls(config)
@@ -278,6 +287,42 @@ mod tests {
             .send()
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires network access to the live update service"]
+    async fn live_update_manifests_and_artifacts_accept_hybrid_only_tls() {
+        let client = required_hybrid_http_client(Duration::from_secs(15)).unwrap();
+        for (path, artifact_pointer) in [
+            ("free/latest.json", "/platforms/windows-x86_64/url"),
+            ("pro/latest.json", "/url"),
+        ] {
+            let response = client
+                .get(format!("https://winupdates.servalabs.com/{path}"))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            let manifest: serde_json::Value = response.json().await.unwrap();
+            let url = reqwest::Url::parse(
+                manifest
+                    .pointer(artifact_pointer)
+                    .unwrap()
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(url.scheme(), "https");
+            assert_eq!(url.host_str(), Some("winupdates.servalabs.com"));
+            client
+                .head(url)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
     }
 
     #[test]

@@ -204,10 +204,11 @@ pub(crate) fn build_updater_for_channel(
     app: &AppHandle,
     channel: crate::settings::UpdateChannel,
 ) -> Result<tauri_plugin_updater::Updater, String> {
+    let tls = crate::net::required_hybrid_tls_config()?;
     preserve_app_until_installer_launch(app.updater_builder())
         .endpoints(crate::cache_busted_endpoints(app, channel)?)
         .map_err(|e| format!("Updater endpoints failed: {}", e))?
-        .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
+        .configure_client(move |cb| crate::net::configure_required_hybrid_client(cb, tls.clone()))
         .build()
         .map_err(|e| format!("Updater build failed: {}", e))
 }

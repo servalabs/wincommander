@@ -92,11 +92,10 @@ fn verified_installed_manifest() -> Option<InvestigatorManifest> {
 }
 
 async fn download_artifact(artifact: &InvestigatorArtifact, path: &Path) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .dns_resolver(crate::net::doh_resolver())
-        .build()
-        .map_err(|e| format!("download:http client: {}", e))?;
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(
+        DOWNLOAD_TIMEOUT_SECS,
+    ))
+    .map_err(|e| format!("download:http client: {}", e))?;
     let response = client
         .get(&artifact.url)
         .send()

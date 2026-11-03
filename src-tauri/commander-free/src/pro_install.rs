@@ -619,7 +619,8 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     // as the license/update hosts that were observed to be ISP-DNS-blocked,
     // so route through the same system-DNS-first/Cloudflare-DoH-fallback
     // resolver license.rs and updater.rs already use (see net.rs).
-    let client = crate::net::doh_http_client().map_err(|e| format!("network:{}", e))?;
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))
+        .map_err(|e| format!("network:{}", e))?;
     let resp = client
         .get(&manifest_url)
         .send()
@@ -1427,17 +1428,12 @@ async fn install_pro_binary_machine(
     let temporary = update_replace::StagedFile::new(&install_path);
     let tmp_path = &temporary.0;
 
-    // DoH-aware resolver (same ISP-DNS-block exposure as the manifest fetch
-    // above and the license/update hosts in license.rs/updater.rs). We build
-    // our own client rather than calling `doh_http_client()` directly because
-    // that helper hardcodes a request timeout sized for small JSON calls,
-    // not a multi-hundred-MB binary download that needs the full
-    // `DOWNLOAD_TIMEOUT_SECS` window.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .dns_resolver(crate::net::doh_resolver())
-        .build()
-        .map_err(|e| format!("download:http client: {}", e))?;
+    // Use the same hybrid-only transport as the manifest, with a longer
+    // timeout for a multi-hundred-MB binary download.
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(
+        DOWNLOAD_TIMEOUT_SECS,
+    ))
+    .map_err(|e| format!("download:http client: {}", e))?;
 
     let resp = client
         .get(&download_url)
