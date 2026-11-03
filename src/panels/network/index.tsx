@@ -14,6 +14,7 @@ import UniversalToggle from "../../components/shared/UniversalToggle";
 import ActivePorts from "../../components/network/ActivePorts";
 import WCSwitch from "../../components/shared/WCSwitch";
 import PortGuardSection from "./PortGuardSection";
+import IpFirewallCard from "./IpFirewallCard";
 import WifiGuardSection from "./WifiGuardSection";
 import { NetworkMaintenanceTools } from "./NetworkMaintenanceTools";
 import { TelemetryProtectionDetails } from "./TelemetryProtectionDetails";
@@ -1235,6 +1236,7 @@ function PortsAndConnectionsTab() {
                     <PortGuardSection />
                 </div>
             </div>
+            <div className="network-control-row network-control-row--active"><div className="ncr-main"><IpFirewallCard /></div></div>
 
             {showActivePorts && (
                 <div className="network-control-row network-control-row--active">

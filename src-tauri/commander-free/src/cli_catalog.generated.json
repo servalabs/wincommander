@@ -25,6 +25,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Add\u002dIPFirewallRule",
+      "name": "Add\u002dIPFirewallRule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Allow\u002dAnonymousSamEnumeration",
       "name": "Allow\u002dAnonymousSamEnumeration",
       "transport": "backend\u002dscript",
@@ -4938,6 +4946,16 @@
       ]
     },
     {
+      "id": "backend:Get\u002dIPFirewallRules",
+      "name": "Get\u002dIPFirewallRules",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/network/IpFirewallCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dJumpLists",
       "name": "Get\u002dJumpLists",
       "transport": "backend\u002dscript",
@@ -6465,6 +6483,14 @@
     {
       "id": "backend:Remove\u002dFirewallRule",
       "name": "Remove\u002dFirewallRule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "backend:Remove\u002dIPFirewallRule",
+      "name": "Remove\u002dIPFirewallRule",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,

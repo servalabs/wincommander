@@ -192,6 +192,9 @@ operational risk, or proprietary enforcement logic.
 - USB/HID policy, device intelligence, transfer metering, quarantine, and
   reactive unknown-keyboard approval.
 - Advanced automation rules and event-driven actions.
+- Local Windows Firewall rules for a specific remote IPv4/IPv6 address or
+  subnet, with separate inbound/outbound and allow/block choices. Rule status
+  is read back from Windows; other firewall policies can affect connections.
 - Encrypted-volume create, mount, dismount, recovery, and secure-erasure
   workflows. Personal and Quick Mount use the supplied password, PIM, and
   keyfile to select a standard, outer, or hidden volume automatically. Secure

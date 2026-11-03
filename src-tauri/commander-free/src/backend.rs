@@ -1830,6 +1830,9 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "Get-ProtocolBlocks"
         | "Block-Protocol"
         | "Unblock-Protocol"
+        | "Get-IPFirewallRules"
+        | "Add-IPFirewallRule"
+        | "Remove-IPFirewallRule"
 
         // ── #10 AI Security Advisor (paid · routes to Pro local Ollama) ──
         // These run through run_backend_script → dispatch_paid_command.
@@ -1969,6 +1972,13 @@ mod command_tier_tests {
         // Pro handler exists; it was mis-tiered Free, letting an unlicensed
         // user run Optimize-Volume -ReTrim against real drives.
         assert_eq!(get_command_tier("Invoke-SSDTrim"), "paid");
+    }
+
+    #[test]
+    fn ip_firewall_commands_stay_paid() {
+        for command in ["Get-IPFirewallRules", "Add-IPFirewallRule", "Remove-IPFirewallRule"] {
+            assert_eq!(get_command_tier(command), "paid");
+        }
     }
 
     #[test]
@@ -5773,6 +5783,8 @@ pub(crate) async fn run_backend_script_with_timeout(
                     | "Set-HostsRecommendedProtection"
                     | "Undo-HostsBlocklistChange"
                     | "Set-UpdateRestartPolicy"
+                    | "Add-IPFirewallRule"
+                    | "Remove-IPFirewallRule"
             );
         if mutating {
             let msg = format!(
