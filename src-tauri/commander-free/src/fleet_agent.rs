@@ -352,7 +352,7 @@ async fn fleet_connect_inner(
     let current = crate::settings::read_settings()?;
     let plan = crate::settings::fleet_enrollment::ConnectionPlan::new(
         &current,
-        server_url,
+        server_url.clone(),
         dispatch,
         signing_key_pub.clone(),
     )?;
