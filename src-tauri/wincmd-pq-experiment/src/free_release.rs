@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Experimental Free installer profile. Not connected to the updater or release pipeline.
+//! Experimental Free installer profile. Not connected to the production release pipeline.
 use crate::{jws, Purpose};
 use aws_lc_rs::digest::{digest, SHA256};
 use serde::Deserialize;

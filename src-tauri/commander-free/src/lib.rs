@@ -1091,11 +1091,10 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
         let body = update.body.clone();
         tokio::time::timeout(
             crate::updater::INSTALL_TIMEOUT,
-            update.download_and_install(|_, _| {}, || {}),
+            updater::install_update(&update, channel, None),
         )
         .await
-        .map_err(|_| "Update installation timed out".to_string())?
-        .map_err(|e| format!("Install failed: {}", e))?;
+        .map_err(|_| "Update installation timed out".to_string())??;
         Ok((version, current, body))
     }
     .await;

@@ -36,6 +36,8 @@ portable = []
 experimental-pq-licence = ["dep:wincmd-pq-experiment"]
 # Opt-in integration rehearsal only; requires separately provisioned trust keys.
 experimental-pq-pro-release = ["dep:wincmd-pq-experiment"]
+# Isolated Free updater rehearsal; requires independent release trust keys.
+experimental-pq-free-release = ["dep:wincmd-pq-experiment"]
 # Closed lab controls for debug artifacts only. This intentionally adds no
 # generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]

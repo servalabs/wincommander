@@ -28,6 +28,57 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(feature = "experimental-pq-free-release")]
+#[path = "updater/hybrid_free.rs"]
+mod hybrid_free;
+
+/// In the experimental build every installation goes through this one gate.
+pub(crate) async fn install_update(
+    update: &tauri_plugin_updater::Update,
+    channel: crate::settings::UpdateChannel,
+    staged: Option<Vec<u8>>,
+) -> Result<(), String> {
+    #[cfg(feature = "experimental-pq-free-release")]
+    {
+        let bytes = hybrid_free::verified_bytes(update, channel, staged).await?;
+        require_selected_channel(channel)?;
+        update
+            .install(bytes)
+            .map_err(|e| format!("Install failed: {e}"))
+    }
+    #[cfg(not(feature = "experimental-pq-free-release"))]
+    {
+        let _ = channel;
+        match staged {
+            Some(bytes) => update
+                .install(bytes)
+                .map_err(|e| format!("Install failed: {e}")),
+            None => update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|e| format!("Install failed: {e}")),
+        }
+    }
+}
+
+async fn download_for_staging(
+    update: &tauri_plugin_updater::Update,
+    channel: crate::settings::UpdateChannel,
+) -> Result<Vec<u8>, String> {
+    #[cfg(feature = "experimental-pq-free-release")]
+    {
+        hybrid_free::verified_bytes(update, channel, None).await
+    }
+    #[cfg(not(feature = "experimental-pq-free-release"))]
+    {
+        let _ = channel;
+        update
+            .download(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
 const INITIAL_DELAY: Duration = Duration::from_secs(30);
 const NORMAL_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 days
 const RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60); // ~5min when offline
@@ -377,7 +428,7 @@ async fn run_cycle(app: &AppHandle) -> Duration {
         body.clone(),
         None,
     );
-    match update.download(|_, _| {}, || {}).await {
+    match download_for_staging(&update, channel).await {
         Ok(bytes) => {
             if require_selected_channel(channel).is_err() {
                 return RETRY_INTERVAL;
@@ -543,22 +594,9 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
             .and_then(|mut state| take_staged_for_version(&mut state, &target_version, channel))
     });
 
-    let result = match staged {
-        Some(bytes) => tokio::time::timeout(INSTALL_TIMEOUT, async {
-            update
-                .install(bytes)
-                .map_err(|e| format!("Install failed: {}", e))
-        })
+    let result = tokio::time::timeout(INSTALL_TIMEOUT, install_update(&update, channel, staged))
         .await
-        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
-        None => tokio::time::timeout(
-            INSTALL_TIMEOUT,
-            update.download_and_install(|_, _| {}, || {}),
-        )
-        .await
-        .map(|result| result.map_err(|e| format!("Install failed: {}", e)))
-        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
-    };
+        .unwrap_or_else(|_| Err("Update installation timed out".to_string()));
 
     if result.is_ok() {
         // Bytes are on disk; surface a persistent Restart affordance in case the
