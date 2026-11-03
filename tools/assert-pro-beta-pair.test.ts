@@ -49,28 +49,40 @@ function writeFixture(overrides: Record<string, unknown> = {}) {
 
 function verify() {
   return Bun.spawnSync({
-    cmd: ["pwsh", "-NoProfile", "-File", script, "-Version", version, "-FreeCommit", freeCommit,
+    cmd: ["pwsh", "-NoProfile", "-NonInteractive", "-File", script, "-Version", version, "-FreeCommit", freeCommit,
       "-FreeTree", freeTree, "-ManifestPath", manifestPath, "-BinaryPath", binaryPath,
       "-ReceiptPath", receiptPath, "-UpdateDomain", domain],
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
+    timeout: 20_000,
+    killSignal: "SIGKILL",
   });
+}
+
+function expectRejected(result: ReturnType<typeof verify>) {
+  expect(result.signalCode).toBeUndefined();
+  expect(result.exitCode).toBe(1);
+  const error = result.stderr.toString().replace(/\r?\n\s*\|\s*/g, " ").replace(/\s+/g, " ");
+  expect(error).toContain("Pro release receipt, manifest, and binary do not match the selected Free beta commit.");
 }
 
 describe("Free beta requires the exact paired Pro release", () => {
   test("accepts the matching commit, manifest, binary, and receipt", () => {
     writeFixture();
-    expect(verify().exitCode).toBe(0);
-  });
+    const result = verify();
+    expect(result.signalCode).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+  }, 30_000);
 
   test("rejects a Pro receipt pinned to another Free commit", () => {
     writeFixture({ free_commit: "e".repeat(40) });
-    expect(verify().exitCode).not.toBe(0);
-  });
+    expectRejected(verify());
+  }, 30_000);
 
   test("rejects changed Pro bytes after the receipt was issued", () => {
     writeFixture();
     writeFileSync(binaryPath, Buffer.from("tampered-pro-binary"));
-    expect(verify().exitCode).not.toBe(0);
-  });
+    expectRejected(verify());
+  }, 30_000);
 });
