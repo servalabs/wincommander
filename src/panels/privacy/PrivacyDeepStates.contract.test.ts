@@ -61,9 +61,23 @@ describe("Privacy deep-state and responsive contracts", () => {
     expect(source).toContain('aria-label="Upgrade Privacy Shield for unlimited time"');
     expect(source).toContain('aria-controls="privacy-shield-ai-runtime"');
     expect(source).toContain('const [showAiRuntimeDetails, setShowAiRuntimeDetails] = useState(false);');
-    expect(source).toContain('const stateUnknown = privacyShieldRunning === null || cameraAvailable === null');
+    expect(source).toContain('const stateUnknown = privacyShieldRunning === null');
+    expect(source).toContain('Camera availability could not be confirmed. You can try starting Shield to check the camera.');
+    expect(source).toContain('setStopError(res.error || "Privacy Shield could not start.');
+    expect(source).toContain('generation !== statusGeneration.current || shieldActionInFlight.current');
+    expect(source).toContain('if (shieldActionInFlight.current) return;');
+    expect(source).toContain('shieldWaiting ? "Waiting for Shield"');
     expect(source).toContain('text="Refresh status"');
     expect(source).toContain('notification sent');
+  });
+
+  test("Shield runtime setup remains accessible when camera detection is uncertain", async () => {
+    const source = await Bun.file("src/panels/privacy/PrivacyShieldCard.tsx").text();
+    const runtimeCheck = source.slice(source.indexOf("const checkAI = async"), source.indexOf("// Surface the backend reader"));
+    expect(runtimeCheck).toContain("getAIDependenciesStatus()");
+    expect(runtimeCheck).not.toContain("cameraAvailable");
+    expect(source).not.toContain("{cameraAvailable === true && (\n                    <div className=\"rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2\">");
+    expect(source).toContain('<AIRuntimeInstaller onInstalled=');
   });
 
   test("Pro upsell badges are keyboard-native actions", async () => {

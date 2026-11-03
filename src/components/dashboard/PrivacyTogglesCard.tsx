@@ -1,11 +1,11 @@
 import { Camera, CameraOff, Mic, MicOff, Globe, GlobeLock, VideoOff } from "lucide-react";
 import RadarControlStrip from "./RadarControlStrip";
 import BluetoothControl from "./BluetoothControl";
+import { cameraDisplayState, type CameraPresence } from "../../hooks/cameraPresenceProbe";
 
 interface PrivacyTogglesCardProps {
-  cameraBlocked?: boolean;
-  /** When false, no camera hardware is present — shows a disabled "No Camera" button. */
-  cameraAvailable?: boolean;
+  cameraBlocked?: boolean | null;
+  cameraPresence?: CameraPresence;
   microphoneBlocked?: boolean;
   capabilityPending?: "webcam" | "microphone" | null;
   onCapabilityToggle?: (capability: "webcam" | "microphone", blocked: boolean) => void;
@@ -23,8 +23,8 @@ interface PrivacyTogglesCardProps {
  * independent toggle.
  */
 export default function PrivacyTogglesCard({
-  cameraBlocked = false,
-  cameraAvailable = true,
+  cameraBlocked = null,
+  cameraPresence = "unknown",
   microphoneBlocked = false,
   capabilityPending = null,
   onCapabilityToggle,
@@ -32,23 +32,13 @@ export default function PrivacyTogglesCard({
   internetPending = false,
   onToggleInternet,
 }: PrivacyTogglesCardProps) {
+  const cameraState = cameraDisplayState(cameraPresence, cameraBlocked);
   return (
     <div className="privacy-toggles-card">
       <div className="ptc-toggles">
         <div className="ptc-title">PRIVACY</div>
         <div className="dashboard-capability-toggles">
-          {cameraAvailable ? (
-            <button
-              type="button"
-              className={`dashboard-capability-toggle ${cameraBlocked ? "active" : ""}`}
-              onClick={() => onCapabilityToggle?.("webcam", !cameraBlocked)}
-              disabled={!onCapabilityToggle || capabilityPending === "webcam"}
-              title={cameraBlocked ? "Camera blocked — click to allow" : "Camera allowed — click to block"}
-            >
-              {cameraBlocked ? <CameraOff size={12} /> : <Camera size={12} />}
-              CAM {cameraBlocked ? "OFF" : "ON"}
-            </button>
-          ) : (
+          {cameraState === "absent" ? (
             <button
               type="button"
               className="dashboard-capability-toggle no-device"
@@ -57,6 +47,29 @@ export default function PrivacyTogglesCard({
             >
               <VideoOff size={12} />
               NO CAM
+            </button>
+          ) : cameraState === "unknown" ? (
+            <button
+              type="button"
+              className="dashboard-capability-toggle no-device"
+              disabled
+              title={cameraPresence === "unknown" ? "Camera presence could not be confirmed" : "Camera access is being checked"}
+            >
+              <Camera size={12} />
+              CAM ?
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`dashboard-capability-toggle ${cameraBlocked ? "active" : ""}`}
+              onClick={() => onCapabilityToggle?.("webcam", !cameraBlocked)}
+              disabled={!onCapabilityToggle || capabilityPending === "webcam"}
+              title={cameraPresence === "unknown"
+                ? `Camera access ${cameraBlocked ? "blocked" : "allowed"}; camera presence could not be confirmed. Individual app permissions may differ.`
+                : cameraBlocked ? "Camera access blocked — click to allow" : "Device camera access allowed — individual app permissions may differ"}
+            >
+              {cameraBlocked ? <CameraOff size={12} /> : <Camera size={12} />}
+              CAM {cameraBlocked ? "OFF" : "ON"}
             </button>
           )}
           <button

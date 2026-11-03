@@ -40,9 +40,7 @@ fn open_source(path: &Path, delete: bool) -> Result<File, String> {
     if delete {
         return Err("Verified legacy cleanup is unavailable on this platform".into());
     }
-    let file = options
-        .open(path)
-        .map_err(|_| "Could not open legacy settings")?;
+    let file = open_source_with_retry(|| options.open(path))?;
     let metadata = file
         .metadata()
         .map_err(|_| "Could not inspect legacy settings")?;
@@ -57,6 +55,21 @@ fn open_source(path: &Path, delete: bool) -> Result<File, String> {
         return Err("Legacy settings are not a bounded regular file".into());
     }
     Ok(file)
+}
+
+fn open_source_with_retry<T>(mut open: impl FnMut() -> std::io::Result<T>) -> Result<T, String> {
+    // Legacy cleanup holds an exclusive handle while checking the source.
+    // Another startup in the same profile may briefly meet that handle.
+    for attempt in 0..=40 {
+        match open() {
+            Ok(file) => return Ok(file),
+            Err(error) if cfg!(windows) && attempt < 40 && matches!(error.raw_os_error(), Some(32 | 33)) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return Err("Could not open legacy settings".into()),
+        }
+    }
+    unreachable!("the final open attempt always returns")
 }
 
 #[cfg(windows)]

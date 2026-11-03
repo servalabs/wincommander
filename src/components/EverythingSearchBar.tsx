@@ -26,7 +26,7 @@ import { Icon, Spinner } from "@/components/ui/bp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AnimatePresence, motion } from "framer-motion";
 import type { AppSettings } from "../types/settings";
-import { dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
+import { dedupeContentRows, highlightPreviewText, isNameOnlyMatch } from "@/lib/contentSearch";
 import { formatResultSize, isDirectoryResult, isEngineMissingError, sfExtOf } from "@/lib/fileNameSearch";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { createAsyncListenerScope } from "@/lib/asyncListeners";
@@ -970,6 +970,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     );
   };
 
+  const isIdle = !query.text.trim() && query.chips.length === 0;
   const sectionLabel = search.isBrowse
     ? (query.chips.length > 0 ? describeQuery(query) : "Recent")
     : null;
@@ -1219,6 +1220,8 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         </div>
       )}
 
+      {search.contentError && <div className="esb-status" role="status">{search.contentError}</div>}
+
       {!privacy.status && (
         <div className="esb-status" role="status">Preparing search…</div>
       )}
@@ -1266,7 +1269,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
                 {previewRow ? <>
                   <div className="esb-preview-heading"><Icon icon="document" size={14} /><strong>{previewRow.name}</strong></div>
                   <div className="esb-preview-path">{previewRow.path}</div>
-                  <div className="esb-preview-copy">{previewLoading ? <Spinner size={16} /> : (previewText || "No readable text is available for this file.")}</div>
+                  <div className="esb-preview-copy" tabIndex={0} aria-label="File content preview">{previewLoading ? <Spinner size={16} /> : previewText ? highlightPreviewText(previewText, previewRow.snippetSegs, search.term).map((part) => part.highlighted ? <mark key={part.offset}>{part.text}</mark> : <span key={part.offset}>{part.text}</span>) : "No readable text is available for this file."}</div>
                   <div className="esb-preview-actions">
                     <button type="button" onClick={() => void openPath(previewRow.path)}>Open</button>
                     <button type="button" onClick={() => void invoke("search_open_containing_folder", { path: previewRow.path }).catch((error) => setError(String(error)))}>Folder</button>
@@ -1279,13 +1282,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         </>
       )}
 
-      {hasMoreResults && (
+      {(hasMoreResults || search.contentError) && (
         <div className="esb-count">
-          <span>
+          {hasMoreResults && <span>
             {search.totalCount === null
               ? `Showing the first ${primary.length.toLocaleString()} results`
               : `Showing ${primary.length} of ${search.totalCount.toLocaleString()}`}
-          </span>
+          </span>}
           <button
             type="button"
             className="esb-open-full-search"
@@ -1303,19 +1306,19 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
                 .finally(close);
             }}
           >
-            View all results
+            {search.contentError ? "Open File Search" : "View all results"}
           </button>
         </div>
       )}
 
-      {!search.isSearching && visibleRowCount === 0 && !search.error && (
+      {!search.isSearching && visibleRowCount === 0 && !search.error && !search.contentError && (
         <div className="esb-no-results">
           <span className="esb-no-results-title">
-            {search.isBrowse ? "Nothing recent to show" : "Nothing matched"}
+            {isIdle ? "Type to search files and contents" : search.isBrowse ? "Nothing matched these filters" : "Nothing matched"}
           </span>
           {/* The query in plain English, so an empty list explains itself
               instead of leaving the user to guess which chip was too tight. */}
-          <span className="esb-no-results-sub">{describeQuery(query)}</span>
+          <span className="esb-no-results-sub">{isIdle ? "Search by file name or words inside a file." : describeQuery(query)}</span>
         </div>
       )}
 

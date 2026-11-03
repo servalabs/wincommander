@@ -56,6 +56,12 @@ function Assert-NoActiveVaultsUnlessAllowed {
     }
 }
 
+function Invoke-NonElevatedVaultGuard([scriptblock]$Probe, [scriptblock]$Guard) {
+    try { & $Probe }
+    catch [System.UnauthorizedAccessException] { return }
+    & $Guard
+}
+
 function Write-Diagnostic([string]$Message) {
     if ($DiagnosticPath) {
         Add-Content -LiteralPath $DiagnosticPath -Value $Message
@@ -184,8 +190,10 @@ function Assert-ProtectedPath([string]$Path) {
     $writeMask = [int64]([Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership) -bor 0x50000000
     foreach ($rule in $acl.Access) {
         if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        if (([int64]$rule.FileSystemRights -band $writeMask) -eq 0) { continue }
         $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-        if ($sid -notin @('S-1-5-18', 'S-1-5-32-544') -and (([int64]$rule.FileSystemRights -band $writeMask) -ne 0)) {
+        if ($sid -eq 'S-1-3-0' -and ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
+        if ($sid -notin @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')) {
             throw "Development path allows an untrusted writer: $Path"
         }
     }
@@ -516,7 +524,12 @@ if (-not $Elevated) {
         return
     }
 
-    Assert-NoActiveVaultsUnlessAllowed
+    Invoke-NonElevatedVaultGuard {
+        if (Test-Path -LiteralPath $activeMountRegistry -PathType Leaf) {
+            $stream = [IO.File]::OpenRead($activeMountRegistry)
+            $stream.Dispose()
+        }
+    } { Assert-NoActiveVaultsUnlessAllowed }
     Start-ElevatedSync -UseExistingBuild
     Write-Host 'WinCommander development service synchronized and running.'
     return

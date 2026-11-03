@@ -14,6 +14,10 @@ mod backend_paid_args;
 #[path = "backend_receipt.rs"]
 mod receipt;
 
+#[path = "backend_shield_lifecycle.rs"]
+mod shield_lifecycle;
+pub(crate) use shield_lifecycle::stop_privacy_shield_gracefully;
+
 fn inventory_persistence_receipt(submitted: &serde_json::Value, saved: Result<serde_json::Value, String>) -> serde_json::Value {
     use sha2::{Digest, Sha256};
     let expected = serde_json::from_value::<settings::AppInventorySnapshot>(submitted.clone())
@@ -4891,7 +4895,7 @@ pub async fn run_backend_script(
     ) {
         let runtime = tokio::runtime::Handle::current();
         return tokio::task::spawn_blocking(move || {
-            let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+            let _guard = crate::paths::acquire_shield_action_lock()?;
             let fleet_policy_active = if command == "Start-PrivacyShield" {
                 crate::fleet_agent::require_single_interactive_shield_session()?;
                 Some(runtime.block_on(crate::fleet_agent::verify_service_shield_profile())?)
@@ -4921,7 +4925,8 @@ pub async fn run_backend_script(
         .await
         .map_err(|error| format!("Shield action worker failed: {error}"))?;
     }
-    run_backend_script_with_timeout(app, command, params, None).await
+    let timeout = process::ui_script_timeout(&command);
+    run_backend_script_with_timeout(app, command, params, timeout).await
 }
 
 fn set_shield_parameter(params: &mut HashMap<String, String>, name: &str, value: String) {
@@ -5863,6 +5868,9 @@ pub(crate) async fn run_backend_script_with_timeout(
         // mesh handler alongside Get-MeshVPNStatus / Start-MeshVPNLogin.
         let args = backend_paid_args::paid_command_args(&command, &params)?;
         let result = crate::sidecar::dispatch_paid_command(&command, args).await;
+        if let Ok(ref receipt) = result {
+            shield_lifecycle::emit_verified_transition(&app, &command, receipt);
+        }
         // Apply settings sync patch so the toggle UI reflects the new
         // state immediately after the Pro sidecar succeeds.
         // Stopping must cancel the local reader and its queued local alerts
@@ -6090,9 +6098,12 @@ pub(crate) async fn run_backend_script_with_timeout(
     } else {
         ""
     };
+    let shield_debug_stage = if cfg!(debug_assertions) && command == "Start-PrivacyShield" {
+        "Write-PrivacyShieldDebugStage 'router'\n"
+    } else { "" };
     let full_script = format!(
-        "{}\n\n{}{}\n\n{}\n\n{}Invoke-BackendCommand",
-        core_utils, additional_modules, command_module, core_router, machine_wide_assertion
+        "{}\n\n{}{}\n\n{}\n\n{}{}Invoke-BackendCommand",
+        core_utils, additional_modules, command_module, core_router, machine_wide_assertion, shield_debug_stage
     );
 
     // Execute PowerShell via stdin (memory-only, never writes to disk)
@@ -6104,8 +6115,34 @@ pub(crate) async fn run_backend_script_with_timeout(
     // wrapper, so give it the real Free owner rather than the wrapper PID.
     // It fails closed if that owner disappears, even if a late Job assignment
     // is unavailable (for example because of a nested-job policy).
+    let mut shield_capture_delivery_status = None;
     if command == "Start-PrivacyShield" {
         cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
+        if cfg!(debug_assertions) { cmd.env("WINCMD_SHIELD_DEBUG_TRACE", "1"); }
+        else { cmd.env_remove("WINCMD_SHIELD_DEBUG_TRACE"); }
+        // Media is separate from Shield enforcement. Missing enrollment or an
+        // older/offline sidecar leaves captures local and never delays Start
+        // indefinitely or inherits a caller-supplied upload binding.
+        cmd.env("WINCMD_SHIELD_CAPTURE_BINDING", "");
+        shield_capture_delivery_status = Some("local_only");
+        if let Ok(settings) = crate::settings::read_settings() {
+            if settings.ideal.privacy.privacy_shield.send_incident_captures_to_fleet {
+                shield_capture_delivery_status = Some("unavailable");
+            }
+            if settings::capture_preferences::publish(&settings).is_ok() && settings.ideal.privacy.privacy_shield.send_incident_captures_to_fleet {
+                if let Ok(Ok(prepared)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    crate::sidecar::dispatch_paid_command("fleet_agent_prepare_shield_capture_delivery", serde_json::Value::Null),
+                ).await {
+                    if let Some(binding) = prepared.get("binding").and_then(serde_json::Value::as_str)
+                        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+                    {
+                        cmd.env("WINCMD_SHIELD_CAPTURE_BINDING", binding);
+                        shield_capture_delivery_status = Some("ready");
+                    }
+                }
+            }
+        }
     }
     if let Ok(exe_path) = std::env::current_exe() {
         cmd.env("WINCMD_EXE_PATH", exe_path);
@@ -6187,6 +6224,18 @@ pub(crate) async fn run_backend_script_with_timeout(
     } else {
         result
     };
+
+    if let (Some(status), Ok(serde_json::Value::Object(receipt))) =
+        (shield_capture_delivery_status, result.as_mut())
+    {
+        receipt.insert("captureDeliveryStatus".into(), serde_json::json!(status));
+    }
+
+    if output.status.success() {
+        if let Ok(ref receipt) = result {
+            shield_lifecycle::emit_verified_transition(&app, &command, receipt);
+        }
+    }
 
     // Privacy-shield-specific: when the PS wrapper successfully spawns
     // Python, it returns `{ success: true, processId: <pid> }`. Add that
@@ -7973,7 +8022,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
 pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        let _guard = crate::paths::acquire_shield_action_lock()?;
         record_local_shield_stop_intent()?;
         runtime.block_on(kill_privacy_shield_process_unlocked(app))
     })
@@ -8122,6 +8171,9 @@ async fn kill_privacy_shield_process_unlocked(app: AppHandle) -> Result<(), Stri
     }
     SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::native_notify::clear_pending_notifications(&app);
+    shield_lifecycle::emit_verified_transition(&app, "Stop-PrivacyShield", &serde_json::json!({
+        "success": true, "running": false, "shieldLifecycle": "stopped"
+    }));
     Ok(())
 }
 

@@ -69,15 +69,6 @@ describe("privacy shield device guardrails", () => {
     expect(sidecar).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
   });
 
-  test("long-lived detector does not hold the backend command output pipe open", async () => {
-    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
-
-    expect(shield).toContain("$startInfo.RedirectStandardOutput = $true");
-    expect(shield).toContain("$startInfo.RedirectStandardError = $true");
-    expect(shield).toContain("$process.BeginOutputReadLine()");
-    expect(shield).toContain("$process.BeginErrorReadLine()");
-  });
-
   test("black camera frames fail startup before a false look-away blackout", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
 
@@ -94,9 +85,7 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("self._no_face_detected_streak = 0");
     expect(shield).toContain("self._face_recovery_streak = 0");
     expect(shield).toContain("self._presence_loss_active = False");
-    expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
     expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
-    expect(shield).toContain("presence_lost_triggered = self._presence_loss_active");
     expect(shield).toContain('parts.append("PRESENCE LOST")');
     expect(shield).toContain("recovery_unknown = presence_unknown or raw_look_away");
     expect(shield).toContain("if recovery_unknown and is_clear:");

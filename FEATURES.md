@@ -84,6 +84,12 @@ the backend and private component before execution.
 - Secret Settings shows whether the running app is **Administrator (elevated)**
   or **Standard (not elevated)**. An unreadable privilege status is shown as
   unavailable, with a retry control.
+- Calculator Lock uses the visible name **calculator.** for its shortcuts.
+  Windows controls Search ranking and may also show Windows Calculator. Hide
+  mode suppresses calculator shortcuts while both modes are active. With an
+  elevated app and available local service, the two shared WinCommander links
+  follow account claims for all users and are restored after all claims end.
+  Failures are reported; pinned shortcuts remain unchanged.
 - Auto Heal checks observed drift every minute while the app is running and
   retries failed repairs. Unavailable Windows status is not treated as OFF;
   changes requiring administrator access remain blocked without that access.

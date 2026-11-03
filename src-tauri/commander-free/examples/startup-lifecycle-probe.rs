@@ -6,6 +6,9 @@
 mod startup_window;
 #[path = "../src/window_placement.rs"]
 mod window_placement;
+#[path = "support/startup.rs"]
+mod probe_startup;
+use probe_startup::{startup_auth, CalcModeState};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::Manager;
 
@@ -42,6 +45,7 @@ fn main() {
     context.config_mut().identifier = "com.servalabs.wincommander.lifecycle-probe".into();
     tauri::Builder::default()
         .manage(startup_window::StartupWindow::new())
+        .manage(CalcModeState::new())
         .manage(Counts { focus: AtomicUsize::new(0), close: AtomicUsize::new(0) })
         .invoke_handler(tauri::generate_handler![startup_window::startup_window_ready])
         .register_uri_scheme_protocol("lifecycleprobe", |_, _| {

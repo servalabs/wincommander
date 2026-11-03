@@ -2,6 +2,7 @@ import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../../hooks/useBackend";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
+import { cleanupPreviewColumns } from "./cleanupPreviewPresentation";
 
 type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
@@ -664,12 +665,8 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       .sort((a, b) => (sortDescending ? -1 : 1) * (a.number - b.number));
   }, [all, query, sortDescending]);
   const columns = useMemo(() => {
-    const labels = new Set<string>();
+    const labels = new Set(cleanupPreviewColumns(all));
     if (categoryId === "amcache" || categoryId === "ntUserTraces") labels.add("Category");
-    for (const row of all) for (const fact of row.facts) {
-      const separator = fact.indexOf(": ");
-      labels.add(separator < 0 ? "Details" : fact.slice(0, separator));
-    }
     if (categoryId === "wlanProfiles") labels.add("Password");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.detailAvailable === true)) labels.add("Clipboard content");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.formats?.includes("Bitmap"))) labels.add("Image");
@@ -687,6 +684,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
   return <section className="cleanup-record-preview" aria-label="Found details">
     <div className="cleanup-record-preview__header">
       <div><h3>Found details</h3><p>{all.length} {all.length === 1 ? "item" : "items"} available; the scan total is above.</p></div>
+      {filtered.length > 0 ? <nav className="cleanup-record-preview__pagination" aria-label="Detail pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} items</span>{filtered.length > pageSize ? <div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div> : null}</nav> : null}
       <label><span className="sr-only">Filter found details</span><input type="search" value={query} placeholder="Filter details" aria-label={accountLabel ? `Filter ${accountLabel} details` : "Filter details"} onChange={event => { setQuery(event.currentTarget.value); setPage(0); }} /></label>
     </div>
     {categoryId === "wlanProfiles" && isObject(shownData) && Array.isArray(shownData.additionalProfiles) && shownData.additionalProfiles.length > 0 ? <p>Additional per-user or policy-managed profiles are shown for reference. The scan total and Clear action cover only all-user profiles.</p> : null}
@@ -696,7 +694,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     {expandedNotice ? <p role="status">{expandedNotice}</p> : null}
     {clipboardNotice ? <p role="status">{clipboardNotice}</p> : null}
     {secretError ? <p role="alert">{secretError}</p> : null}
-    <div className="cleanup-readable-detail__table cleanup-record-preview__table"><table>
+    <div className={`cleanup-readable-detail__table cleanup-record-preview__table${columns.length > 6 ? " cleanup-record-preview__table--wide" : ""}`}><table>
       <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort items ${sortDescending ? "ascending" : "descending"}`}># {sortDescending ? "↓" : "↑"}</button></th>{columns.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
       <tbody>{rows.map(row => {
         const cells = new Map<string, string[]>();
@@ -714,7 +712,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
         }
         const clipboardItem = categoryId === "clipboardHistory" ? clipboardItems?.[row.number - 1] : undefined;
         const storageItems = clipboardItem ? clipboardStorageItems(clipboardItem) : null;
-        return <tr key={row.number}><td>{row.number}</td>{columns.map(label => <td key={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
+        return <tr key={row.number}><td data-label="Item">{row.number}</td>{columns.map(label => <td key={label} data-label={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
           ? <ClipboardImage key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryImage(id, offset, hash)} />
           : label === "Clipboard content" && clipboardItem?.id && clipboardItem.detailAvailable === true ? <ClipboardItemDetails key={clipboardItem.id} itemId={clipboardItem.id} load={(id, offset, hash) => backendRef.current.getClipboardHistoryDetail(id, offset, hash)} />
           : label === "Files and folders" && storageItems ? <ClipboardStorageDetails items={storageItems} />
@@ -722,6 +720,5 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       })}</tbody>
     </table></div>
     {!rows.length ? <p role="status">{categoryId === "clipboardHistory" ? clipboardEmptyMessage(clipboardItems, clipboardNotice, query, clipboardIncomplete) : "No items match this filter."}</p> : null}
-    {filtered.length > pageSize ? <nav className="cleanup-record-preview__pagination" aria-label="Detail pages"><span>{currentPage * pageSize + 1}–{currentPage * pageSize + rows.length} of {filtered.length} items</span><div><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={(currentPage + 1) * pageSize >= filtered.length} onClick={() => setPage(currentPage + 1)}>Next</button></div></nav> : null}
   </section>;
 }

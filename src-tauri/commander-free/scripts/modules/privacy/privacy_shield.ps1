@@ -58,9 +58,44 @@ function Install-AIDependencies {
     return @{ error = $true; message = "Dependencies module not loaded." }
 }
 
+function Get-PrivacyShieldVideoSourceSummary {
+    # Enumerates source metadata only: it does not open a camera or request permission.
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.Devices.Enumeration.DeviceInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $type = [Windows.Devices.Enumeration.DeviceInformationCollection,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 -and
+            $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+        } | Select-Object -First 1
+        $operation = [Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync([Windows.Devices.Enumeration.DeviceClass]::VideoCapture)
+        $task = $method.MakeGenericMethod($type).Invoke($null, @($operation))
+        if (-not $task.Wait(4000)) { throw 'Camera enumeration timed out' }
+        $count = @($task.Result).Count
+        $access = 'Unknown'
+        try {
+            $null = [Windows.Devices.Enumeration.DeviceAccessInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+            $access = [string]([Windows.Devices.Enumeration.DeviceAccessInformation]::CreateFromDeviceClass([Windows.Devices.Enumeration.DeviceClass]::VideoCapture).CurrentStatus)
+        } catch {}
+        return @{ known = $true; count = $count; access = $access }
+    } catch {
+        return @{ known = $false; count = 0; access = 'Unknown' }
+    }
+}
+
+function Get-PrivacyShieldRemoteSession {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        return [bool][System.Windows.Forms.SystemInformation]::TerminalServerSession
+    } catch { return $null }
+}
+
 function Get-PrivacyShieldCameraAvailability {
     try {
         $devices = @()
+        $uncertain = $false
+        $isRemote = Get-PrivacyShieldRemoteSession
+        if ($null -eq $isRemote) { $uncertain = $true }
         # ProductType 2/3 means Windows Server. Fleet receives only this
         # coarse capability when Privacy Shield cannot use a camera there.
         $isWindowsServer = $false
@@ -71,19 +106,31 @@ function Get-PrivacyShieldCameraAvailability {
 
         foreach ($className in @("Camera", "Image")) {
             try {
-                $devices += Get-CimInstance -ClassName Win32_PnPEntity `
+                $found = @(Get-CimInstance -ClassName Win32_PnPEntity `
                     -Filter "PNPClass='$className'" `
-                    -ErrorAction SilentlyContinue |
-                    Where-Object {
-                        $_.Status -eq "OK" -and
-                        $_.Name -and
-                        $_.Name -notmatch '(?i)\bvirtual\b|obs|snap\s*camera'
-                    } |
-                    ForEach-Object { $_.Name }
-            } catch {}
+                    -ErrorAction Stop)
+                foreach ($item in $found) {
+                    $cameraLike = $className -eq 'Camera' -or $item.Name -match '(?i)camera|webcam' -or $item.CompatibleID -match '(?i)USB\\Class_0E|VideoCapture'
+                    if (-not $cameraLike) { $uncertain = $true; continue }
+                    if ($item.Present -ne $true -or $item.Status -ne 'OK' -or $isRemote -ne $false) { $uncertain = $true; continue }
+                    # Do not send device names or IDs to the status consumer.
+                    $devices += 'Camera source'
+                }
+            } catch { $uncertain = $true }
         }
 
         $names = @($devices | Sort-Object -Unique)
+        $video = if ($names.Count -eq 0) { Get-PrivacyShieldVideoSourceSummary } else { $null }
+        if ($video -and $video.known -and $video.count -gt 0) { $names = @('Camera source') }
+        if ($names.Count -eq 0 -and ($isRemote -ne $false -or -not $video -or -not $video.known -or $video.access -ne 'Allowed')) { $uncertain = $true }
+        if ($names.Count -eq 0 -and -not $uncertain) {
+            # Generic media/software devices may expose a localized or virtual
+            # camera through a path not represented by the two CIM classes.
+            try {
+                $ambiguous = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.Class -in @('Media','SoftwareDevice') })
+                if ($ambiguous.Count -gt 0) { $uncertain = $true }
+            } catch { $uncertain = $true }
+        }
         $policyBlockers = @()
         try {
             if ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) {
@@ -110,6 +157,8 @@ function Get-PrivacyShieldCameraAvailability {
             'app_camera_permission_denied'
         } elseif ($blockedByPolicy) {
             'windows_camera_policy_denied'
+        } elseif ($names.Count -eq 0 -and $uncertain) {
+            'unknown'
         } elseif ($names.Count -eq 0) {
             'hardware_unavailable'
         } else {
@@ -123,9 +172,9 @@ function Get-PrivacyShieldCameraAvailability {
             $null
         }
         @{
-            available = ($names.Count -gt 0) -and -not $blockedByPolicy
+            available = if ($cameraStatus -eq 'unknown') { $null } else { ($names.Count -gt 0) -and -not $blockedByPolicy }
             devices   = $names
-            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
+            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } elseif ($cameraStatus -eq 'unknown') { 'Camera status could not be confirmed. Check camera access and refresh.' } else { "No usable camera detected." }
             blockedByPolicy = $blockedByPolicy
             policyBlockers = @($policyBlockers)
             cameraStatus = $cameraStatus
@@ -136,7 +185,7 @@ function Get-PrivacyShieldCameraAvailability {
     catch {
         # Registry/WMI probe failures are not evidence that the hardware is
         # absent.  Keep the diagnosis honest and do not echo exception text.
-        @{ available = $false; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+        @{ available = $null; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 
@@ -237,15 +286,27 @@ function Get-PrivacyShieldNativeOptions {
     return $options
 }
 
+function Test-PrivacyShieldProcessReady {
+    param([string]$CommandLine)
+    $switches = [regex]::Matches($CommandLine, '(?:^|\s)--run-id(?=\s|$)').Count
+    if ($switches -eq 0) { return $true } # Compatibility with an already-running older detector.
+    $values = [regex]::Matches($CommandLine, '(?:^|\s)--run-id\s+([0-9a-f]{32})(?=\s|$)')
+    if ($switches -ne 1 -or $values.Count -ne 1) { return $false }
+    $logPath = Join-Path (Split-Path (Get-PrivacyShieldPidMarkerPath) -Parent) 'privacy_shield.log'
+    $tail = Get-PrivacyShieldLaunchLogTail -Path $logPath -RunId $values[0].Groups[1].Value
+    return ($tail -match '(?m)\] Status: Shield Active\r?$')
+}
+
 function Get-PrivacyShieldStatus {
+    param([switch]$SkipCameraProbe)
     try {
         $running = $false
         $processId = $null
         $activeMode = $null
         $nativeOptions = $null
         $cameraIndex = $null
+        $processRunning = $false
         $processStartTicks = $null
-        $camera = Get-PrivacyShieldCameraAvailability
         $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
 
         # Get-CimInstance works reliably on both PowerShell 5.1 (Windows
@@ -268,7 +329,9 @@ function Get-PrivacyShieldStatus {
         foreach ($proc in $procs) {
             if ($proc.SessionId -eq $currentSessionId -and $proc.CommandLine -match '(?:^|\s)--wc-privacy-shield(?=\s|$)') {
                 $running = $true
+                $processRunning = $true
                 $processId = $proc.ProcessId
+                $running = Test-PrivacyShieldProcessReady -CommandLine $proc.CommandLine
                 # The process arguments are the detector's applied state.
                 # Do not infer mode from a delayed settings sync: that made a
                 # no-blur Notify only process appear as Blur + Notify locally.
@@ -306,18 +369,25 @@ function Get-PrivacyShieldStatus {
 
         # A marker is only a hint. If process identity cannot be read, report
         # unknown instead of guessing from a PID that Windows may have reused.
-        if (-not $running) {
+        if (-not $processRunning) {
             $markerPid = Get-PrivacyShieldPidFromMarker
             if ($markerPid -eq -1) {
                 return @{ error = $true; message = 'Privacy Shield process identity could not be verified.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
             }
             if ($markerPid) {
-                $running = $true
+                $markerProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$markerPid" -ErrorAction Stop
+                if (-not $markerProcess -or $markerProcess.SessionId -ne $currentSessionId -or
+                    $markerProcess.Name -notin @('python.exe', 'pythonw.exe') -or
+                    $markerProcess.CommandLine -notmatch '(?:^|\s)--wc-privacy-shield(?=\s|$)') {
+                    return @{ error = $true; message = 'Privacy Shield process identity could not be verified.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
+                }
+                $running = Test-PrivacyShieldProcessReady -CommandLine $markerProcess.CommandLine
+                $processRunning = $true
                 $processId = $markerPid
                 # Mode is intentionally unknown rather than guessed from cache.
             }
         }
-        if ($cimUnavailable -and -not $running) {
+        if ($cimUnavailable -and -not $processRunning) {
             return @{ error = $true; message = 'Privacy Shield status could not be read.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
         }
 
@@ -328,20 +398,30 @@ function Get-PrivacyShieldStatus {
         # Server 2025 with a monitoring agent). CIM works on both PS 5.1 and
         # PS 7, so the fallback is not needed.
 
+        $camera = if ($SkipCameraProbe -or ($processRunning -and -not $running)) {
+            @{ available = $null; devices = @(); message = ''; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+        } elseif ($running) {
+            # A ready detector has opened and sampled the actual camera.
+            # Re-enumerating PnP on every poll adds delay and can contradict it.
+            @{ available = $true; devices = @('Camera source'); message = ''; cameraStatus = 'available'; cameraPolicyScope = $null; isWindowsServer = $false }
+        } else { Get-PrivacyShieldCameraAvailability }
         @{
             running         = $running
+            detectorProcessRunning = $processRunning
             processId       = $processId
             activeMode      = $activeMode
             processStartTicks = $processStartTicks
             nativeOptions   = $nativeOptions
             cameraIndex     = $cameraIndex
+            # Fleet requires an explicit true before changing a managed
+            # session. The separate status preserves an unknown diagnosis.
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
             cameraPolicyBlockers = @($camera.policyBlockers)
             cameraStatus = $camera.cameraStatus
             cameraPolicyScope = $camera.cameraPolicyScope
-            shieldLifecycle = if ($running) { 'running' } else { 'stopped' }
+            shieldLifecycle = if ($running) { 'running' } elseif ($processRunning) { 'starting' } else { 'stopped' }
             isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
@@ -365,8 +445,10 @@ function Get-PrivacyShieldStartFailure {
     if ($LogTail -imatch 'black frames|camera feed unavailable') {
         return @{ code = 'camera_feed_unavailable'; message = 'Camera feed is black - open its privacy shutter or close another camera app.' }
     }
-    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out') {
-        return @{ code = 'hardware_unavailable'; message = 'No usable camera detected for Privacy Shield.' }
+    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out|camera.*(?:open|initializ)') {
+        # An open failure alone cannot distinguish missing hardware from a
+        # busy camera, privacy restriction, driver failure or timeout.
+        return @{ code = 'camera_start_unverified'; message = 'Camera could not be opened. Check Windows camera access and close other camera apps, then try again.' }
     }
     if ($LogTail -imatch 'missing python dependency|dependency import failed|importerror|module not found|no module named') {
         return @{ code = 'runtime_dependency_missing'; message = 'Privacy Shield AI runtime is unavailable.' }
@@ -378,6 +460,37 @@ function Get-PrivacyShieldStartFailure {
         return @{ code = 'model_invalid'; message = 'Privacy Shield model could not be loaded.' }
     }
     return @{ code = 'shield_start_failed'; message = 'Privacy Shield could not start.' }
+}
+
+function Get-PrivacyShieldLaunchLogTail {
+    param([string]$Path, [string]$RunId)
+    if (-not $Path -or $RunId -cnotmatch '^[0-9a-f]{32}$' -or -not (Test-Path -LiteralPath $Path)) { return '' }
+    try {
+        # The file can contain older or other-session runs. Only lines tagged
+        # by this launched process can contribute to its failure diagnosis.
+        return @((Get-Content -LiteralPath $Path -Tail 100 -ErrorAction Stop) | Where-Object { $_.Contains("[$RunId]") }) -join "`n"
+    } catch { return '' }
+}
+
+function Wait-PrivacyShieldReady {
+    param($Process, [string]$LogPath, [string]$RunId, [int]$TimeoutMs = 30000)
+    $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($deadline.ElapsedMilliseconds -lt $TimeoutMs) {
+        if ($Process.HasExited) { return $false }
+        $tail = Get-PrivacyShieldLaunchLogTail -Path $LogPath -RunId $RunId
+        if ($tail -match '(?m)\] Status: Shield Active\r?$' -and -not $Process.HasExited) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return $false
+}
+
+function Write-PrivacyShieldDebugStage {
+    param([ValidateSet('router', 'start', 'status', 'runtime', 'dependencies', 'launch', 'ready')][string]$Stage)
+    if ($env:WINCMD_SHIELD_DEBUG_TRACE -ne '1' -or -not $env:LOCALAPPDATA) { return }
+    try {
+        $path = Join-Path $env:LOCALAPPDATA 'WinCommander\logs\privacy_shield.log'
+        Add-Content -LiteralPath $path -Value "Shield debug stage: $Stage" -ErrorAction Stop
+    } catch {}
 }
 
 function Start-PrivacyShield {
@@ -407,11 +520,19 @@ function Start-PrivacyShield {
     )
     
     try {
+        Write-PrivacyShieldDebugStage 'start'
         $status = Get-PrivacyShieldStatus
-        if ($status.running) {
-            return @{ error = $true; message = "Shield is already running."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'running'; diagnosticCode = 'already_running' }
+        Write-PrivacyShieldDebugStage 'status'
+        if ($status.error -or $status.shieldLifecycle -eq 'unknown') {
+            return @{ error = $true; message = 'Privacy Shield status could not be confirmed. Refresh and try again.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'status_unavailable' }
         }
-        if ($status.cameraAvailable -ne $true) {
+        if ($status.running -or $status.detectorProcessRunning) {
+            return @{ error = $true; message = "Shield is already running or starting."; cameraStatus = $status.cameraStatus; shieldLifecycle = $status.shieldLifecycle; diagnosticCode = 'already_running' }
+        }
+        # Enumeration can be inconclusive for virtual or redirected cameras.
+        # In that case the detector's real open/read test below is authoritative.
+        # Never bypass an explicit policy denial or a confirmed unavailable camera.
+        if ($status.cameraAvailable -ne $true -and $status.cameraStatus -ne 'unknown') {
             return @{
                 error = $true
                 message = if ($status.cameraMessage) { $status.cameraMessage } else { "No camera detected - Privacy Shield requires a webcam." }
@@ -425,32 +546,17 @@ function Start-PrivacyShield {
         }
 
         $pythonExe = Resolve-PythonPath
+        Write-PrivacyShieldDebugStage 'runtime'
         if (-not $pythonExe) {
-            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
+            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
 
-        # Check dependencies (Quietly)
-        # Check dependencies (Quietly)
-        $packages = @("mediapipe", "opencv-python", "PyQt6", "numpy", "Pillow")
-        $importMap = @{
-            "opencv-python" = "cv2"
-            "Pillow"        = "PIL"
-        }
-        foreach ($pkg in $packages) {
-            $importName = if ($importMap.ContainsKey($pkg)) { $importMap[$pkg] } else { $pkg.Split('-')[0] }
-            try {
-                # Just invoke python, silencing output
-                & $pythonExe -c "import $importName" *>$null
-                if ($LASTEXITCODE -ne 0) {
-                    # Pip install can be chatty, silence it completely
-                    & $pythonExe -m pip install $pkg --quiet *>$null
-                }
-                & $pythonExe -c "import $importName" *>$null
-                if ($LASTEXITCODE -ne 0) {
-                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
-                }
-            }
-            catch {}
+        # Installation belongs to the explicit AI-runtime installer. Starting
+        # protection must not block its policy mutex on hidden pip downloads.
+        & $pythonExe -c 'import mediapipe, cv2, PyQt6, numpy, PIL' *>$null
+        Write-PrivacyShieldDebugStage 'dependencies'
+        if ($LASTEXITCODE -ne 0) {
+            return @{ error = $true; message = 'Privacy Shield AI runtime is incomplete. Install or repair the AI runtime, then try again.'; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
         }
 
         # Keep the core script in-memory to avoid writing source code to AppData.
@@ -469,12 +575,20 @@ Optimized for low-overhead running on CPU efficiently.
 
 import sys
 import os
+if sys.platform == "win32":
+    # The launcher owns temporary drain pipes; keep native library output off
+    # those pipes after it exits so later writes cannot hit a closed reader.
+    _null_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(_null_fd, 1)
+    os.dup2(_null_fd, 2)
+    os.close(_null_fd)
 import json
 import time
 import argparse
 import threading
 import traceback
 import ctypes
+import uuid
 import urllib.request
 import uuid
 from collections import deque
@@ -490,6 +604,8 @@ CAPTURES_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", 
 # Rust backend (backend.rs shield event reader).
 EVENTS_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield_events.ndjson")
 PID_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield.pid")
+STOP_FILE = PID_FILE + "." + str(os.getpid()) + ".stop"
+RUN_ID = os.environ.get("WINCMD_SHIELD_RUN_ID", "")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 def log(msg):
@@ -497,7 +613,7 @@ def log(msg):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with open(LOG_FILE, "a", encoding="utf-8") as handle:
             launch_id = os.environ.get("WINCMD_SHIELD_LAUNCH_ID", "unknown")
-            handle.write(f"[{timestamp}] [launch:{launch_id}] {msg}\n")
+            handle.write(f"[{timestamp}] [{RUN_ID}] [launch:{launch_id}] {msg}\n")
     except Exception:
         pass
 
@@ -514,6 +630,8 @@ def emit_event(name, reason="", capture_ids=None):
 
 def write_pid_marker():
     try:
+        if os.path.isfile(STOP_FILE):
+            os.remove(STOP_FILE)
         temporary = PID_FILE + ".tmp"
         with open(temporary, "w", encoding="ascii") as handle:
             handle.write(str(os.getpid()))
@@ -523,11 +641,20 @@ def write_pid_marker():
 
 def clear_pid_marker():
     try:
-        os.remove(PID_FILE)
+        with open(PID_FILE, encoding="ascii") as handle:
+            owned = handle.read().strip() == str(os.getpid())
+        if owned:
+            os.remove(PID_FILE)
     except FileNotFoundError:
         pass
     except Exception as e:
         log(f"Could not remove detector PID marker: {e}")
+    try:
+        os.remove(STOP_FILE)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log("Could not remove detector stop request")
 
 def owner_process_is_alive(pid):
     """Check the trusted WinCommander Free owner, never the PS launcher."""
@@ -555,7 +682,7 @@ try:
     import numpy as np
     from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
     from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread, QPoint
-    from PyQt6.QtGui import QColor, QFont
+    from PyQt6.QtGui import QColor, QFont, QPainter, QImage, QPixmap
 except ImportError as e:
     # Ensure dependencies are installed by wrapper first
     log(f"Dependency import failed: {e}")
@@ -580,29 +707,65 @@ OBJ_MODELS = {
 FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 MIN_MODEL_SIZE = 50_000  # 50 KB minimum - guards against empty/corrupt/partial downloads
 
-# --- Windows Blur API ---
-def enable_window_blur(hwnd: int, opacity: int = 200) -> bool:
-    if sys.platform != "win32": return False
-    class ACCENTPOLICY(ctypes.Structure):
-        _fields_ = [("AccentState", ctypes.c_int), ("AccentFlags", ctypes.c_int), ("GradientColor", ctypes.c_uint32), ("AnimationId", ctypes.c_int)]
-    class WINDOWCOMPOSITIONATTRIBDATA(ctypes.Structure):
-        _fields_ = [("Attribute", ctypes.c_int), ("Data", ctypes.c_void_p), ("SizeOfData", ctypes.c_size_t)]
-    
-    # Calculate GradientColor: (Opacity << 24) | (B << 16) | (G << 8) | R
-    # We'll use black tint (0,0,0)
-    gradient_color = (opacity << 24) | (0 << 16) | (0 << 8) | 0
-    
-    # AccentState 3 = BLURBEHIND (Traditional Aero/Acrylic blur)
-    # AccentState 4 = ACRYLIC (Modern, uses GradientColor for tint/opacity)
-    # We use 4 usually for tint control, but 3 might ignore GradientColor depending on Windows version.
-    # Let's try AccentState=3 first, but usually opacity control requires ACCENT_ENABLE_ACRYLICBLURBEHIND (4).
-    # However, for pure blur without heavy tint, 3 is standard. But user wants opacity control.
-    # Let's use 4 (ACRYLIC) if opacity < 255.
-    
-    accent = ACCENTPOLICY(AccentState=4, AccentFlags=0, GradientColor=gradient_color, AnimationId=0)
-    data = WINDOWCOMPOSITIONATTRIBDATA(Attribute=19, Data=ctypes.addressof(accent), SizeOfData=ctypes.sizeof(accent))
-    user32 = ctypes.WinDLL("user32")
-    return user32.SetWindowCompositionAttribute(wintypes.HWND(hwnd), ctypes.byref(data)) != 0
+def classify_gaze_with_reason(landmarks):
+    try:
+        nose, left, right = landmarks[1], landmarks[234], landmarks[454]
+        width = right.x - left.x
+        if width <= 0.01:
+            return "blackout", "invalid"
+        yaw = abs((nose.x - (left.x + right.x) / 2.0) / width)
+        if not np.isfinite(yaw):
+            return "blackout", "invalid"
+        if yaw >= 0.46:
+            return "blackout", "full_turn"
+        clipped = left.x <= 0.02 or right.x >= 0.98 or getattr(landmarks[10], "y", 0.5) <= 0.02 or getattr(landmarks[152], "y", 0.5) >= 0.98
+        if clipped:
+            return "blur", "frame_edge"
+        if yaw >= 0.12:
+            return "blur", "yaw"
+        return "clear", "clear"
+    except (IndexError, AttributeError, TypeError, ValueError):
+        return "blackout", "invalid"
+
+
+def classify_gaze(landmarks):
+    return classify_gaze_with_reason(landmarks)[0]
+
+
+def overlay_presentation(is_clear, reason):
+    if is_clear:
+        return "clear"
+    if reason == "LOOK AWAY":
+        return "blur"
+    return "blackout"
+
+
+def write_capture_result(path, result):
+    temporary = path + "." + uuid.uuid4().hex + ".tmp"
+    try:
+        with open(temporary, "x", encoding="utf-8") as handle:
+            json.dump(result, handle)
+        os.replace(temporary, path)
+    finally:
+        if os.path.isfile(temporary):
+            os.remove(temporary)
+
+
+class GazeState:
+    def __init__(self, buffer_frames):
+        self.buffer_frames = max(1, buffer_frames)
+        self.state = "clear"
+        self.pending = "clear"
+        self.streak = 0
+
+    def observe(self, state):
+        self.streak = self.streak + 1 if state == self.pending else 1
+        self.pending = state
+        required = max(3, self.buffer_frames) if state == "blackout" else self.buffer_frames
+        if self.streak >= required:
+            self.state = state
+        return self.state
+
 
 def set_process_dpi_aware():
     try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -670,6 +833,10 @@ class ShieldWorker(QThread):
         self._lock_reason = ""
         self._captured_for_device = False
         self._captured_for_multi_face = False
+        self._capture_retry_at = {"device": 0.0, "multi_face": 0.0}
+        self._gaze = GazeState(self.buffer_frames)
+        self._debug_gaze_reason = None
+        self._debug_gaze_events = 0
         self._device_detected_streak = 0
         self._multi_face_detected_streak = 0
         # Presence is noisier than the other detectors: a single missed
@@ -680,12 +847,24 @@ class ShieldWorker(QThread):
         self._face_recovery_streak = 0
         self._presence_loss_active = False
         self._frame_buffer = deque(maxlen=30)
+        self._frame_times = deque(maxlen=30)
         self._active_recordings = []
 
         self.mp_face = None
         self.mp_obj = None
         self.face_detector = None
         self.obj_detector = None
+
+    def _observe_missing_face(self):
+        self._no_face_detected_streak += 1
+        self._face_recovery_streak = 0
+        if self.check_gaze and self._no_face_detected_streak >= max(6, self.buffer_frames * 2):
+            self._presence_loss_active = True
+        presence_lost = self.check_gaze and self._presence_loss_active
+        hold_gaze_overlay = self.check_gaze and not presence_lost and self._is_locked and (
+            "LOOK AWAY" in self._lock_reason or "PRESENCE LOST" in self._lock_reason
+        )
+        return presence_lost, hold_gaze_overlay
 
     def _is_model_valid(self, path: str) -> bool:
         """Return True only if the file exists and is large enough to be a real model.
@@ -773,19 +952,14 @@ class ShieldWorker(QThread):
             self.status_msg.emit(f"Init Error: {e}")
             return False
 
-    def _face_orientation(self, landmarks):
-        # Reuse existing landmarks; no second camera or inference pass.
-        nose = landmarks[1]
-        l_cheek = landmarks[234]
-        r_cheek = landmarks[454]
-        face_width = r_cheek.x - l_cheek.x
-        if face_width <= 0: return "unknown"
-        mid_x = (l_cheek.x + r_cheek.x) / 2.0
-        yaw_ratio = (nose.x - mid_x) / face_width
-        yaw = abs(yaw_ratio)
-        if yaw >= 0.45: return "profile"
-        if yaw > 0.35: return "away"
-        return "attentive"
+    def _check_gaze(self, landmarks):
+        state, reason = classify_gaze_with_reason(landmarks)
+        if (os.environ.get("WINCMD_SHIELD_DEBUG_TRACE") == "1" and
+                reason != self._debug_gaze_reason and self._debug_gaze_events < 32):
+            log(f"Gaze debug category: {reason}")
+            self._debug_gaze_reason = reason
+            self._debug_gaze_events += 1
+        return state
 
     def _start_webcam_recording(self, prefix: str, reason_key: str, post_roll_sec: float = 5.0):
         """Start recording webcam. Records while detection is active + post_roll_sec after it ends."""
@@ -793,70 +967,125 @@ class ShieldWorker(QThread):
         try:
             if not self._frame_buffer:
                 return False
-            # A Fleet clip must not look complete while its writer is open.
+            if any(rec["reason_key"] == reason_key for rec in self._active_recordings):
+                return True
             final_path = os.path.join(CAPTURES_DIR, f"{prefix}_webcam.avi")
-            video_path = (os.path.join(CAPTURES_DIR, f"{prefix}_pending.avi")
-                          if self.fleet_video_only else final_path)
+            video_path = os.path.join(CAPTURES_DIR, f"{prefix}_pending.avi") if self.fleet_video_only else final_path
             first = self._frame_buffer[0]
             h, w = first.shape[:2]
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-            output_fps = 30.0 * self.capture_speed
+            elapsed = self._frame_times[-1] - self._frame_times[0] if len(self._frame_times) > 1 else 0.0
+            measured_fps = (len(self._frame_times) - 1) / elapsed if elapsed > 0 else 30.0
+            output_fps = max(1.0, min(60.0, measured_fps)) * self.capture_speed
             out = cv2.VideoWriter(video_path, fourcc, output_fps, (w, h))
             if not out.isOpened():
                 out.release()
-                log(f"VideoWriter failed for {video_path}")
+                log("Incident webcam writer could not be opened")
                 return False
             for f in self._frame_buffer:
                 out.write(f)
             now = time.monotonic()
             self._active_recordings.append({
                 "out": out, "path": video_path, "reason_key": reason_key,
-                "final_path": final_path if self.fleet_video_only else None,
                 "record_until": now + post_roll_sec, "in_post_roll": False,
-                "max_until": now + 30.0 if self.fleet_video_only else float('inf')
+                "metadata_path": os.path.join(CAPTURES_DIR, prefix + "_capture.json"),
+                "final_path": final_path if self.fleet_video_only else None,
+                "max_until": now + 30.0 if self.fleet_video_only else float("inf")
             })
             return True
         except Exception as e:
             if out is not None:
-                try:
-                    out.release()
-                except Exception:
-                    pass
-            log(f"Start webcam recording failed: {e}")
+                out.release()
+            log("Incident webcam recording could not be started")
             return False
-
-    def _finish_webcam_recording(self, recording):
-        try:
-            recording["out"].release()
-            final_path = recording.get("final_path")
-            if final_path:
-                # Keep failed or oversized recordings unadvertised for later cleanup.
-                size = os.path.getsize(recording["path"])
-                if not 0 < size <= 50 * 1024 * 1024:
-                    log("Fleet webcam recording was empty or exceeded the size limit")
-                    return
-                os.rename(recording["path"], final_path)
-            log("Recorded webcam video")
-        except Exception as e:
-            log(f"Could not finalize webcam recording: {e}")
 
     def _capture_incident(self, frame, reason: str, reason_key: str):
         """Capture screen (PNG) + start webcam video. Video records while detection active + 5s post-roll."""
+        screen_saved = False
         try:
             os.makedirs(CAPTURES_DIR, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            clip_id = str(uuid.uuid4()) if self.fleet_video_only else None
-            prefix = ("clip_" + clip_id) if clip_id else ts + "_" + reason.replace(" ", "_").lower()
-            screen_path = os.path.join(CAPTURES_DIR, f"{prefix}_screen.png")
-            if not self.fleet_video_only and sys.platform == "win32":
+        except OSError:
+            self.status_msg.emit("Incident capture failed: capture folder is unavailable")
+            return False
+        incident_id = str(uuid.uuid4()) if self.fleet_video_only else uuid.uuid4().hex
+        prefix = "clip_" + incident_id if self.fleet_video_only else time.strftime("%Y%m%d_%H%M%S") + "_" + reason_key + "_" + incident_id
+        if not self.fleet_video_only:
+            try:
                 from PIL import ImageGrab
-                img = ImageGrab.grab()
-                img.save(screen_path)
-            if self._start_webcam_recording(prefix, reason_key) and clip_id:
-                self._capture_ids[reason_key] = clip_id
-            log("Captured incident webcam video (records while active + 5s post)" if self.fleet_video_only else f"Captured incident: {screen_path}, webcam video (records while active + 5s post)")
-        except Exception as e:
-            log(f"Capture failed: {e}")
+                with ImageGrab.grab(all_screens=True) as img:
+                    img.save(os.path.join(CAPTURES_DIR, prefix + "_screen.png"))
+                screen_saved = True
+            except Exception:
+                log("Incident screenshot could not be saved")
+        video_started = self._start_webcam_recording(prefix, reason_key)
+        if video_started and self.fleet_video_only:
+            self._capture_ids[reason_key] = incident_id
+        status = "recording" if video_started else "partial" if screen_saved else "failed"
+        self.status_msg.emit("Incident capture " + status)
+        capture_binding = os.environ.get("WINCMD_SHIELD_CAPTURE_BINDING", "")
+        if len(capture_binding) != 64 or any(char not in "0123456789abcdef" for char in capture_binding):
+            capture_binding = ""
+        try:
+            write_capture_result(os.path.join(CAPTURES_DIR, prefix + "_capture.json"),
+                                 {"id": incident_id, "reason": reason_key, "status": status, "screenSaved": screen_saved,
+                                  "webcamStarted": video_started, "webcamSaved": False, "ts": time.time(),
+                                  "binding": capture_binding,
+                                  "screenFile": prefix + "_screen.png" if screen_saved else None,
+                                  "webcamFile": prefix + "_webcam.avi" if video_started else None})
+        except OSError:
+            log("Incident capture result could not be saved")
+        return screen_saved or video_started
+
+    def _capture_if_needed(self, frame, triggered, enabled, reason_key, reason, now):
+        attribute = "_captured_for_" + reason_key
+        if not triggered:
+            setattr(self, attribute, False)
+            self._capture_retry_at[reason_key] = 0.0
+        elif enabled and not getattr(self, attribute) and now >= self._capture_retry_at[reason_key]:
+            recording_active = any(rec["reason_key"] == reason_key for rec in self._active_recordings)
+            setattr(self, attribute, recording_active or self._capture_incident(frame, reason, reason_key))
+            self._capture_retry_at[reason_key] = now + 5.0
+
+    def _finish_recording(self, rec):
+        saved = False
+        try:
+            rec["out"].release()
+            size = os.path.getsize(rec["path"]) if os.path.isfile(rec["path"]) else 0
+            saved = not rec.get("failed") and size > 0 and (not rec.get("final_path") or size <= 50 * 1024 * 1024)
+            if saved and rec.get("final_path"):
+                os.rename(rec["path"], rec["final_path"])
+        except Exception:
+            saved = False
+        try:
+            with open(rec["metadata_path"], encoding="utf-8") as handle:
+                result = json.load(handle)
+            result["webcamSaved"] = saved
+            result["status"] = "complete" if saved and (result["screenSaved"] or self.fleet_video_only) else "partial" if saved or result["screenSaved"] else "failed"
+            write_capture_result(rec["metadata_path"], result)
+            self.status_msg.emit("Incident capture " + result["status"])
+        except (OSError, ValueError, KeyError):
+            self.status_msg.emit("Incident webcam recording saved" if saved else "Incident webcam recording failed")
+
+    def _update_recordings(self, frame, device_triggered, multi_face_triggered, now):
+        still_active = []
+        for rec in self._active_recordings:
+            triggered = device_triggered if rec["reason_key"] == "device" else multi_face_triggered
+            if triggered:
+                rec["in_post_roll"] = False
+                rec["record_until"] = now + 5.0
+            elif not rec["in_post_roll"]:
+                rec["in_post_roll"] = True
+                rec["record_until"] = now + 5.0
+            if now < rec["record_until"] and now < rec["max_until"]:
+                try:
+                    rec["out"].write(frame)
+                    still_active.append(rec)
+                    continue
+                except Exception:
+                    rec["failed"] = True
+                    self.status_msg.emit("Incident webcam recording failed")
+            self._finish_recording(rec)
+        self._active_recordings = still_active
 
     def run(self):
         if not self._ensure_models():
@@ -879,6 +1108,9 @@ class ShieldWorker(QThread):
             try:
                 c = cv2.VideoCapture(self.camera_idx, cv2.CAP_DSHOW)
                 if not c.isOpened():
+                    # Release the failed DirectShow handle before asking the
+                    # default backend to open the same camera.
+                    c.release()
                     c = cv2.VideoCapture(self.camera_idx)
                 _cam_result[0] = c
             except Exception as exc:
@@ -887,14 +1119,14 @@ class ShieldWorker(QThread):
                 _cam_done.set()
         threading.Thread(target=_try_open_cam, daemon=True).start()
         if not _cam_done.wait(timeout=5.0):
-            log("No camera detected - VideoCapture timed out (no webcam on this system)")
-            self.init_failed.emit("No camera detected - this system has no webcam")
+            log("Camera initialization timed out")
+            self.init_failed.emit("Camera could not be opened. Check camera access and try again.")
             return
         cap = _cam_result[0]
         if not cap or not cap.isOpened():
             self.status_msg.emit("Camera Failed")
-            log("No camera detected - VideoCapture returned not-opened")
-            self.init_failed.emit("No camera detected - webcam not found or in use by another app")
+            log("Camera could not be opened")
+            self.init_failed.emit("Camera could not be opened. Check camera access and close other camera apps, then try again.")
             return
 
         # A device can open successfully while returning only black frames,
@@ -935,6 +1167,7 @@ class ShieldWorker(QThread):
                 continue
 
             self._frame_buffer.append(frame.copy())
+            self._frame_times.append(now_ts)
 
             # Convert frame for MediaPipe
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -947,6 +1180,7 @@ class ShieldWorker(QThread):
                 device_triggered = False
                 multi_face_triggered = False
                 gaze_triggered = False
+                gaze_level = "clear"
                 raw_look_away = False
                 # A sustained missing face is a distinct presence-lost event.
                 # It is debounced and recovered independently, so a camera
@@ -974,16 +1208,12 @@ class ShieldWorker(QThread):
                     landmarks = face_results.face_landmarks
 
                     if not landmarks:
-                        self._no_face_detected_streak += 1
-                        self._face_recovery_streak = 0
-                        if self.check_gaze:
-                            # Use the configured detector buffer for absence
-                            # and recovery. A sustained absence is alert-worthy
-                            # but one missing frame is not.
-                            if self._no_face_detected_streak >= self.buffer_frames:
-                                self._presence_loss_active = True
-                            presence_lost_triggered = self._presence_loss_active
-                            presence_unknown = not self._presence_loss_active
+                        # Keep the previous gaze overlay through the short
+                        # no-face debounce, then use the existing black
+                        # presence-loss overlay. A single missed frame is not
+                        # a new alert or a reason to briefly reveal the screen.
+                        self._look_away.reset()
+                        presence_lost_triggered, presence_unknown = self._observe_missing_face()
                     else:
                         self._no_face_detected_streak = 0
                         if self._presence_loss_active:
@@ -1005,13 +1235,13 @@ class ShieldWorker(QThread):
                             self._multi_face_detected_streak = 0
                         if self._multi_face_detected_streak >= self.buffer_frames:
                             multi_face_triggered = True
-                        if not multi_face_triggered and not presence_unknown and self.check_gaze:
-                            orientation = self._face_orientation(landmarks[0])
-                            raw_look_away = orientation == "away"
-                            presence_lost_triggered = orientation == "profile"
-                            presence_unknown = orientation == "unknown"
-
-                gaze_triggered = self._look_away.observe(raw_look_away, time.monotonic())
+                        if not multi_face_triggered and self.check_gaze:
+                            gaze_level = self._gaze.observe(self._check_gaze(landmarks[0]))
+                            raw_look_away = gaze_level == "blur"
+                            delayed_look_away = self._look_away.observe(raw_look_away, now_ts)
+                            gaze_triggered = gaze_level == "blackout" or delayed_look_away
+                        else:
+                            self._look_away.reset()
 
                 # Combine only explicit, configured threats. Presence loss is
                 # independent of gaze and uses the same explicit blur flag.
@@ -1023,7 +1253,7 @@ class ShieldWorker(QThread):
                     if multi_face_triggered:
                         parts.append("MULTIPLE FACES")
                     if gaze_triggered:
-                        parts.append("LOOK AWAY")
+                        parts.append("LOOK AWAY (FULL TURN)" if gaze_level == "blackout" else "LOOK AWAY")
                     if presence_lost_triggered:
                         parts.append("PRESENCE LOST")
                     reason = " & ".join(parts)
@@ -1034,12 +1264,8 @@ class ShieldWorker(QThread):
                 log(f"Detection loop error: {e}")
 
             # Capture for each triggered reason (both device and multi-face when both detected)
-            if device_triggered and self.capture_on_device and not self._captured_for_device:
-                self._capture_incident(frame, "PHONE DETECTED", "device")
-                self._captured_for_device = True
-            if multi_face_triggered and self.capture_on_multi_face and not self._captured_for_multi_face:
-                self._capture_incident(frame, "MULTIPLE FACES", "multi_face")
-                self._captured_for_multi_face = True
+            self._capture_if_needed(frame, device_triggered, self.capture_on_device, "device", "PHONE DETECTED", now_ts)
+            self._capture_if_needed(frame, multi_face_triggered, self.capture_on_multi_face, "multi_face", "MULTIPLE FACES", now_ts)
 
             # Hysteresis Smoothing
             recovery_unknown = presence_unknown or raw_look_away
@@ -1092,31 +1318,12 @@ class ShieldWorker(QThread):
                     self._lock_reason = reason
                     self.state_changed.emit(False, reason, dict(self._capture_ids))
 
-            still_active = []
-            for rec in self._active_recordings:
-                out, path = rec["out"], rec["path"]
-                rk, until, in_post = rec["reason_key"], rec["record_until"], rec["in_post_roll"]
-                triggered = (rk == "device" and device_triggered) or (rk == "multi_face" and multi_face_triggered)
-                if not in_post:
-                    if triggered:
-                        rec["record_until"] = now_ts + 5.0
-                    else:
-                        rec["in_post_roll"] = True
-                        rec["record_until"] = now_ts + 5.0
-                if now_ts < rec["record_until"] and now_ts < rec["max_until"]:
-                    out.write(frame)
-                    still_active.append(rec)
-                else:
-                    self._finish_webcam_recording(rec)
-            self._active_recordings = still_active
+            self._update_recordings(frame, device_triggered, multi_face_triggered, now_ts)
 
             time.sleep(0.03)
 
         for rec in self._active_recordings:
-            try:
-                self._finish_webcam_recording(rec)
-            except Exception:
-                pass
+            self._finish_recording(rec)
         self._active_recordings.clear()
         cap.release()
         if self.face_detector: self.face_detector.close()
@@ -1127,17 +1334,20 @@ class ShieldOverlay(QWidget):
     def __init__(self, screen, opacity=200):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setObjectName("shieldOverlay")
         # One overlay per physical display is reliable on mixed-DPI and
         # negative-coordinate monitor layouts.
         self.setGeometry(screen.geometry())
+        self.screen_source = screen
+        self.presentation = "clear"
+        self.blurred_screen = None
         
         # Message Label
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet("color: rgba(255, 50, 50, 200); font-weight: bold; font-family: Consolas; font-size: 48px;")
+        self.label.setStyleSheet("color: rgba(255, 50, 50, 200); background: transparent; font-weight: bold; font-family: Consolas; font-size: 48px;")
+        self.label.setWordWrap(True)
         self.label.hide()
         
         layout = QVBoxLayout(self)
@@ -1145,36 +1355,61 @@ class ShieldOverlay(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         self.opacity_val = opacity
-        self._active_opacity = min(120, opacity)
-        self.enable_blur()
 
-    def enable_blur(self):
-        # Consult the latest state when the timer runs: a pending blur update
-        # must not replace a newer presence-lost blackout.
-        QTimer.singleShot(100, lambda: enable_window_blur(int(self.winId()), self._active_opacity))
+    def prepare_protection(self):
+        # Keep only a blurred in-memory snapshot while protected. Native acrylic
+        # becomes an opaque tint when Windows transparency is disabled.
+        self.blurred_screen = None
+        try:
+            snapshot = self.screen_source.grabWindow(0).toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+            if snapshot.isNull():
+                return
+            snapshot = snapshot.scaled(max(1, snapshot.width() // 4), max(1, snapshot.height() // 4),
+                                       Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            bits = snapshot.bits()
+            bits.setsize(snapshot.sizeInBytes())
+            pixels = np.frombuffer(bits, dtype=np.uint8).reshape(snapshot.height(), snapshot.bytesPerLine())
+            rgba = pixels[:, :snapshot.width() * 4].reshape(snapshot.height(), snapshot.width(), 4)
+            blurred = cv2.GaussianBlur(rgba, (0, 0), 8)
+            image = QImage(blurred.data, snapshot.width(), snapshot.height(), blurred.strides[0], QImage.Format.Format_RGBA8888).copy()
+            self.blurred_screen = QPixmap.fromImage(image)
+        except Exception:
+            log("Screen blur snapshot unavailable; using protective blackout")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        if self.presentation == "blur" and self.blurred_screen is not None:
+            painter.drawPixmap(self.rect(), self.blurred_screen)
+            painter.fillRect(self.rect(), QColor(0, 0, 0, min(80, max(0, self.opacity_val // 4))))
+        else:
+            painter.fillRect(self.rect(), QColor(0, 0, 0))
 
     def update_state(self, is_clear, reason):
+        self.presentation = overlay_presentation(is_clear, reason)
         if is_clear:
             self.hide()
             self.label.hide()
+            self.blurred_screen = None
         else:
-            presence_lost = "PRESENCE LOST" in reason or "NO FACE" in reason
-            self._active_opacity = (255 if presence_lost else
-                min(120, self.opacity_val) if reason == "LOOK AWAY" else self.opacity_val)
-            self.setStyleSheet("QWidget#shieldOverlay { background-color: black; }" if presence_lost else "")
-            self.show()
-            self.enable_blur()
-            if reason and reason != "LOOK AWAY":
-                self.label.setText("PRESENCE LOST" if reason == "NO FACE" else reason)
+            if self.presentation == "blackout" or self.blurred_screen is None:
+                self.label.setText(reason.replace(" (FULL TURN)", ""))
                 self.label.show()
             else:
                 self.label.hide()
+            self.show()
+            self.update()
 
 class ShieldOverlays:
     def __init__(self, app, opacity=200):
         self.overlays = [ShieldOverlay(screen, opacity) for screen in app.screens()]
 
     def update_state(self, is_clear, reason):
+        if not is_clear:
+            # Capture every display before any overlay is shown, and never
+            # recapture our own blackout during a full-to-partial transition.
+            for overlay in self.overlays:
+                if overlay.presentation == "clear":
+                    overlay.prepare_protection()
         for overlay in self.overlays:
             overlay.update_state(is_clear, reason)
 
@@ -1272,7 +1507,13 @@ class ShieldApp(QObject):
         self.worker.state_changed.connect(self._handle_state)
         self.worker.status_msg.connect(lambda msg: log(f"Status: {msg}"))
         self.worker.init_failed.connect(self.handle_init_fail)
+        self.worker.finished.connect(self.app.quit)
         self.worker.start()
+        self._stop_watchdog = QTimer(self)
+        self._stop_watchdog.setInterval(250)
+        self._stop_watchdog.timeout.connect(self._stop_when_requested)
+        self._stop_watchdog.start()
+        self.app.aboutToQuit.connect(clear_pid_marker)
         if self.args.owner_pid:
             self._owner_watchdog = QTimer(self)
             self._owner_watchdog.setInterval(1000)
@@ -1287,7 +1528,20 @@ class ShieldApp(QObject):
         clear_pid_marker()
         self.worker._running = False
         self.overlay.update_state(True, "")
-        self.app.quit()
+
+    def _stop_when_requested(self):
+        try:
+            if not os.path.isfile(STOP_FILE) or os.path.getsize(STOP_FILE) > 128:
+                return
+            with open(STOP_FILE, encoding="utf-8-sig") as handle:
+                request = json.load(handle)
+            if request.get("pid") != os.getpid():
+                return
+        except (OSError, ValueError, AttributeError):
+            return
+        self._stop_watchdog.stop()
+        self.worker._running = False
+        self.overlay.update_state(True, "")
 
     def _handle_state(self, is_clear, reason, capture_ids):
         # Fleet/flow receives every transition. The local blur toggles only
@@ -1347,9 +1601,11 @@ if __name__ == "__main__":
             $ownerPid = [int]$env:WINCMD_SHIELD_OWNER_PID
         }
 
+        $runId = [guid]::NewGuid().ToString('N')
         $pythonArgs = @(
             "-",
             "$shieldProcessMarker",
+            "--run-id", "$runId",
             "--camera", "$Camera",
             "--model-level", "$ModelLevel",
             "--confidence", "$Confidence",
@@ -1381,6 +1637,7 @@ if __name__ == "__main__":
         $pythonCmd = $pythonExe
 
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.EnvironmentVariables['WINCMD_SHIELD_RUN_ID'] = $runId
         $startInfo.FileName = $pythonCmd
         # Correlate failures with this launch; earlier log lines can describe
         # a different camera, runtime, or detector attempt.
@@ -1394,77 +1651,126 @@ if __name__ == "__main__":
         # one-shot command runner's stdout/stderr handles: Rust waits for the
         # runner's output EOF, and inherited handles kept a Fleet Start
         # lifecycle stuck at "applying" until the detector was stopped.
-        # Drain both streams asynchronously rather than letting an occasional
-        # native-library warning fill a redirected pipe and stall detection.
+        # Drain natively: PowerShell scriptblock event handlers run without a
+        # runspace on callback threads and can terminate the launcher.
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         
         $process = [System.Diagnostics.Process]::Start($startInfo)
+        Write-PrivacyShieldDebugStage 'launch'
         if ($process -and -not $process.HasExited) {
-            $process.add_OutputDataReceived({ param($sender, $eventArgs) })
-            $process.add_ErrorDataReceived({ param($sender, $eventArgs) })
-            $process.BeginOutputReadLine()
-            $process.BeginErrorReadLine()
+            $null = $process.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
+            $null = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
             $process.StandardInput.Write($embeddedScript)
             $process.StandardInput.Close()
         }
-        # Poll for up to 8 s. Camera probe inside Python times out at 5 s,
-        # so a no-camera exit arrives around 6-7 s. Fast failures (import
-        # error, dependency missing) exit within 1-2 s.
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $exitedEarly = $false
-        while ($sw.ElapsedMilliseconds -lt 8000) {
-            Start-Sleep -Milliseconds 300
-            if ($process.HasExited) { $exitedEarly = $true; break }
-        }
-
-        if ($exitedEarly) {
-            $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
-            $logPath = if ($logRoot) { Join-Path $logRoot "WinCommander\logs\privacy_shield.log" } else { $null }
-            $logTail = ""
-            $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
-            if ($logPath -and (Test-Path $logPath)) {
-                $logTail = (Get-Content $logPath -Tail 300 | Where-Object { $_.Contains("[launch:$launchId]") } | Out-String).Trim()
-                $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
+        $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+        $logPath = if ($logRoot) { Join-Path $logRoot "WinCommander\logs\privacy_shield.log" } else { $null }
+        if (-not (Wait-PrivacyShieldReady -Process $process -LogPath $logPath -RunId $runId)) {
+            # Keep this Process handle while killing: a reused PID must never
+            # terminate unrelated work, nor may a timed-out launch run later.
+            if (-not $process.HasExited) {
+                $process.Kill()
+                [void]$process.WaitForExit(5000)
             }
+            $logTail = Get-PrivacyShieldLaunchLogTail -Path $logPath -RunId $runId
+            $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             $cameraStatus = if ($failure.code -in @('camera_busy', 'camera_feed_unavailable', 'hardware_unavailable')) {
                 $failure.code
+            } elseif ($failure.code -eq 'camera_start_unverified') {
+                'unknown'
             } else {
-                # The preflight succeeded, so a dependency/model failure is
-                # not evidence that camera hardware disappeared.
-                'available'
+                # A dependency/model failure does not resolve an unknown preflight.
+                if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
             }
             return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
+        Write-PrivacyShieldDebugStage 'ready'
         $startTicks = $null
         try { $startTicks = $process.StartTime.ToUniversalTime().Ticks.ToString() } catch {}
-        @{ success = $true; processId = $process.Id; processStartTicks = $startTicks; cameraStatus = 'available'; shieldLifecycle = 'running' }
+        @{ success = $true; processId = $process.Id; processStartTicks = $startTicks; cameraStatus = 'available'; shieldLifecycle = 'running'; ready = $true; activeMode = if ($Mode) { $Mode } elseif ($BlurGaze -or $BlurFaces -or $BlurPhone) { 'blur_notify' } else { 'notify_only' } }
     }
     catch {
         @{ error = $true; message = 'Privacy Shield could not start.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'shield_start_failed' }
     }
 }
 
-function Stop-PrivacyShield {
+function Request-PrivacyShieldGracefulStop {
+    param([int]$DetectorPid)
+    $path = (Get-PrivacyShieldPidMarkerPath) + ".$DetectorPid.stop"
+    $temporary = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
-        $status = Get-PrivacyShieldStatus
+        [IO.File]::WriteAllText($temporary, (@{ pid = $DetectorPid } | ConvertTo-Json -Compress))
+        if (Test-Path -LiteralPath $path) { [IO.File]::Replace($temporary, $path, $null) }
+        else { [IO.File]::Move($temporary, $path) }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Stop-PrivacyShield {
+    $detector = $null
+    try {
+        $status = Get-PrivacyShieldStatus -SkipCameraProbe
         if ($status -isnot [System.Collections.IDictionary] -or $status['error'] -eq $true -or $status['running'] -isnot [bool]) {
             return @{ error = $true; message = 'Privacy Shield status could not be verified.' }
         }
-        if ($status['running'] -eq $true) {
-            Stop-Process -Id $status['processId'] -Force -ErrorAction Stop
-            Wait-Process -Id $status['processId'] -Timeout 5 -ErrorAction SilentlyContinue
-            $after = Get-PrivacyShieldStatus
-            if ($after -isnot [System.Collections.IDictionary] -or $after['error'] -eq $true -or $after['running'] -ne $false) {
-                return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' }
+        if ($status['running'] -eq $true -or $status['detectorProcessRunning'] -eq $true) {
+            try {
+                $detector = Get-Process -Id $status['processId'] -ErrorAction Stop
+                # The PID can exit between the status read and opening its
+                # handle. A fresh stopped read is success; an unreadable or
+                # still-running process remains an error.
+                $null = $detector.Handle
+            } catch {
+                $afterExit = Get-PrivacyShieldStatus -SkipCameraProbe
+                if ($afterExit -is [System.Collections.IDictionary] -and $afterExit['error'] -ne $true -and
+                    $afterExit['running'] -eq $false -and $afterExit['detectorProcessRunning'] -ne $true) {
+                    return @{ success = $true; message = 'Stopped.'; running = $false; shieldLifecycle = 'stopped' }
+                }
+                return @{ error = $true; message = 'Privacy Shield process could not be opened safely.' }
             }
+            # Hold the kernel object across validation/request/termination so
+            # a recycled numeric PID cannot target an unrelated process.
+            $verified = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $status['processId']) -ErrorAction Stop
+            if (-not $verified -or $verified.SessionId -ne [System.Diagnostics.Process]::GetCurrentProcess().SessionId -or
+                $verified.Name -notin @('python.exe', 'pythonw.exe') -or
+                $verified.CommandLine -notmatch '(?:^|\s)--wc-privacy-shield(?=\s|$)') {
+                return @{ error = $true; message = 'Privacy Shield process identity changed before stop.' }
+            }
+            try { Request-PrivacyShieldGracefulStop -DetectorPid $status['processId'] } catch {}
+            if (-not $detector.WaitForExit(2000)) {
+                try { $detector.Kill() } catch {
+                    # Kill may race with a graceful exit. Verify the resulting
+                    # state below instead of reporting a failed Stop.
+                }
+                if (-not $detector.WaitForExit(5000)) {
+                    return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' }
+                }
+            }
+            # CIM and the marker can lag the process exit briefly. Never claim
+            # stopped until a fresh status sees no detector in this session.
+            $confirmed = $false
+            for ($attempt = 0; $attempt -lt 5; $attempt++) {
+                $after = Get-PrivacyShieldStatus -SkipCameraProbe
+                if ($after -is [System.Collections.IDictionary] -and $after['error'] -ne $true -and
+                    $after['running'] -eq $false -and $after['detectorProcessRunning'] -ne $true) {
+                    $confirmed = $true
+                    break
+                }
+                if ($attempt -lt 4) { Start-Sleep -Milliseconds 150 }
+            }
+            if (-not $confirmed) { return @{ error = $true; message = 'Privacy Shield stop could not be confirmed.' } }
         }
         # Status removes stale markers itself. Do not remove a marker for a
         # detector still running in another session of the same profile.
-        return @{ success = $true; message = "Stopped." }
+        return @{ success = $true; message = "Stopped."; running = $false; shieldLifecycle = 'stopped' }
     }
     catch {
         @{ error = $true; message = $_.Exception.Message }
+    }
+    finally {
+        if ($detector) { $detector.Dispose() }
     }
 }

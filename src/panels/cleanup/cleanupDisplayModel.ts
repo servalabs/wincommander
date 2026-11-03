@@ -1,9 +1,14 @@
 import type { CleanupCategory } from "./cleanupCategories";
 
-export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "limited" | "inconsistent" | "empty" | "found";
+export type CleanupDisplayState = "scanning" | "not-scanned" | "unavailable" | "error" | "partial" | "limited" | "disabled" | "inconsistent" | "empty" | "found";
 export type CleanupVerification = { status: "cleared" | "reduced" | "reset" | "unchanged" | "deferred" | "failed" | "limited" | "unverified"; verifiedAt?: string };
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): value is RecordValue => !!value && typeof value === "object" && !Array.isArray(value);
+
+export function isClipboardHistoryOff(id: string, raw: unknown): boolean {
+  return id === "clipboardHistory" && object(raw) && !raw.error && !["failed", "error"].includes(String(raw.status)) &&
+    raw.clipboardHistoryDisabled === true && raw.historyReadStatus === "disabled";
+}
 
 export function hasLimitedCleanupCoverage(id: string, raw: unknown): boolean {
   return object(raw) && (raw.coverage === "limited" || (id === "srumData" && raw.historicalRecordsAvailable === false) || (id === "searchIndex" && typeof raw.coverage === "string" && raw.coverage.length > 0));
@@ -196,6 +201,7 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.loading) return { ...base, state: "scanning", count: null, message: "Scan in progress", nextStep: "Wait for the scan to finish." };
   if (raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (raw?.status === "unavailable") return { ...base, state: "unavailable", count: null, message: "Scan unavailable", nextStep: "Try again when the source is available." };
+  if (isClipboardHistoryOff(input.id, raw)) return { ...base, state: "disabled", count: null, message: "Clipboard history is off", nextStep: "Previously stored items cannot be checked while history is off." };
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
     const observed = observedProcessRows(input.id, raw);
     return { ...base, state: "partial", count: null, message: observed === null ? "Scan incomplete" : `${observed} ${observed === 1 ? "process" : "processes"} observed`, nextStep: observed === null ? "Review coverage and scan again." : "Some process details or processes could not be checked." };

@@ -14,7 +14,7 @@ use wincmd_shared::personal_settings::{
 use zeroize::Zeroizing;
 
 #[path = "personal_settings_windows.rs"]
-mod platform;
+pub(crate) mod platform;
 #[path = "personal_settings_scheduler.rs"]
 mod scheduler;
 #[cfg(test)]

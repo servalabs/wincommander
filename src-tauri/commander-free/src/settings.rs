@@ -49,6 +49,8 @@ mod legacy_migration;
 mod personal_settings;
 #[path = "settings_startup_scope.rs"]
 mod startup_scope;
+#[path = "shield_capture_preferences.rs"]
+pub(crate) mod capture_preferences;
 
 pub(crate) fn personal_settings_automation_available() -> bool {
     personal_settings::automation_available()
@@ -1695,6 +1697,10 @@ pub struct PrivacyShieldSettings {
     pub detection_buffer_frames: Option<u32>,
     pub capture_on_device: Option<bool>,
     pub capture_on_multi_face: Option<bool>,
+    /// Explicit opt-in for sending saved incident captures to the linked Fleet.
+    /// Attention/status telemetry remains separate and media-free.
+    #[serde(default)]
+    pub send_incident_captures_to_fleet: bool,
     /// Fleet-managed webcam recording, disabled when absent.
     #[serde(default)]
     pub fleet_capture_on_phone: Option<bool>,
@@ -2826,6 +2832,7 @@ fn migrate_legacy_monitor_names(root: &mut serde_json::Value) {
 
 struct LoadedSettings {
     settings: AppSettings,
+    machine_store_was_empty: bool,
     // A new machine snapshot must record its generated device identity.  A
     // legacy plaintext source also needs one normal migration commit.  Routine
     // launches deliberately do not write metadata while loading.
@@ -2844,22 +2851,27 @@ fn initial_persistence_needed(
 /// check for a legacy plaintext settings.json and migrate it on first run.
 fn load_settings_for_startup() -> Result<LoadedSettings, String> {
     legacy_migration::clear()?;
-    crate::paths::migrate_user_data_layout()?;
+    crate::paths::migrate_user_data_layout()
+        .map_err(|error| format!("User data migration: {error}"))?;
     let defaults = create_default_settings();
     let (default_machine, default_user_overlay) = split_settings_value(
         serde_json::to_value(&defaults)
             .map_err(|error| format!("Failed to serialize default settings: {error}"))?,
     )?;
-    let stored = crate::datastore::load("settings")?;
+    let stored = crate::datastore::load("settings")
+        .map_err(|error| format!("Machine settings store: {error}"))?;
     let machine_store_was_empty = stored.as_object().is_some_and(|value| value.is_empty());
     let encrypted_machine_exists = !machine_store_was_empty;
     let mut legacy_user_overlay = None;
     let mut legacy_source = None;
     // Empty object = section file does not yet exist.
     let machine_value = if machine_store_was_empty {
+        crate::paths::migrate_legacy_settings_if_required()
+            .map_err(|error| format!("Legacy settings migration: {error}"))?;
         let legacy = crate::paths::user_settings_path()?;
-        if legacy.exists() {
-            let (raw, source) = legacy_migration::read(&legacy)?;
+        if crate::paths::legacy_settings_exist(&legacy)? {
+            let (raw, source) = legacy_migration::read(&legacy)
+                .map_err(|error| format!("Legacy settings: {error}"))?;
             if !raw.trim().is_empty() {
                 let json: serde_json::Value = serde_json::from_str(&raw)
                     .map_err(|e| format!("Failed to parse legacy settings.json: {e}"))?;
@@ -2878,7 +2890,7 @@ fn load_settings_for_startup() -> Result<LoadedSettings, String> {
                 legacy_source = Some(source);
                 machine
             } else {
-                default_machine.clone()
+                return Err("Legacy settings are empty; existing data preserved".into());
             }
         } else {
             default_machine
@@ -2890,7 +2902,8 @@ fn load_settings_for_startup() -> Result<LoadedSettings, String> {
         split_settings_value(stored)?.0
     };
     let machine = parse_and_migrate_json_val(machine_value)?;
-    let loaded = personal_settings::load()?;
+    let loaded = personal_settings::load()
+        .map_err(|error| format!("Personal settings: {error}"))?;
     let personal_overlay = loaded.value;
     let encrypted_personal_exists = personal_overlay.is_some();
     let legacy_migration_needed = legacy_source.is_some();
@@ -2920,6 +2933,7 @@ fn load_settings_for_startup() -> Result<LoadedSettings, String> {
     }
     Ok(LoadedSettings {
         settings,
+        machine_store_was_empty,
         initial_persistence_needed: initial_persistence_needed(
             machine_store_was_empty,
             legacy_migration_needed,
@@ -2927,6 +2941,7 @@ fn load_settings_for_startup() -> Result<LoadedSettings, String> {
         ),
     })
 }
+
 
 /// General cold readers need only the resolved snapshot.  Startup uses the
 /// richer result above to make the one required first-run migration commit.
@@ -2982,14 +2997,13 @@ pub fn read_settings() -> Result<AppSettings, String> {
         if loaded.initial_persistence_needed
             && !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed)
         {
-            if let Err(error) = write_settings_internal(&settings) {
-                if personal_settings::is_conflict(&error) {
-                    settings = load_settings_from_store()?;
-                }
-                crate::log_message(
-                    "warn",
-                    &format!("[Settings] initial settings persistence skipped: {error}"),
-                );
+            // Another account/process may have initialized the machine store
+            // after our first read. Re-read under the same cross-process lease
+            // that guards the commit and adopt its PIN/policy before opening.
+            if initialize_settings_under_lease(&settings, loaded.machine_store_was_empty)? {
+                // Do not hold the machine lease across a potentially slow
+                // personal-settings service read.
+                settings = load_settings_from_store()?;
             }
         }
         settings.snapshot_revision = Some(Uuid::new_v4());
@@ -3006,6 +3020,57 @@ pub fn read_settings() -> Result<AppSettings, String> {
         crate::log_message("error", &format!("[Settings] read_settings failed: {}", e));
     }
     res
+}
+
+fn initialize_settings_under_lease(settings: &AppSettings, initially_empty: bool) -> Result<bool, String> {
+    let elevated = crate::process_privileges::current_process_elevation()?;
+    let machine_writer = startup_scope::acquire_writer(
+        elevated,
+        crate::paths::current_user_install_uses_local_datastore(),
+    )?;
+    let stored = crate::datastore::load("settings")?;
+    let (candidate, _) = split_settings_value(serde_json::to_value(settings)
+        .map_err(|_| "Could not compare initial settings".to_string())?)?;
+    if initial_snapshot_needs_reload(initially_empty, &stored, &candidate)? {
+        return Ok(true);
+    }
+    if !personal_settings::initial_persistence_available() {
+        // A temporary session cannot commit personal settings. Do not wait for
+        // its service recovery while holding the machine writer lease.
+        return initial_persistence_failure(initially_empty, machine_writer.is_some(), "Personal settings are temporarily unavailable");
+    }
+    if let Err(error) = write_settings_under_lease(settings, elevated, machine_writer.is_some()) {
+        if personal_settings::is_conflict(&error) {
+            return Ok(true);
+        }
+        crate::log_message(
+            "warn",
+            &format!("[Settings] initial settings persistence skipped: {error}"),
+        );
+        return initial_persistence_failure(initially_empty, machine_writer.is_some(), &error);
+    }
+    Ok(false)
+}
+
+fn initial_persistence_failure(initially_empty: bool, has_machine_lease: bool, reason: &str) -> Result<bool, String> {
+    if initially_empty && has_machine_lease {
+        return Err(format!("Initial machine settings could not be committed safely: {reason}"));
+    }
+    // Without a machine lease another process may have won during our attempt.
+    // The caller reloads after this function has released any lease.
+    Ok(!has_machine_lease)
+}
+
+fn initial_snapshot_needs_reload(initially_empty: bool, stored: &serde_json::Value, candidate: &serde_json::Value) -> Result<bool, String> {
+    let empty_now = stored.as_object().is_some_and(|value| value.is_empty());
+    if initially_empty {
+        return Ok(!empty_now);
+    }
+    if empty_now {
+        // A formerly existing security snapshot disappearing is not first run.
+        return Err("Machine settings disappeared during startup".into());
+    }
+    machine_settings_changed(&split_settings_value(stored.clone())?.0, candidate)
 }
 
 /// Write settings via the app-data store (encoded at rest, atomic write).
@@ -3028,7 +3093,9 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
         elevated,
         crate::paths::current_user_install_uses_local_datastore(),
     )?;
-    write_settings_under_lease(settings, elevated, machine_writer.is_some())
+    capture_preferences::restrict_before_save(settings)?;
+    write_settings_under_lease(settings, elevated, machine_writer.is_some())?;
+    capture_preferences::publish(settings)
 }
 
 fn write_settings_under_lease(
@@ -3182,6 +3249,24 @@ pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
     patch_settings_with(patch, paid, write_settings_internal, |old, new| {
         crate::flow_bridge::on_settings_written(old, new);
     })
+}
+
+fn prepare_calculator_lock(settings: &AppSettings, enabled: bool) -> Result<AppSettings, String> {
+    if enabled && settings.ideal.privacy.startup_pin.real_hash.is_none() {
+        return Err("Set a Real PIN before turning on the calculator lock.".into());
+    }
+    let mut updated = settings.clone();
+    updated.ideal.privacy.startup_pin.enabled = Some(enabled);
+    Ok(updated)
+}
+
+pub(crate) fn set_calculator_lock_enabled(enabled: bool) -> Result<AppSettings, String> {
+    mutate_settings_with(
+        |settings| prepare_calculator_lock(settings, enabled),
+        crate::license::has_paid_entitlement(),
+        write_settings_internal,
+        |old, new| crate::flow_bridge::on_settings_written(old, new),
+    )
 }
 
 fn patch_settings_with(
@@ -4684,6 +4769,35 @@ mod tests {
     }
 
     #[test]
+    fn second_first_launch_adopts_committed_pin_and_policy_without_writing() {
+        let mut winner = create_default_settings();
+        winner.ideal.privacy.startup_pin.enabled = Some(true);
+        winner.ideal.privacy.startup_pin.real_hash = Some("committed-pin-hash".into());
+        winner.policy.managed = true;
+        let (machine, _) = split_settings_value(serde_json::to_value(&winner).unwrap()).unwrap();
+        let (stale, _) = split_settings_value(serde_json::to_value(create_default_settings()).unwrap()).unwrap();
+        assert!(initial_snapshot_needs_reload(true, &machine, &stale).unwrap());
+        let actual = parse_and_migrate_json_val(machine).unwrap();
+        assert_eq!(actual.ideal.privacy.startup_pin.enabled, Some(true));
+        assert_eq!(actual.ideal.privacy.startup_pin.real_hash.as_deref(), Some("committed-pin-hash"));
+        assert!(actual.policy.managed);
+    }
+
+    #[test]
+    fn disappearing_existing_machine_settings_fail_closed() {
+        let (candidate, _) = split_settings_value(serde_json::to_value(create_default_settings()).unwrap()).unwrap();
+        assert!(initial_snapshot_needs_reload(false, &serde_json::json!({}), &candidate).is_err());
+        assert!(!initial_snapshot_needs_reload(true, &serde_json::json!({}), &candidate).unwrap());
+    }
+
+    #[test]
+    fn failed_first_machine_commit_does_not_open_with_uncommitted_defaults() {
+        assert!(initial_persistence_failure(true, true, "write denied").is_err());
+        assert!(initial_persistence_failure(true, false, "write denied").unwrap());
+        assert!(!initial_persistence_failure(false, true, "write denied").unwrap());
+    }
+
+    #[test]
     fn explorer_setup_defaults_have_reversible_convergence_commands() {
         let mappings = [
             (
@@ -5259,6 +5373,45 @@ mod tests {
             Some(true)
         );
         assert_eq!(reread.policy.locked_paths, locked_paths);
+    }
+
+    #[test]
+    fn calculator_lock_toggle_preserves_a_concurrent_settings_change() {
+        let _lock = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        warm_cache_with_defaults();
+        mutate_settings_with(
+            |settings| {
+                let mut updated = settings.clone();
+                updated.ideal.privacy.startup_pin.real_hash = Some("test-hash".into());
+                Ok(updated)
+            },
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        let stale = cached_settings().unwrap();
+        patch_settings_with(
+            serde_json::json!({"app": {"theme": "light"}}),
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(write_settings_with(&stale, |_| Ok(())).is_err());
+        let committed = mutate_settings_with(
+            |settings| prepare_calculator_lock(settings, true),
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(committed.app.theme, "light");
+        assert_eq!(committed.ideal.privacy.startup_pin.enabled, Some(true));
+        assert_eq!(committed.ideal.privacy.startup_pin.real_hash.as_deref(), Some("test-hash"));
+        assert!(prepare_calculator_lock(&create_default_settings(), true).is_err());
     }
 
     #[test]

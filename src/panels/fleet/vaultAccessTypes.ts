@@ -84,7 +84,7 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
   engine_drive_letter_unavailable: "The requested drive letter is already in use",
   engine_mount_failed: "The encrypted-volume engine could not mount this Vault",
-  acl_apply_failed: "Windows permissions could not be applied to this Vault",
+  acl_apply_failed: "Windows permissions could not be applied to this Vault. Check the filesystem inside the Vault: exFAT and FAT32 cannot enforce these permissions; NTFS supports them. Other Windows access problems can also cause this error. Back up your files before moving them to an NTFS Vault",
   acl_readback_failed: "Windows permissions could not be verified for this Vault",
   dismount_failed: "The Vault could not be safely unmounted",
 };

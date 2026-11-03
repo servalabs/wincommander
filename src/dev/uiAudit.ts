@@ -524,6 +524,8 @@ export function uiAuditBackendResponse(command: string, params: Record<string, u
   const serviceSafety = serviceSafetyAuditResponse(command, params);
   if (serviceSafety !== undefined) return serviceSafety;
   switch (command) {
+    case "Get-AppCapabilityAccessStatus":
+      return { capability: "webcam", value: "Allow", disabled: false, app_access_mixed: false, desktop_apps_allowed: true };
     case "Get-StartupStatus":
       return { systemInfo: AUDIT_SYSTEM_INFO, productivity: { installed: true, running: true, details: { server: true, input: true, active: true } } };
     case "Get-SystemInfo":
@@ -811,10 +813,16 @@ export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
 export function uiAuditDirectResponse(command: string): unknown {
   if (command.startsWith("plugin:")) return null;
   switch (command) {
+    case "dashboard_camera_presence": {
+      const camera = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("camera");
+      return camera === "absent" || camera === "unknown" ? camera : "present";
+    }
     case "take_safe_paste_requests":
       return [];
     case "startup_pin_is_configured":
       return false;
+    case "calculator_gate_generation":
+      return null;
     case "is_dev_build":
       return true;
     case "get_license_status":

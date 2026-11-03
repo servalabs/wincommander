@@ -28,8 +28,8 @@ mod handoff_wait;
 
 /// Only foreground launches may request consent. Scheduler already chooses
 /// the account's highest available token for the automatic sign-in task.
-pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String]) -> bool {
-    if cli_mode || args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG) {
+pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String], calculator_lock_active: bool) -> bool {
+    if cli_mode || calculator_lock_active || args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG) {
         return false;
     }
 
@@ -307,8 +307,15 @@ mod tests {
     fn foreground_gui_launch_offers_elevation() {
         assert!(should_offer_startup_elevation(
             false,
-            &["wincommander-free.exe".into()]
+            &["wincommander-free.exe".into()], false
         ));
+    }
+
+    #[test]
+    fn calculator_cover_never_requests_optional_startup_elevation() {
+        assert!(!should_offer_startup_elevation(false, &["app.exe".into()], true));
+        assert!(!should_offer_startup_elevation(false, &["app.exe".into(), "--focus".into()], true));
+        assert!(should_offer_startup_elevation(false, &["app.exe".into()], false));
     }
 
     #[test]
@@ -316,18 +323,18 @@ mod tests {
         for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste"] {
             assert!(!should_offer_startup_elevation(
                 false,
-                &["app.exe".into(), flag.into()]
+                &["app.exe".into(), flag.into()], false
             ));
         }
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), "--autostart".into()]
+            &["app.exe".into(), "--autostart".into()], false
         ));
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), "--minimized".into()]
+            &["app.exe".into(), "--minimized".into()], false
         ));
-        assert!(!should_offer_startup_elevation(true, &["app.exe".into()]));
+        assert!(!should_offer_startup_elevation(true, &["app.exe".into()], false));
     }
 
     #[test]
@@ -353,7 +360,7 @@ mod tests {
         for extra in ["--focus", "--minimized", ELEVATED_RELAUNCH_FLAG] {
             assert!(!should_offer_startup_elevation(
                 false,
-                &["app.exe".into(), "--autostart".into(), extra.into()]
+                &["app.exe".into(), "--autostart".into(), extra.into()], false
             ));
         }
     }
@@ -362,7 +369,7 @@ mod tests {
     fn elevated_child_cannot_loop_back_into_uac() {
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()]
+            &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()], false
         ));
     }
 

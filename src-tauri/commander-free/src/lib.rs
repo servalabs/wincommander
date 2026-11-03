@@ -30,6 +30,8 @@ mod bluetooth_control;
 mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
+mod calculator_handoff;
+mod shared_shortcut_claim;
 mod context_menu_scrub;
 mod context_menu_shred;
 mod context_scrub_failure;
@@ -135,6 +137,7 @@ mod startup_trace;
 #[cfg(windows)]
 mod startup_visibility;
 mod startup_window;
+mod camera_presence;
 mod storage_probe;
 mod svc_client;
 mod trust_store_audit;
@@ -225,14 +228,28 @@ struct HideHotkeyState(Mutex<String>);
 /// true at once, but only this flag decides tray/close/reopen behaviour so an
 /// authenticated session doesn't get treated as locked. Seeded in setup() from
 /// the cold-start state; flipped by enter_calculator_mode / exit_calculator_mode.
-pub(crate) struct CalcModeState(pub Mutex<bool>);
+pub(crate) struct CalcModeState(pub Mutex<CalcModeSnapshot>);
+
+pub(crate) struct CalcModeSnapshot {
+    pub(crate) active: bool,
+    pub(crate) generation: u32,
+}
+
+impl CalcModeState {
+    fn new(active: bool) -> Self {
+        Self(Mutex::new(CalcModeSnapshot {
+            active,
+            generation: u32::from(active),
+        }))
+    }
+}
 
 /// Read the runtime calculator-locked flag. Falls back to the configured-PIN
 /// check only when the state hasn't been managed yet (should not happen post-setup).
 pub(crate) fn calc_mode_active(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
     app.try_state::<CalcModeState>()
-        .and_then(|s| s.0.lock().ok().map(|g| *g))
+        .and_then(|s| s.0.lock().ok().map(|g| g.active))
         .unwrap_or_else(startup_auth::startup_pin_is_configured_sync)
 }
 
@@ -241,20 +258,41 @@ pub(crate) fn set_calc_mode_active(app: &tauri::AppHandle, value: bool) {
     use tauri::Manager;
     if let Some(s) = app.try_state::<CalcModeState>() {
         if let Ok(mut g) = s.0.lock() {
-            *g = value;
+            if value && !g.active {
+                g.generation = g.generation.wrapping_add(1).max(1);
+                if let Some(startup) = app.try_state::<startup_window::StartupWindow>() {
+                    startup.reset_for_calculator();
+                }
+            }
+            g.active = value;
         }
     }
 }
 
 #[tauri::command]
+fn calculator_gate_generation(app: tauri::AppHandle) -> Result<Option<u32>, String> {
+    let state = app
+        .try_state::<CalcModeState>()
+        .ok_or("Calculator state is unavailable")?;
+    let state = state
+        .0
+        .lock()
+        .map_err(|_| "Calculator state is unavailable")?;
+    Ok(state.active.then_some(state.generation))
+}
+
+#[tauri::command]
 fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if is_calculator_peek_hotkey(&hotkey) {
+        return Err("Ctrl+Shift+G is reserved for Calculator Lock.".into());
+    }
     let state = app
         .try_state::<PanicHotkeyState>()
         .ok_or_else(|| "PanicHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
     // Unregister the old shortcut
-    if !current.is_empty() {
+    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     // Register the new one
@@ -274,11 +312,14 @@ fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Stri
 #[tauri::command]
 fn update_search_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if is_calculator_peek_hotkey(&hotkey) {
+        return Err("Ctrl+Shift+G is reserved for Calculator Lock.".into());
+    }
     let state = app
         .try_state::<SearchHotkeyState>()
         .ok_or_else(|| "SearchHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
-    if !current.is_empty() {
+    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     if !hotkey.is_empty() {
@@ -303,26 +344,88 @@ fn register_hide_peek_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(),
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    // Hide: remove from taskbar and screen; tray stays invisible in
-                    // hidden/calc mode (the user re-peeks via the hotkey again).
-                    let _ = window.set_skip_taskbar(true);
-                    let _ = window.hide();
-                    // Keep tray icon hidden regardless of mode — it was already
-                    // hidden/shown correctly at startup or apply_wincommander_hide_mode.
-                    log_message_src("info", "core", "[Hotkey] peek/hide: hiding window");
-                } else {
-                    log_message_src("info", "core", "[Hotkey] peek/hide: revealing window");
-                    // Single shared reveal implementation — it handles calc-mode
-                    // re-entry, the unminimize-before-show ordering, the visible-flag
-                    // resync, and the deferred foreground workaround. This branch used
-                    // to re-implement all of that with show() before unminimize().
-                    reveal_main_window(app);
-                }
-            }
+            toggle_hide_peek(app);
         })
         .map_err(|e| e.to_string())
+}
+
+const CALCULATOR_PEEK_HOTKEY: &str = "Ctrl+Shift+G";
+static CALCULATOR_PEEK_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+fn is_calculator_peek_hotkey(hotkey: &str) -> bool {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+    match (Shortcut::from_str(hotkey), Shortcut::from_str(CALCULATOR_PEEK_HOTKEY)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn calculator_peek_requires_gate(hidden: bool, armed: bool) -> bool {
+    hidden && armed
+}
+
+fn is_custom_hide_peek_hotkey(hotkey: &str) -> bool {
+    !hotkey.is_empty() && !is_calculator_peek_hotkey(hotkey)
+}
+
+fn toggle_hide_peek(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.set_skip_taskbar(true);
+            let _ = window.hide();
+        } else {
+            reveal_main_window(app);
+        }
+    }
+}
+
+fn register_calculator_peek_hotkey(app: &tauri::AppHandle) -> Result<(), String> {
+    let result = app.global_shortcut()
+        .on_shortcut(CALCULATOR_PEEK_HOTKEY, |app, _shortcut, event| {
+            if event.state() != ShortcutState::Pressed { return; }
+            if calculator_peek_requires_gate(wincommander_is_hidden(), startup_auth::startup_pin_is_configured_sync()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = startup_auth::enter_calculator_mode_with(window, true);
+                }
+            } else if app.try_state::<HideHotkeyState>()
+                .and_then(|state| state.0.lock().ok().map(|key| is_calculator_peek_hotkey(&key)))
+                .unwrap_or(false)
+            {
+                toggle_hide_peek(app);
+            }
+        })
+        .map_err(|error| error.to_string());
+    CALCULATOR_PEEK_REGISTERED.store(result.is_ok(), Ordering::Release);
+    result
+}
+
+#[tauri::command]
+fn require_calculator_peek_hotkey(app: tauri::AppHandle) -> Result<(), String> {
+    if CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)
+        && app.global_shortcut().is_registered(CALCULATOR_PEEK_HOTKEY) {
+        Ok(())
+    } else {
+        Err("Ctrl+Shift+G is unavailable. Release it in the other application and try again.".into())
+    }
+}
+
+#[cfg(test)]
+mod calculator_peek_hotkey_tests {
+    use super::{calculator_peek_requires_gate, is_calculator_peek_hotkey, is_custom_hide_peek_hotkey};
+
+    #[test]
+    fn fixed_peek_remains_reserved_and_opens_gate_only_when_both_modes_are_on() {
+        assert!(is_calculator_peek_hotkey("Ctrl+Shift+G"));
+        assert!(!is_calculator_peek_hotkey("Ctrl+Shift+H"));
+        assert!(!is_calculator_peek_hotkey(""));
+        assert!(!is_custom_hide_peek_hotkey("Ctrl+Shift+G"));
+        assert!(is_custom_hide_peek_hotkey("Ctrl+Shift+H"));
+        assert!(!is_custom_hide_peek_hotkey(""));
+        assert!(calculator_peek_requires_gate(true, true));
+        assert!(!calculator_peek_requires_gate(true, false));
+        assert!(!calculator_peek_requires_gate(false, true));
+    }
 }
 
 /// Update the hide-peek hotkey at runtime.
@@ -343,14 +446,14 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
         g.clone()
     };
 
-    if !old.is_empty() {
+    if is_custom_hide_peek_hotkey(&old) {
         let _ = app.global_shortcut().unregister(old.as_str());
     }
     // Register whenever a hotkey is set so it works as an always-on hide/unhide
     // toggle — the handler hides a visible window and shows a hidden one. (It
     // used to register only while already hidden, so a freshly-set hotkey did
     // nothing until the app was hidden some other way.)
-    if !hotkey.is_empty() {
+    if is_custom_hide_peek_hotkey(&hotkey) {
         register_hide_peek_hotkey(&app, &hotkey)?;
     }
 
@@ -392,6 +495,10 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         ),
     );
     if calculator_mode {
+        if startup_window::defer_reveal_until_ready(&window) {
+            let _ = startup_auth::enter_calculator_mode_with(window.clone(), false);
+            return;
+        }
         let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
     } else {
         if startup_window::defer_reveal_until_ready(&window) {
@@ -1276,7 +1383,7 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
             .and_then(|s| s.0.lock().ok().map(|g| g.clone()))
             .unwrap_or_default();
 
-        if !hotkey_str.is_empty() {
+        if is_custom_hide_peek_hotkey(&hotkey_str) {
             // Always unregister first — makes this call idempotent if invoked twice.
             let _ = app.global_shortcut().unregister(hotkey_str.as_str());
             // Keep it registered in BOTH states so it stays an always-on
@@ -1362,7 +1469,7 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         file_watch_trigger::FileWatchTriggerState::default(),
     ));
     app.manage(HideHotkeyState(Mutex::new("Ctrl+Shift+G".to_string())));
-    app.manage(CalcModeState(Mutex::new(false)));
+    app.manage(CalcModeState::new(false));
 
     updater::init_headless(app.handle());
     flow_engine::init_headless(app.handle());
@@ -1506,21 +1613,31 @@ pub fn run() {
     // A duplicate launch in the same session forwards its args to the primary
     // and exits; launches from different sessions are completely independent.
     #[cfg(windows)]
+    let mut preloaded_startup_settings = None;
+    #[cfg(windows)]
     {
         let cli_args: Vec<String> = std::env::args().collect();
-        // Keep the desktop manifest asInvoker. A normal interactive launch
-        // asks Windows for an elevated replacement; cancelling that UAC prompt
-        // simply continues with the user's standard token. This runs before
-        // single-instance acquisition: an elevated child can then cleanly
-        // replace an already-running normal instance instead of being treated
-        // as a duplicate.
         if !cli_mode
             && !session_instance::is_background_duplicate(&cli_args)
-            && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args)
-            && startup_elevation::offer_startup_elevation(&cli_args)
-                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+            && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args, false)
         {
-            std::process::exit(0);
+            // Resolve the real per-user PIN policy before any optional UAC.
+            // A stale registry hint must not reveal the app before its cover.
+            let startup = match settings::preload_settings() {
+                Ok(startup) => startup,
+                Err(error) => {
+                    startup_window::show_initialization_error(&error);
+                    return;
+                }
+            };
+            preloaded_startup_settings = Some(startup);
+            if startup_elevation::should_offer_startup_elevation(
+                cli_mode, &cli_args, startup.calculator_lock_active,
+            ) && startup_elevation::offer_startup_elevation(&cli_args)
+                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+            {
+                std::process::exit(0);
+            }
         }
         if !cli_mode && !session_instance::acquire(&cli_args) {
             // Primary instance already running in this session and has received
@@ -1561,10 +1678,17 @@ pub fn run() {
     // first paint.  These stores can be large and parsing/re-writing them here
     // used to hold the splash screen for tens of seconds.
     let start_silently_at_sign_in = if !cli_mode {
-        // Security settings must be known before creating the window. A stalled
-        // preload fails closed; it never starts a second read or bypasses PIN policy.
-        match settings::preload_settings() {
-            Ok(start_silently) => start_silently,
+        // Reuse the verified snapshot when foreground elevation already needed it.
+        #[cfg(windows)]
+        let preloaded = preloaded_startup_settings;
+        #[cfg(not(windows))]
+        let preloaded = None;
+        let loaded = match preloaded {
+            Some(startup) => Ok(startup),
+            None => settings::preload_settings(),
+        };
+        match loaded {
+            Ok(startup) => startup.start_silently_at_sign_in,
             Err(error) => {
                 startup_window::show_initialization_error(&error);
                 return;
@@ -1768,7 +1892,7 @@ pub fn run() {
                         // here stalls the OS message pump and hangs the window.
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            if backend::kill_privacy_shield_process(app.clone()).await.is_ok() {
+                            if backend::stop_privacy_shield_gracefully(app.clone()).await.is_ok() {
                                 // Restore only after the detector has actually stopped.
                                 backend::restore_shield_webcam_access(app.clone()).await;
                             }
@@ -1806,7 +1930,7 @@ pub fn run() {
                                     // is independently confirmed by the backend.
                                     let app = app.clone();
                                     tauri::async_runtime::spawn(async move {
-                                        match backend::kill_privacy_shield_process(app.clone()).await {
+                                        match backend::stop_privacy_shield_gracefully(app.clone()).await {
                                             Ok(()) => {
                                                 set_tray_shield_running(&app, false);
                                                 backend::restore_shield_webcam_access(app).await;
@@ -1842,7 +1966,7 @@ pub fn run() {
 
             let calculator_mode_on_startup = startup_auth::startup_pin_is_configured_sync();
             // Cache the startup calc-mode flag so CloseRequested avoids a disk read per close.
-            app.manage(CalcModeState(Mutex::new(calculator_mode_on_startup)));
+            app.manage(CalcModeState::new(calculator_mode_on_startup));
             let tray = _tray.build(app)?;
             // Hide tray icon immediately if WinCommander is in hidden mode.
             // The tray is still built so its event handlers (quit, show) remain
@@ -1930,7 +2054,8 @@ pub fn run() {
                     // Keep cold-start and every later calculator entry on the
                     // same native path. Divergent setup here caused a second
                     // transition after React mounted in packaged builds.
-                    let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
+                    let _ = startup_auth::enter_calculator_mode_with(window.clone(), false);
+                    let _ = startup_window::defer_reveal_until_ready(&window);
                 } else if foreground_launch && !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
                     reveal_main_window(app.handle());
@@ -2038,8 +2163,7 @@ pub fn run() {
                     let _ = window_clone.set_skip_taskbar(true);
                     let _ = window_clone.hide();
                     if lock_on_close && armed {
-                        set_calc_mode_active(window_clone.app_handle(), true);
-                        let _ = window_clone.app_handle().emit("calculator-mode-entered", ());
+                        let _ = startup_auth::enter_calculator_mode_with(window_clone.clone(), false);
                     } else {
                         // Re-arm Borrowed Mode. The webview persists across a hide
                         // (we prevent_close + hide, never destroy), so a session
@@ -2130,7 +2254,10 @@ pub fn run() {
                     .try_state::<HideHotkeyState>()
                     .and_then(|hs| hs.0.lock().ok().map(|g| g.clone()))
                     .unwrap_or_default();
-                if !startup_hotkey.is_empty() {
+                if let Err(error) = register_calculator_peek_hotkey(app.handle()) {
+                    log_message_src("error", "core", &format!("[Hotkey] Calculator peek registration failed: {error}"));
+                }
+                if is_custom_hide_peek_hotkey(&startup_hotkey) {
                     log_message_src(
                         "info",
                         "core",
@@ -2436,6 +2563,11 @@ pub fn run() {
             startup_trace::report_startup_milestone,
             startup_trace::report_startup_phase,
             startup_window::startup_window_ready,
+            camera_presence::dashboard_camera_presence,
+            calculator_gate_generation,
+            calculator_handoff::open_windows_calculator,
+            require_calculator_peek_hotkey,
+            shared_shortcut_claim::reconcile_shared_shortcut_claim,
             exit_app,
             open_search_files_from_shortcut,
             reveal_main_window_for_security_alert,

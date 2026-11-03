@@ -20,17 +20,22 @@ import {
     resolveLocalFleetPrivacyShieldControl,
 } from "../../lib/fleetPrivacyShieldControl";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
-import { privacyShieldStopError, privacyShieldStopVerificationError } from "../../lib/privacyShieldStop";
+import { confirmPrivacyShieldStop, privacyShieldStopError } from "../../lib/privacyShieldStop";
+import { ShieldStatusGate, hasVerifiedRunningDetector, shouldProbeShieldCamera } from "../../lib/privacyShieldStatus";
+import { defaultPrivacyShieldConfig, hydratePrivacyShieldConfig, privacyShieldConfigPatch } from "../../lib/privacyShieldConfig";
 
 // Module-level cache — survives panel unmount/remount
 let _shieldRunningCache: boolean | null = null;
-// Module-level flag — set once we've hydrated local toggle state from
-// stored settings, so subsequent appSettings polls don't stomp user
-// edits before they're persisted. Without this, the appSettings poll
-// (every few seconds in useAppState) would re-apply the saved values
-// over the live UI, flipping toggles back to false the moment the
-// user clicks them but before the debounced save fires.
-let _toggleHydratedFromSettings = false;
+
+async function stopShieldWithVerification(): Promise<string | null> {
+    const response = await executeBackendCommand<{ success: boolean; message?: string; running?: boolean; shieldLifecycle?: string }>("Stop-PrivacyShield", {});
+    return confirmPrivacyShieldStop(response, async () => ({
+        success: true,
+        data: await invoke<{ running?: boolean; error?: boolean | null }>("run_backend_script", {
+            command: "Get-PrivacyShieldStatus", params: { SkipCameraProbe: true },
+        }),
+    }));
+}
 
 // Dedicated (i) icon next to the label rather than wrapping the whole label
 // in a hover target — matches the app-wide info-icon idiom (see
@@ -113,7 +118,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
     const [localLoading, setLocalLoading] = useState(false);
+    const [operationPending, setOperationPending] = useState(false);
+    const [shieldWaiting, setShieldWaiting] = useState(false);
     const [stopError, setStopError] = useState<string | null>(null);
+    const [captureDeliveryStatus, setCaptureDeliveryStatus] = useState<"local_only" | "ready" | "unavailable" | null>(null);
     const [showShieldIntro, setShowShieldIntro] = useState(false);
     // Single disclosure for every non-essential control (was split across a
     // header row, two always-visible mini-grids, and this chevron — now one
@@ -197,13 +205,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         try { await invoke("consume_shield_minutes", { minutes: elapsedMin }); } catch {}
     }, []);
 
-    const [privacyConfig, setPrivacyConfig] = useState({
-        blurOnLookAway: true, blurOnMultipleFaces: true, blurOnCamera: true,
-        captureOnDevice: false, captureOnMultiFace: false,
-        modelLevel: 'medium', confidence: 0.5, overlayOpacity: 200,
-        wakeDelayMs: 150, deviceWakeMultiplier: 5, multiFaceWakeMultiplier: 5,
-        bufferFrames: 2, captureSpeed: 1,
-    });
+    const [privacyConfig, setPrivacyConfig] = useState(defaultPrivacyShieldConfig);
+    const [configHydrated, setConfigHydrated] = useState(false);
     const [aiRuntimeInstalled, setAiRuntimeInstalled] = useState<boolean | null>(null);
 
     const [autostart, setAutostart] = useState(false);
@@ -214,33 +217,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // overwrite a value the user just toggled.
     useEffect(() => {
         if (!appSettings) return;
-        if (_toggleHydratedFromSettings) return;
+        if (configHydrated) return;
         const ps = appSettings.ideal.privacy?.privacyShield;
         if (ps) {
-            setPrivacyConfig(prev => ({
-                ...prev,
-                confidence: ps.confidenceThreshold ?? prev.confidence,
-                overlayOpacity: ps.blurOpacity ?? prev.overlayOpacity,
-                // wake_delay_seconds is *misnamed* in the Rust schema --
-                // its type is u32 (no fractional seconds possible) so we
-                // actually store milliseconds in it. Reading it back as
-                // ms is the round-trip-stable behaviour. The legacy
-                // path that multiplied by 1000 produced fractional
-                // wake_delay_seconds writes (150 / 1000 = 0.15) which
-                // the u32 serde guard rejected, blasting the dev log
-                // with "invalid type: floating point `0.15`, expected
-                // u32" once per render.
-                wakeDelayMs: ps.wakeDelaySeconds ?? prev.wakeDelayMs,
-                modelLevel: ps.modelSize ?? prev.modelLevel,
-                bufferFrames: ps.detectionBufferFrames ?? prev.bufferFrames,
-                blurOnLookAway: ps.gazeDetectionEnabled ?? prev.blurOnLookAway,
-                blurOnMultipleFaces: ps.antiPeepingEnabled ?? prev.blurOnMultipleFaces,
-                blurOnCamera: ps.cameraHunterEnabled ?? prev.blurOnCamera,
-            }));
+            setPrivacyConfig(prev => hydratePrivacyShieldConfig(prev, ps));
             setAutostart(ps.autostart ?? false);
         }
-        _toggleHydratedFromSettings = true;
-    }, [appSettings]);
+        setConfigHydrated(true);
+    }, [appSettings, configHydrated]);
 
     // A signed Fleet epoch can update this card while it is mounted. Normal
     // local edits stay protected by the one-time hydration guard above, but a
@@ -268,26 +252,17 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // running (controls are disabled anyway) and during the very first
     // render before hydration completes.
     useEffect(() => {
-        if (!_toggleHydratedFromSettings) return;
+        if (!configHydrated) return;
         if (privacyShieldRunning === true || localFleetControl.settingsLocked) return;
         const t = setTimeout(() => {
             patchAppSettings({ ideal: { privacy: { privacyShield: {
-                gazeDetectionEnabled: privacyConfig.blurOnLookAway,
-                antiPeepingEnabled: privacyConfig.blurOnMultipleFaces,
-                cameraHunterEnabled: privacyConfig.blurOnCamera,
-                confidenceThreshold: privacyConfig.confidence,
-                blurOpacity: privacyConfig.overlayOpacity,
-                wakeDelaySeconds: Math.round(privacyConfig.wakeDelayMs),
-                modelSize: privacyConfig.modelLevel as any,
-                detectionBufferFrames: privacyConfig.bufferFrames,
+                ...privacyShieldConfigPatch(privacyConfig),
                 autostart,
             } } } }).catch(reportSettingsWriteFailure);
         }, 400);
         return () => clearTimeout(t);
     }, [
-        privacyConfig.blurOnLookAway, privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
-        privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
-        privacyConfig.modelLevel, privacyConfig.bufferFrames,
+        privacyConfig, configHydrated,
         autostart, privacyShieldRunning, localFleetControl.settingsLocked, patchAppSettings,
     ]);
 
@@ -303,26 +278,42 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // keep a single setInterval alive across the component lifetime.
     // The check function is held in a ref so handleToggle can call it
     // imperatively too.
-    const checkStatusRef = useRef<() => Promise<void>>(async () => {});
-    checkStatusRef.current = async () => {
+    const checkStatusRef = useRef<(forceCamera?: boolean) => Promise<void>>(async () => {});
+    const statusGate = useRef(new ShieldStatusGate());
+    const lastCameraProbeAt = useRef(0);
+    const forceCameraProbe = useRef(false);
+    checkStatusRef.current = async (forceCamera = false) => {
+        const gate = statusGate.current;
+        if (forceCamera) { forceCameraProbe.current = true; gate.queueRead(); }
+        const generation = gate.beginRead();
+        if (generation === null) return;
+        const includeCamera = shouldProbeShieldCamera(lastCameraProbeAt.current, Date.now(), forceCameraProbe.current);
+        if (includeCamera) {
+            lastCameraProbeAt.current = Date.now();
+            forceCameraProbe.current = false;
+        }
         try {
             const shield = await executeBackendCommand<{
                 running: boolean;
                 activeMode?: PrivacyShieldMode | null;
-                cameraAvailable?: boolean;
+                cameraAvailable?: boolean | null;
+                cameraStatus?: string;
                 cameraMessage?: string;
-            }>("Get-PrivacyShieldStatus");
+            }>("Get-PrivacyShieldStatus", { SkipCameraProbe: !includeCamera });
+            if (!gate.canApply(generation)) return;
             if (shield.success && shield.data && typeof shield.data.running === "boolean") {
                 setPrivacyShieldRunning(shield.data.running);
                 setActiveShieldMode(shield.data.running
                     && (shield.data.activeMode === "notify_only" || shield.data.activeMode === "blur_notify")
                     ? shield.data.activeMode
                     : null);
-                if (typeof shield.data.cameraAvailable === "boolean") {
+                if (includeCamera && (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean")) {
+                    setCameraAvailable(null);
+                    setCameraMessage(shield.data.cameraMessage ?? "Camera status could not be confirmed.");
+                } else if (includeCamera && typeof shield.data.cameraAvailable === "boolean") {
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
                     if (!shield.data.cameraAvailable) {
-                        setAiRuntimeInstalled(null);
                         recordDiagnostic({ feature: "privacy_shield", action: "camera_check", stage: "capability",
                             lifecycle: "verified", outcome: "degraded", errorCode: "PSH.CAMERA.UNAVAILABLE",
                             severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera",
@@ -345,6 +336,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     privacyClass: "local_sensitive", context: { health: "unknown" } });
             }
         } catch {
+            if (!gate.canApply(generation)) return;
             // A failed probe is also unknown state, not evidence that the last
             // observed running/camera value is still current.
             setPrivacyShieldRunning(null);
@@ -355,9 +347,33 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 lifecycle: "verified", outcome: "failed", errorCode: "PSH.STATUS.UNAVAILABLE",
                 severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
                 privacyClass: "local_sensitive", context: { health: "unknown" } });
+        } finally {
+            if (gate.finishRead(generation)) void checkStatusRef.current();
         }
     };
-    const checkStatus = useCallback(() => checkStatusRef.current(), []);
+    const checkStatus = useCallback((forceCamera = false) => checkStatusRef.current(forceCamera), []);
+
+    useEffect(() => {
+        const gate = statusGate.current;
+        gate.setActive(true);
+        let disposed = false;
+        let removeListener: (() => void) | undefined;
+        void listen<unknown>("privacy-shield-status-changed", ({ payload }) => {
+            const status = gate.acceptEvent(payload);
+            if (!status) return;
+            setPrivacyShieldRunning(status.running);
+            setActiveShieldMode(status.activeMode ?? null);
+            setShieldWaiting(false);
+            setLocalLoading(false);
+            if (status.running) {
+                setCameraAvailable(true);
+                setCameraMessage(null);
+            }
+            void invoke("update_tray_shield_label", { running: status.running }).catch(() => {});
+            if (!gate.actionPending) void checkStatusRef.current();
+        }).then(remove => { if (disposed) remove(); else removeListener = remove; }).catch(() => {});
+        return () => { disposed = true; gate.setActive(false); removeListener?.(); };
+    }, []);
 
     useEffect(() => {
         // Status polling is ALWAYS on, regardless of the
@@ -395,10 +411,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, []);
 
     useEffect(() => {
-        if (cameraAvailable !== true) {
-            if (cameraAvailable === false) setAiRuntimeInstalled(null);
-            return;
-        }
         const checkAI = async () => {
             try {
                 const res = await getAIDependenciesStatus();
@@ -406,7 +418,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             } catch { setAiRuntimeInstalled(false); }
         };
         checkAI();
-    }, [cameraAvailable]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Surface the backend reader's look-away/look-back transitions. The
     // reader emits `lookingAway:false` on shield stop, so the badge clears
@@ -423,13 +435,31 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, [privacyShieldRunning]);
 
     const handleShieldExhausted = useCallback(async () => {
-        try { await executeBackendCommand<{ success: boolean }>("Stop-PrivacyShield", {}); } catch { }
-        await consumeElapsedSession();
-        setPrivacyShieldRunning(false);
-        await invoke("update_tray_shield_label", { running: false }).catch(() => {});
-        openShieldPaywall();
-        invalidateShieldQuota();
-    }, [consumeElapsedSession, invalidateShieldQuota, openShieldPaywall]);
+        const gate = statusGate.current;
+        const actionRevision = gate.beginAction();
+        if (actionRevision === null) { localExhaustFiredRef.current = false; return; }
+        setOperationPending(true);
+        try {
+            const failure = await stopShieldWithVerification();
+            if (failure) { if (gate.canApplyAction(actionRevision)) setStopError(failure); }
+            else {
+                await consumeElapsedSession();
+                if (gate.canApplyAction(actionRevision)) {
+                    setPrivacyShieldRunning(false);
+                    await invoke("update_tray_shield_label", { running: false }).catch(() => {});
+                }
+            }
+        } catch (error) {
+            if (gate.canApplyAction(actionRevision)) setStopError(privacyShieldStopError({ success: false, error: String(error) }));
+        } finally {
+            if (gate.endAction(actionRevision)) {
+                setOperationPending(false);
+                void checkStatus();
+                openShieldPaywall();
+                invalidateShieldQuota();
+            }
+        }
+    }, [consumeElapsedSession, invalidateShieldQuota, openShieldPaywall, checkStatus]);
 
     // Fleet-run sessions are charged/stopped by BackgroundPollers so the
     // monitoring service remains correct even when this card is unmounted.
@@ -480,10 +510,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // and answering the status poll. Belt-and-braces with the explicit
     // setLocalLoading(false) in handleToggle's finally block.
     useEffect(() => {
-        if (privacyShieldRunning === true && localLoading) setLocalLoading(false);
+        if (privacyShieldRunning === true && localLoading && !statusGate.current.actionPending) setLocalLoading(false);
     }, [privacyShieldRunning, localLoading]);
 
     const handleToggle = async () => {
+        if (statusGate.current.actionPending) return;
         setStopError(null);
         const operationId = newDiagnosticOperationId("privacy_shield");
         if (fleetShieldSessionLocked) {
@@ -496,15 +527,21 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
         const targetState = !privacyShieldRunning;
         if (targetState && !privacyConfig.blurOnLookAway && !privacyConfig.blurOnMultipleFaces && !privacyConfig.blurOnCamera) {
+            setStopError("Choose at least one detection option before starting Privacy Shield.");
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "configuration", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.CONFIG.NO_TRIGGER", severity: "warn", retryability: "manual", suggestedNextAction: "configure_trigger", privacyClass: "local_sensitive", context: { state: "invalid" } });
             return;
         }
         if (targetState && cameraAvailable === false) {
+            setStopError(cameraMessage || "Camera access is unavailable. Check the camera and Windows camera settings, then refresh.");
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "capability", lifecycle: "verified", outcome: "failed", errorCode: "PSH.CAMERA.UNAVAILABLE", severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera", privacyClass: "local_sensitive", context: { capability: "camera", state: "unavailable" } });
             return;
         }
         if (targetState && quota && !quota.is_unlimited && quota.minutes_remaining <= 0) { openShieldPaywall(); return; }
+        const actionRevision = statusGate.current.beginAction();
+        if (actionRevision === null) return;
         setLocalLoading(true);
+        setOperationPending(true);
+        setShieldWaiting(false);
         const action = targetState ? "start" : "stop";
         const startedAt = Date.now();
         recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: targetState ? "start" : "stop" } });
@@ -513,7 +550,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         // user can re-try / open the log. The status poll continues
         // running independently so the real state still surfaces.
         const loadingTimeout = setTimeout(() => {
+            statusGate.current.allowActionStatus(actionRevision);
+            if (!statusGate.current.isActive || !statusGate.current.actionPending) return;
             setLocalLoading(false);
+            setShieldWaiting(true);
             checkStatus();
         }, 60_000);
         try {
@@ -537,73 +577,85 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     blurTriggers.device,
                     privacyShieldLookAwayDelay(shieldSettings, fleetShieldDelayPolicyActive(appSettings?.app?.fleet?.enabled === true, appSettings?.policy?.lockedPaths), appSettings?.app?.localPrivacyShieldLookAwayDelaySeconds),
                 );
-                if (res.success) {
+                if (res.success && res.data?.success === true) {
+                    setCaptureDeliveryStatus(res.data.captureDeliveryStatus ?? null);
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "running" } });
-                    setPrivacyShieldRunning(true);
+                    if (statusGate.current.canApplyAction(actionRevision)) {
+                        setPrivacyShieldRunning(true);
+                        void invoke("update_tray_shield_label", { running: true }).catch(() => {});
+                    }
                     setAiRuntimeInstalled(true);
-                    await invoke("update_tray_shield_label", { running: true });
                     patchAppSettings({ ideal: { privacy: { privacyShield: {
-                        gazeDetectionEnabled: privacyConfig.blurOnLookAway,
-                        antiPeepingEnabled: privacyConfig.blurOnMultipleFaces,
-                        cameraHunterEnabled: privacyConfig.blurOnCamera,
-                        confidenceThreshold: privacyConfig.confidence,
-                        blurOpacity: privacyConfig.overlayOpacity,
-                        wakeDelaySeconds: Math.round(privacyConfig.wakeDelayMs),
-                        modelSize: privacyConfig.modelLevel as any,
-                        detectionBufferFrames: privacyConfig.bufferFrames,
+                        ...privacyShieldConfigPatch(privacyConfig),
                     } } } }).catch(reportSettingsWriteFailure);
                 } else {
+                    setCaptureDeliveryStatus(null);
                     const err = (res.error || "").toLowerCase();
+                    const observed = await executeBackendCommand<{ running?: boolean; detectorProcessRunning?: boolean; shieldLifecycle?: string; error?: boolean | null; activeMode?: PrivacyShieldMode | null }>("Get-PrivacyShieldStatus", { SkipCameraProbe: true });
+                    if (statusGate.current.canApplyAction(actionRevision)) {
+                        if (hasVerifiedRunningDetector(observed)) {
+                            setPrivacyShieldRunning(true);
+                            setActiveShieldMode(observed.data?.activeMode === "blur_notify" || observed.data?.activeMode === "notify_only" ? observed.data.activeMode : null);
+                            setStopError("Privacy Shield is running, but its start response could not be confirmed. Check its settings and stop it if needed.");
+                        } else setStopError(res.error || "Privacy Shield could not start. Check the camera and AI runtime, then try again.");
+                    }
                     if (err.includes("python is required") || err.includes("missing python dependency")) setAiRuntimeInstalled(false);
                     else if (err.includes('camera') || err.includes('webcam') || err.includes('cap.read') || err.includes('videocapture') || err.includes('no camera') || err.includes('no webcam')) {
-                        setCameraAvailable(false);
-                        setCameraMessage(res.error || "No camera detected — Privacy Shield requires a webcam.");
+                        // A failed open can mean a busy camera, permission, or a
+                        // driver problem; it does not prove hardware is absent.
+                        setCameraMessage(res.error || "Camera access could not be confirmed.");
                         setAiRuntimeInstalled(null);
                     }
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: err.includes("camera") || err.includes("webcam") ? "PSH.CAMERA.UNAVAILABLE" : "PSH.START.FAILED", severity: "error", retryability: "manual", suggestedNextAction: err.includes("camera") || err.includes("webcam") ? "connect_camera" : "review_status", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: err.includes("camera") || err.includes("webcam") ? "camera" : "start" } });
                 }
             } else {
-                const res = await executeBackendCommand<{ success: boolean; message?: string }>("Stop-PrivacyShield", {});
-                let failure = privacyShieldStopError(res);
+                const failure = await stopShieldWithVerification();
                 if (!failure) {
-                    failure = privacyShieldStopVerificationError(
-                        await executeBackendCommand<{ running?: boolean }>("Get-PrivacyShieldStatus", {}),
-                    );
+                    if (statusGate.current.canApplyAction(actionRevision)) {
+                        setPrivacyShieldRunning(false);
+                        setStopError(null);
+                    }
+                    await consumeElapsedSession();
+                    invalidateShieldQuota();
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } });
+                    // Tray refresh is secondary UI work. Its failure must not
+                    // turn a verified stopped detector into a Stop failure.
+                    void invoke("update_tray_shield_label", { running: false }).catch(() => {});
                 }
-                if (!failure) { await consumeElapsedSession(); invalidateShieldQuota(); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); }
                 else {
-                    setStopError(failure);
+                    if (statusGate.current.canApplyAction(actionRevision)) setStopError(failure);
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.STOP.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "unknown" } });
                 }
             }
-        } catch (e) { if (!targetState) setStopError("Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
+        } catch (e) { if (statusGate.current.canApplyAction(actionRevision)) setStopError(targetState ? "Privacy Shield could not start. Check the camera and AI runtime, then try again." : privacyShieldStopError({ success: false, error: String(e) })); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
-            setLocalLoading(false);
-            // Reconcile against the actual process state right away so the
-            // button label updates the moment the start/stop returns,
-            // instead of waiting up to a full poll interval.
-            checkStatus();
-            setTimeout(() => { checkStatus(); }, 800);
-            setTimeout(() => { checkStatus(); }, 2200);
+            if (statusGate.current.endAction(actionRevision)) {
+                setOperationPending(false);
+                setShieldWaiting(false);
+                setLocalLoading(false);
+                checkStatus();
+                setTimeout(() => { checkStatus(); }, 800);
+                setTimeout(() => { checkStatus(); }, 2200);
+            }
         }
     };
 
-    const stateUnknown = privacyShieldRunning === null || cameraAvailable === null;
+    const stateUnknown = privacyShieldRunning === null;
     const headerRight = stateUnknown ? (
         <Button
             text="Refresh status"
             intent="primary"
-            onClick={checkStatus}
+            onClick={() => checkStatus(true)}
             className="shield-primary-btn physical-shield-header-btn"
         />
     ) : (
         <Button
-            text={privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
+            text={shieldWaiting ? "Waiting for Shield" : privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
             intent={privacyShieldRunning ? "danger" : "primary"}
             onClick={handleToggle}
-            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || (privacyShieldRunning ? false : localLoading || cameraAvailable === false)}
-            loading={privacyShieldRunning ? false : localLoading}
+            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || operationPending || shieldWaiting || (!privacyShieldRunning && cameraAvailable === false)}
+            loading={localLoading}
             className="shield-primary-btn physical-shield-header-btn"
         />
     );
@@ -618,6 +670,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         >
             <div className="flex flex-col gap-5">
                 {stopError && <div role="alert" className="text-sm text-[var(--color-warning)]">{stopError}</div>}
+                {cameraAvailable === null && privacyShieldRunning === false && (
+                    <p className="text-sm text-[var(--color-warning)]">Camera availability could not be confirmed. You can try starting Shield to check the camera.</p>
+                )}
                 <div className="physical-shield-head">
                     <div className="physical-shield-copy flex flex-col gap-2 min-w-0">
                         {/* Title row — name + info icon only. "How it works" and
@@ -742,7 +797,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     </div>
                 </div>
 
-                {cameraAvailable === true && (
                     <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2">
                         <button
                             type="button"
@@ -770,8 +824,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             </div>
                         )}
                     </div>
-                )}
-
                 {cameraAvailable !== false && (
                 <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${localFleetControl.settingsLocked ? "pointer-events-none opacity-70" : ""}`}>
                     {/* Blur conditions are intentionally kept together: these
@@ -849,6 +901,31 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                         <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
                                         <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
                                     </div>
+                                    <p className="text-[10px] text-[var(--shield-text-muted)]">
+                                        Saved captures and incident details are in %LOCALAPPDATA%\WinCommander\shield_captures. Paste that path into File Explorer to view them. Captures older than 7 days are removed the next time Shield starts.
+                                    </p>
+                                    {appSettings?.app?.fleet?.enabled === true && (
+                                        <ShieldOption label="Send incident captures to Fleet"
+                                            tooltip="Uploads saved incident screenshots and webcam recordings to this device’s Fleet organization. Off by default; turning this off stops future uploads."
+                                            checked={privacyConfig.sendIncidentCapturesToFleet}
+                                            onChange={value => {
+                                                setPrivacyConfig(previous => ({ ...previous, sendIncidentCapturesToFleet: value }));
+                                                void patchAppSettings({ ideal: { privacy: { privacyShield: {
+                                                    sendIncidentCapturesToFleet: value,
+                                                } } } }).catch(reportSettingsWriteFailure);
+                                            }}
+                                            disabled={operationPending} />
+                                    )}
+                                    {privacyConfig.sendIncidentCapturesToFleet && captureDeliveryStatus === "unavailable" && (
+                                        <p role="status" className="text-xs text-[var(--color-warning)]">
+                                            Captures will stay on this device until Fleet delivery is available. Shield can still protect your screen.
+                                        </p>
+                                    )}
+                                    {privacyConfig.sendIncidentCapturesToFleet && captureDeliveryStatus === "ready" && (
+                                        <p role="status" className="text-xs text-[var(--shield-text-muted)]">
+                                            Fleet delivery is ready for new incidents. Check Fleet to confirm each upload.
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div className="pt-3 border-t border-[var(--shield-inner-border)]">

@@ -1097,6 +1097,8 @@ export interface PrivacyShieldSettings {
   detectionBufferFrames: number | null;
   captureOnDevice: boolean | null;
   captureOnMultiFace: boolean | null;
+  /** Explicit opt-in for saved incident media; ordinary Fleet alerts contain no media. */
+  sendIncidentCapturesToFleet?: boolean;
   captureSpeed: number | null;
   deviceWakeMultiplier: number | null;
   multiFaceWakeMultiplier: number | null;

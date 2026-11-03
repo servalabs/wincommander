@@ -68,7 +68,7 @@ describe("native and UI-audit entrypoints", () => {
     expect(startup).toContain("startMainWindow().catch");
     expect(startup).not.toContain("waitForStartupAnimationReady");
     expect(startup.indexOf("revealStartupWindow()")).toBeLessThan(
-      startup.indexOf("await import('./main')"),
+      startup.lastIndexOf("await import('./main')"),
     );
     expect(main).not.toContain("Retry startup");
     expect(main).not.toContain("location.reload()");
@@ -83,7 +83,8 @@ describe("native and UI-audit entrypoints", () => {
     expect(native).not.toContain("reveal_armed_startup_window(&fallback_window)");
     expect(startup).toContain("MessageBoxW");
     expect(startup).toContain("target.navigate(url)");
-    expect(startup).toContain("accept_ready(generation.unwrap_or(0))");
+    expect(startup).toContain("state.accept_content_ready(");
+    expect(startup).toContain("generation.unwrap_or(0)");
     expect(startup).toContain("state.begin_recovery()");
     expect(startup).toContain("window_placement::show_maximized(window).await");
   });

@@ -2,6 +2,27 @@
 use super::*;
 
 #[test]
+fn calculator_requires_its_current_content_on_cold_start_and_after_relock() {
+    let state = StartupWindow::new();
+    state.arm();
+    assert!(!state.accept_content_ready(0, true, 1, None), "splash cannot reveal a locked window");
+    assert!(!state.accept_content_ready(0, true, 1, Some(0)));
+    assert!(state.accept_content_ready(0, true, 1, Some(1)));
+    assert!(state.take_ready_reveal());
+
+    state.reset_for_calculator();
+    state.arm();
+    assert!(!state.is_ready());
+    assert!(!state.accept_content_ready(0, true, 2, Some(1)), "old calculator cannot reveal a new lock");
+    assert!(!state.is_ready());
+    assert!(!state.take_ready_reveal());
+    assert!(state.accept_content_ready(0, true, 2, Some(2)));
+    assert!(state.take_ready_reveal());
+    assert!(!state.accept_content_ready(0, false, 2, Some(2)), "stale calculator cannot reveal the app");
+    assert!(state.accept_content_ready(0, false, 2, None));
+}
+
+#[test]
 fn recovery_replaces_all_stale_generation_values_preserving_route_and_options() {
     let url = recovery_url(
         "http://tauri.localhost/settings?theme=dark&wc-startup-generation=0&view=secret&wc-startup-generation=1#startup"

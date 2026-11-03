@@ -584,7 +584,7 @@ describe("System Cleanup persona details", () => {
     expect(activity[1].facts).toContain("Value: Unavailable");
   });
 
-  test("shows selected-account WSL registry values including unavailable fields", () => {
+  test("preserves selected-account WSL source values while omitting wholly empty columns", () => {
     const raw = { partial: true, coverage: "Selected registry registrations only", records: [{ registrationId: "fixture-id", registryPath: "HKU\\fixture\\Lxss\\id", registryValues: { DistributionName: "Fixture Linux", BasePath: "D:\\fixture", Version: 2, Extra: [1, 2, 3], Missing: null } }] };
     const rows = getSafeCleanupPreview("wslData", raw);
     expect(rows).toHaveLength(1);
@@ -597,7 +597,8 @@ describe("System Cleanup persona details", () => {
     expect(rows[0].facts).toContain("Registry Values Missing: No value");
     const category = ALL_CATEGORIES.find(item => item.id === "wslData")!;
     const html = renderToStaticMarkup(<CleanupDisplayDetails category={category} mode="advanced" count={-1} items={[]} rawData={raw} error="Incomplete" clearing={false} clearLabel="Clear" onClose={() => {}} accountName="S-1-5-21-100-200-300-1002" accountLabel="Other user" />);
-    for (const field of ["Registry Values Distribution Name", "Fixture Linux", "Registry Values Base Path", "D:\\fixture", "Registry Values Missing", "No value"]) expect(html).toContain(field);
+    for (const field of ["Registry Values Distribution Name", "Fixture Linux", "Registry Values Base Path", "D:\\fixture"]) expect(html).toContain(field);
+    expect(html).not.toContain('<th scope="col">Registry Values Missing</th>');
     expect(html).toContain("Scan incomplete");
   });
 

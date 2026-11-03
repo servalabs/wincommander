@@ -5,22 +5,37 @@ use std::time::Duration;
 // Includes cold filesystem/key access and the transport's handshake retries.
 const PRELOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The GUI must not open without the snapshot that carries its PIN and policy.
-/// A stalled worker causes a closed startup, never a second read or defaults.
-pub(crate) fn preload_settings() -> Result<bool, String> {
-    preload_with(|| super::read_settings().map(|settings| settings.app.start_silently_at_sign_in))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StartupSettings {
+    pub start_silently_at_sign_in: bool,
+    pub calculator_lock_active: bool,
 }
 
-fn preload_with(
-    load: impl FnOnce() -> Result<bool, String> + Send + 'static,
-) -> Result<bool, String> {
+impl StartupSettings {
+    fn from_settings(settings: &super::AppSettings) -> Self {
+        Self {
+            start_silently_at_sign_in: settings.app.start_silently_at_sign_in,
+            calculator_lock_active: crate::startup_auth::gate_enabled(&settings.ideal.privacy.startup_pin),
+        }
+    }
+}
+
+/// The GUI must not open without the snapshot that carries its PIN and policy.
+/// A stalled worker causes a closed startup, never a second read or defaults.
+pub(crate) fn preload_settings() -> Result<StartupSettings, String> {
+    preload_with(|| super::read_settings().map(|settings| StartupSettings::from_settings(&settings)))
+}
+
+fn preload_with<T: Send + 'static>(
+    load: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     preload_with_timeout(load, PRELOAD_TIMEOUT)
 }
 
-fn preload_with_timeout(
-    load: impl FnOnce() -> Result<bool, String> + Send + 'static,
+fn preload_with_timeout<T: Send + 'static>(
+    load: impl FnOnce() -> Result<T, String> + Send + 'static,
     timeout: Duration,
-) -> Result<bool, String> {
+) -> Result<T, String> {
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
         .name("settings-preload".into())
@@ -44,12 +59,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn startup_snapshot_uses_the_resolved_pin_policy() {
+        let mut settings = super::super::create_default_settings();
+        assert!(!StartupSettings::from_settings(&settings).calculator_lock_active);
+        settings.ideal.privacy.startup_pin.enabled = Some(true);
+        assert!(!StartupSettings::from_settings(&settings).calculator_lock_active);
+        settings.ideal.privacy.startup_pin.real_hash = Some("configured".into());
+        settings.app.start_silently_at_sign_in = false;
+        let startup = StartupSettings::from_settings(&settings);
+        assert!(startup.calculator_lock_active);
+        assert!(!startup.start_silently_at_sign_in);
+        settings.ideal.privacy.startup_pin.enabled = Some(false);
+        assert!(!StartupSettings::from_settings(&settings).calculator_lock_active);
+    }
+
+    #[test]
     fn preload_reports_success_and_sanitizes_failure() {
         for silent in [false, true] {
             assert_eq!(preload_with(move || Ok(silent)), Ok(silent));
         }
         assert_eq!(
-            preload_with(|| Err("private-path-and-account".into())),
+            preload_with::<bool>(|| Err("private-path-and-account".into())),
             Err("Settings could not be loaded safely".into())
         );
     }

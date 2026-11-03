@@ -11,6 +11,8 @@ ${Using:StrFunc} UnStrStr
 !define WC_SERVICE_NAME "WinCommanderSvc"
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
+!define WC_CALCULATOR_PAYLOAD "$INSTDIR\resources\Calculator.exe"
+!define WC_CALCULATOR_EXE "$INSTDIR\Calculator.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 !define WC_SCRUB_MENU_MIGRATION "${__FILEDIR__}\migrate-scrub-context-menus.ps1"
@@ -271,6 +273,13 @@ ${Using:StrFunc} UnStrStr
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "postinstall"
   !insertmacro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
+  IfFileExists "${WC_CALCULATOR_PAYLOAD}" wc_calculator_payload_ok 0
+    Abort "The Calculator launcher is missing from this setup."
+  wc_calculator_payload_ok:
+  System::Call 'kernel32::CopyFileW(w "${WC_CALCULATOR_PAYLOAD}", w "${WC_CALCULATOR_EXE}", i 0) i .R8'
+  ${If} $R8 == 0
+    Abort "The Calculator launcher could not be installed."
+  ${EndIf}
   ; An existing Pro driver may have a protected, empty DACL. Run the pinned
   ; verifier only when its engine directory exists; a file-level existence
   ; check can fail under that DACL. This never downloads or starts a driver.
@@ -423,6 +432,7 @@ ${Using:StrFunc} UnStrStr
   ; The update path has already done this in PREINSTALL, but repeating it is
   ; harmless and prevents an interactive uninstall from leaving the EXE locked.
   !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "uninstall"
+  Delete "${WC_CALCULATOR_EXE}"
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "uninstall" "un"
   !insertmacro WC_DELETE_OWNED_SERVICE_OR_ABORT "uninstall"
   ; Updates retain the canonical task so POSTINSTALL can migrate the legacy

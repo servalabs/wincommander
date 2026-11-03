@@ -5,6 +5,19 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Show the calculator before any startup animation when its PIN gate is active,
+  including when an open window is locked again.
+- Handle temporary settings-service contention and concurrent settings migration
+  more reliably, while preserving saved settings and startup security checks.
+- Detect camera hardware separately from camera privacy permissions on the
+  Dashboard, and show an unknown state when detection cannot be confirmed.
+- Run independent Dashboard Fix All repairs three at a time while keeping
+  installers and conflicting maintenance operations ordered.
+- Simplify cleanup cards and detail tables, hide wholly empty columns, move
+  pagination above results, and place disk-analysis item details in the selection
+  bar. Distinguish disabled clipboard history and protected process details from
+  scan failures, skip folder junctions during database-trace scans, and verify
+  schedule changes without retrying unrelated upgrades.
 - Expand local clipboard detection with scored secret and identifier checks,
   per-detector controls and content-free explanations. Optional contact checks
   start off. Paid clipboard masking preserves unrelated text and rechecks the

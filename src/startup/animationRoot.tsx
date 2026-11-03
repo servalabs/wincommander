@@ -6,10 +6,12 @@ import '@fontsource/ibm-plex-mono/600.css';
 let root: Root | undefined;
 let container: HTMLDivElement | undefined;
 let generation = 0;
+let suppressionCount = 0;
 let appearance: Pick<StartupAnimationProps, 'branding' | 'isLight' | 'reducedMotion'> | undefined;
 
 /** The bootstrap and application update one animation instance without replay. */
 export function showStartupAnimation(props: StartupAnimationProps): void {
+    if (suppressionCount > 0) return;
     generation += 1;
     if (!container) {
         container = document.createElement('div');
@@ -31,6 +33,13 @@ export function showStartupAnimation(props: StartupAnimationProps): void {
     }
     container.hidden = false;
     root!.render(<StartupAnimation {...props} {...appearance} />);
+}
+
+/** Hide the splash synchronously for the full lifetime of a calculator gate. */
+export function suppressStartupAnimation(): () => void {
+    suppressionCount += 1;
+    if (container) container.hidden = true;
+    return () => { suppressionCount = Math.max(0, suppressionCount - 1); };
 }
 
 export function hideStartupAnimation(): void {

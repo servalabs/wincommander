@@ -27,6 +27,12 @@
   position: relative;
 }
 
+.calc-handoff-error {
+  color: #ffb4a9;
+  font-size: 12px;
+  text-align: right;
+}
+
 .calc-titlebar {
   height: 32px;
   flex: 0 0 32px;

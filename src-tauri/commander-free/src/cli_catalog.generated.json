@@ -4403,7 +4403,9 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/hooks/useCameraPresence.ts"
+      ]
     },
     {
       "id": "backend:Get\u002dAppInventory",
@@ -7177,7 +7179,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/BackgroundPollers.tsx",
         "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
@@ -8414,6 +8415,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
         "src/panels/secret/index.tsx"
       ]
     },
@@ -8783,9 +8785,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/components/BackgroundPollers.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_request_unenroll",
@@ -10373,7 +10373,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/BackgroundPollers.tsx",
         "src/context/ThemeContext.tsx"
       ]
     },
@@ -10475,6 +10474,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/usePurchase.ts"
+      ]
+    },
+    {
+      "id": "tauri:reconcile_shared_shortcut_claim",
+      "name": "reconcile_shared_shortcut_claim",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/sharedShortcutClaims.ts"
       ]
     },
     {
@@ -10668,6 +10677,17 @@
       ]
     },
     {
+      "id": "tauri:require_calculator_peek_hotkey",
+      "name": "require_calculator_peek_hotkey",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
+        "src/panels/secret/index.tsx"
+      ]
+    },
+    {
       "id": "tauri:resend_purchase_license",
       "name": "resend_purchase_license",
       "transport": "tauri",
@@ -10794,7 +10814,9 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/context/AppContext.tsx",
-        "src/hooks/useBackend.ts"
+        "src/hooks/useBackend.ts",
+        "src/hooks/useCameraPresence.ts",
+        "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
     {
@@ -11656,9 +11678,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/App.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:stop_auth_anomaly_monitor",
@@ -12025,6 +12045,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
         "src/panels/secret/index.tsx"
       ]
     },

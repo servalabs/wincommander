@@ -56,9 +56,9 @@ const HASH_ALGOS: { value: HashAlgo; label: string }[] = [
 
 const FS_TYPES: { value: FSType; label: string; desc: string }[] = [
     { value: "None", label: "None", desc: "Leave the decrypted volume unformatted" },
-    { value: "NTFS", label: "NTFS", desc: "Windows native, supports large files" },
-    { value: "FAT", label: "FAT32", desc: "Cross-platform compatible" },
-    { value: "ExFAT", label: "exFAT", desc: "Large file support, cross-platform" },
+    { value: "NTFS", label: "NTFS", desc: "Windows native; supports per-user file permissions" },
+    { value: "FAT", label: "FAT32", desc: "Cross-platform; no per-user file permissions" },
+    { value: "ExFAT", label: "exFAT", desc: "Cross-platform; no per-user file permissions" },
 ];
 
 const MAX_PIM = 2_147_468;
@@ -535,7 +535,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
             case "filesystem":
                 return (
                     <div className="wizard-step-content">
-                        <p className="step-description">Select the filesystem for the volume contents.</p>
+                        <p className="step-description">Select the filesystem for the volume contents. Choose NTFS if you plan to use Vault permissions for Windows users.</p>
                         <div className="fs-grid">
                             {FS_TYPES.map(f => (
                                 <button

@@ -1,12 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
+import { useCameraPresence } from "../../hooks/useCameraPresence";
 import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { useLiveMetrics } from "../../context/LiveMetricsContext";
 import useVisibility from "../../hooks/useVisibility";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { useServiceChanges } from "../../hooks/useServiceChanges";
-import { runOperation } from "../../context/OperationContext";
+import { beginOperation } from "../../context/OperationContext";
 import SovereigntyRadar from "../../components/dashboard/SovereigntyRadar";
 import ViewToggle from "../../components/dashboard/ViewToggle";
 import NeedsAttention from "../../components/dashboard/NeedsAttention";
@@ -30,7 +31,7 @@ import useBorrowedActive from "../../hooks/useBorrowedActive";
 import { useQueuedAppUpdateIds } from "../../hooks/useQueuedAppUpdateIds";
 import { claimFreeAppUpdates, clearAppUpdatesQueued } from "../../lib/appUpdateQueue";
 import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
-import { isPackageBackedDependency, runQueuedDependencyInstall, runQueuedPackageOperation } from "../../lib/packageOperationLock";
+import { runQueuedDependencyInstall, runQueuedPackageOperation } from "../../lib/packageOperationLock";
 import { getRadarDriftToggles, getToggleById } from "../../registry";
 import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/toggles";
 import { getToggleDrift } from "../../lib/toggleDrift";
@@ -50,6 +51,7 @@ import { showError, showInfo, showSuccess } from "../../utils/toast";
 import { getMaintenanceFailureMessage } from "../../utils/maintenance";
 import { assertDashboardFixSucceeded, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { useFindingFixAttempts } from "./useFindingFixAttempts";
+import { isDashboardPackageFinding, runDashboardFixes, type DashboardFixStep } from "./fixScheduler";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
@@ -694,28 +696,38 @@ export default function DashboardPanel() {
     const runnableTargets = targets.filter((finding) =>
       !finding.id.startsWith('app-update:') || ownedAppUpdateIds.has(finding.id.slice('app-update:'.length))
     );
-    const hasPackageDependency = runnableTargets.some((finding) =>
-      finding.id.startsWith('dependency:') && isPackageBackedDependency(finding.id.slice('dependency:'.length))
-    );
-    const ownsPackageOperation = appUpdateIds.length > 0 || hasPackageDependency;
     const opSteps = runnableTargets
-      .map((finding) => buildFindingOp(finding, machineWide, ownsPackageOperation))
-      .filter((s): s is { label: string; fn: () => Promise<any> } => s !== null);
+      .map((finding) => {
+        const operation = buildFindingOp(finding, machineWide, isDashboardPackageFinding(finding.id));
+        return operation ? { ...operation, id: finding.id } : null;
+      })
+      .filter((step): step is DashboardFixStep => step !== null);
     if (opSteps.length === 0) {
       clearAppUpdatesQueued(appUpdateIds);
       return Promise.resolve();
     }
     const ids = targets.map((t) => t.id);
     const shouldRefreshNetwork = ids.includes('telemetry-blocklist');
-    // Fix Everything may combine repairs with package installs or upgrades.
-    // Hold the shared lock for the whole package-bearing batch and run its
-    // steps sequentially so two dependency installers cannot share WinGet.
-    // Claim IDs synchronously so other update surfaces skip duplicate package
-    // work while this operation waits in the shared FIFO.
     setBusyIds((prev) => { const n = new Set(prev); ids.forEach((i) => n.add(i)); return n; });
-    // Keep package-bearing batches sequential under their shared lock; fixes
-    // without package-manager work can still run concurrently.
-    const executeFindings = () => runOperation(title, opSteps, { mode: ownsPackageOperation ? 'sequential' : 'parallel', accent: 'blue', failFast: false, autoDismissMs: 5000 })
+    const progress = beginOperation(title, { accent: 'blue' });
+    const firstStepIndex = progress.reserve(opSteps.map(step => step.label));
+    let queueNoticeShown = false;
+    const operation = runDashboardFixes(opSteps, async (step, index) => {
+      const execute = () => progress.runReserved([{
+        index: firstStepIndex < 0 ? -1 : firstStepIndex + index,
+        fn: step.fn,
+      }]);
+      // Cleanup and service changes must also avoid installers from other screens.
+      if (isDashboardPackageFinding(step.id) || step.id === 'disk-cleanup' || step.id === 'services-profile') {
+        await runQueuedPackageOperation(execute, () => {
+          if (queueNoticeShown) return;
+          queueNoticeShown = true;
+          void showInfo('Installation work is queued. Independent fixes can continue.');
+        });
+      } else {
+        await execute();
+      }
+    })
       .then(async () => {
         await refreshSettings();
         if (shouldRefreshNetwork) {
@@ -727,13 +739,9 @@ export default function DashboardPanel() {
           window.dispatchEvent(new CustomEvent("tour-fix-all-done"));
         }
       });
-    const operation = ownsPackageOperation
-      ? runQueuedPackageOperation(async (wasQueued) => {
-        if (wasQueued) void showInfo(`${title} queued. It will start after the current package-manager operation finishes.`);
-        await executeFindings();
-      }, undefined, () => clearAppUpdatesQueued(appUpdateIds))
-      : executeFindings();
     return operation.finally(() => {
+        progress.finish();
+        clearAppUpdatesQueued(appUpdateIds);
         setBusyIds((prev) => { const n = new Set(prev); ids.forEach((i) => n.delete(i)); return n; });
       });
   }, [buildFindingOp, refreshSettings, refreshNetwork]);
@@ -855,9 +863,7 @@ export default function DashboardPanel() {
     invoke("lock_to_calculator").catch(() => {});
   }, []);
 
-  const webcamCap = getByPath(appSettings, "current.privacy.appCapabilities.webcam");
-  const cameraAvailable = webcamCap !== null && webcamCap !== undefined;
-  const cameraBlocked = webcamCap === "Deny";
+  const { presence: cameraPresence, blocked: cameraBlocked, refreshAccess: refreshCameraAccess, invalidateAccess: invalidateCameraAccess } = useCameraPresence();
   const microphoneBlocked = getByPath(appSettings, "current.privacy.appCapabilities.microphone") === "Deny";
 
   const missingEngineCount = activeFindings.filter((f) => f.category === "engines").length;
@@ -865,16 +871,22 @@ export default function DashboardPanel() {
   const handleCapabilityToggle = useCallback(async (capability: "webcam" | "microphone", blocked: boolean) => {
     if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setCapabilityPending(capability);
+    if (capability === "webcam") invalidateCameraAccess();
     try {
-      await executeBackendCommand("Set-AppCapabilityAccess", {
+      const result = await executeBackendCommand("Set-AppCapabilityAccess", {
         Capability: capability,
         Access: blocked ? "Deny" : "Allow",
       });
-      await refreshSettings();
+      if (!result.success) {
+        showError(result.error || "Could not change camera or microphone access.");
+        return;
+      }
+      void refreshSettings().catch(reportSettingsWriteFailure);
     } finally {
+      if (capability === "webcam") void refreshCameraAccess();
       setCapabilityPending(null);
     }
-  }, [refreshSettings, needsElevation]);
+  }, [refreshSettings, refreshCameraAccess, invalidateCameraAccess, needsElevation]);
 
   // Ambient backdrop glow tracks the health BAND as a peripheral-vision cue:
   // calm green when strong, amber as it slips, red at risk — driven by the
@@ -922,7 +934,7 @@ export default function DashboardPanel() {
           <div data-tour="dashboard-privacy-toggles">
             <PrivacyTogglesCard
               cameraBlocked={cameraBlocked}
-              cameraAvailable={cameraAvailable}
+              cameraPresence={cameraPresence}
               microphoneBlocked={microphoneBlocked}
               capabilityPending={capabilityPending}
               onCapabilityToggle={handleCapabilityToggle}

@@ -1125,9 +1125,7 @@ fn validate_cached_shield_envelope(
 /// not make stale local options look current.
 pub(crate) async fn verify_service_shield_profile() -> Result<Option<(u32, bool, bool, bool)>, String> {
     let settings = crate::settings::read_settings()?;
-    let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
-        .await
-        .map_err(|_| "WinCommander service is unavailable; Shield cannot verify this machine's Fleet policy".to_string())?;
+    let response = service_shield_policy().await?;
     verify_shield_profile_against_service(&settings, &response)?;
     // This is derived from the verified service envelope, not stale local
     // flags or a renderer-provided assertion.
@@ -1171,6 +1169,105 @@ pub(crate) fn effective_shield_look_away_delay(settings: &crate::settings::AppSe
     let value = fleet_delay.unwrap_or_else(|| settings.app.local_privacy_shield_look_away_delay_seconds.unwrap_or(0));
     if value > 300 { return Err("Look-away delay must be between 0 and 300 seconds".into()); }
     Ok(value)
+}
+
+async fn service_shield_policy() -> Result<Value, String> {
+    crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
+        .await
+        .map_err(|error| {
+            crate::log_message_src(
+                "warn",
+                "core",
+                &format!("[FleetPrivacyShield] service policy failure stage: {}", shield_service_error_stage(&error)),
+            );
+            shield_service_error(&error).to_string()
+        })
+}
+
+fn shield_service_error_stage(error: &str) -> &'static str {
+    if error.starts_with("service connect failed:") { "connect" }
+    else if error.starts_with("service Hello write") { "hello_write" }
+    else if error.starts_with("service Hello acknowledgement") { "hello_ack" }
+    else if error.starts_with("service request write") { "request_write" }
+    else if error.starts_with("service reply timed out") { "reply_timeout" }
+    else if error.starts_with("service reply read failed") { "reply_read" }
+    else if error.starts_with("Service identity could not be verified") { "service_identity" }
+    else if error.starts_with("service rejected request:") { "service_rejection" }
+    else { "other" }
+}
+
+async fn service_shield_profile_is_bound() -> Result<bool, String> {
+    let settings = crate::settings::read_settings()?;
+    let response = service_shield_policy().await?;
+    shield_supervisor_requires_policy_lock(&settings, &response)
+}
+
+fn shield_supervisor_requires_policy_lock(
+    settings: &crate::settings::AppSettings,
+    response: &Value,
+) -> Result<bool, String> {
+    let bound = response.get("trust_bound").and_then(Value::as_bool)
+        .ok_or("service Fleet trust state is unavailable")?;
+    if !bound {
+        verify_shield_profile_against_service(settings, response)?;
+    }
+    Ok(bound)
+}
+
+fn shield_service_error(error: &str) -> &'static str {
+    if error.starts_with("service rejected request: forbidden ") {
+        "WinCommander service rejected this app's identity. Restore the matching installed service, then try Shield again."
+    } else if error.starts_with("service rejected request: unknown_verb ") {
+        "WinCommander service is an older or incompatible version. Repair the installed service, then try Shield again."
+    } else if error.starts_with("service rejected request: fleet_policy_unavailable ") {
+        "WinCommander service cannot read the machine's Fleet policy. Repair the service policy before starting Shield."
+    } else if error.starts_with("service connect failed:") || error.contains("timed out") {
+        "WinCommander service could not be reached. Start or repair the service, then try Shield again."
+    } else {
+        "WinCommander could not verify the machine's Fleet policy. Check the service and try Shield again."
+    }
+}
+
+#[cfg(test)]
+mod shield_service_error_tests {
+    use super::{shield_service_error, shield_service_error_stage, shield_supervisor_requires_policy_lock};
+
+    #[test]
+    fn policy_diagnostics_report_only_fixed_stages() {
+        assert_eq!(shield_service_error_stage("service connect failed: private detail"), "connect");
+        assert_eq!(shield_service_error_stage("service Hello acknowledgement timed out"), "hello_ack");
+        assert_eq!(shield_service_error_stage("service reply timed out"), "reply_timeout");
+        assert_eq!(shield_service_error_stage("unexpected private detail"), "other");
+    }
+
+    #[test]
+    fn only_confirmed_unbound_devices_skip_the_policy_mutex() {
+        let mut settings = crate::settings::create_default_settings();
+        let unbound = serde_json::json!({"trust_bound": false, "policy": null});
+        assert_eq!(shield_supervisor_requires_policy_lock(&settings, &unbound), Ok(false));
+        assert_eq!(shield_supervisor_requires_policy_lock(&settings,
+            &serde_json::json!({"trust_bound": true})), Ok(true));
+        for response in [serde_json::json!({}), serde_json::json!({"trust_bound": null}),
+            serde_json::json!({"trust_bound": false, "policy": {"stale": true}})]
+        {
+            assert!(shield_supervisor_requires_policy_lock(&settings, &response).is_err());
+        }
+        settings.policy.fleet_signing_key = Some("locally-pinned".into());
+        assert!(shield_supervisor_requires_policy_lock(&settings, &unbound).is_err());
+        settings.policy.fleet_signing_key = None;
+        settings.policy.master_config_version = Some(3);
+        assert!(shield_supervisor_requires_policy_lock(&settings, &unbound).is_err());
+    }
+
+    #[test]
+    fn distinguishes_rejection_from_an_unreachable_service_without_exposing_details() {
+        let rejected = shield_service_error("service rejected request: forbidden (sensitive detail) [operation 12]");
+        assert!(rejected.contains("rejected"));
+        assert!(!rejected.contains("sensitive detail"));
+        assert!(shield_service_error("service connect failed: access denied").contains("could not be reached"));
+        assert!(shield_service_error("service rejected request: unknown_verb (x) [operation 1]").contains("incompatible"));
+        assert!(shield_service_error("service rejected request: fleet_policy_unavailable (x) [operation 1]").contains("cannot read"));
+    }
 }
 
 fn verify_shield_profile_against_service(
@@ -1515,6 +1612,13 @@ async fn apply_fleet_privacy_shield_policy_locked(
     app: &tauri::AppHandle,
     reported: &Arc<Mutex<std::collections::BTreeSet<String>>>,
 ) -> Result<(), String> {
+    // An unlinked device has no Fleet transaction to serialize. In particular,
+    // do not hold the machine mutex while bootstrapping an unused Pro sidecar.
+    // The protected service response, never the profile's enabled checkbox,
+    // decides this; bound devices are reverified inside the locked transaction.
+    if !service_shield_profile_is_bound().await? {
+        return Ok(());
+    }
     let runtime = tokio::runtime::Handle::current();
     let app = app.clone();
     let reported = Arc::clone(reported);

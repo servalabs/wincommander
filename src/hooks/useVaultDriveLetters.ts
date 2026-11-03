@@ -7,6 +7,7 @@ import { createSettingsCacheObserver, settingsKeys } from "../lib/settingsQueryP
 import useBackend from "./useBackend";
 import { selectableDriveLetters } from "@/lib/vaultOperationFeedback";
 import { waitForMountOptions } from "../panels/vault/mountOperationProgress";
+import { refreshVaultDriveLetters, vaultDriveLettersQueryOptions } from "../lib/vaultDriveLettersQuery";
 
 const EMPTY_LETTERS: string[] = [];
 
@@ -21,28 +22,18 @@ export default function useVaultDriveLetters(preload = false, includeSavedReserv
   const settingsUnavailable = includeSavedReservations && !settings;
   const savedLetters = settings?.app.vault.quickMountSlots?.map(slot => slot.driveLetter) ?? EMPTY_LETTERS;
   const { getAvailableDriveLetters } = useBackend();
-  const query = useQuery({
-    queryKey: ["vault", "available-drive-letters", mode],
-    queryFn: async () => {
+  const query = useQuery(vaultDriveLettersQueryOptions(mode, preload, async () => {
       const result = await waitForMountOptions(getAvailableDriveLetters());
       if (!result.success || !result.data) throw new Error("vault_drive_letters_unavailable");
       return selectableDriveLetters(result.data.letters);
-    },
-    enabled: preload && mode !== "decoy",
-    staleTime: 30_000,
-    refetchInterval: preload && mode !== "decoy" ? 30_000 : false,
-    refetchIntervalInBackground: false,
-    refetchOnMount: preload ? "always" : false,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
+  }));
   const { refetch } = query;
   const refresh = useCallback(async () => {
     if (mode === "decoy") return null;
     try {
       const current = await invoke<AppSettings>("get_settings", { refreshPersonal: true });
       queryClient.setQueryData(settingsKeys.detail(), current);
-      const result = await refetch({ cancelRefetch: false });
+      const result = await refreshVaultDriveLetters(queryClient, mode, () => refetch({ cancelRefetch: true }));
       if (result.isError || !result.data) return null;
       return selectableDriveLetters(result.data, includeSavedReservations ? current.app.vault.quickMountSlots?.map(slot => slot.driveLetter) : []);
     } catch { return null; }

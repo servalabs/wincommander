@@ -8,9 +8,10 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import { hasLimitedCleanupCoverage, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import { getSafeCleanupPreview } from "./CleanupRecordPreview";
+import { cleanupCardPreview } from "./cleanupPreviewPresentation";
 import RunOnceButton from "./RunOnceButton";
 import "./CleanupTraceCard.css";
 
@@ -50,7 +51,7 @@ interface CleanupTraceCardProps {
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "not-scanned" | "action-only" | "schedule-only";
+type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "disabled" | "not-scanned" | "action-only" | "schedule-only";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -60,6 +61,10 @@ interface BandDef {
 }
 
 const BAND: Record<BandState, BandDef> = {
+  disabled: {
+    bg: "var(--color-bg-secondary)", borderColor: "var(--color-border)",
+    labelColor: "var(--color-text-muted)", icon: "info-sign", label: "Clipboard history is off",
+  },
   has: {
     bg: "var(--color-warning-dim)",
     borderColor: "color-mix(in srgb, var(--color-warning) 28%, transparent)",
@@ -152,6 +157,7 @@ export default function CleanupTraceCard({
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
   const observedProcesses = observedProcessRows(category.id, rawData);
+  const clipboardOff = isClipboardHistoryOff(category.id, rawData);
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
@@ -163,12 +169,14 @@ export default function CleanupTraceCard({
   const countUnit = category.countUnits?.[count === 1 ? 'singular' : 'plural'] ?? (count === 1 ? 'trace' : 'traces');
   const safePreview = category.id === "amcache"
     ? summarizeCleanupResult({ id: category.id, count, raw: rawData, error }).categories.map(row => `${row.label}: ${row.count} records`).slice(0, 3)
-    : getSafeCleanupPreview(category.id, rawData).slice(0, 3).map(row => [row.label, ...row.facts].join(" · "));
+    : cleanupCardPreview(getSafeCleanupPreview(category.id, rawData));
   const scheduleReason = getCleanupScheduleUnavailableReason(category);
   const bandState: BandState = scheduleOnly ? "schedule-only" : isActionOnly
     ? "action-only"
     : loading
       ? "scanning"
+      : clipboardOff
+        ? "disabled"
       : incomplete
         ? "incomplete"
       : error
@@ -276,7 +284,7 @@ export default function CleanupTraceCard({
   const iconBg = `${category.color}1e`;
 
   // ── CLEAN STATE — scanned, zero traces, nothing to action. ──
-  if (bandState === "clean") {
+  if (bandState === "clean" || bandState === "disabled" || (bandState === "limited" && count === 0)) {
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -286,6 +294,7 @@ export default function CleanupTraceCard({
         data-cleanup-trace-card
         data-cleanup-category={category.id}
         data-cleanup-state={bandState}
+        title={clipboardOff ? "Clipboard history is off. Previously stored items cannot be checked while history is off." : limited ? "No items found in the checked locations. Open details for scan coverage." : undefined}
         role="group"
         aria-label={`${category.label}: ${accessibleStatus}`}
         aria-busy={loading || clearing}
@@ -302,9 +311,9 @@ export default function CleanupTraceCard({
         {compact ? (
           <div className="flex h-full items-center gap-1.5 px-2">
             <Icon
-              icon="tick-circle"
+              icon={limited || clipboardOff ? "info-sign" : "tick-circle"}
               size={14}
-              style={{ color: "var(--color-success)" }}
+              style={{ color: clipboardOff ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "var(--color-success)" }}
             />
             <span
               className="min-w-0 flex-1 text-left font-bold uppercase leading-tight"
@@ -313,11 +322,12 @@ export default function CleanupTraceCard({
                 letterSpacing: "0.4px",
                 color: "var(--color-text-muted)",
               }}
-              title={category.label}
+              title={limited ? `${category.label}: No items found in the checked locations. Open details for scan coverage.` : category.label}
             >
               {category.label}
             </span>
             {scheduleControl}
+            {clipboardOff ? <span style={{ fontSize: 9, color: "var(--color-text-muted)" }}>Off</span> : null}
             {infoTooltip}
             {compactDetailsButton}
             {rescanButton}
@@ -355,11 +365,10 @@ export default function CleanupTraceCard({
               style={{ padding: "6px 12px" }}
             >
               <Icon
-                icon="tick-circle"
+                icon={limited || clipboardOff ? "info-sign" : "tick-circle"}
                 size={26}
                 style={{
-                  color:
-                    "color-mix(in srgb, var(--color-success) 60%, var(--color-text-muted))",
+                  color: clipboardOff ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "color-mix(in srgb, var(--color-success) 60%, var(--color-text-muted))",
                 }}
               />
               <div
@@ -377,22 +386,6 @@ export default function CleanupTraceCard({
               </div>
             </div>
           </>
-        )}
-        {!compact && category.regeneratesNote && (
-          <div
-            title={category.regeneratesNote}
-            className="flex items-center gap-1"
-            style={{
-              fontSize: 8,
-              color: "var(--color-text-muted)",
-              opacity: 0.6,
-              cursor: "help",
-              marginTop: 4,
-            }}
-          >
-            <Icon icon="info-sign" size={8} color="currentColor" />
-            <span>Regenerates</span>
-          </div>
         )}
       </motion.div>
     );
@@ -570,17 +563,17 @@ export default function CleanupTraceCard({
           {(error || (incomplete && observedProcesses !== null)) && !loading && (
             <div
               className="font-mono line-clamp-2"
-              role="alert"
+              role={incomplete ? "status" : "alert"}
               title={incomplete ? "The scan did not finish checking its sources." : "The scan could not be completed."}
               style={{
                 fontSize: 8.5,
                 padding: "2px 6px",
                 borderRadius: 2,
-                background: "var(--color-danger-dim)",
-                color: "var(--color-danger)",
+                background: incomplete ? "var(--color-warning-dim)" : "var(--color-danger-dim)",
+                color: incomplete ? "var(--color-warning)" : "var(--color-danger)",
               }}
             >
-              {incomplete ? observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
+              {incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at
@@ -632,22 +625,6 @@ export default function CleanupTraceCard({
                 <Icon icon="search" size={11} color="currentColor" />
                 Scan
               </button>
-            </div>
-          )}
-          {!loading && hasData && category.regeneratesNote && (
-            <div
-              title={category.regeneratesNote}
-              className="flex items-center gap-1 truncate"
-              style={{
-                fontSize: 8,
-                color: "var(--color-text-muted)",
-                opacity: 0.7,
-                cursor: "help",
-                marginTop: 1,
-              }}
-            >
-              <Icon icon="info-sign" size={8} color="currentColor" />
-              <span className="truncate">Regenerates after clear</span>
             </div>
           )}
         </div>

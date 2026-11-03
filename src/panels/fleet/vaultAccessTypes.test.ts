@@ -75,6 +75,16 @@ describe("Vault Access service intent", () => {
       })).not.toBe("Mount request could not be completed");
     }
   });
+  test("explains unsupported filesystems as a possible ACL failure without claiming it is the only cause", () => {
+    const message = vaultMountResultLabel({
+      entry_id: "opaque-entry", state: "failed", presentation: null,
+      drive_letter: null, reason: "acl_apply_failed",
+    });
+    expect(message).toContain("filesystem inside the Vault");
+    expect(message).toContain("exFAT and FAT32");
+    expect(message).toContain("Other Windows access problems");
+    expect(message).toContain("Back up your files");
+  });
   test("starts with the shared plus two private file-container shape", () => {
     const policy = newVaultPolicy();
     expect(policy.schema_version).toBe(1);

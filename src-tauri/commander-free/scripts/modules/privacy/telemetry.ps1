@@ -606,6 +606,19 @@ public class WC_PolicyRefresh {
     }
 }
 
+function Get-AppCapabilityRegistryValue {
+    param([string]$Path, [string]$Name, [bool]$Strict)
+    if (-not $Strict) { return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name }
+    try { return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name }
+    catch {
+        # A missing key/value is an unset policy; denied or failed reads are
+        # unknown and must not be presented as an Allow decision.
+        if ($_.Exception -is [System.Management.Automation.ItemNotFoundException] -or
+            $_.FullyQualifiedErrorId -like 'System.Management.Automation.PSArgumentException,Microsoft.PowerShell.Commands.GetItemPropertyCommand*') { return $null }
+        throw
+    }
+}
+
 function Get-AppCapabilityAccessStatus {
     param(
         [Parameter(Mandatory = $true)][string]$Capability
@@ -623,13 +636,13 @@ function Get-AppCapabilityAccessStatus {
             "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
         )) {
-            $value = (Get-ItemProperty -Path (Join-Path $root $Capability) -Name "Value" -ErrorAction SilentlyContinue).Value
+            $value = Get-AppCapabilityRegistryValue -Path (Join-Path $root $Capability) -Name 'Value' -Strict ($Capability -eq 'webcam')
             if ($value -eq "Deny") { $consentDenied = $true }
         }
         if ($Script:AppPrivacyValueNames.ContainsKey($Capability)) {
             $policyName = $Script:AppPrivacyValueNames[$Capability]
             foreach ($hive in @('HKCU:', 'HKLM:')) {
-                $policyValue = (Get-ItemProperty -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name $policyName -ErrorAction SilentlyContinue).$policyName
+                $policyValue = Get-AppCapabilityRegistryValue -Path "$hive\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" -Name $policyName -Strict ($Capability -eq 'webcam')
                 if ($policyValue -eq 2) { $hardDenied = $true }
             }
         }
@@ -637,10 +650,15 @@ function Get-AppCapabilityAccessStatus {
             # ConsentStore roots are defaults. A child app entry can explicitly
             # allow camera use, so surface that mixed state rather than calling
             # the entire device blocked.
-            $desktopAppsValue = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -ErrorAction SilentlyContinue).Value
-            $appValues = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty -Path $_.PSPath -Name 'Value' -ErrorAction SilentlyContinue).Value } | Where-Object { $_ -in @('Allow', 'Deny') })
+            $desktopAppsValue = Get-AppCapabilityRegistryValue -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -Strict $true
+            try { $appKeys = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam' -Recurse -ErrorAction Stop) }
+            catch [System.Management.Automation.ItemNotFoundException] { $appKeys = @() }
+            $appValues = @($appKeys | ForEach-Object { Get-AppCapabilityRegistryValue -Path $_.PSPath -Name 'Value' -Strict $true } | Where-Object { $_ -in @('Allow', 'Deny') })
             $mixedAppAccess = $consentDenied -and ($appValues -contains 'Allow')
-            $hardDenied = $hardDenied -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
+            $userCamera = Get-AppCapabilityRegistryValue -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -Strict $true
+            $machineCamera = Get-AppCapabilityRegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -Strict $true
+            $deviceAccess = Get-AppCapabilityRegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -Strict $true
+            $hardDenied = $hardDenied -or ($userCamera -eq 0) -or ($machineCamera -eq 0) -or ($deviceAccess -eq 'Deny')
         }
         $denied = $hardDenied -or ($consentDenied -and -not $mixedAppAccess)
         $value = if ($denied) { "Deny" } else { "Allow" }

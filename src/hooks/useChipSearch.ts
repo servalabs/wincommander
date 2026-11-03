@@ -10,9 +10,7 @@
 //   1. The plan's `tokens` array goes to the backend as `tokens`, NEVER joined
 //      into `query`. es.exe treats one argv entry containing a space as a quoted
 //      phrase, so a joined multi-token query returns zero rows with no error.
-//   2. An empty box is a BROWSE, not an idle state — the most common reason to
-//      open a launcher is "the thing I was just working on", so we over-fetch a
-//      recency-sorted page, drop the machine noise, and let frecency lead.
+//   2. A blank box is idle; filter-only queries still browse matching files.
 //   3. Everything the backend might not have (the count command, the Explorer
 //      probe) degrades to "no extra information", never to an error the user
 //      cannot act on.
@@ -426,6 +424,7 @@ export interface ChipSearchApi {
   term: string;
   primary: BrowseResult[];
   contentRows: ContentDisplayRow[];
+  contentError: string | null;
   /** True total from the engine, or null when unknown / not worth showing. */
   totalCount: number | null;
   /** The shortcut preview hid additional verified filename results. */
@@ -453,6 +452,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
   // went down and the rows follow 200ms later, so the list sat there unlabelled.
   const [showingBrowse, setShowingBrowse] = useState(true);
   const [contentRows, setContentRows] = useState<ContentDisplayRow[]>([]);
+  const [contentError, setContentError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -473,6 +473,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     return addChip(query, "folders");
   }, [jump.isJump, query]);
 
+  const isIdle = query.text.trim().length === 0 && query.chips.length === 0;
   const plan = useMemo(() => buildEverythingPlan(searchState), [searchState]);
   const suggestion = useMemo(() => suggestChip(query), [query]);
   const blockedReason = useMemo(
@@ -486,6 +487,7 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     setPrimary([]);
     setShowingBrowse(true);
     setContentRows([]);
+    setContentError(null);
     setTotalCount(null);
     setHasMore(false);
     setError(null);
@@ -515,6 +517,16 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
     const runId = ++runIdRef.current;
     const lease = searchPrivacyLease();
     const live = () => runIdRef.current === runId && lease();
+
+    if (isIdle) {
+      setPrimary([]);
+      setShowingBrowse(false);
+      setTotalCount(null);
+      setHasMore(false);
+      setError(null);
+      setIsSearching(false);
+      return;
+    }
 
     // A missing drive is not a query with zero results. Suppress it before
     // either engine sees its words, or unrelated matches make the storage
@@ -590,11 +602,13 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
       runIdRef.current += 1;
       if (nameTimerRef.current) clearTimeout(nameTimerRef.current);
     };
-  }, [active, blockedReason, plan, searchState, jump.term, privacy.revision, privacyReady]);
+  }, [active, blockedReason, isIdle, plan, searchState, jump.term, privacy.revision, privacyReady]);
 
-  // ── Content pass (best-effort, silent on failure) ──
+  // ── Content pass ──
   useEffect(() => {
     if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
+    setContentRows([]);
+    setContentError(null);
     if (!active || !privacyReady) return;
     if (blockedReason || jump.term.length < 2 || !contentSearchApplies(searchState)) {
       setContentRows([]);
@@ -625,7 +639,11 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
           setContentRows(hits.filter((hit) => mayShowSearchPath(hit.path)).map(contentHitToDisplayRow));
           setContentRevision(privacy.revision);
         })
-        .catch(() => { /* the bar must not break when the index is cold */ });
+        .catch(() => {
+          if (cancelled || !lease()) return;
+          setContentRows([]);
+          setContentError("Inside-file search is unavailable. Open File Search to check the index and retry.");
+        });
     }, CONTENT_DEBOUNCE_MS);
 
     return () => {
@@ -637,9 +655,10 @@ export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker):
   return {
     query, setQuery, suggestion,
     isBrowse: showingBrowse, isJump: jump.isJump, term: jump.term,
-    primary: rowsRevision === privacy.revision ? primary.filter((row) => mayShowSearchPath(row.full_path)) : [],
-    contentRows: contentRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
-    totalCount, hasMore, isSearching, error, setError, reset,
+    primary: !isIdle && rowsRevision === privacy.revision ? primary.filter((row) => mayShowSearchPath(row.full_path)) : [],
+    contentRows: !isIdle && contentRevision === privacy.revision ? contentRows.filter((row) => mayShowSearchPath(row.path)) : [],
+    contentError: isIdle ? null : contentError,
+    totalCount: isIdle ? null : totalCount, hasMore: !isIdle && hasMore, isSearching: !isIdle && isSearching, error: isIdle ? null : error, setError, reset,
   };
 }
 

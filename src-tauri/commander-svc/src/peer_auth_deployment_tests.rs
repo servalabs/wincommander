@@ -30,6 +30,37 @@ fn identity(session_id: u32) -> PeerIdentitySnapshot {
 }
 
 #[test]
+fn shared_shortcuts_require_the_pinned_free_image_and_captured_session() {
+    let gate = SessionHelperGate::with_allowed_root(
+        Arc::new(Probe), Some(PathBuf::from(r"C:\Program Files\WinCommander")),
+    );
+    let free = PeerIdentitySnapshot {
+        session_id: 7,
+        canonical_image_path: PathBuf::from(r"C:\Program Files\WinCommander\wincommander-free.exe"),
+    };
+    assert_eq!(gate.authorize_shared_shortcut_observation(&free, 7, true, || Ok(())),
+        Ok(TrustOrigin::SessionHelperPinned));
+    assert_eq!(gate.authorize_shared_shortcut_observation(&free, 8, true, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_shared_shortcut_observation(&free, 7, false, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_shared_shortcut_observation(&free, 7, true,
+        || Err(PeerAuthError::IdentityUnavailable)), Err(PeerAuthError::IdentityUnavailable));
+    let mut pro = free.clone();
+    pro.canonical_image_path = PathBuf::from(r"C:\Program Files\WinCommander\wincommander-pro.exe");
+    assert_eq!(gate.authorize_shared_shortcut_observation(&pro, 7, true,
+        || panic!("Pro must not change shared links")), Err(PeerAuthError::PathNotAllowed));
+    let mut sibling = free.clone();
+    sibling.canonical_image_path = PathBuf::from(r"C:\Program Files\WinCommander\other.exe");
+    assert_eq!(gate.authorize_shared_shortcut_observation(&sibling, 7, true,
+        || panic!("other installed image must not change shared links")), Err(PeerAuthError::PathNotAllowed));
+    let mut foreign = free.clone();
+    foreign.canonical_image_path = PathBuf::from(r"C:\Users\Public\wincommander-free.exe");
+    assert_eq!(gate.authorize_shared_shortcut_observation(&foreign, 7, true,
+        || panic!("untrusted path must be denied")), Err(PeerAuthError::PathNotAllowed));
+}
+
+#[test]
 fn fleet_policy_relay_requires_matching_active_session_and_protected_helper() {
     let gate = SessionHelperGate::with_allowed_root(
         Arc::new(Probe),

@@ -2,6 +2,37 @@
 use super::*;
 
 #[test]
+fn concurrent_startup_waits_for_a_short_exclusive_legacy_handle() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, b"legacy settings").unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+    });
+    let (text, _) = read(&path).unwrap();
+    release.join().unwrap();
+    assert_eq!(text, "legacy settings");
+}
+
+#[test]
+fn denied_legacy_access_is_not_retried_or_treated_as_empty() {
+    let mut attempts = 0;
+    let result = open_source_with_retry(|| {
+        attempts += 1;
+        Err::<(), _>(std::io::Error::from_raw_os_error(5))
+    });
+    assert!(result.is_err());
+    assert_eq!(attempts, 1);
+}
+
+#[test]
 fn journal_cannot_supply_an_alternative_deletion_target() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");

@@ -136,6 +136,10 @@ pub(super) fn automation_available() -> bool {
     status.can_save && !status.recovery_required
 }
 
+pub(super) fn initial_persistence_available() -> bool {
+    status().can_save
+}
+
 pub(super) fn persisted_service_available() -> bool {
     status().mode == Mode::Service
 }

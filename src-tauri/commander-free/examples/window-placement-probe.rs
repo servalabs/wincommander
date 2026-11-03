@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Disposable native-window check; no application settings, tasks or services.
+#[allow(dead_code)] // This probe exercises only window placement and readiness.
 #[path = "../src/startup_window.rs"]
 mod startup_window;
 #[path = "../src/window_placement.rs"]
 mod window_placement;
+#[path = "support/startup.rs"]
+mod probe_startup;
+use probe_startup::{startup_auth, CalcModeState};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn set_wincommander_window_icon(_: &tauri::WebviewWindow) {}
@@ -29,6 +33,7 @@ fn main() {
     context.config_mut().identifier = "com.servalabs.wincommander.placement-probe".into();
     tauri::Builder::default()
         .manage(AtomicBool::new(false))
+        .manage(CalcModeState::new())
         .manage(startup_window::StartupWindow::new())
         .invoke_handler(tauri::generate_handler![probe_ready, startup_window::startup_window_ready])
         .register_uri_scheme_protocol("placement", |_, _| {
@@ -97,7 +102,7 @@ fn main() {
                     window_placement::show_maximized(&window).await?;
                     println!("PASS minimized reveal");
                     window.hide().map_err(|e| e.to_string())?;
-                    if startup_window::startup_window_ready(window.clone(), false, Some(1)).await? {
+                    if startup_window::startup_window_ready(window.clone(), false, Some(1), None).await? {
                         return Err("Repeated document readiness reopened a window closed to tray".into());
                     }
                     if startup_window::defer_reveal_until_ready(&window) {

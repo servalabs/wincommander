@@ -258,7 +258,11 @@ pub async fn register_startup_pin(mode: String, plaintext: String) -> Result<(),
         "destroy" => s.ideal.privacy.startup_pin.destroy_hash = Some(hash),
         _ => return Err(format!("Unknown mode: {mode}")),
     }
-    crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"))
+    let result = crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"));
+    if result.is_ok() && mode == "real" {
+        crate::write_wc_registry_dword("CalculatorMode", 1);
+    }
+    result
 }
 
 #[tauri::command]
@@ -267,28 +271,19 @@ pub async fn set_startup_pin_enabled(app: tauri::AppHandle, enabled: bool) -> Re
     if enabled {
         crate::license::require_paid("startup PIN gate")?;
     }
-    let mut s = crate::settings::read_settings().map_err(|e| format!("read settings: {e}"))?;
-    if enabled && s.ideal.privacy.startup_pin.real_hash.is_none() {
-        return Err("Set a Real PIN before turning on the calculator lock.".into());
-    }
-    s.ideal.privacy.startup_pin.enabled = Some(enabled);
-    let result = crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"));
+    let s = crate::settings::set_calculator_lock_enabled(enabled)
+        .map_err(|e| format!("write settings: {e}"))?;
     // Keep CalculatorMode registry DWORD in sync (contract: read by R5/NSIS).
-    if result.is_ok() {
-        let is_calc = gate_enabled(&s.ideal.privacy.startup_pin);
-        crate::write_wc_registry_dword("CalculatorMode", if is_calc { 1 } else { 0 });
-        // Turning the lock OFF drops the Calculator disguise live (the session
-        // is no longer armed, so exit_calculator_mode wouldn't have restored
-        // branding). Hide/unhide via the peek hotkey keeps working — the tray
-        // restore here honours Hide-WinCommander mode.
-        if !enabled {
-            crate::set_calc_mode_active(&app, false);
-            if let Some(window) = app.get_webview_window("main") {
-                restore_wincommander_identity(&window, "WinCommander");
-            }
+    let is_calc = gate_enabled(&s.ideal.privacy.startup_pin);
+    crate::write_wc_registry_dword("CalculatorMode", if is_calc { 1 } else { 0 });
+    // Turning the lock OFF restores branding while respecting Hide mode.
+    if !enabled {
+        crate::set_calc_mode_active(&app, false);
+        if let Some(window) = app.get_webview_window("main") {
+            restore_wincommander_identity(&window, "WinCommander");
         }
     }
-    result
+    Ok(())
 }
 
 /// mode: "real" | "decoy" | "destroy"
@@ -626,8 +621,13 @@ pub fn enter_calculator_mode_with(
     // (cold start, dashboard Lock button, lock keyword, tray, peek hotkey,
     // relaunch) — without it the window resizes to calc dimensions but the
     // React gate never renders, leaving a calculator-sized blank real UI.
+    if !crate::calc_mode_active(window.app_handle()) {
+        // Do not expose the previous app content while React switches gates.
+        let _ = window.hide();
+    }
     crate::set_calc_mode_active(window.app_handle(), true);
-    let _ = window.emit("calculator-mode-entered", ());
+    let generation = crate::calculator_gate_generation(window.app_handle().clone())?;
+    let _ = window.emit("calculator-mode-entered", generation);
 
     crate::log_message_src(
         "info",
@@ -667,6 +667,10 @@ pub fn enter_calculator_mode_with(
         let _ = tray.set_visible(false);
     }
     if reveal {
+        if crate::startup_window::defer_reveal_until_ready(&window) {
+            let _ = window.hide();
+            return Ok(());
+        }
         let _ = window.unminimize();
         let _ = window.show();
         // Foreground synchronously here: the reveal usually originates from a
