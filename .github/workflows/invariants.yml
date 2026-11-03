@@ -288,6 +288,14 @@ jobs:
           cargo test --locked -p commander-free --lib --features experimental-pq-pro-release hybrid_
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p commander-free --lib --features experimental-pq-free-release,experimental-pq-pro-release hybrid_
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $licenseFixture = Get-Content commander-svc/src/fixtures/hybrid-licence-test.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_LIC_ED_KEY = $licenseFixture.publicEd
+          $env:WINCMD_PQ_LIC_MLDSA_KEY = $licenseFixture.publicPq
+          $env:WINCMD_PQ_LIC_ED_ID = "ed-key"
+          $env:WINCMD_PQ_LIC_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_LIC_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-free-release,experimental-pq-pro-release,experimental-pq-licence hybrid_
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
   # its TypeScript check + dependency audit run in THAT repo's CI, not here. A
@@ -360,6 +368,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Lint combined experimental update verification
         run: cargo clippy --locked -p commander-free --lib --tests --features experimental-pq-free-release,experimental-pq-pro-release -- -D warnings
+      - name: Lint combined experimental update and licence verification
+        run: cargo clippy --locked -p commander-free --lib --tests --features experimental-pq-free-release,experimental-pq-pro-release,experimental-pq-licence -- -D warnings
 
   # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks
   # known vulnerabilities; cargo-audit's unmaintained-crate notices remain
