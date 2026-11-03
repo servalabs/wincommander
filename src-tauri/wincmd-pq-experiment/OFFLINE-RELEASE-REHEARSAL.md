@@ -71,3 +71,17 @@ and recheck the same installer; finish requires both valid raw signatures.
 The operator must keep the installer unchanged through publication and verify
 the ordinary release checks separately. These commands do not provide a key
 store, production signing ceremony, publishing, revocation or rollback.
+
+An independent reviewer can build `wincmd-pq-free-release-check` with
+`--features experimental-offline-verifier --bin wincmd-pq-free-release-check`
+and run:
+
+```text
+wincmd-pq-free-release-check hybrid-stable.json setup.exe free-trust.json 3.7.0 stable
+```
+
+The tool streams the installer and checks both signatures, the expected
+version and channel, official Windows installer URL, size and digest. Obtain
+the trust file independently of the release being checked. It does not verify
+the Tauri signature, Authenticode, revocation, or rollback history; a successful
+check is not approval to publish or evidence of a deployed protection.

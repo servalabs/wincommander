@@ -24,6 +24,11 @@ path = "src/bin/release_check.rs"
 required-features = ["experimental-offline-verifier"]
 
 [[bin]]
+name = "wincmd-pq-free-release-check"
+path = "src/bin/free_release_check.rs"
+required-features = ["experimental-offline-verifier"]
+
+[[bin]]
 name = "wincmd-pq-release-prepare"
 path = "src/bin/release_prepare.rs"
 required-features = ["experimental-signer"]

@@ -3,7 +3,10 @@
 use crate::{jws, Purpose};
 use aws_lc_rs::digest::{digest, SHA256};
 use serde::Deserialize;
-#[cfg(feature = "experimental-signer")]
+#[cfg(any(
+    feature = "experimental-signer",
+    feature = "experimental-offline-verifier"
+))]
 use std::io::Read;
 
 const MAX_ENVELOPE: usize = 32 * 1024;
@@ -118,7 +121,10 @@ pub fn prepare_release(
     prepare_release_from_reader(payload, bytes, version, channel, url, epoch, trust)
 }
 
-#[cfg(feature = "experimental-signer")]
+#[cfg(any(
+    feature = "experimental-signer",
+    feature = "experimental-offline-verifier"
+))]
 fn read_artifact(mut reader: impl Read) -> Result<(u64, String), &'static str> {
     let mut ctx = aws_lc_rs::digest::Context::new(&SHA256);
     let mut buf = [0u8; 65536];
@@ -145,6 +151,26 @@ fn read_artifact(mut reader: impl Read) -> Result<(u64, String), &'static str> {
         .map(|b| format!("{b:02x}"))
         .collect();
     Ok((size, hash))
+}
+
+/// Verify an independently obtained record and stream the exact Free installer.
+#[cfg(feature = "experimental-offline-verifier")]
+pub fn verify_offline(
+    envelope: &[u8],
+    artifact: impl Read,
+    version: &str,
+    channel: &str,
+    trust: &jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let url = format!(
+        "https://winupdates.servalabs.com/free/v{version}/WinCommander_{version}_x64-setup.exe"
+    );
+    let (release, _) = verify_metadata(envelope, version, channel, &url, trust)?;
+    let (size, hash) = read_artifact(artifact)?;
+    if size != release.size || hash != release.sha256 {
+        return Err("Free installer does not match signed metadata");
+    }
+    Ok(())
 }
 
 /// Derive an unsigned Free payload from the staged Tauri manifest and file.
