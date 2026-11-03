@@ -187,6 +187,9 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
         working-directory: .
+      - name: Verify Windows schedule ownership readback
+        run: bun test src-tauri/wincmd-shared/scripts/auto-erase-ownership.behavior.test.ts
+        working-directory: .
       - name: Generate encrypted backend modules
         run: bun run encrypt-backend
         working-directory: .
