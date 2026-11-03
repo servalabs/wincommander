@@ -5654,6 +5654,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dUpdateRestartPolicyStatus",
+      "name": "Get\u002dUpdateRestartPolicyStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/UpdateRestartCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dUpdateStatus",
       "name": "Get\u002dUpdateStatus",
       "transport": "backend\u002dscript",
@@ -6971,6 +6981,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Set\u002dUpdateRestartPolicy",
+      "name": "Set\u002dUpdateRestartPolicy",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/UpdateRestartCard.tsx"
+      ]
     },
     {
       "id": "backend:Set\u002dWin32PrioritySeparation",

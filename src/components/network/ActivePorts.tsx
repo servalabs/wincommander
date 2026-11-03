@@ -12,6 +12,8 @@ import {
 import useBackend, { type NetworkPortRow, type NetworkPortsResult } from "../../hooks/useBackend";
 import SectionCard from "../shared/SectionCard";
 import WCSwitch from "../shared/WCSwitch";
+import { showError, showSuccess } from "../../utils/toast";
+import { formatNetworkSnapshotReport } from "./networkSnapshotReport";
 import {
     getServiceName,
     inferDirection,
@@ -273,6 +275,7 @@ function GroupBlock({ group, expanded, onToggle, showHeader }: GroupBlockProps) 
 export default function ActivePorts() {
     const { getNetworkPorts } = useBackend();
     const [data, setData] = useState<NetworkPortsResult | null>(null);
+    const [capturedAt, setCapturedAt] = useState<Date | null>(null);
     const [loading, setLoading] = useState(false);
     const [lastError, setLastError] = useState<string | null>(null);
     const [paused, setPaused] = useState(false);
@@ -299,6 +302,7 @@ export default function ActivePorts() {
             const res = await getNetworkPorts(1500);
             if (res.success && res.data) {
                 setData(res.data);
+                setCapturedAt(new Date());
                 setLastError(null);
             } else if (res.error) {
                 setLastError(res.error);
@@ -345,6 +349,18 @@ export default function ActivePorts() {
 
     const searchActive = search.trim().length > 0;
 
+    const copyReport = async () => {
+        if (!data || !capturedAt) return;
+        try {
+            await navigator.clipboard.writeText(formatNetworkSnapshotReport(data, filteredRows, capturedAt, {
+                protocol: proto, state, direction, hideLoopback, showWindowsProcesses, search: search.trim(),
+            }));
+            showSuccess("Active ports snapshot copied.");
+        } catch {
+            showError("Could not copy the active ports snapshot.");
+        }
+    };
+
     return (
         <SectionCard
             title="Active Ports"
@@ -354,6 +370,11 @@ export default function ActivePorts() {
                     <span className="font-mono text-[10px] tracking-wider text-[var(--color-text-muted)]">
                         {totalsBadge}
                     </span>
+                    <button type="button" className="refresh-btn active-ports-report-btn" onClick={() => void copyReport()}
+                        disabled={!data || !capturedAt} title="Copy connections matching the filters; this is not a traffic history"
+                        aria-label="Copy active ports snapshot report">
+                        Copy report
+                    </button>
                     <button
                         type="button"
                         className="refresh-btn"

@@ -1,6 +1,12 @@
 /* Active Ports — filter bar directly under the section heading, plus a
    consistent WCSwitch-based toggle row (2026-07 redesign). */
 
+.refresh-btn.active-ports-report-btn {
+    width: auto;
+    padding: 0 10px;
+    white-space: nowrap;
+}
+
 .active-ports-filter-bar {
     display: flex;
     align-items: center;

@@ -87,6 +87,117 @@ function Get-UpdateStatus {
     }
 }
 
+# The marker is written before the policy, so an interrupted write can be
+# recovered without adopting a pre-existing administrator policy as ours.
+function Get-UpdateRestartRegistryValue {
+    param([string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ exists = $false; value = $null; kind = $null } }
+        try {
+            if ($Name -notin $sub.GetValueNames()) { return @{ exists = $false; value = $null; kind = $null } }
+            return @{ exists = $true; value = $sub.GetValue($Name, $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind($Name) }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-UpdateRestartRegistryValue {
+    param([string]$Key, [string]$Name, [int]$Value)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.CreateSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'Windows denied the registry write.' }
+        try { $sub.SetValue($Name, $Value, 'DWord'); $sub.Flush() } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-UpdateRestartRegistryValue {
+    param([string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -ne $sub) { try { $sub.DeleteValue($Name, $false); $sub.Flush() } finally { $sub.Dispose() } }
+    } finally { $base.Dispose() }
+}
+
+function Invoke-WithUpdateRestartMutex {
+    param([scriptblock]$Action)
+    $mutex = [Threading.Mutex]::new($false, 'Global\WinCommander_UpdateRestartPolicy')
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Timed out waiting for the update policy lock.' }
+        & $Action
+    } finally {
+        if ($acquired) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+}
+
+function Get-UpdateRestartPolicyState {
+    $policyKey = 'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+    $markerKey = 'SOFTWARE\WinCommander\UpdateRestartPolicy'
+    $policy = Get-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers'
+    $mode = Get-UpdateRestartRegistryValue $policyKey 'AUOptions'
+    $disabled = Get-UpdateRestartRegistryValue $policyKey 'NoAutoUpdate'
+    $marker = Get-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
+    $reserved = $marker.exists -and $marker.kind -eq 'DWord' -and $marker.value -eq 1
+    $owned = $marker.exists -and $marker.kind -eq 'DWord' -and $marker.value -eq 2
+    return @{
+        isAdmin = [bool](Test-IsAdmin)
+        configured = [bool]($policy.exists -and $policy.kind -eq 'DWord' -and $policy.value -eq 1)
+        policyExists = [bool]$policy.exists
+        owned = [bool]$owned
+        reserved = [bool]$reserved
+        conflict = [bool](($marker.exists -and -not ($owned -or $reserved)) -or ($reserved -and $policy.exists) -or ($owned -and $policy.exists -and ($policy.kind -ne 'DWord' -or $policy.value -ne 1)))
+        scheduledMode = [bool]($mode.exists -and $mode.kind -eq 'DWord' -and $mode.value -eq 4 -and (-not $disabled.exists -or ($disabled.kind -eq 'DWord' -and $disabled.value -eq 0)))
+    }
+}
+
+function Get-UpdateRestartPolicyStatus {
+    return Invoke-WithUpdateRestartMutex { Get-UpdateRestartPolicyState }
+}
+
+function Set-UpdateRestartPolicy {
+    param([Parameter(Mandatory = $true)][ValidateSet('apply', 'revert')][string]$Mode)
+    Assert-IsAdmin
+    return Invoke-WithUpdateRestartMutex {
+        $policyKey = 'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+        $markerKey = 'SOFTWARE\WinCommander\UpdateRestartPolicy'
+        $state = Get-UpdateRestartPolicyState
+        if ($state.conflict) { throw 'The policy changed outside WinCommander. No settings were changed.' }
+        if ($Mode -eq 'apply') {
+            if (-not $state.scheduledMode) { throw 'Windows Update is not set to scheduled installation. This policy would not apply; no settings were changed.' }
+            if ($state.policyExists -and -not $state.owned) { throw 'An existing administrator policy controls this setting. No settings were changed.' }
+            if (-not $state.owned -and -not $state.reserved) {
+                Set-UpdateRestartRegistryValue $markerKey 'CreatedPolicy' 1
+                $marker = Get-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
+                if (-not $marker.exists -or $marker.kind -ne 'DWord' -or $marker.value -ne 1) { throw 'Could not verify ownership before changing the policy.' }
+            }
+            if (-not $state.configured) {
+                # Recheck after reserving ownership to avoid adopting a policy
+                # another administrator installed during the first read.
+                $current = Get-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers'
+                if ($current.exists) { throw 'The policy changed while applying. No policy value was changed.' }
+                Set-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers' 1
+                $written = Get-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers'
+                if (-not $written.exists -or $written.kind -ne 'DWord' -or $written.value -ne 1) { throw 'Windows could not verify the policy write.' }
+                Set-UpdateRestartRegistryValue $markerKey 'CreatedPolicy' 2
+            }
+        } else {
+            if (-not ($state.owned -or $state.reserved)) { throw 'WinCommander did not create this policy; it will not remove it.' }
+            if ($state.policyExists) { Remove-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers' }
+            $current = Get-UpdateRestartRegistryValue $policyKey 'NoAutoRebootWithLoggedOnUsers'
+            if ($current.exists) { throw 'Windows could not verify policy removal.' }
+            Remove-UpdateRestartRegistryValue $markerKey 'CreatedPolicy'
+        }
+        $result = Get-UpdateRestartPolicyState
+        if (($Mode -eq 'apply' -and (-not $result.configured -or -not $result.owned)) -or ($Mode -eq 'revert' -and ($result.policyExists -or $result.owned -or $result.reserved))) { throw 'Windows could not verify the policy change.' }
+        return $result
+    }
+}
+
 # --- POWER & PERFORMANCE ---
 
 function Disable-Hibernation {

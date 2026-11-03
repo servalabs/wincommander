@@ -10,6 +10,7 @@ import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
 import PowerGraphicsCard from "../../components/tweaks/PowerGraphicsCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
 import LocalPasswordExpiryCard from "../../components/tweaks/LocalPasswordExpiryCard";
+import UpdateRestartCard from "../../components/tweaks/UpdateRestartCard";
 import RdpRedirectionCard from "../privacy/RdpRedirectionCard";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
@@ -88,7 +89,7 @@ export default function TweaksPanel() {
         // shows an empty screen instead.
         return TWEAKS_TOGGLES.some(
             (t) => (isServerSku || t.section !== "server") && toggleMatchesQuery(t, q),
-        ) || matchesContextMenu;
+        ) || matchesContextMenu || "windows update scheduled restart signed in".includes(q);
     }, [searchQuery, isServerSku]);
 
     const isAdvanced = visibility.density === "expert";
@@ -131,7 +132,7 @@ export default function TweaksPanel() {
                     return showExpertSpeed && (sectionHasMatch("os", q) || sectionHasMatch("boot", q) ||
                         (isServerSku && sectionHasMatch("server", q)));
                 case "security":
-                    return showExpertSpeed && sectionHasMatch("security", q);
+                    return (showExpertSpeed && sectionHasMatch("security", q)) || "windows update scheduled restart signed in".includes(q);
                 case "exploit-protection":
                     return showExpertSpeed && sectionHasMatch("exploitProtection", q);
                 case "windows-server":
@@ -384,6 +385,7 @@ function SecurityAppsTab({ showExpertSpeed, noSearch, searchQuery, handlePostTog
                 block below so it isn't swallowed by the showExpertSpeed gate. */}
             {noSearch && <VmSandboxSection />}
             {noSearch && <LocalPasswordExpiryCard />}
+            {(noSearch || "windows update scheduled restart signed in".includes(searchQuery.toLowerCase().trim())) && <UpdateRestartCard />}
 
             {/* Security & Apps + AI actions + Defender Auditor (expert) */}
             {showExpertSpeed && (

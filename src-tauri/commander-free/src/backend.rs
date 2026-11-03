@@ -2369,6 +2369,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-WindowsUpdate" => Some("tweaks/system"),
         "Enable-WindowsUpdate" => Some("tweaks/system"),
         "Get-UpdateStatus" => Some("tweaks/system"),
+        "Get-UpdateRestartPolicyStatus" | "Set-UpdateRestartPolicy" => Some("tweaks/system"),
         "Disable-Hibernation" => Some("tweaks/system"),
         "Enable-Hibernation" => Some("tweaks/system"),
         "Disable-FastStartup" => Some("tweaks/system"),
@@ -4709,6 +4710,7 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Remove-BlocklistFromHosts",
     "Undo-HostsBlocklistChange",
     "Set-HostsRecommendedProtection",
+    "Set-UpdateRestartPolicy",
 ];
 
 fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool, String> {
@@ -4852,6 +4854,8 @@ mod param_env_tests {
     fn machine_wide_scope_allowlist_excludes_user_profile_commands() {
         assert!(is_machine_wide_fix_command("Disable-ActivityHistory"));
         assert!(is_machine_wide_fix_command("Set-AppCapabilityAccess"));
+        assert!(is_machine_wide_fix_command("Set-UpdateRestartPolicy"));
+        assert!(local_admin_preflight("Set-UpdateRestartPolicy", false).is_some());
         for command in [
             "Disable-BitLockerAutoEncrypt",
             "Enable-BitLockerAutoEncrypt",
@@ -5768,6 +5772,7 @@ pub(crate) async fn run_backend_script_with_timeout(
                 "Add-BlocklistToHosts"
                     | "Set-HostsRecommendedProtection"
                     | "Undo-HostsBlocklistChange"
+                    | "Set-UpdateRestartPolicy"
             );
         if mutating {
             let msg = format!(

@@ -31,6 +31,9 @@ the backend and private component before execution.
   confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
+- Optional Windows Update policy to avoid scheduled update restarts while a
+  user is signed in. It requires Windows' scheduled-install setting and does
+  not prevent all restarts. Existing administrator policies are preserved.
 - Dashboard Bluetooth uses Windows machine policy, with administrator approval
   and the matching local service. It does not disable adapters. Policy control
   checks eligible Windows client editions and Server 2025 or later against the
@@ -42,6 +45,10 @@ the backend and private component before execution.
   paths.
 
 ### Local alerts and visibility
+
+- Active Ports can copy the currently visible connection snapshot as a text
+  report. It reflects the selected filters and scan cap; it is not packet
+  capture or a history of past connections.
 
 - Local ransomware-style mass-change alerting.
 - Basic USB attach/detach timeline, observed volume mounts/unmounts, and device
