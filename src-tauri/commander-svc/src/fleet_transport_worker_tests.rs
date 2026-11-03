@@ -104,7 +104,14 @@ async fn committed_rotation_interrupts_the_real_worker_backoff() {
     let profile = profile.unwrap();
     let first = [1u8; 32];
     let initial = store
-        .prepare_candidate(&trust, &origins, &profile, &origin, &first, &TestProtector)
+        .prepare_candidate(
+            (&trust, &store.connection_token().unwrap()),
+            &origins,
+            &profile,
+            &origin,
+            &first,
+            &TestProtector,
+        )
         .unwrap()
         .unwrap();
     store
@@ -137,7 +144,14 @@ async fn committed_rotation_interrupts_the_real_worker_backoff() {
     }
     let next = [2u8; 32];
     let context = store
-        .prepare_candidate(&trust, &origins, &profile, &origin, &next, &TestProtector)
+        .prepare_candidate(
+            (&trust, &store.connection_token().unwrap()),
+            &origins,
+            &profile,
+            &origin,
+            &next,
+            &TestProtector,
+        )
         .unwrap()
         .unwrap();
     let mut queue = CandidateQueue::default();

@@ -27,6 +27,7 @@ interface FleetStatus extends FleetLinkStatus {
   // shows "Request submitted — waiting for admin approval" instead of
   // "Enrolled" while this holds.
   pendingApproval?: boolean;
+  cleanupPending?: boolean;
 }
 
 // Steady-state poll while enrolled (shows live connection health).
@@ -106,11 +107,16 @@ export default function FleetConnectView() {
   // Non-null while an unenroll request is outstanding (submitted, awaiting
   // the required admin approval(s) from the fleet console).
   const [unenrollInfo, setUnenrollInfo] = useState<UnenrollInfo | null>(null);
+  const [cleanupRetry, setCleanupRetry] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const enrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unenrollPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unenrollEpochRef = useRef(0);
+
+  useEffect(() => {
+    if (status?.cleanupPending) setCleanupRetry(true);
+  }, [status?.cleanupPending]);
 
   // Prefill form from persisted settings on mount.
   useEffect(() => {
@@ -237,6 +243,7 @@ export default function FleetConnectView() {
       return;
     }
     setError(null);
+    setCleanupRetry(false);
     setBusy(true);
     try {
       // fleet_connect: persists config to settings, then sends fleet_agent_configure
@@ -270,14 +277,23 @@ export default function FleetConnectView() {
     const epoch = unenrollEpochRef.current;
     let serviceStopped = false;
     try {
-      const result = await invoke<{ ok?: boolean; serviceReachabilityStopped?: boolean }>("fleet_disconnect");
+      const result = await invoke<{ ok?: boolean; agentStopped?: boolean; sharedCleanupUnconfirmed?: boolean; serviceReachabilityStopped?: boolean; cleanupRetryable?: boolean }>("fleet_disconnect");
       if (epoch !== unenrollEpochRef.current) return;
+      if (result?.sharedCleanupUnconfirmed === true && result.agentStopped === true) {
+        setCleanupRetry(true);
+        setUnenrollInfo(null);
+        setError("The Fleet agent stopped, but shared settings and service cleanup could not be confirmed because another Windows user may be connecting. Retry local cleanup.");
+        return;
+      }
       if (result?.ok !== true) throw new Error(UNENROLL_UNCONFIRMED);
       serviceStopped = result?.serviceReachabilityStopped === true;
-    } catch {
+      setCleanupRetry(result?.cleanupRetryable === true);
+    } catch (reason) {
       if (epoch !== unenrollEpochRef.current) return;
       setUnenrollInfo(null);
-      setError(UNENROLL_UNCONFIRMED);
+      setCleanupRetry(true);
+      setError(typeof reason === "string" && reason.startsWith("Fleet agent stopped,")
+        ? reason : UNENROLL_UNCONFIRMED);
       return;
     }
     setStatus(null);
@@ -312,11 +328,15 @@ export default function FleetConnectView() {
       try {
         const r = await invoke<UnenrollResult>("fleet_unenroll_status");
         if (epoch !== unenrollEpochRef.current) return;
-        if (consecutiveFailures > 0) setError(null);
-        consecutiveFailures = 0;
-        if (isUnenrollApproved(r)) { await finalizeApprovedUnenroll(); return; }
+        if (isUnenrollApproved(r)) {
+          if (consecutiveFailures > 0) setError(null);
+          await finalizeApprovedUnenroll();
+          return;
+        }
         const pending = pendingUnenroll(r);
         if (!pending) throw new Error(UNENROLL_UNCONFIRMED);
+        if (consecutiveFailures > 0) setError(null);
+        consecutiveFailures = 0;
         setUnenrollInfo(pending);
       } catch {
         if (epoch !== unenrollEpochRef.current) return;
@@ -455,6 +475,15 @@ export default function FleetConnectView() {
           </span>
         )}
       </div>
+
+      {cleanupRetry && <div className="fleet-connect-status">
+        <p className="fleet-connect-enrolling">Local Fleet cleanup is not fully confirmed. Another Windows user may be connecting. Retry while this app remains open, or contact your administrator.</p>
+        <Button variant="outline" size="sm" disabled={busy} onClick={async () => {
+          setBusy(true);
+          setError(null);
+          try { await finalizeApprovedUnenroll(); } finally { setBusy(false); }
+        }}>Retry local cleanup</Button>
+      </div>}
 
       {isConnected && status ? (
         <div className="fleet-connect-status">

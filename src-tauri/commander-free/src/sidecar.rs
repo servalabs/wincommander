@@ -1105,12 +1105,33 @@ async fn spawn_pro_session() -> Result<ProSession, String> {
 }
 
 async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, String> {
-    deadlines::while_open(
-        shutdown_signal().subscribe(),
-        spawn_pro_session_with_role_open(role),
-    )
-    .await
-    .unwrap_or_else(|| Err("Pro session is closing".to_string()))
+    let operation = async move {
+        let mut session = deadlines::while_open(
+            shutdown_signal().subscribe(),
+            spawn_pro_session_with_role_open(role),
+        )
+        .await
+        .unwrap_or_else(|| Err("Pro session is closing".to_string()))?;
+        if role == SessionRole::FleetAgent {
+            // The Hello acknowledgement precedes Pro's optional Fleet startup.
+            // A normal request cannot be serviced until startup has run, so keep
+            // the lifecycle lease until that admission attempt is complete.
+            let request = Request {
+                request_id: next_request_id(),
+                feature_id: "fleet_agent_status".to_string(),
+                diagnostic_operation_id: None,
+                args: serde_json::Value::Null,
+            };
+            dispatch_request(&mut session, request).await
+                .map_err(|error| format!("Fleet agent startup could not be confirmed: {error}"))?;
+        }
+        Ok(session)
+    };
+    if role == SessionRole::FleetAgent {
+        crate::fleet_agent::lifecycle_lease::launch(operation).await
+    } else {
+        operation.await
+    }
 }
 
 async fn spawn_pro_session_with_role_open(role: SessionRole) -> Result<ProSession, String> {
@@ -1188,6 +1209,9 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // collectors, keeping their in-process sample/signal queues co-located with
     // the loop that drains them.
     if role == SessionRole::FleetAgent {
+        // Other Windows sessions may have changed the machine enrollment.
+        // Launch is under the machine lifecycle lease; read fresh settings.
+        crate::settings::invalidate_cache();
         if let Ok(s) = crate::settings::read_settings() {
             let fleet = &s.app.fleet;
             if fleet.enabled && !fleet.server_url.is_empty() {

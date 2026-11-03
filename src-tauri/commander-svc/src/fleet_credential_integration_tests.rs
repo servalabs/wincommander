@@ -71,7 +71,14 @@ fn submit(store: &FleetMachinePolicy, origin: &str, secret: &[u8]) -> Result<u64
     };
     let origins = vec!["https://fleet.test".to_string()];
     let context = store
-        .prepare_candidate(&binding, &origins, &profile, origin, secret, &TestProtector)?
+        .prepare_candidate(
+            (&binding, &store.connection_token().unwrap()),
+            &origins,
+            &profile,
+            origin,
+            secret,
+            &TestProtector,
+        )?
         .ok_or("already_current")?;
     store.commit_candidate(&context, secret, &TestProtector)
 }
@@ -112,16 +119,22 @@ fn verified_credential_survives_restart_and_rotation_fences_stale_work() {
     submit(&store, "https://fleet.test", &two).unwrap();
     assert!(!store.credential_is_current(&first));
     assert!(
-        !store.clear_credential(&first_token).unwrap(),
+        !store
+            .clear_credential(&first_token, &store.connection_token().unwrap())
+            .unwrap(),
         "old clear request must not erase new credential"
     );
     let current = store.credential_snapshot(&TestProtector).unwrap().unwrap();
     let token = store.credential_clear_token().unwrap().unwrap();
     fs.fail.store(true, Ordering::SeqCst);
-    assert!(store.clear_credential(&token).is_err());
+    assert!(store
+        .clear_credential(&token, &store.connection_token().unwrap())
+        .is_err());
     assert!(store.credential_is_current(&current));
     fs.fail.store(false, Ordering::SeqCst);
-    assert!(store.clear_credential(&token).unwrap());
+    assert!(store
+        .clear_credential(&token, &store.connection_token().unwrap())
+        .unwrap());
     assert!(store.credential_snapshot(&TestProtector).unwrap().is_none());
 }
 
@@ -134,7 +147,12 @@ fn changed_runtime_origin_or_proxy_profile_can_only_suspend_service_transport() 
     let mut changed_profile = first.profile.clone();
     changed_profile.environment_fingerprint = STANDARD.encode([8u8; 32]);
     assert!(!store
-        .observe_runtime_transport(&first.trust, &first.origins, Some(&changed_profile))
+        .observe_runtime_transport(
+            &first.trust,
+            &first.origins,
+            Some(&changed_profile),
+            &store.connection_token().unwrap()
+        )
         .unwrap());
     assert!(!store.credential_is_current(&first));
     assert!(matches!(
@@ -146,7 +164,12 @@ fn changed_runtime_origin_or_proxy_profile_can_only_suspend_service_transport() 
         "network_configuration_differs"
     );
     assert!(store
-        .observe_runtime_transport(&first.trust, &first.origins, Some(&first.profile))
+        .observe_runtime_transport(
+            &first.trust,
+            &first.origins,
+            Some(&first.profile),
+            &store.connection_token().unwrap()
+        )
         .unwrap());
     submit(&store, "https://fleet.test", &key).unwrap();
     let second = store.credential_snapshot(&TestProtector).unwrap().unwrap();
@@ -154,7 +177,8 @@ fn changed_runtime_origin_or_proxy_profile_can_only_suspend_service_transport() 
         .observe_runtime_transport(
             &second.trust,
             &["https://other.test".into()],
-            Some(&second.profile)
+            Some(&second.profile),
+            &store.connection_token().unwrap()
         )
         .unwrap());
     assert!(!store.credential_is_current(&second));
@@ -202,7 +226,7 @@ fn late_verified_candidate_cannot_replace_a_newer_credential() {
     let origins = vec!["https://fleet.test".to_string()];
     let first = store
         .prepare_candidate(
-            &binding,
+            (&binding, &store.connection_token().unwrap()),
             &origins,
             &profile,
             &origins[0],
@@ -213,7 +237,7 @@ fn late_verified_candidate_cannot_replace_a_newer_credential() {
         .unwrap();
     let second = store
         .prepare_candidate(
-            &binding,
+            (&binding, &store.connection_token().unwrap()),
             &origins,
             &profile,
             &origins[0],

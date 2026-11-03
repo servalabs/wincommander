@@ -27,9 +27,16 @@ enum Operation {
     },
     Offer {
         credential: CredentialTransfer,
+        connection_token: String,
     },
     Clear {
         token: String,
+        connection_token: String,
+    },
+    ConnectionStart {
+        trust: crate::fleet_machine_policy::FleetTrust,
+        token: String,
+        connection_token: String,
     },
     Get,
 }
@@ -132,7 +139,7 @@ pub(crate) fn handle(store: &FleetMachinePolicy, args: Value) -> Result<Value, &
                 store.record_contact(&nonce, &transfer.request, &transfer.response, &receipt)?;
             Ok(json!({"observation": result}))
         }
-        Operation::Offer { credential } => {
+        Operation::Offer { credential, connection_token } => {
             let secret = zeroize::Zeroizing::new(
                 STANDARD
                     .decode(&credential.secret_b64)
@@ -150,27 +157,34 @@ pub(crate) fn handle(store: &FleetMachinePolicy, args: Value) -> Result<Value, &
                     credential.transport.profile.clone(),
                     credential.origin.clone(),
                     secret,
+                    connection_token,
                 )?;
                 Ok(json!({"queued":true}))
             }
             #[cfg(not(windows))]
             {
-                let _ = (credential, secret);
+                let _ = (credential, secret, connection_token);
                 Err("fleet_credential_unavailable")
             }
         }
-        Operation::Clear { token } => Ok(json!({"cleared":store.clear_credential(&token)?})),
+        Operation::Clear { token, connection_token } => Ok(json!({"cleared":store.clear_credential(&token, &connection_token)?})),
+        Operation::ConnectionStart { trust, token, connection_token } => {
+            let (connection_token, token) = store.start_connection(&trust, &token, &connection_token)?;
+            Ok(json!({"connection_token":connection_token, "credential_clear_token":token}))
+        }
         Operation::Get => {
             #[cfg(windows)]
             let reachability = crate::fleet_transport::status(store);
             #[cfg(not(windows))]
             let reachability = json!({"state":"unconfirmed"});
             match store.contact_state()? {
-                Some((device_id, observation, token)) => Ok(
-                    json!({"deviceId": device_id, "observation": observation, "service_reachability":reachability, "credential_clear_token":token}),
+                Some((trust, observation, token, connection_token)) => Ok(
+                    json!({"deviceId": trust.device_id, "observation": observation, "service_reachability":reachability, "credential_clear_token":token,
+                        "connection_token":connection_token,
+                        "serviceTrust":{"orgId":trust.org_id,"deviceId":trust.device_id,"enrollmentGeneration":trust.enrollment_generation,"signerKey":trust.signer_key}}),
                 ),
                 None => Ok(
-                    json!({"deviceId": null, "observation": null, "service_reachability":reachability, "credential_clear_token":null}),
+                    json!({"deviceId": null, "observation": null, "service_reachability":reachability, "credential_clear_token":null, "serviceTrust":null, "connection_token":null}),
                 ),
             }
         }

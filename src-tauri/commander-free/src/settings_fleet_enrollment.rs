@@ -146,6 +146,68 @@ fn binding(current: &AppSettings) -> Value {
         "enabled": current.app.fleet.enabled, "dispatch": current.app.fleet.dispatch })
 }
 
+pub(crate) fn removal_binding(current: &AppSettings) -> Value {
+    json!({ "deviceId": current.device_id, "policySigningKey": current.policy.fleet_signing_key,
+        "serverUrl": current.app.fleet.server_url, "signingKey": current.app.fleet.signing_key_pub,
+        "enabled": current.app.fleet.enabled, "dispatch": current.app.fleet.dispatch })
+}
+
+/// Disable only the enrollment that was observed when removal was approved.
+pub(crate) fn disable_if_binding(expected: &Value) -> Result<(), String> {
+    reconcile_disable(
+        expected,
+        || {
+            let attempted = std::cell::Cell::new(false);
+            let result = super::mutate_settings_with(
+                |current| prepare_disable(current, expected),
+                crate::license::has_paid_entitlement(),
+                |settings| { attempted.set(true); super::write_settings_internal(settings) },
+                crate::flow_bridge::on_settings_written,
+            ).map(|_| ());
+            (result, attempted.get())
+        },
+        || { super::invalidate_cache(); super::read_settings() },
+    )
+}
+
+fn reconcile_disable(
+    expected: &Value,
+    write: impl FnOnce() -> (Result<(), String>, bool),
+    read: impl FnOnce() -> Result<AppSettings, String>,
+) -> Result<(), String> {
+    match write() {
+        (Ok(()), _) => Ok(()),
+        (Err(error), false) => Err(error),
+        (Err(error), true) => match read() {
+            Ok(current) if disabled_matches(&current, expected) => Ok(()),
+            _ => Err(error),
+        },
+    }
+}
+
+fn disabled_matches(current: &AppSettings, expected: &Value) -> bool {
+    let mut disabled = expected.clone();
+    disabled["enabled"] = json!(false);
+    removal_binding(current) == disabled
+        && !current.app.fleet.privacy_shield_session_owned
+        && current.ideal.privacy.privacy_shield.fleet_managed == Some(false)
+        && current.ideal.privacy.privacy_shield.fleet_monitoring_enabled == Some(false)
+}
+
+fn prepare_disable(current: &AppSettings, expected: &Value) -> Result<AppSettings, String> {
+    if &removal_binding(current) != expected {
+        return Err("Fleet settings changed during removal; retry with the current connection".into());
+    }
+    let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    merge_json(&mut value, &json!({
+        "app": { "fleet": { "enabled": false, "privacyShieldSessionOwned": false } },
+        "ideal": { "privacy": { "privacyShield": {
+            "fleetManaged": false, "fleetMonitoringEnabled": false
+        } } }
+    }));
+    serde_json::from_value(value).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 #[path = "settings_fleet_enrollment_tests.rs"]
 mod tests;

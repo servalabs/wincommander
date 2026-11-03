@@ -101,8 +101,9 @@ pub(crate) fn offer(
     profile: Option<TransportProfile>,
     origin: String,
     secret: Zeroizing<Vec<u8>>,
+    connection_token: String,
 ) -> Result<(), &'static str> {
-    if !store.observe_runtime_transport(&trust, &origins, profile.as_ref())? {
+    if !store.observe_runtime_transport(&trust, &origins, profile.as_ref(), &connection_token)? {
         return Err("transport_profile_changed");
     }
     let profile = profile.ok_or("transport_profile_changed")?;
@@ -111,17 +112,10 @@ pub(crate) fn offer(
     {
         // Suspension preserves any old credential but makes the mismatch
         // visible even before the service has accepted its first candidate.
-        let _ = store.observe_runtime_transport(&trust, &origins, None)?;
+        let _ = store.observe_runtime_transport(&trust, &origins, None, &connection_token)?;
         return Err("network_configuration_differs");
     }
-    let Some(context) = store.prepare_candidate(
-        &trust,
-        &origins,
-        &profile,
-        &origin,
-        &secret,
-        &crate::fleet_credential::MachineDpapi,
-    )?
+    let Some(context) = store.prepare_candidate((&trust, &connection_token), &origins, &profile, &origin, &secret, &crate::fleet_credential::MachineDpapi)?
     else {
         return Ok(());
     };
@@ -145,6 +139,7 @@ pub(crate) fn offer(
         hash.update(origin.as_bytes());
     }
     hash.update(context.revision.to_be_bytes());
+    hash.update(context.connection_revision.to_be_bytes());
     let digest: [u8; 32] = hash.finalize().into();
     let mut slot = candidate_slot().lock().map_err(|_| "service_unavailable")?;
     let queued = slot.push(context, secret, digest)?;

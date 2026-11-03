@@ -14,6 +14,7 @@ fn context() -> CandidateContext {
             environment_fingerprint: "profile".into(),
         },
         revision: 1,
+        connection_revision: 0,
         origin: "https://fleet.test".into(),
     }
 }
@@ -52,7 +53,7 @@ fn failed_or_superseded_candidate_never_replaces_protected_credential() {
     let prepare = |secret: &[u8]| {
         store
             .prepare_candidate(
-                &trust,
+                (&trust, &store.connection_token().unwrap()),
                 &origins,
                 &profile,
                 &origins[0],
@@ -140,7 +141,7 @@ fn disconnect_fences_a_queued_or_inflight_first_candidate() {
     let prepare = || {
         store
             .prepare_candidate(
-                &trust,
+                (&trust, &store.connection_token().unwrap()),
                 &origins,
                 &profile,
                 &origins[0],
@@ -159,7 +160,9 @@ fn disconnect_fences_a_queued_or_inflight_first_candidate() {
         .push(prepare(), Zeroizing::new(secret.to_vec()), [8; 32])
         .unwrap();
     let token = store.credential_clear_token().unwrap().unwrap();
-    assert!(store.clear_credential(&token).unwrap());
+    assert!(store
+        .clear_credential(&token, &store.connection_token().unwrap())
+        .unwrap());
     finish_candidate(
         &mut queue,
         &inflight,
@@ -173,7 +176,7 @@ fn disconnect_fences_a_queued_or_inflight_first_candidate() {
     assert!(store.credential_snapshot(&TestProtector).unwrap().is_none());
     assert!(matches!(
         store.prepare_candidate(
-            &trust,
+            (&trust, &store.connection_token().unwrap()),
             &origins,
             &profile,
             &origins[0],
@@ -193,7 +196,7 @@ async fn verified_credential_wakes_the_worker_without_retry_storms() {
     let prepare = |secret: &[u8]| {
         store
             .prepare_candidate(
-                &trust,
+                (&trust, &store.connection_token().unwrap()),
                 &origins,
                 &profile,
                 &origins[0],
@@ -302,4 +305,55 @@ async fn verified_credential_wakes_the_worker_without_retry_storms() {
     .await
     .unwrap();
     assert!(!receiver.has_changed().unwrap());
+}
+
+#[test]
+fn new_connection_fences_both_active_and_queued_candidates_before_install() {
+    use crate::fleet_machine_policy::credential_integration_tests::{setup_store, TestProtector};
+    let store = setup_store();
+    let (trust, _, origins, profile, _) = store.trust_with_origins().unwrap().unwrap();
+    let profile = profile.unwrap();
+    let old_connection = store.connection_token().unwrap();
+    let prepare = |secret: &[u8]| {
+        store
+            .prepare_candidate(
+                (&trust, &old_connection),
+                &origins,
+                &profile,
+                &origins[0],
+                secret,
+                &TestProtector,
+            )
+            .unwrap()
+            .unwrap()
+    };
+    let mut queue = CandidateQueue::default();
+    queue
+        .push(prepare(&[1; 32]), Zeroizing::new(vec![1; 32]), [1; 32])
+        .unwrap();
+    let active = queue.take().unwrap();
+    queue
+        .push(prepare(&[2; 32]), Zeroizing::new(vec![2; 32]), [2; 32])
+        .unwrap();
+    let clear = store.credential_clear_token().unwrap().unwrap();
+    store
+        .start_connection(&trust, &clear, &old_connection)
+        .unwrap();
+    let (updates, receiver) = tokio::sync::watch::channel(());
+    finish_candidate(&mut queue, &active, true, &store, &TestProtector, &updates);
+    let pending = queue.take().unwrap();
+    finish_candidate(&mut queue, &pending, true, &store, &TestProtector, &updates);
+    assert!(store.credential_snapshot(&TestProtector).unwrap().is_none());
+    assert!(!receiver.has_changed().unwrap());
+    assert!(matches!(
+        store.prepare_candidate(
+            (&trust, &old_connection),
+            &origins,
+            &profile,
+            &origins[0],
+            &[3; 32],
+            &TestProtector
+        ),
+        Err("binding_changed")
+    ));
 }

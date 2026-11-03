@@ -18,7 +18,7 @@ test("unenroll requires an explicit approved response and a successful final rec
     const timers=new Map(); let nextTimer=0;
     globalThis.setInterval=(callback,delay)=>{const id=++nextTimer;timers.set(id,{callback,delay});return id;};
     globalThis.clearInterval=id=>timers.delete(id);
-    let pollResult='unauthorized'; let requestFails=false; let disconnectFails=false; let disconnectMalformed=false; let disconnectCalls=0; let resolveStale;
+    let pollResult='unauthorized'; let requestFails=false; let disconnectFails=false; let disconnectMalformed=false; let disconnectCalls=0; let partial=false; let sharedFallback=false; let resolveStale;
     const status={connected:true,deviceId:'device-123',serverUrl:'https://fleet.test',lastEnrollAt:null,lastError:null,retrying:true};
     mock.module('@tauri-apps/api/core',()=>({invoke:async command=>{
       if(command==='fleet_status') return status;
@@ -33,7 +33,7 @@ test("unenroll requires an explicit approved response and a successful final rec
         if(pollResult==='pending') return {approved:false,status:'pending',approvals:0,required_approvals:2};
         return {approved:true,status:'approved',approvals:0,required_approvals:0};
       }
-      if(command==='fleet_disconnect') { disconnectCalls++; if(disconnectFails) throw new Error('HTTP 401'); return {ok:!disconnectMalformed,serviceReachabilityStopped:true}; }
+      if(command==='fleet_disconnect') { disconnectCalls++; if(disconnectFails) throw new Error('HTTP 401'); if(sharedFallback) return {ok:false,agentStopped:true,sharedCleanupUnconfirmed:true,cleanupRetryable:true}; return {ok:!disconnectMalformed,serviceReachabilityStopped:!partial,cleanupRetryable:partial}; }
       throw new Error('unexpected command: '+command);
     }}));
     mock.module('@/hooks/useSettings',()=>({getSettingsOnce:async()=>({deviceId:'device-123',app:{fleet:{enabled:true}}})}));
@@ -79,6 +79,8 @@ test("unenroll requires an explicit approved response and a successful final rec
     assert.match(host.textContent,/Could not verify Fleet removal status/);
     assert.doesNotMatch(host.textContent,/waiting for admin approval/);
     assert.equal(disconnectCalls,0);
+    await poll(); await poll();
+    assert.ok(![...timers.values()].some(t=>t.delay===5000),'three malformed polls must stop polling');
     pollResult='approved'; disconnectFails=true; await request(); await poll();
     assert.equal(disconnectCalls,1);
     assert.match(host.textContent,/Could not verify Fleet removal status/);
@@ -87,10 +89,27 @@ test("unenroll requires an explicit approved response and a successful final rec
     disconnectFails=false; disconnectMalformed=true; await request(); await poll();
     assert.equal(disconnectCalls,2);
     assert.match(host.textContent,/Could not verify Fleet removal status/);
-    disconnectMalformed=false; await request(); await poll();
+    disconnectMalformed=false; sharedFallback=true; await request(); await poll();
     assert.equal(disconnectCalls,3);
+    assert.match(host.textContent,/shared settings and service cleanup could not be confirmed/);
+    assert.doesNotMatch(host.textContent,/device was removed from Fleet/);
+    sharedFallback=false;
+    const retryFallback=[...host.querySelectorAll('button')].find(button=>button.textContent==='Retry local cleanup');
+    partial=true; await act(async()=>{retryFallback.click();});
+    assert.equal(disconnectCalls,4);
     assert.doesNotMatch(host.textContent,/Could not verify Fleet removal status/);
-    await act(async()=>{root.unmount();});dom.window.close();
+    assert.match(host.textContent,/stopping local service reachability could not be confirmed/);
+    const retry=[...host.querySelectorAll('button')].find(button=>button.textContent==='Retry local cleanup');
+    assert.ok(retry); partial=false;
+    await act(async()=>{retry.click();});
+    assert.equal(disconnectCalls,5);
+    assert.ok(![...host.querySelectorAll('button')].some(button=>button.textContent==='Retry local cleanup'));
+    status.cleanupPending=true;
+    await act(async()=>{root.unmount();});
+    const remount=createRoot(host);
+    await act(async()=>{remount.render(h(View));});
+    assert.ok([...host.querySelectorAll('button')].some(button=>button.textContent==='Retry local cleanup'), 'an in-memory cleanup survives panel navigation');
+    await act(async()=>{remount.unmount();});dom.window.close();
   `;
   const process=Bun.spawn([Bun.which("bun")!,"-e",script],{stdout:"pipe",stderr:"pipe"});
   let timedOut=false;

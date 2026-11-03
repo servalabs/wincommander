@@ -108,7 +108,7 @@ pub struct TransportProfile {
 }
 
 type TrustWithTransport = (FleetTrust, Vec<TrustAudit>, Vec<String>, Option<TransportProfile>, bool);
-type ContactState = (String, Option<ContactObservation>, Option<String>);
+type ContactState = (FleetTrust, Option<ContactObservation>, Option<String>, String);
 
 fn default_service_enabled() -> bool { true }
 
@@ -133,6 +133,7 @@ pub(crate) struct CandidateContext {
     pub origins: Vec<String>,
     pub profile: TransportProfile,
     pub revision: u64,
+    pub connection_revision: u64,
     pub origin: String,
 }
 
@@ -162,9 +163,20 @@ struct Record {
     #[serde(default)]
     credential_revision: u64,
     #[serde(default)]
+    connection_revision: u64,
+    #[serde(default)]
+    cleared: Option<ClearAcknowledgement>,
+    #[serde(default)]
     runtime_profile_changed: bool,
     #[serde(default = "default_service_enabled")]
     service_enabled: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClearAcknowledgement {
+    token: String,
+    connection_token: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -457,6 +469,8 @@ impl FleetMachinePolicy {
                 transport_profile: approved_profile,
                 credential: None,
                 credential_revision: 0,
+                connection_revision: 0,
+                cleared: None,
                 runtime_profile_changed: false,
                 service_enabled: true,
             }),
@@ -511,7 +525,11 @@ impl FleetMachinePolicy {
                 origins: approved_origins,
                 transport_profile: approved_profile,
                 credential: None,
-                credential_revision: 0,
+                // Authorized replacement may return to a previously used
+                // trust tuple. Never recreate that tuple's old local tokens.
+                credential_revision: current.credential_revision.checked_add(1).ok_or("revision_exhausted")?,
+                connection_revision: current.connection_revision.checked_add(1).ok_or("revision_exhausted")?,
+                cleared: None,
                 runtime_profile_changed: false,
                 service_enabled: true,
             }),
@@ -550,6 +568,8 @@ impl FleetMachinePolicy {
             record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
             record.runtime_profile_changed = false;
             record.service_enabled = true;
+            record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+            record.cleared = None;
         }
         next.pending = None;
         next.contact_challenge = None;
@@ -565,10 +585,10 @@ impl FleetMachinePolicy {
 
     /// A running pinned helper may report a mismatch only to suspend service
     /// transport. It cannot authorize new destinations or security settings.
-    pub(crate) fn observe_runtime_transport(&self, expected: &FleetTrust, observed_origins: &[String], observed_profile: Option<&TransportProfile>) -> Result<bool, &'static str> {
+    pub(crate) fn observe_runtime_transport(&self, expected: &FleetTrust, observed_origins: &[String], observed_profile: Option<&TransportProfile>, connection_token: &str) -> Result<bool, &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
-        if current.trust != *expected { return Err("binding_changed"); }
+        if current.trust != *expected || Self::connection_token_for(current)? != connection_token { return Err("binding_changed"); }
         if !current.service_enabled { return Err("service_disabled"); }
         let matches = origins::normalize(observed_origins).ok().as_deref() == Some(current.origins.as_slice())
             && observed_profile.is_some() && current.transport_profile.as_ref() == observed_profile;
@@ -637,6 +657,8 @@ impl FleetMachinePolicy {
                 transport_profile: current.transport_profile.clone(),
                 credential: current.credential.clone(),
                 credential_revision: current.credential_revision,
+                connection_revision: current.connection_revision,
+                cleared: current.cleared.clone(),
                 runtime_profile_changed: current.runtime_profile_changed,
                 service_enabled: current.service_enabled,
             }),
@@ -852,18 +874,21 @@ impl FleetMachinePolicy {
         guard.record.as_ref().is_some_and(|record| {
             record.service_enabled && record.trust == context.trust && record.origins == context.origins
                 && record.transport_profile.as_ref() == Some(&context.profile)
-                && record.credential_revision == context.revision && record.origins.contains(&context.origin)
+                && record.credential_revision == context.revision && record.connection_revision == context.connection_revision
+                && record.origins.contains(&context.origin)
         })
     }
 
     pub(crate) fn prepare_candidate(
-        &self, trust: &FleetTrust, observed_origins: &[String], profile: &TransportProfile,
+        &self, expected_connection: (&FleetTrust, &str), observed_origins: &[String], profile: &TransportProfile,
         origin: &str, secret: &[u8], protector: &dyn crate::fleet_credential::Protector,
     ) -> Result<Option<CandidateContext>, &'static str> {
         use subtle::ConstantTimeEq;
+        let (trust, connection_token) = expected_connection;
         if secret.len() != 32 { return Err("invalid_fleet_credential"); }
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let record = guard.record.as_ref().ok_or("not_provisioned")?;
+        if Self::connection_token_for(record)? != connection_token { return Err("binding_changed"); }
         if !record.service_enabled { return Err("service_disabled"); }
         if record.trust != *trust || record.transport_profile.as_ref() != Some(profile)
             || origins::normalize(observed_origins)? != record.origins
@@ -883,7 +908,7 @@ impl FleetMachinePolicy {
             }
         }
         Ok(Some(CandidateContext { trust:trust.clone(), origins:record.origins.clone(), profile:profile.clone(),
-            revision:record.credential_revision, origin:origin.to_owned() }))
+            revision:record.credential_revision, connection_revision:record.connection_revision, origin:origin.to_owned() }))
     }
 
     /// Called only after the service has verified a fresh signed presence
@@ -895,7 +920,8 @@ impl FleetMachinePolicy {
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
         if !current.service_enabled || current.trust != context.trust || current.origins != context.origins
             || current.transport_profile.as_ref() != Some(&context.profile)
-            || current.credential_revision != context.revision || !current.origins.contains(&context.origin) {
+            || current.credential_revision != context.revision || current.connection_revision != context.connection_revision
+            || !current.origins.contains(&context.origin) {
             return Err("binding_changed");
         }
         let binding = crate::fleet_credential::CredentialBinding { org_id:&context.trust.org_id,
@@ -920,6 +946,40 @@ impl FleetMachinePolicy {
         Ok(STANDARD.encode(Sha256::digest(bytes)))
     }
 
+    fn connection_token_for(record: &Record) -> Result<String, &'static str> {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(&["wincommander:fleet-service-connection:v1", &record.trust.org_id,
+            &record.trust.device_id, &record.trust.enrollment_generation, &record.trust.signer_key,
+            &record.connection_revision.to_string()]).map_err(|_| "invalid_store")?;
+        Ok(STANDARD.encode(Sha256::digest(bytes)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connection_token(&self) -> Result<String, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        Self::connection_token_for(guard.record.as_ref().ok_or("not_provisioned")?)
+    }
+
+    /// A new local connection intent fences old clears and offers, but grants
+    /// neither enrollment nor permission to reenable a disabled service.
+    pub(crate) fn start_connection(&self, expected: &FleetTrust, token: &str, connection_token: &str) -> Result<(String, String), &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.trust != *expected || Self::clear_token(current)? != token
+            || Self::connection_token_for(current)? != connection_token {
+            return Err("binding_changed");
+        }
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.cleared = None;
+        let result = (Self::connection_token_for(record)?, Self::clear_token(record)?);
+        self.persist(&next)?;
+        *guard = next;
+        Ok(result)
+    }
+
     pub(crate) fn credential_clear_token(&self) -> Result<Option<String>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         guard.record.as_ref().map(Self::clear_token).transpose()
@@ -929,20 +989,28 @@ impl FleetMachinePolicy {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         guard.record.as_ref().map(|record| {
             let token = Some(Self::clear_token(record)?);
-            Ok((record.trust.device_id.clone(), record.contact.clone(), token))
+            Ok((record.trust.clone(), record.contact.clone(), token, Self::connection_token_for(record)?))
         }).transpose()
     }
 
-    pub(crate) fn clear_credential(&self, token: &str) -> Result<bool, &'static str> {
+    pub(crate) fn clear_credential(&self, token: &str, connection_token: &str) -> Result<bool, &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let Some(record) = &guard.record else { return Ok(false); };
-        if Self::clear_token(record)? != token {
+        if !record.service_enabled && record.credential.is_none()
+            && record.cleared.as_ref().is_some_and(|ack| ack.token == token && ack.connection_token == connection_token) {
+            // Read-only acknowledgement of the exact committed operation. New
+            // connection intent, rebind or replacement discards this receipt.
+            return Ok(true);
+        }
+        if Self::clear_token(record)? != token || Self::connection_token_for(record)? != connection_token {
             return Ok(false);
         }
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.credential = None;
         record.service_enabled = false;
+        record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.cleared = Some(ClearAcknowledgement { token:token.to_owned(), connection_token:connection_token.to_owned() });
         record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
         next.pending = None;
         self.persist(&next)?;

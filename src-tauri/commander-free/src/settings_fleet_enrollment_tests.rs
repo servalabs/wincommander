@@ -47,6 +47,40 @@ fn reconnect_keeps_committed_policy_and_personal_session_state() {
 }
 
 #[test]
+fn removal_only_disables_the_observed_settings() {
+    let current = managed();
+    let expected = removal_binding(&current);
+    let disabled = prepare_disable(&current, &expected).unwrap();
+    assert!(!disabled.app.fleet.enabled);
+    assert_eq!(disabled.device_id, current.device_id);
+    assert_eq!(disabled.policy.fleet_signing_key, current.policy.fleet_signing_key);
+    let mut newer = current.clone();
+    newer.app.fleet.server_url = "https://new-fleet.example.invalid".into();
+    assert!(prepare_disable(&newer, &expected).is_err());
+    newer = current;
+    newer.app.fleet.dispatch = !newer.app.fleet.dispatch;
+    assert!(prepare_disable(&newer, &expected).is_err());
+}
+
+#[test]
+fn committed_then_error_is_reconciled_only_for_the_exact_disabled_binding() {
+    let current = managed();
+    let expected = removal_binding(&current);
+    let disabled = prepare_disable(&current, &expected).unwrap();
+    let error = || (Err("persist result unknown".to_string()), true);
+    assert!(reconcile_disable(&expected, error, || Ok(disabled.clone())).is_ok());
+    assert!(reconcile_disable(&expected, error, || Ok(current.clone())).is_err());
+    let mut newer = disabled.clone();
+    newer.app.fleet.server_url = "https://new.example.invalid".into();
+    assert!(reconcile_disable(&expected, error, || Ok(newer)).is_err());
+    let mut incomplete = disabled;
+    incomplete.app.fleet.privacy_shield_session_owned = true;
+    assert!(reconcile_disable(&expected, error, || Ok(incomplete)).is_err());
+    assert!(reconcile_disable(&expected, error, || Err("read unavailable".into())).is_err());
+    assert!(reconcile_disable(&expected, || (Err("binding changed".into()), false), || Ok(prepare_disable(&current, &expected).unwrap())).is_err());
+}
+
+#[test]
 fn native_policy_pin_requires_confirmation_when_the_ui_pin_is_missing() {
     let mut current = managed();
     current.app.fleet.signing_key_pub.clear();

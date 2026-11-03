@@ -32,6 +32,12 @@ use wincmd_shared::fleet::{
     ShieldPolicyProgressStage, ShieldStoredSettings,
 };
 
+#[path = "fleet_lifecycle_lease.rs"]
+pub(crate) mod lifecycle_lease;
+#[path = "fleet_removal.rs"]
+mod removal;
+use removal::PendingRemoval;
+
 fn record_fleet_lifecycle(
     operation_id: &str,
     lifecycle: DiagnosticLifecycle,
@@ -343,6 +349,19 @@ async fn fleet_connect_inner(
     confirmation: Option<String>,
     repair_expected_binding: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    lifecycle_lease::run(async move {
+        fleet_connect_inner_locked(app, server_url, dispatch, signing_key_pub, confirmation, repair_expected_binding).await
+    }).await
+}
+
+async fn fleet_connect_inner_locked(
+    app: tauri::AppHandle,
+    server_url: String,
+    dispatch: bool,
+    signing_key_pub: String,
+    confirmation: Option<String>,
+    repair_expected_binding: Option<String>,
+) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
     let _connection = FLEET_CONNECT_GATE
         .try_lock()
@@ -386,10 +405,12 @@ async fn fleet_connect_inner(
     // committed while service trust is still absent. An elevated reconnect
     // may finish that provision, but ordinary reconnect never replaces an
     // established machine binding.
-    let prior = if plan.needs_service_challenge() || repair_expected_binding.is_some() {
+    let prior = if repair_expected_binding.is_some() {
         Some(crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await?)
     } else {
-        crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await.ok()
+        tokio::time::timeout(std::time::Duration::from_millis(100),
+            crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})),
+        ).await.ok().and_then(Result::ok)
     };
     if prior.as_ref().is_some_and(|reply| reply.get("trust").is_none()) {
         return Err("Fleet service trust response is incomplete".into());
@@ -407,8 +428,8 @@ async fn fleet_connect_inner(
     let origin_binding_matches = prior.as_ref().and_then(|value| value.get("origins"))
         .and_then(Value::as_array)
         .is_some_and(|stored| stored.len() == origins.len() && stored.iter().zip(&origins).all(|(a, b)| a.as_str() == Some(b.as_str())));
-    let challenge_required = plan.needs_service_challenge()
-        || (prior.is_some() && previous_trust.is_none());
+    let challenge_required = prior.is_some() && (plan.needs_service_challenge()
+        || previous_trust.is_none());
     let transport_binding_matches = prior.as_ref().and_then(|value| value.get("transport_profile")) == transport_profile.as_ref();
     let service_disabled = prior.as_ref().and_then(|value| value.get("service_enabled")).and_then(Value::as_bool) == Some(false);
     let needs_challenge = challenge_required || (prior.is_some() && transport_profile.is_some() && (service_disabled || !origin_binding_matches || !transport_binding_matches));
@@ -425,7 +446,7 @@ async fn fleet_connect_inner(
                 "transport_profile": transport_profile,
             }),
         );
-        let reply = if challenge_required {
+        let reply = if repair_expected_binding.is_some() {
             Some(request.await?)
         } else {
             tokio::time::timeout(std::time::Duration::from_millis(100), request).await.ok().and_then(Result::ok)
@@ -434,7 +455,7 @@ async fn fleet_connect_inner(
             .and_then(Value::as_str)
             .filter(|value| uuid::Uuid::parse_str(value).ok().is_some_and(|id| id.to_string() == *value))
             .map(str::to_owned);
-        if challenge_required && challenge.is_none() {
+        if repair_expected_binding.is_some() && challenge.is_none() {
             return Err("Fleet service enrollment challenge is invalid".into());
         }
         challenge.map(|value| (value, previous_trust))
@@ -443,6 +464,8 @@ async fn fleet_connect_inner(
     };
     // Recheck the observed authority under the settings lock before persisting.
     let committed = plan.commit(confirmed)?;
+    // A newly authorized connection supersedes any in-memory removal retry.
+    *pending_removal().lock().map_err(|_| "Fleet removal state is unavailable")? = None;
     let mut args = serde_json::json!({
         "serverUrl": committed.app.fleet.server_url,
         "dispatch": committed.app.fleet.dispatch,
@@ -455,7 +478,7 @@ async fn fleet_connect_inner(
     }
     let status = crate::sidecar::dispatch_paid_command("fleet_agent_configure", args).await?;
     if let Some((_, previous_trust)) = service_challenge {
-        if challenge_required {
+        if repair_expected_binding.is_some() {
             establish_service_enrollment_trust(&committed.device_id, &signing_key_pub, previous_trust, plan.allows_trust_replacement() && confirmed).await?;
         } else {
             let device = committed.device_id.clone();
@@ -543,6 +566,7 @@ async fn establish_service_enrollment_trust(
 /// specific transport error so the frontend never shows stale/empty state silently.
 #[tauri::command]
 pub async fn fleet_status() -> Result<serde_json::Value, String> {
+    let cleanup_pending = pending_removal().lock().map(|pending| pending.is_some()).unwrap_or(false);
     match crate::sidecar::dispatch_paid_command("fleet_agent_status", serde_json::Value::Null).await
     {
         Ok(mut v) => {
@@ -552,6 +576,9 @@ pub async fn fleet_status() -> Result<serde_json::Value, String> {
                     obj.entry("lastError")
                         .or_insert_with(|| serde_json::Value::String(err));
                 }
+            }
+            if let Some(object) = v.as_object_mut() {
+                object.insert("cleanupPending".into(), Value::Bool(cleanup_pending));
             }
             Ok(v)
         }
@@ -569,6 +596,7 @@ pub async fn fleet_status() -> Result<serde_json::Value, String> {
                 "serverUrl": "",
                 "lastEnrollAt": null,
                 "lastError": last_err,
+                "cleanupPending": cleanup_pending,
             }))
         }
     }
@@ -3591,16 +3619,32 @@ pub async fn fleet_unenroll_status() -> Result<serde_json::Value, String> {
         .await
 }
 
-/// Disconnect this device from the fleet and persist enabled=false to settings.
-/// The Pro agent task is aborted; no further heartbeats or command polls occur.
+/// Stop the approved Pro session and persist enabled=false to settings.
+/// Service credential removal is reported separately when it cannot be confirmed.
 ///
 /// Succeeds only when the server reports an approved unenroll request.
 /// An authentication failure does not establish approval. Until approved the
-/// command returns an error so the UI can
-/// direct the user to request approval via `fleet_request_unenroll` first.
+/// command returns an error so the UI can request approval first. A partial
+/// local removal may be retried while this process still owns its session fence;
+/// approval and the retry record are intentionally not persisted across restart.
 #[tauri::command]
 pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
+    lifecycle_lease::run(async move { fleet_disconnect_locked().await }).await
+}
+
+async fn fleet_disconnect_locked() -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
+    let _connection = FLEET_CONNECT_GATE.try_lock()
+        .map_err(|_| "A Fleet connection change is already in progress".to_string())?;
+
+    let existing = pending_removal().lock()
+        .map_err(|_| "Fleet removal state is unavailable")?.clone();
+    if let Some(pending) = existing {
+        return finish_pending_removal(pending).await;
+    }
+
+    crate::settings::invalidate_cache();
+    let settings_binding = crate::settings::fleet_enrollment::removal_binding(&crate::settings::read_settings()?);
 
     // Snapshot the optional service credential fence before the server check.
     // A later enrollment/rotation must not be cleared by this older request.
@@ -3609,9 +3653,6 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
         crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"get"})),
     ).await.ok().and_then(Result::ok);
     let expected_device = crate::settings::read_settings().ok().map(|settings| settings.device_id);
-    let service_token = service_before.as_ref().filter(|value| {
-        value.get("deviceId").and_then(Value::as_str) == expected_device.as_deref()
-    }).and_then(|value| value.get("credential_clear_token")).and_then(Value::as_str).map(str::to_owned);
 
     // Ask Pro for an explicit approval result; authentication errors are not
     // evidence that the server approved removal.
@@ -3662,39 +3703,66 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
                 .to_string(),
         );
     }
-    // Approved: proceed with disconnect below.
+    let status = status_result.map_err(|_| "Could not verify Fleet removal status")?;
+    let fence = status.get("sessionFence").and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("Could not bind Fleet removal to the current agent; reconnect and retry")?.to_owned();
+    let service_trust = status.get("serviceTrust").filter(|value| !value.is_null());
+    let service_token = service_before.as_ref().filter(|value| {
+        status.get("serviceFenceReady").and_then(Value::as_bool) == Some(true)
+            && value.get("deviceId").and_then(Value::as_str) == expected_device.as_deref()
+            && service_trust.is_some() && value.get("serviceTrust") == service_trust
+            && value.get("connection_token").and_then(Value::as_str).is_some()
+            && value.get("connection_token") == status.get("serviceFenceToken")
+    }).and_then(|value| value.get("credential_clear_token")).and_then(Value::as_str).map(str::to_owned);
+    let connection_token = service_before.as_ref().and_then(|value| value.get("connection_token"))
+        .and_then(Value::as_str).map(str::to_owned);
+    let pending = PendingRemoval { fence, settings_binding, service_token, connection_token, settings_disabled: false };
+    *pending_removal().lock().map_err(|_| "Fleet removal state is unavailable")? = Some(pending.clone());
+    finish_pending_removal(pending).await
+}
 
-    // Persist the disabled flag so the agent stays off on next launch.
-    let patch = serde_json::json!({
-        "app": { "fleet": { "enabled": false, "privacyShieldSessionOwned": false } },
-        "ideal": { "privacy": { "privacyShield": {
-            "fleetManaged": false,
-            "fleetMonitoringEnabled": false,
-        } } }
-    });
-    crate::settings::patch_settings(patch)?;
+fn pending_removal() -> &'static Mutex<Option<PendingRemoval>> {
+    static PENDING: std::sync::OnceLock<Mutex<Option<PendingRemoval>>> = std::sync::OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(None))
+}
 
-    let mut disconnected =
-        crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null)
-            .await?;
-    if disconnected.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err("Could not confirm the Fleet agent stopped; retry or contact an administrator.".into());
+async fn finish_pending_removal(pending: PendingRemoval) -> Result<Value, String> {
+    removal::finish(&RemovalBackend, pending).await
+}
+
+struct RemovalBackend;
+impl removal::RemovalBackend for RemovalBackend {
+    async fn stop(&self, fence: &str) -> Result<Value, String> {
+        crate::sidecar::dispatch_paid_command(
+            "fleet_agent_disconnect", serde_json::json!({"sessionFence":fence}),
+        ).await
     }
-
-    let service_stopped = if let Some(token) = service_token {
-        let reply = crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"clear", "token":token})).await;
-        reply.ok().and_then(|value| value.get("cleared").and_then(Value::as_bool)).unwrap_or(false)
-    } else {
-        false
-    };
-    if let Some(object) = disconnected.as_object_mut() {
-        object.insert("serviceReachabilityStopped".into(), Value::Bool(service_stopped));
+    fn shared_cleanup_allowed(&self) -> bool {
+        lifecycle_lease::shared_lease_held()
     }
-
-    // Clear only the managed source after Pro confirms disconnect. Personal
-    // rules stay active; transient status/disconnect failures retain both.
-    crate::paste_monitor::clear_paste_monitor_fleet_policy_on_unenroll();
-    Ok(disconnected)
+    fn disable(&self, binding: &Value) -> Result<(), String> {
+        crate::settings::invalidate_cache();
+        crate::settings::fleet_enrollment::disable_if_binding(binding)
+            .map_err(|_| "Fleet agent stopped, but its settings could not be disabled. Retry removal before restarting the app.".to_string())?;
+        crate::paste_monitor::clear_paste_monitor_fleet_policy_on_unenroll();
+        Ok(())
+    }
+    fn save(&self, pending: Option<PendingRemoval>) -> Result<(), String> {
+        *pending_removal().lock().map_err(|_| "Fleet removal state is unavailable")? = pending;
+        Ok(())
+    }
+    async fn clear(&self, token: &str, connection_token: &str) -> removal::ClearResult {
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500),
+            crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"clear", "token":token,"connection_token":connection_token})),
+        ).await.ok().and_then(Result::ok)
+            .and_then(|value| value.get("cleared").and_then(Value::as_bool));
+        match result {
+            Some(true) => removal::ClearResult::Cleared,
+            Some(false) => removal::ClearResult::Rejected,
+            None => removal::ClearResult::Unconfirmed,
+        }
+    }
 }
 
 fn explicit_unenroll_approval(value: &Value) -> bool {
@@ -4073,7 +4141,7 @@ mod tests {
         let source = include_str!("fleet_agent.rs");
         let repair = source.split("pub async fn fleet_repair_machine_trust").nth(1).unwrap()
             .split("fn repair_connection_matches").next().unwrap();
-        let connect = source.split("async fn fleet_connect_inner").nth(1).unwrap()
+        let connect = source.split("async fn fleet_connect_inner_locked(").nth(1).unwrap()
             .split("pub async fn fleet_status").next().unwrap();
         for forbidden in ["fleet_request_unenroll", "fleet_disconnect", "fleet_agent_disconnect", "fleet_agent_request_unenroll"] {
             assert!(!repair.contains(forbidden), "repair must not call {forbidden}");
@@ -4872,30 +4940,6 @@ mod tests {
         assert_eq!(
             stopped["current"]["privacy"]["screenCapture"]["detectionEnabled"],
             false
-        );
-    }
-
-    /// Verify disconnect patch sets only enabled=false (minimal merge-safe patch).
-    #[test]
-    fn disconnect_patch_sets_enabled_false() {
-        let patch = json!({ "app": { "fleet": { "enabled": false } } });
-        assert!(!patch["app"]["fleet"]["enabled"].as_bool().unwrap());
-        // Must not contain other keys that would accidentally clear the URL.
-        assert!(patch["app"]["fleet"].get("serverUrl").is_none());
-    }
-
-    #[test]
-    fn approved_disconnect_clears_fleet_policy_only_after_sidecar_disconnect_succeeds() {
-        let source = include_str!("fleet_agent.rs").replace("\r\n", "\n");
-        let disconnect = source
-            .find("dispatch_paid_command(\"fleet_agent_disconnect\"")
-            .expect("disconnect dispatch must remain present");
-        let clear = source
-            .find("clear_paste_monitor_fleet_policy_on_unenroll();")
-            .expect("approved unenroll must clear the Fleet policy source");
-        assert!(
-            disconnect < clear,
-            "Fleet policy must remain installed when the disconnect dispatch fails"
         );
     }
 
