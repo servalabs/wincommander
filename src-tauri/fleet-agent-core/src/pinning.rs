@@ -267,6 +267,91 @@ mod tests {
     use super::*;
     use rcgen::{generate_simple_self_signed, CertifiedKey};
 
+    #[tokio::test]
+    async fn live_tls_pin_accepts_matching_server_and_rejects_mismatch() {
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = CertificateDer::from(cert.der().to_vec());
+        let pin = spki_sha256(&cert).unwrap();
+        let key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+        let server =
+            rustls::ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key.into())
+                .unwrap();
+        let server = Arc::new(server);
+
+        async fn attempt(server: Arc<rustls::ServerConfig>, pins: Option<SpkiPinSet>) -> bool {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let socket: TcpStream = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(error) => panic!("local TLS test accept failed: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(20)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(20)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(server).unwrap();
+                let mut tls = rustls::StreamOwned::new(connection, socket);
+                let mut request = [0u8; 4096];
+                if tls.read(&mut request).is_ok() {
+                    let _ = tls.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK",
+                    );
+                    let _ = tls.flush();
+                }
+            });
+            let response = build_client(pins)
+                .unwrap()
+                .get(format!("https://127.0.0.1:{}/", address.port()))
+                .timeout(Duration::from_secs(20))
+                .send()
+                .await;
+            thread.join().unwrap();
+            response.is_ok_and(|r| r.status().is_success())
+        }
+
+        assert!(
+            attempt(
+                server.clone(),
+                Some(SpkiPinSet::new(vec![SpkiPin(pin)]).unwrap())
+            )
+            .await
+        );
+        let mut wrong = pin;
+        wrong[0] ^= 1;
+        assert!(
+            !attempt(
+                server.clone(),
+                Some(SpkiPinSet::new(vec![SpkiPin(wrong)]).unwrap())
+            )
+            .await
+        );
+        assert!(!attempt(server, None).await);
+    }
+
     /// Generate a self-signed cert for `name` and return (DER cert, SPKI SHA-256 hash).
     fn self_signed(name: &str) -> (CertificateDer<'static>, [u8; 32]) {
         let CertifiedKey { cert, .. } =
