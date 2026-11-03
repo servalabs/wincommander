@@ -24,7 +24,7 @@ sha2 = "0.11"
 subtle = "2"  # constant-time eq for HMAC tag comparison
 # `signing` + `rand_core` features are needed by wipe_auth (key generation + signing);
 # getrandom provides the OS RNG for provisioning-time nonce + key generation.
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature", "rand_core"] }
 getrandom = { version = "0.4", features = ["std"] }
 base64 = "0.22"
 aes-gcm = "0.11"

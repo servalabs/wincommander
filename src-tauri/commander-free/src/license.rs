@@ -1891,7 +1891,6 @@ mod tests {
         ));
     }
     use ed25519_dalek::SigningKey;
-    use rand_core::OsRng;
 
     /// Test fixture: a throwaway Ed25519 keypair generated fresh per test.
     /// This is NOT the production licence-worker key — it exists purely so
@@ -1899,7 +1898,7 @@ mod tests {
     /// (signature check, key decode, device-hash binding) without any real
     /// private key material.
     fn test_keypair() -> (SigningKey, String) {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = SigningKey::generate(&mut rand10::rng());
         let public_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
         (signing_key, public_key_b64)
     }

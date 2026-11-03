@@ -217,8 +217,10 @@ fn get_or_create_signing_key() -> Result<SigningKey, String> {
         return Ok(SigningKey::from_bytes(&arr));
     }
 
-    // First-time generation. Uses the OS CSPRNG via rand_core::OsRng.
-    let signing_key = SigningKey::generate(&mut rand_core::OsRng);
+    // First-time generation uses the OS CSPRNG and clears the temporary seed.
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut *seed).map_err(|_| "OS random source unavailable".to_string())?;
+    let signing_key = SigningKey::from_bytes(&seed);
     let seed_b64 = B64.encode(signing_key.to_bytes());
     settings.app.flow_signing_seed_b64 = Some(seed_b64);
     write_settings(&settings)?;
@@ -597,7 +599,7 @@ mod tests {
 
     #[test]
     fn sign_then_verify_roundtrips() {
-        let signing_key = SigningKey::generate(&mut rand_core::OsRng);
+        let signing_key = SigningKey::generate(&mut rand10::rng());
         let pubkey = signing_key.verifying_key();
         let flows = vec![fake_flow("hello")];
         let mut bundle = FlowBundle {
@@ -615,7 +617,7 @@ mod tests {
 
     #[test]
     fn tamper_breaks_verify() {
-        let signing_key = SigningKey::generate(&mut rand_core::OsRng);
+        let signing_key = SigningKey::generate(&mut rand10::rng());
         let pubkey = signing_key.verifying_key();
         let flows = vec![fake_flow("orig")];
         let mut bundle = FlowBundle {

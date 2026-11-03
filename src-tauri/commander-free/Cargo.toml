@@ -81,12 +81,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
 # transitively and we need binary-compatible TLS roots.
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["https-ring", "tokio"] }
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
-# `rand_core` feature on ed25519-dalek above pulls in the trait;
-# the OsRng implementation lives in `rand_core` with `getrandom`.
-# Used by `flow_bundle::generate_signing_key` to seed a per-bundle Ed25519
-# keypair on export.
-rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "rand_core"] }
+# Generate new signing seeds directly from the operating system CSPRNG.
+getrandom = "0.4"
 base64 = "0.22"
 minisign-verify = "0.3.0"
 # Per-install key derivation for the app-data store (datastore.rs).
@@ -151,6 +148,7 @@ url = "2"
 tauri = { version = "^2.12", features = ["test"] }
 # Cross-version test oracle for keys written by released versions only.
 argon2-legacy = { package = "argon2", version = "=0.5.3" }
+rand10 = { package = "rand", version = "0.10" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 

@@ -40,7 +40,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 zeroize = { version = "1", features = ["alloc"] }
 sha2 = "0.11"
 base64 = "0.22"
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

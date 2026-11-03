@@ -15,7 +15,7 @@ fleet-proto = { path = "../fleet-proto" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 base64 = "0.22"
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature", "rand_core"] }
 hmac = "0.13"
 sha2 = "0.11"
 hex = "0.4"
@@ -35,6 +35,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", 
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "std"], optional = true }
 
 [dev-dependencies]
+rand10 = { package = "rand", version = "0.10" }
 serial_test = "3"
 rcgen = "0.14"
 

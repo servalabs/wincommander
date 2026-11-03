@@ -14,7 +14,7 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature", "rand_core"] }
 sha2 = "0.11"
 
 # Clipboard-guard policy types (plan §4.1) — Severity/Action/Rule/MatchKind/
@@ -45,3 +45,7 @@ autonomous-test = []
 # Sensitive-finder finding wire type. Off by default until the owner approves
 # reporting relative paths; compiling it in grants no behaviour.
 sensitive-finder = []
+
+[dev-dependencies]
+# Test oracle for signatures produced by releases using dalek 2.
+ed25519-dalek-v2 = { package = "ed25519-dalek", version = "=2.2.0", default-features = false, features = ["alloc"] }

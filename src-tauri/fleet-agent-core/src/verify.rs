@@ -412,7 +412,7 @@ mod tests {
     use ed25519_dalek::{Signature, Signer, SigningKey};
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::generate(&mut rand::rngs::OsRng)
+        SigningKey::generate(&mut rand10::rng())
     }
 
     /// Builds a `SignedCommand` the way the REAL system does: the signer signs
