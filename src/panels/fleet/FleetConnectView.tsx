@@ -35,9 +35,7 @@ const STEADY_POLL_MS = 4_000;
 const ENROLL_POLL_MS = 1_000;
 // Return to steady polling after this interval; live agent status still owns retry state.
 const ENROLL_TIMEOUT_MS = 75_000;
-// Refresh cadence while a managed-device unenroll request is awaiting admin
-// approval. Refreshes use the status endpoint: resubmitting after approval
-// would correctly receive 401 because the device credential is revoked.
+// Refresh cadence while a managed-device unenroll request is awaiting admin approval.
 const UNENROLL_POLL_MS = 5_000;
 
 interface UnenrollInfo {
@@ -51,15 +49,21 @@ type UnenrollResult = {
   status: string;
   approvals: number;
   required_approvals: number;
-  // Pro deliberately maps a post-revocation 401 to this value. The server
-  // cannot return the ordinary status body after it has invalidated the
-  // check-in secret, so status alone is not the authoritative approval bit.
   approved?: boolean;
 };
 
 function isUnenrollApproved(result: UnenrollResult) {
-  return result.approved === true || result.status === "approved" || result.status === "revoked";
+  return result.approved === true && result.status === "approved";
 }
+
+function pendingUnenroll(result: UnenrollResult): UnenrollInfo | null {
+  if (result.status !== "pending" || (result.approved !== undefined && result.approved !== false)
+      || !Number.isSafeInteger(result.approvals) || result.approvals < 0
+      || !Number.isSafeInteger(result.required_approvals) || result.required_approvals < 0) return null;
+  return { status: result.status, approvals: result.approvals, required: result.required_approvals };
+}
+
+const UNENROLL_UNCONFIRMED = "Could not verify Fleet removal status. Check the connection or contact an administrator, then retry.";
 
 export default function FleetConnectView() {
   const { data: license, isLoading: licenseLoading } = useLicenseQuery();
@@ -106,6 +110,7 @@ export default function FleetConnectView() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const enrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unenrollPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unenrollEpochRef = useRef(0);
 
   // Prefill form from persisted settings on mount.
   useEffect(() => {
@@ -128,6 +133,7 @@ export default function FleetConnectView() {
   }
 
   function stopUnenrollPoll() {
+    unenrollEpochRef.current += 1;
     if (unenrollPollRef.current !== null) { clearInterval(unenrollPollRef.current); unenrollPollRef.current = null; }
   }
 
@@ -261,12 +267,18 @@ export default function FleetConnectView() {
 
   async function finalizeApprovedUnenroll() {
     stopUnenrollPoll();
+    const epoch = unenrollEpochRef.current;
     let serviceStopped = false;
     try {
-      const result = await invoke<{ serviceReachabilityStopped?: boolean }>("fleet_disconnect");
+      const result = await invoke<{ ok?: boolean; serviceReachabilityStopped?: boolean }>("fleet_disconnect");
+      if (epoch !== unenrollEpochRef.current) return;
+      if (result?.ok !== true) throw new Error(UNENROLL_UNCONFIRMED);
       serviceStopped = result?.serviceReachabilityStopped === true;
     } catch {
-      // Server approval does not prove the separate local service stopped.
+      if (epoch !== unenrollEpochRef.current) return;
+      setUnenrollInfo(null);
+      setError(UNENROLL_UNCONFIRMED);
+      return;
     }
     setStatus(null);
     setWasEnrolled(false);
@@ -279,31 +291,40 @@ export default function FleetConnectView() {
   // tearing the agent down immediately, which the server refuses for a
   // managed device anyway (see fleet_agent.rs::fleet_disconnect).
   async function requestOrPollUnenroll() {
-    const res = await invoke<UnenrollResult>("fleet_request_unenroll");
-    setUnenrollInfo({ status: res.status, approvals: res.approvals, required: res.required_approvals });
+    const epoch = ++unenrollEpochRef.current;
+    let res: UnenrollResult;
+    try { res = await invoke<UnenrollResult>("fleet_request_unenroll"); }
+    catch (error) { if (epoch !== unenrollEpochRef.current) return; throw error; }
+    if (epoch !== unenrollEpochRef.current) return;
     if (isUnenrollApproved(res)) {
       await finalizeApprovedUnenroll();
       return;
     }
+    const pending = pendingUnenroll(res);
+    if (!pending) throw new Error(UNENROLL_UNCONFIRMED);
+    setUnenrollInfo(pending);
     if (unenrollPollRef.current !== null) return; // already polling
+    let checking = false;
     let consecutiveFailures = 0;
     unenrollPollRef.current = setInterval(async () => {
+      if (checking) return;
+      checking = true;
       try {
         const r = await invoke<UnenrollResult>("fleet_unenroll_status");
+        if (epoch !== unenrollEpochRef.current) return;
+        if (consecutiveFailures > 0) setError(null);
         consecutiveFailures = 0;
-        setUnenrollInfo({ status: r.status, approvals: r.approvals, required: r.required_approvals });
-        if (isUnenrollApproved(r)) await finalizeApprovedUnenroll();
-      } catch (err) {
-        // Transient hiccups (Pro mid-restart, network blip) are common on a
-        // multi-minute wait — tolerate a few before giving up so we don't
-        // drop a legitimate pending request over one bad poll.
+        if (isUnenrollApproved(r)) { await finalizeApprovedUnenroll(); return; }
+        const pending = pendingUnenroll(r);
+        if (!pending) throw new Error(UNENROLL_UNCONFIRMED);
+        setUnenrollInfo(pending);
+      } catch {
+        if (epoch !== unenrollEpochRef.current) return;
+        setUnenrollInfo(null);
+        setError(UNENROLL_UNCONFIRMED);
         consecutiveFailures += 1;
-        if (consecutiveFailures >= 3) {
-          stopUnenrollPoll();
-          setUnenrollInfo(null);
-          setError(typeof err === "string" ? err : "Lost contact while waiting for admin approval — click Disconnect to retry.");
-        }
-      }
+        if (consecutiveFailures >= 3) stopUnenrollPoll();
+      } finally { checking = false; }
     }, UNENROLL_POLL_MS);
   }
 
@@ -311,6 +332,7 @@ export default function FleetConnectView() {
     setError(null);
     setBusy(true);
     stopPoll();
+    stopUnenrollPoll();
     setEnrolling(false);
     try {
       // Every device must have its departure approved by an admin — see
@@ -318,7 +340,9 @@ export default function FleetConnectView() {
       // unenroll request and starts polling for approval.
       await requestOrPollUnenroll();
     } catch (err) {
-      setError(typeof err === "string" ? err : "Disconnect failed.");
+      setUnenrollInfo(null);
+      const message = typeof err === "string" ? err : err instanceof Error ? err.message : "";
+      setError(!message || /HTTP\s+401\b/i.test(message) ? UNENROLL_UNCONFIRMED : message);
     } finally {
       setBusy(false);
       // Resume steady poll so status reflects reality after disconnect.

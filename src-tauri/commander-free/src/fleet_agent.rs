@@ -3582,9 +3582,8 @@ pub async fn fleet_request_unenroll() -> Result<serde_json::Value, String> {
         .await
 }
 
-/// Read the current managed-unenroll status without re-submitting it. Once
-/// approval revokes the device HMAC secret, Pro maps the status endpoint's 401
-/// to `{ approved: true }` so the local cleanup can finish cleanly.
+/// Read the current managed-unenroll status without re-submitting it.
+/// Authentication failures leave approval unconfirmed.
 #[tauri::command]
 pub async fn fleet_unenroll_status() -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
@@ -3595,11 +3594,9 @@ pub async fn fleet_unenroll_status() -> Result<serde_json::Value, String> {
 /// Disconnect this device from the fleet and persist enabled=false to settings.
 /// The Pro agent task is aborted; no further heartbeats or command polls occur.
 ///
-/// Succeeds only when the server has already approved a prior unenroll
-/// request (the device's credentials are revoked server-side as part of
-/// approval — checkin_secret nulled, so it can never authenticate or receive
-/// commands again; a 401 on the unenroll-status poll is treated as implicit
-/// approval).  Until approved the command returns an error so the UI can
+/// Succeeds only when the server reports an approved unenroll request.
+/// An authentication failure does not establish approval. Until approved the
+/// command returns an error so the UI can
 /// direct the user to request approval via `fleet_request_unenroll` first.
 #[tauri::command]
 pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
@@ -3616,10 +3613,8 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
         value.get("deviceId").and_then(Value::as_str) == expected_device.as_deref()
     }).and_then(|value| value.get("credential_clear_token")).and_then(Value::as_str).map(str::to_owned);
 
-    // KT: Ask Pro to poll the server's unenroll-status endpoint.
-    // Pro returns `{ "approved": bool }` or errors if the server is unreachable.
-    // A 401 from the server means the token was already revoked (approval
-    // happened and revoke ran) — treat that as approved too.
+    // Ask Pro for an explicit approval result; authentication errors are not
+    // evidence that the server approved removal.
     let status_result = crate::sidecar::dispatch_paid_command(
         "fleet_agent_unenroll_status",
         serde_json::Value::Null,
@@ -3627,12 +3622,13 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     .await;
 
     let approved = match &status_result {
-        Ok(v) => {
-            v.get("approved").and_then(|a| a.as_bool()).unwrap_or(false)
-            // A 401 flag from Pro means the token is already revoked = approved.
-            || v.get("token_revoked").and_then(|a| a.as_bool()).unwrap_or(false)
-        }
-        // Pro failed to reach the server — refuse to disconnect (fail-closed).
+        Ok(v) if explicit_unenroll_approval(v) => true,
+        // Only a server status explicitly reporting pending/none is a
+        // known lack of approval. Older Pro builds synthesized `revoked`
+        // from any 401; that is not evidence of removal.
+        Ok(v) if v.get("approved").and_then(Value::as_bool) == Some(false)
+            && matches!(v.get("status").and_then(Value::as_str), Some("pending" | "none")) => false,
+        Ok(_) => return Err("Could not verify Fleet removal status. Check the connection or contact an administrator, then retry.".to_string()),
         Err(_) => false,
     };
 
@@ -3659,6 +3655,7 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
                         .to_string(),
                 );
             }
+            return Err("Could not verify Fleet removal status. Check the connection or contact an administrator, then retry.".to_string());
         }
         return Err(
             "Admin approval is required to disconnect this device. Use 'Request to leave' to submit a request."
@@ -3680,6 +3677,9 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     let mut disconnected =
         crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null)
             .await?;
+    if disconnected.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err("Could not confirm the Fleet agent stopped; retry or contact an administrator.".into());
+    }
 
     let service_stopped = if let Some(token) = service_token {
         let reply = crate::svc_client::call("svc.fleet.contact_observation", serde_json::json!({"operation":"clear", "token":token})).await;
@@ -3697,9 +3697,22 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     Ok(disconnected)
 }
 
+fn explicit_unenroll_approval(value: &Value) -> bool {
+    value.get("approved").and_then(Value::as_bool) == Some(true)
+        && value.get("status").and_then(Value::as_str) == Some("approved")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn unenroll_requires_explicit_approved_status_not_synthetic_401_mapping() {
+        assert!(super::explicit_unenroll_approval(&json!({"approved":true,"status":"approved"})));
+        for value in [json!({"approved":true,"status":"revoked"}), json!({"token_revoked":true}), json!({"approved":false,"status":"pending"}), json!({"approved":true})] {
+            assert!(!super::explicit_unenroll_approval(&value));
+        }
+    }
 
     #[test]
     fn service_enrollment_stages_only_configured_valid_origins() {
