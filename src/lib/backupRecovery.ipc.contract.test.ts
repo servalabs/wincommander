@@ -1,0 +1,36 @@
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+const sidecar = readFileSync("src-tauri/commander-free/src/sidecar.rs", "utf8");
+const backend = readFileSync("src-tauri/commander-free/src/backend.rs", "utf8");
+const ui = readFileSync("src/panels/vault/BackupRecoverySection.tsx", "utf8");
+test("backup lane uses verified worker lifecycle without borrowing protection capacity or replay", () => {
+  const helper = sidecar.slice(sidecar.indexOf("async fn dispatch_backup_command("), sidecar.indexOf("pub async fn dispatch_paid_command("));
+  expect(helper).toContain("spawn_pro_session_unlocked(SessionRole::Worker)");
+  expect(helper).toContain("shutdown_signal().subscribe()");
+  expect(helper).not.toContain("spawn_pro_session().await");
+  expect(helper).not.toContain("PRO_SPAWN_IS_HEALTHY");
+  expect(helper).not.toContain("pro_spawn_gate()");
+  expect(helper).toContain("dispatch_request(&mut session, request).await");
+  expect(helper).not.toContain("pool_semaphore");
+  expect(helper).not.toContain("return_pro_session_to_pool");
+  expect(helper).not.toContain("for attempt");
+  expect(helper).toContain("backup_outcome_unknown");
+  const dispatch = sidecar.slice(sidecar.indexOf("pub async fn dispatch_paid_command("));
+  expect(dispatch.indexOf("if backup::matches(feature_id)")).toBeLessThan(dispatch.indexOf("pool_semaphore().acquire()"));
+  expect(dispatch.indexOf("pro_is_installed()")).toBeLessThan(dispatch.indexOf("if backup::matches(feature_id)"));
+  expect(sidecar).toContain("cmd.kill_on_drop(true)");
+});
+test("only fixed paid adapters are exposed and UI distinguishes ciphertext copying from plaintext restoration", () => {
+  for (const feature of ["backup_container_export", "backup_container_verify", "backup_generation_restore"]) expect(backend).toContain(`"${feature}"`);
+  expect(backend).toContain('"backup_container_export" | "backup_container_verify" | "backup_generation_restore" => "paid"');
+  const redaction = backend.slice(backend.indexOf("let sanitized_params:"), backend.indexOf("let sanitized_params:") + 1200);
+  expect(redaction).toContain('matches!(command.as_str(), "backup_container_export" | "backup_container_verify" | "backup_generation_restore")');
+  expect(redaction).toContain('if is_secret { "***" }');
+  expect(ui).toContain("Normally dismount it first");
+  expect(ui).toContain("Restored files are plaintext");
+  expect(ui).toContain("original per-file hashes are unavailable");
+  expect(ui).toContain("remote durability or protected retention");
+  expect(ui).toContain('role="status"');
+  expect(ui).toContain('role="alert"');
+  expect(ui).not.toContain("localStorage");
+});

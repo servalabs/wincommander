@@ -66,6 +66,14 @@ pub(super) fn paid_command_args(
             args.insert("ReplaceExisting".into(), Value::Bool(confirmed));
         }
     }
+    if command == "backup_generation_restore" {
+        let flag = match params.get("allowLegacy").map(String::as_str) {
+            Some("true") => true,
+            Some("false") => false,
+            _ => return Err("allowLegacy must be explicitly true or false".into()),
+        };
+        args.insert("allowLegacy".into(), Value::Bool(flag));
+    }
     // Preserve the explicit recovery consent as a boolean. The service still
     // derives the actual SID and only allows it for a local administrator on
     // an unmanaged machine mount.
@@ -86,6 +94,20 @@ pub(super) fn paid_command_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_legacy_consent_requires_an_explicit_boolean() {
+        for flag in [false, true] {
+            let params = HashMap::from([("allowLegacy".into(), flag.to_string()), ("generationPath".into(), "true".into())]);
+            let args = paid_command_args("backup_generation_restore", &params).unwrap();
+            assert_eq!(args["allowLegacy"], Value::Bool(flag));
+            assert_eq!(args["generationPath"], "true");
+        }
+        for raw in [None, Some("1"), Some("TRUE"), Some("")] {
+            let params = raw.map(|value| HashMap::from([("allowLegacy".into(), value.into())])).unwrap_or_default();
+            assert!(paid_command_args("backup_generation_restore", &params).is_err());
+        }
+    }
 
     const MOUNT_COMMAND: &str = "Mount-EncryptionVolume";
     const REPAIR_PARAM: &str = "RepairCurrentAccountAccess";

@@ -1686,6 +1686,7 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "malware_quarantine_list"
         | "security_threat_snapshot"
         | "security_cve_snapshot" => "paid",
+        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => "paid",
         // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
         "Create-StegoMp4"
         | "Extract-StegoMp4"
@@ -2789,6 +2790,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Create-DualVolume" => Some("vault/volumes"),
         "Create-StegoMp4" => Some("vault/volumes"),
         "Extract-StegoMp4" => Some("vault/volumes"),
+        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => Some("vault/volumes"),
         "Attach-StegoContainer" => Some("vault/volumes"),
         "Restore-StegoContainer" => Some("vault/volumes"),
         "Refresh-StegoContainer" => Some("vault/volumes"),
@@ -2989,6 +2991,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Create-DualVolume",
         "Create-StegoMp4",
         "Extract-StegoMp4",
+        "backup_container_export",
+        "backup_container_verify",
+        "backup_generation_restore",
         "Attach-StegoContainer",
         "Restore-StegoContainer",
         "Refresh-StegoContainer",
@@ -5752,7 +5757,8 @@ pub(crate) async fn run_backend_script_with_timeout(
         .iter()
         .map(|(k, v)| {
             let kl = k.to_lowercase();
-            let is_secret = kl.contains("password")
+            let is_secret = matches!(command.as_str(), "backup_container_export" | "backup_container_verify" | "backup_generation_restore")
+                || kl.contains("password")
                 || kl.contains("keyfile")
                 || (command == "Get-ClipboardHistoryStatus"
                     && matches!(
@@ -5778,6 +5784,7 @@ pub(crate) async fn run_backend_script_with_timeout(
             || command.starts_with("Erase-")
             || command.starts_with("Remove-")
             || command.starts_with("Reset-")
+            || matches!(command.as_str(), "backup_container_export" | "backup_generation_restore")
             || command == "Provision-EncryptedBackupTarget"
             || command == "Invoke-AIControlOperation"
             || command == "Invoke-CleanupClearAllUsers";

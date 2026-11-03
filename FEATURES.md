@@ -228,6 +228,13 @@ operational risk, or proprietary enforcement logic.
   encrypted-container snapshots with explicit replacement confirmation; restoring
   a snapshot does not grant new Windows account permissions. Fleet-managed
   containers retain their separate selected-user and group permission checks.
+- Secure Storage offers explicit encrypted-container copy, copy checking, and
+  backed-up file recovery with local file/folder pickers. Normally dismount the
+  container before copying its backing file to existing local or network storage.
+  Restore checks the selected mounted generation and writes plaintext contents
+  to a new folder; legacy recovery requires an explicit choice. These checks do
+  not prove remote durability or retention. Requires a matching updated Pro;
+  availability starts with a future release containing this paired app change.
 - Personal Vault folder sync through Syncthing. Explicit setup installs a
   verified per-user engine if needed, retains existing sync identities, and
   follows the same container when its drive letter changes. After mounting,

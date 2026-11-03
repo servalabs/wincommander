@@ -138,6 +138,8 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
 }
 
 fn request_timeout_for(feature_id: &str) -> Option<Duration> {
+    if backup::matches(feature_id) { return Some(STEGO_TRANSFER_TIMEOUT); }
+
     if is_vault_mount_mutation(feature_id) {
         return Some(VAULT_MUTATION_TIMEOUT);
     }
@@ -1779,6 +1781,43 @@ async fn try_dispatch_via_agent(
     None
 }
 
+#[path = "sidecar_backup.rs"]
+mod backup;
+
+async fn dispatch_backup_command(
+    feature_id: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    backup::run(async {
+        // This child never enters the ordinary pool or the persistent agent session.
+        // The separate permit already bounds launch attempts. A stalled backup
+        // handshake must not hold protection's spawn gate or change its cooldown.
+        let mut session = deadlines::while_open(
+            shutdown_signal().subscribe(),
+            spawn_pro_session_unlocked(SessionRole::Worker),
+        )
+        .await
+        .unwrap_or_else(|| Err("Pro session is closing".into()))
+        .map_err(|error| format!("backup_not_started: {error}"))?;
+        let request = Request {
+            request_id: next_request_id(),
+            feature_id: feature_id.to_owned(),
+            diagnostic_operation_id: None,
+            args,
+        };
+        match dispatch_request(&mut session, request).await {
+            Ok(value) => Ok(value),
+            Err(DispatchFailure::Rejected(error)) => Err(format!("backup_rejected: {error}")),
+            Err(_) => Err(
+                "backup_outcome_unknown; request was not replayed; check retained files before use"
+                    .into(),
+            ),
+        }
+        // Dropping the owned session aborts its readers and kills its child, including on cancellation.
+    })
+    .await
+}
+
 pub async fn dispatch_paid_command(
     feature_id: &str,
     args: serde_json::Value,
@@ -1829,7 +1868,8 @@ pub async fn dispatch_paid_command(
             // P2: cascade dispatch — each step is irreversible; the
             // full_lockdown gate above already refuses, but belt-and-braces
             // here catches any direct sidecar calls.
-            || feature_id == "run_destruct_step";
+            || feature_id == "run_destruct_step"
+            || matches!(feature_id, "backup_container_export" | "backup_generation_restore");
         if mutating {
             let msg = format!(
                 "Refused: investigator mode does not run state-mutating Pro commands. \
@@ -1865,6 +1905,10 @@ pub async fn dispatch_paid_command(
             feature_id
         ),
     );
+
+    if backup::matches(feature_id) {
+        return dispatch_backup_command(feature_id, args).await;
+    }
 
     // Agent-affine commands (fleet, collectors, and stateful monitors) run on
     // the dedicated fleet-agent session so their in-process state stays
@@ -2280,6 +2324,9 @@ mod tests {
             "Attach-StegoContainer",
             "Restore-StegoContainer",
             "Refresh-StegoContainer",
+            "backup_container_export",
+            "backup_container_verify",
+            "backup_generation_restore",
         ] {
             assert_eq!(
                 request_timeout_for(feature_id),
