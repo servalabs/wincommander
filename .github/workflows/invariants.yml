@@ -240,6 +240,15 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Fleet mutex acceptance test did not run.' }
       - name: Test experimental offline hybrid release verification
         run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
+      - name: Test experimental Free hybrid release staging
+        shell: pwsh
+        run: |
+          cargo build --locked -p wincmd-pq-experiment --features experimental-signer --bin wincmd-pq-free-release-prepare
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & pwsh -NoProfile -File ../tools/stage-hybrid-free.test.ps1 -ToolPath (Join-Path $PWD 'target/debug/wincmd-pq-free-release-prepare.exe')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test experimental Free updater verification
+        run: cargo test --locked -p commander-free --lib --features experimental-pq-free-release updater::hybrid_free::tests
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation

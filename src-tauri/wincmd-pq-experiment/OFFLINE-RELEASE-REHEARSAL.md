@@ -72,6 +72,12 @@ The operator must keep the installer unchanged through publication and verify
 the ordinary release checks separately. These commands do not provide a key
 store, production signing ceremony, publishing, revocation or rollback.
 
+The local Free release staging command can prepare the same unsigned payload
+after its normal artifact checks: pass `-StageOnly -HybridPrepareTool` with the
+path to the built Free preparation tool, and optionally `-Beta`. It prints the
+payload location. The option is refused during publication and requires a
+numeric version. It does not create signatures or publish the payload.
+
 An independent reviewer can build `wincmd-pq-free-release-check` with
 `--features experimental-offline-verifier --bin wincmd-pq-free-release-check`
 and run:
