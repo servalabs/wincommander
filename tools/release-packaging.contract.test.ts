@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+  scripts: Record<string, string>;
+  dependencies: Record<string, string>;
+};
+const cargoLock = readFileSync("src-tauri/Cargo.lock", "utf8");
 const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8")) as {
   bundle: {
     resources: string[];
@@ -41,6 +45,16 @@ const sharedSettingsRepair = readFileSync(
 const sharedSettingsRepairTest = readFileSync("tools/test-shared-settings-repair.ps1", "utf8");
 
 describe("Free machine-wide release packaging", () => {
+  test("keeps Tauri plugin Rust and JavaScript minor versions aligned", () => {
+    for (const plugin of ["autostart", "dialog", "fs", "process", "shell", "updater"]) {
+      const rust = cargoLock.match(new RegExp(`\\[\\[package\\]\\]\\r?\\nname = "tauri-plugin-${plugin}"\\r?\\nversion = "(\\d+\\.\\d+)\\.`));
+      const js = packageJson.dependencies[`@tauri-apps/plugin-${plugin}`]?.match(/^(\d+\.\d+)\./);
+      expect(rust?.[1], `${plugin} Rust lock version`).toBeDefined();
+      expect(js?.[1], `${plugin} JavaScript package version`).toBeDefined();
+      expect(rust?.[1], `${plugin} release version mismatch`).toBe(js?.[1]);
+    }
+  });
+
   test("uses a shared Program Files install and a product-specific Start Menu location", () => {
     expect(baseConfig.bundle.targets).toBe("nsis");
     expect(baseConfig.bundle.windows.nsis.installMode).toBe("perMachine");

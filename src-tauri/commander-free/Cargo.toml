@@ -46,7 +46,7 @@ tempfile = "3"
 futures = "0.3"
 # 2.12 includes Tao's Windows/RDP keyboard reentrancy deadlock fix.
 tauri = { version = "^2.12", features = ["tray-icon", "unstable", "devtools", "image-png"] }
-tauri-plugin-shell = "2"
+tauri-plugin-shell = "=2.6.0"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
