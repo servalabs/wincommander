@@ -3,6 +3,7 @@ import { Button, Spinner } from "@/components/ui/bp";
 import { executeBackendCommand } from "../../hooks/useBackend";
 import SectionCard from "../shared/SectionCard";
 import { useAppConfirm } from "../shared/AppConfirmDialog";
+import useEntitlements from "../../hooks/useEntitlements";
 
 interface RestartPolicyStatus {
   isAdmin: boolean;
@@ -19,6 +20,7 @@ interface RestartPolicyStatus {
 
 export default function UpdateRestartCard() {
   const confirm = useAppConfirm();
+  const { isInvestigator } = useEntitlements();
   const [status, setStatus] = useState<RestartPolicyStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,10 +71,11 @@ export default function UpdateRestartCard() {
           {!status.scheduledMode && <p className="text-xs text-[var(--color-warning)]">This policy requires scheduled installation. You can choose to configure it below when no other update policy is already set.</p>}
           {status.scheduleOwned && <p className="text-xs text-[var(--text-mute)]">WinCommander set scheduled installation for this control. Restore removes that added schedule setting too.</p>}
           {!status.isAdmin && <p className="text-xs text-[var(--color-warning)]">Open WinCommander as administrator to change this setting.</p>}
+          {isInvestigator && <p className="text-xs text-[var(--color-warning)]">Changes are unavailable while Investigator mode is active.</p>}
           <div className="flex flex-wrap gap-2">
-            <Button small text="Prevent scheduled restart" disabled={busy || !status.isAdmin || !status.scheduledMode || status.conflict || status.policyExists} onClick={() => void change("apply")} />
-            {!status.scheduledMode && <Button small text={status.scheduleReserved ? "Retry schedule and prevent restart" : "Set schedule and prevent restart"} disabled={busy || !status.isAdmin || !status.canPrepareSchedule || status.conflict || status.policyExists} onClick={() => void prepareSchedule()} />}
-            <Button small text="Restore previous setting" disabled={busy || !status.isAdmin || status.conflict || !(status.owned || status.reserved || status.scheduleOwned || status.scheduleReserved)} onClick={() => void change("revert")} />
+            <Button small text="Prevent scheduled restart" disabled={busy || isInvestigator || !status.isAdmin || !status.scheduledMode || status.conflict || status.policyExists} onClick={() => void change("apply")} />
+            {!status.scheduledMode && <Button small text={status.scheduleReserved ? "Retry schedule and prevent restart" : "Set schedule and prevent restart"} disabled={busy || isInvestigator || !status.isAdmin || !status.canPrepareSchedule || status.conflict || status.policyExists} onClick={() => void prepareSchedule()} />}
+            <Button small text="Restore previous setting" disabled={busy || isInvestigator || !status.isAdmin || status.conflict || !(status.owned || status.reserved || status.scheduleOwned || status.scheduleReserved)} onClick={() => void change("revert")} />
             <Button small minimal icon="refresh" text="Refresh" disabled={busy} onClick={() => { setError(null); void refresh(); }} />
           </div>
         </>}
