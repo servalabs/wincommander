@@ -193,15 +193,27 @@ function Get-PrivacyShieldNativeOptions {
         if ($matches.Count -gt 1) { return $null }
         $options[$flags[$name]] = ($matches.Count -eq 1)
     }
+    $videoOnlyCount = [regex]::Matches($CommandLine, '(?:^|\s)--fleet-video-only(?=\s|$)').Count
+    if ($videoOnlyCount -gt 1) { return $null }
+    if ($videoOnlyCount -eq 1) { $options.fleetVideoOnly = $true }
+    $explicitCount = [regex]::Matches($CommandLine, '(?:^|\s)--detector-options-explicit(?=\s|$)').Count
+    if ($explicitCount -gt 1) { return $null }
+    if ($explicitCount -eq 0 -and -not ($options.checkGaze -or $options.checkFaces -or $options.checkPhone)) {
+        $options.checkGaze = $true
+    }
     $names = @{
         'model-level' = 'modelLevel'; 'confidence' = 'confidence'
         'overlay-opacity' = 'overlayOpacity'; 'wake-delay-ms' = 'wakeDelayMs'
         'device-wake-multiplier' = 'deviceWakeMultiplier'
         'multi-face-wake-multiplier' = 'multiFaceWakeMultiplier'
         'buffer-frames' = 'bufferFrames'; 'capture-speed' = 'captureSpeed'
+        'look-away-delay-seconds' = 'lookAwayDelaySeconds'
     }
     foreach ($name in $names.Keys) {
-        if ([regex]::Matches($CommandLine, "(?:^|\s)--$name(?=\s|$)").Count -ne 1) { return $null }
+        $flagCount = [regex]::Matches($CommandLine, "(?:^|\s)--$name(?=\s|$)").Count
+        # Older running detectors do not report this additive option.
+        if ($name -eq 'look-away-delay-seconds' -and $flagCount -eq 0) { continue }
+        if ($flagCount -ne 1) { return $null }
         $matches = [regex]::Matches($CommandLine, "(?:^|\s)--$name\s+([^\s`"']+)(?=\s|$)")
         if ($matches.Count -ne 1) { return $null }
         $raw = $matches[0].Groups[1].Value
@@ -232,6 +244,7 @@ function Get-PrivacyShieldStatus {
         $activeMode = $null
         $nativeOptions = $null
         $cameraIndex = $null
+        $processStartTicks = $null
         $camera = Get-PrivacyShieldCameraAvailability
         $currentSessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
 
@@ -274,6 +287,7 @@ function Get-PrivacyShieldStatus {
                 } else {
                     'notify_only'
                 }
+                try { $processStartTicks = (Get-Process -Id $proc.ProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString() } catch {}
                 $nativeOptions = Get-PrivacyShieldNativeOptions -CommandLine $proc.CommandLine
                 # Local recovery needs the exact camera index. Keep this out
                 # of Fleet observations and fail closed on missing/duplicate
@@ -318,6 +332,7 @@ function Get-PrivacyShieldStatus {
             running         = $running
             processId       = $processId
             activeMode      = $activeMode
+            processStartTicks = $processStartTicks
             nativeOptions   = $nativeOptions
             cameraIndex     = $cameraIndex
             cameraAvailable = [bool]$camera.available
@@ -353,7 +368,7 @@ function Get-PrivacyShieldStartFailure {
     if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out') {
         return @{ code = 'hardware_unavailable'; message = 'No usable camera detected for Privacy Shield.' }
     }
-    if ($LogTail -imatch 'missing python dependency|importerror|module not found') {
+    if ($LogTail -imatch 'missing python dependency|dependency import failed|importerror|module not found|no module named') {
         return @{ code = 'runtime_dependency_missing'; message = 'Privacy Shield AI runtime is unavailable.' }
     }
     if ($LogTail -imatch 'model preparation|failed to download|model download') {
@@ -378,11 +393,13 @@ function Start-PrivacyShield {
         [switch]$BlurPhone,
         [switch]$CaptureOnDevice,
         [switch]$CaptureOnMultiFace,
+        [switch]$FleetVideoOnly,
         [ValidateSet('blur_notify', 'notify_only')][string]$Mode = '',
         [string]$ModelLevel = "nano",
         [float]$Confidence = 0.5,
         [int]$OverlayOpacity = 200,
         [int]$WakeDelayMs = 150,
+        [ValidateRange(0, 300)][int]$LookAwayDelaySeconds = 0,
         [int]$DeviceWakeMultiplier = 2,
         [int]$MultiFaceWakeMultiplier = 2,
         [int]$BufferFrames = 2,
@@ -459,6 +476,7 @@ import threading
 import traceback
 import ctypes
 import urllib.request
+import uuid
 from collections import deque
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -478,15 +496,16 @@ def log(msg):
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with open(LOG_FILE, "a", encoding="utf-8") as handle:
-            handle.write(f"[{timestamp}] {msg}\n")
+            launch_id = os.environ.get("WINCMD_SHIELD_LAUNCH_ID", "unknown")
+            handle.write(f"[{timestamp}] [launch:{launch_id}] {msg}\n")
     except Exception:
         pass
 
-def emit_event(name, reason=""):
+def emit_event(name, reason="", capture_ids=None):
     # One JSON object per line (NDJSON). Appended + flushed on every Qt
     # look-state change so the backend reader sees transitions promptly.
     try:
-        line = json.dumps({"event": name, "reason": reason, "ts": time.time()})
+        line = json.dumps({"event": name, "reason": reason, "ts": time.time(), "capture_ids": capture_ids or {}})
         with open(EVENTS_FILE, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
             handle.flush()
@@ -590,17 +609,38 @@ def set_process_dpi_aware():
     except: pass
 
 # --- Worker Thread ---
+class ContinuousLookAway:
+    """Delay only a continuous, actually observed look-away episode."""
+    def __init__(self, delay_seconds):
+        self.delay_seconds = max(0, min(300, int(delay_seconds)))
+        self.since = None
+        self.last_observed = None
+
+    def reset(self):
+        self.since = None
+        self.last_observed = None
+
+    def observe(self, away, now):
+        if not away:
+            self.reset()
+            return False
+        if (self.since is None or self.last_observed is None or
+                now < self.last_observed or now - self.last_observed > 2.0):
+            self.since = now
+        self.last_observed = now
+        return now - self.since >= self.delay_seconds
+
 class ShieldWorker(QThread):
-    state_changed = pyqtSignal(bool, str) # (is_clear, reason_msg)
+    state_changed = pyqtSignal(bool, str, object)
     status_msg = pyqtSignal(str)
     init_failed = pyqtSignal(str)
 
     def __init__(self, camera_idx=0, check_gaze=True, check_faces=False, check_phone=False,
                  capture_on_device=False,
-                 capture_on_multi_face=False,
+                 capture_on_multi_face=False, fleet_video_only=False,
                  model_level="nano", confidence=0.5, cam_width=640, cam_height=480,
                  wake_delay_ms=150, device_wake_multiplier=2, multi_face_wake_multiplier=2,
-                 buffer_frames=2, capture_speed=1):
+                 buffer_frames=2, capture_speed=1, look_away_delay_seconds=0):
         super().__init__()
         self.camera_idx = camera_idx
         self.check_gaze = check_gaze
@@ -608,6 +648,8 @@ class ShieldWorker(QThread):
         self.check_phone = check_phone
         self.capture_on_device = capture_on_device
         self.capture_on_multi_face = capture_on_multi_face
+        self.fleet_video_only = fleet_video_only
+        self._capture_ids = {}
         self.model_level = model_level
         self.confidence = confidence
         self.cam_width = cam_width
@@ -617,6 +659,7 @@ class ShieldWorker(QThread):
         self.multi_face_wake_multiplier = max(1, min(20, int(multi_face_wake_multiplier)))
         self.buffer_frames = max(1, int(buffer_frames))
         self.capture_speed = max(1, min(4, int(capture_speed)))
+        self._look_away = ContinuousLookAway(look_away_delay_seconds)
 
         self._running = True
         self._is_locked = True
@@ -730,54 +773,88 @@ class ShieldWorker(QThread):
             self.status_msg.emit(f"Init Error: {e}")
             return False
 
-    def _check_gaze(self, landmarks) -> bool:
-        # Simple heuristic: Nose vs Cheeks
+    def _face_orientation(self, landmarks):
+        # Reuse existing landmarks; no second camera or inference pass.
         nose = landmarks[1]
         l_cheek = landmarks[234]
         r_cheek = landmarks[454]
         face_width = r_cheek.x - l_cheek.x
-        if face_width <= 0: return False
+        if face_width <= 0: return "unknown"
         mid_x = (l_cheek.x + r_cheek.x) / 2.0
         yaw_ratio = (nose.x - mid_x) / face_width
-        return abs(yaw_ratio) <= 0.35 # Slightly looser than before
+        yaw = abs(yaw_ratio)
+        if yaw >= 0.45: return "profile"
+        if yaw > 0.35: return "away"
+        return "attentive"
 
     def _start_webcam_recording(self, prefix: str, reason_key: str, post_roll_sec: float = 5.0):
         """Start recording webcam. Records while detection is active + post_roll_sec after it ends."""
+        out = None
         try:
             if not self._frame_buffer:
-                return
-            video_path = os.path.join(CAPTURES_DIR, f"{prefix}_webcam.avi")
+                return False
+            # A Fleet clip must not look complete while its writer is open.
+            final_path = os.path.join(CAPTURES_DIR, f"{prefix}_webcam.avi")
+            video_path = (os.path.join(CAPTURES_DIR, f"{prefix}_pending.avi")
+                          if self.fleet_video_only else final_path)
             first = self._frame_buffer[0]
             h, w = first.shape[:2]
             fourcc = cv2.VideoWriter_fourcc(*'MJPG')
             output_fps = 30.0 * self.capture_speed
             out = cv2.VideoWriter(video_path, fourcc, output_fps, (w, h))
             if not out.isOpened():
+                out.release()
                 log(f"VideoWriter failed for {video_path}")
-                return
+                return False
             for f in self._frame_buffer:
                 out.write(f)
             now = time.monotonic()
             self._active_recordings.append({
                 "out": out, "path": video_path, "reason_key": reason_key,
-                "record_until": now + post_roll_sec, "in_post_roll": False
+                "final_path": final_path if self.fleet_video_only else None,
+                "record_until": now + post_roll_sec, "in_post_roll": False,
+                "max_until": now + 30.0 if self.fleet_video_only else float('inf')
             })
+            return True
         except Exception as e:
+            if out is not None:
+                try:
+                    out.release()
+                except Exception:
+                    pass
             log(f"Start webcam recording failed: {e}")
+            return False
+
+    def _finish_webcam_recording(self, recording):
+        try:
+            recording["out"].release()
+            final_path = recording.get("final_path")
+            if final_path:
+                # Keep failed or oversized recordings unadvertised for later cleanup.
+                size = os.path.getsize(recording["path"])
+                if not 0 < size <= 50 * 1024 * 1024:
+                    log("Fleet webcam recording was empty or exceeded the size limit")
+                    return
+                os.rename(recording["path"], final_path)
+            log("Recorded webcam video")
+        except Exception as e:
+            log(f"Could not finalize webcam recording: {e}")
 
     def _capture_incident(self, frame, reason: str, reason_key: str):
         """Capture screen (PNG) + start webcam video. Video records while detection active + 5s post-roll."""
         try:
             os.makedirs(CAPTURES_DIR, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
-            prefix = ts + "_" + reason.replace(" ", "_").lower()
+            clip_id = str(uuid.uuid4()) if self.fleet_video_only else None
+            prefix = ("clip_" + clip_id) if clip_id else ts + "_" + reason.replace(" ", "_").lower()
             screen_path = os.path.join(CAPTURES_DIR, f"{prefix}_screen.png")
-            if sys.platform == "win32":
+            if not self.fleet_video_only and sys.platform == "win32":
                 from PIL import ImageGrab
                 img = ImageGrab.grab()
                 img.save(screen_path)
-            self._start_webcam_recording(prefix, reason_key)
-            log(f"Captured incident: {screen_path}, webcam video (records while active + 5s post)")
+            if self._start_webcam_recording(prefix, reason_key) and clip_id:
+                self._capture_ids[reason_key] = clip_id
+            log("Captured incident webcam video (records while active + 5s post)" if self.fleet_video_only else f"Captured incident: {screen_path}, webcam video (records while active + 5s post)")
         except Exception as e:
             log(f"Capture failed: {e}")
 
@@ -846,11 +923,15 @@ class ShieldWorker(QThread):
         last_ts = time.monotonic()
         while self._running:
             now_ts = time.monotonic()
-            delta_ms = (now_ts - last_ts) * 1000.0
+            # A stalled capture is not proof that the user was attentive.
+            delta_ms = min(250.0, max(0.0, (now_ts - last_ts) * 1000.0))
             last_ts = now_ts
             ret, frame = cap.read()
             if not ret:
+                self._look_away.reset()
+                self._attentive_ms = 0.0
                 time.sleep(0.5)
+                last_ts = time.monotonic()
                 continue
 
             self._frame_buffer.append(frame.copy())
@@ -866,6 +947,7 @@ class ShieldWorker(QThread):
                 device_triggered = False
                 multi_face_triggered = False
                 gaze_triggered = False
+                raw_look_away = False
                 # A sustained missing face is a distinct presence-lost event.
                 # It is debounced and recovered independently, so a camera
                 # dropout cannot create an alert storm.
@@ -901,6 +983,7 @@ class ShieldWorker(QThread):
                             if self._no_face_detected_streak >= self.buffer_frames:
                                 self._presence_loss_active = True
                             presence_lost_triggered = self._presence_loss_active
+                            presence_unknown = not self._presence_loss_active
                     else:
                         self._no_face_detected_streak = 0
                         if self._presence_loss_active:
@@ -922,9 +1005,13 @@ class ShieldWorker(QThread):
                             self._multi_face_detected_streak = 0
                         if self._multi_face_detected_streak >= self.buffer_frames:
                             multi_face_triggered = True
-                        if not multi_face_triggered and self.check_gaze:
-                            if not self._check_gaze(landmarks[0]):
-                                gaze_triggered = True
+                        if not multi_face_triggered and not presence_unknown and self.check_gaze:
+                            orientation = self._face_orientation(landmarks[0])
+                            raw_look_away = orientation == "away"
+                            presence_lost_triggered = orientation == "profile"
+                            presence_unknown = orientation == "unknown"
+
+                gaze_triggered = self._look_away.observe(raw_look_away, time.monotonic())
 
                 # Combine only explicit, configured threats. Presence loss is
                 # independent of gaze and uses the same explicit blur flag.
@@ -942,6 +1029,8 @@ class ShieldWorker(QThread):
                     reason = " & ".join(parts)
 
             except Exception as e:
+                self._look_away.reset()
+                presence_unknown = True
                 log(f"Detection loop error: {e}")
 
             # Capture for each triggered reason (both device and multi-face when both detected)
@@ -953,7 +1042,14 @@ class ShieldWorker(QThread):
                 self._captured_for_multi_face = True
 
             # Hysteresis Smoothing
-            if is_clear:
+            recovery_unknown = presence_unknown or raw_look_away
+            if recovery_unknown and is_clear:
+                # A partially recovered face, or a look-away that has not
+                # yet reached its trigger delay, is not attentive recovery.
+                # Actual independent threats still accrue distracted time.
+                self._attentive_ms = 0.0
+                self._distracted_ms = 0.0
+            elif is_clear:
                 self._attentive_ms += delta_ms
                 self._distracted_ms = 0.0
             else:
@@ -961,7 +1057,7 @@ class ShieldWorker(QThread):
                 self._attentive_ms = 0.0
             
             # Transition Logic
-            if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):
+            if recovery_unknown and is_clear:
                 # Preserve a genuine alert state through a short unknown
                 # camera interval, but never emit/blur solely for absence.
                 pass
@@ -972,32 +1068,29 @@ class ShieldWorker(QThread):
                 multi_clear = self.wake_delay_ms * self.multi_face_wake_multiplier if multi_in_reason else 0
                 required_clear_ms = max(device_clear, multi_clear, self.wake_delay_ms)
 
-                # A gaze/no-face overlay must disappear on the very first
-                # attentive frame.  Applying the general wake hysteresis here
-                # left Fleet-started sessions blank after the user looked back.
-                # Keep the stricter clear window only when the lock was caused
-                # by a phone or multiple faces, where a brief clear frame is
-                # not enough to safely reveal the screen.
-                clear_immediately = is_clear and not device_in_reason and not multi_in_reason
-                if clear_immediately or self._attentive_ms >= required_clear_ms:
+                # Every trigger uses the configured continuous recovery time.
+                # Clearing a gaze/presence lock on one good frame caused the
+                # overlay to blink when the next frame lost the face again.
+                if is_clear and self._attentive_ms >= required_clear_ms:
                     self._is_locked = False
                     self._lock_reason = ""
                     self._captured_for_device = False
                     self._captured_for_multi_face = False
-                    self.state_changed.emit(True, "")
+                    self._capture_ids.clear()
+                    self.state_changed.emit(True, "", {})
                 elif reason and reason != self._lock_reason:
                     # A new condition can arrive while a prior condition is
                     # still active (for example look-away followed by phone
                     # detection). Emit the new reason so its independent blur
                     # toggle and Fleet alert are evaluated immediately.
                     self._lock_reason = reason
-                    self.state_changed.emit(False, reason)
+                    self.state_changed.emit(False, reason, dict(self._capture_ids))
             else:
                 buffer_ms = self.buffer_frames * 30.0
                 if self._distracted_ms >= buffer_ms:
                     self._is_locked = True
                     self._lock_reason = reason
-                    self.state_changed.emit(False, reason)
+                    self.state_changed.emit(False, reason, dict(self._capture_ids))
 
             still_active = []
             for rec in self._active_recordings:
@@ -1010,19 +1103,18 @@ class ShieldWorker(QThread):
                     else:
                         rec["in_post_roll"] = True
                         rec["record_until"] = now_ts + 5.0
-                if now_ts < rec["record_until"]:
+                if now_ts < rec["record_until"] and now_ts < rec["max_until"]:
                     out.write(frame)
                     still_active.append(rec)
                 else:
-                    out.release()
-                    log(f"Recorded webcam video: {path}")
+                    self._finish_webcam_recording(rec)
             self._active_recordings = still_active
 
             time.sleep(0.03)
 
         for rec in self._active_recordings:
             try:
-                rec["out"].release()
+                self._finish_webcam_recording(rec)
             except Exception:
                 pass
         self._active_recordings.clear()
@@ -1037,6 +1129,7 @@ class ShieldOverlay(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setObjectName("shieldOverlay")
         # One overlay per physical display is reliable on mixed-DPI and
         # negative-coordinate monitor layouts.
         self.setGeometry(screen.geometry())
@@ -1052,20 +1145,27 @@ class ShieldOverlay(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         self.opacity_val = opacity
+        self._active_opacity = min(120, opacity)
         self.enable_blur()
 
     def enable_blur(self):
-        QTimer.singleShot(100, lambda: enable_window_blur(int(self.winId()), self.opacity_val))
+        # Consult the latest state when the timer runs: a pending blur update
+        # must not replace a newer presence-lost blackout.
+        QTimer.singleShot(100, lambda: enable_window_blur(int(self.winId()), self._active_opacity))
 
     def update_state(self, is_clear, reason):
         if is_clear:
             self.hide()
             self.label.hide()
         else:
+            presence_lost = "PRESENCE LOST" in reason or "NO FACE" in reason
+            self._active_opacity = (255 if presence_lost else
+                min(120, self.opacity_val) if reason == "LOOK AWAY" else self.opacity_val)
+            self.setStyleSheet("QWidget#shieldOverlay { background-color: black; }" if presence_lost else "")
             self.show()
             self.enable_blur()
-            if reason and reason != "NO FACE" and reason != "LOOK AWAY":
-                self.label.setText(reason)
+            if reason and reason != "LOOK AWAY":
+                self.label.setText("PRESENCE LOST" if reason == "NO FACE" else reason)
                 self.label.show()
             else:
                 self.label.hide()
@@ -1088,6 +1188,7 @@ class ShieldApp(QObject):
         parser = argparse.ArgumentParser()
         parser.add_argument('--camera', type=int, default=0)
         parser.add_argument('--check-gaze', action='store_true')
+        parser.add_argument('--detector-options-explicit', action='store_true')
         parser.add_argument('--check-faces', action='store_true')
         parser.add_argument('--check-phone', action='store_true')
         parser.add_argument('--blur-gaze', action='store_true')
@@ -1095,12 +1196,14 @@ class ShieldApp(QObject):
         parser.add_argument('--blur-phone', action='store_true')
         parser.add_argument('--capture-on-device', action='store_true')
         parser.add_argument('--capture-on-multi-face', action='store_true')
+        parser.add_argument('--fleet-video-only', action='store_true')
         
         # Granular Controls
         parser.add_argument('--model-level', type=str, default='nano', help='nano, small, medium, large')
         parser.add_argument('--confidence', type=float, default=0.5)
         parser.add_argument('--overlay-opacity', type=int, default=200)
         parser.add_argument('--wake-delay-ms', type=int, default=150)
+        parser.add_argument('--look-away-delay-seconds', type=int, default=0, choices=range(0, 301))
         parser.add_argument('--device-wake-multiplier', type=int, default=2)
         parser.add_argument('--multi-face-wake-multiplier', type=int, default=2)
         parser.add_argument('--buffer-frames', type=int, default=6)
@@ -1136,7 +1239,7 @@ class ShieldApp(QObject):
             pass
 
         # Defaults if no flags set (default to basic eye tracker behavior)
-        if not (self.args.check_gaze or self.args.check_faces or self.args.check_phone):
+        if not self.args.detector_options_explicit and not (self.args.check_gaze or self.args.check_faces or self.args.check_phone):
             self.args.check_gaze = True
 
         # Fresh event sidecar per session so the Rust reader never replays
@@ -1156,9 +1259,11 @@ class ShieldApp(QObject):
             check_phone=self.args.check_phone,
             capture_on_device=self.args.capture_on_device,
             capture_on_multi_face=self.args.capture_on_multi_face,
+            fleet_video_only=self.args.fleet_video_only,
             model_level=self.args.model_level,
             confidence=self.args.confidence,
             wake_delay_ms=self.args.wake_delay_ms,
+            look_away_delay_seconds=self.args.look_away_delay_seconds,
             device_wake_multiplier=self.args.device_wake_multiplier,
             multi_face_wake_multiplier=self.args.multi_face_wake_multiplier,
             buffer_frames=self.args.buffer_frames,
@@ -1184,11 +1289,11 @@ class ShieldApp(QObject):
         self.overlay.update_state(True, "")
         self.app.quit()
 
-    def _handle_state(self, is_clear, reason):
+    def _handle_state(self, is_clear, reason, capture_ids):
         # Fleet/flow receives every transition. The local blur toggles only
         # control visual enforcement; an unchecked toggle never silences an
         # attention event.
-        self._emit_look_event(is_clear, reason)
+        self._emit_look_event(is_clear, reason, capture_ids)
         # `is_clear` means the user is attentive. It must clear the overlay,
         # not satisfy a blur condition; otherwise every successful camera
         # startup immediately blacks out the screen.
@@ -1199,11 +1304,17 @@ class ShieldApp(QObject):
         )
         self.overlay.update_state(is_clear or not should_blur, reason)
 
-    def _emit_look_event(self, is_clear, reason):
+    def _emit_look_event(self, is_clear, reason, capture_ids):
         # Qt look-state change -> NDJSON sidecar. `is_clear` True means the
         # user is present/attentive (look_back); False means the overlay
         # engaged (look_away), carrying the trigger reason for context.
-        emit_event("look_back" if is_clear else "look_away", "" if is_clear else reason)
+        ids = {}
+        if not is_clear and self.args.fleet_video_only:
+            if "PHONE DETECTED" in reason and "device" in capture_ids:
+                ids["phone_detected"] = capture_ids["device"]
+            if "MULTIPLE FACES" in reason and "multi_face" in capture_ids:
+                ids["multiple_faces"] = capture_ids["multi_face"]
+        emit_event("look_back" if is_clear else "look_away", "" if is_clear else reason, ids)
 
     def handle_init_fail(self, msg):
         log(f"Shield init failed: {msg}")
@@ -1244,6 +1355,7 @@ if __name__ == "__main__":
             "--confidence", "$Confidence",
             "--overlay-opacity", "$OverlayOpacity",
             "--wake-delay-ms", "$WakeDelayMs",
+            "--look-away-delay-seconds", "$LookAwayDelaySeconds",
             "--device-wake-multiplier", "$DeviceWakeMultiplier",
             "--multi-face-wake-multiplier", "$MultiFaceWakeMultiplier",
             "--buffer-frames", "$BufferFrames",
@@ -1252,11 +1364,15 @@ if __name__ == "__main__":
         if ($CheckGaze) { $pythonArgs += "--check-gaze" }
         if ($CheckFaces) { $pythonArgs += "--check-faces" }
         if ($CheckPhone) { $pythonArgs += "--check-phone" }
+        if ($PSBoundParameters.ContainsKey('CheckGaze') -or $PSBoundParameters.ContainsKey('CheckFaces') -or $PSBoundParameters.ContainsKey('CheckPhone')) {
+            $pythonArgs += "--detector-options-explicit"
+        }
         if ($BlurGaze) { $pythonArgs += "--blur-gaze" }
         if ($BlurFaces) { $pythonArgs += "--blur-faces" }
         if ($BlurPhone) { $pythonArgs += "--blur-phone" }
         if ($CaptureOnDevice) { $pythonArgs += "--capture-on-device" }
         if ($CaptureOnMultiFace) { $pythonArgs += "--capture-on-multi-face" }
+        if ($FleetVideoOnly) { $pythonArgs += "--fleet-video-only" }
         if ($Mode) { $pythonArgs += "--mode"; $pythonArgs += $Mode }
         if ($ownerPid -gt 0) { $pythonArgs += "--owner-pid"; $pythonArgs += "$ownerPid" }
 
@@ -1266,6 +1382,10 @@ if __name__ == "__main__":
 
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = $pythonCmd
+        # Correlate failures with this launch; earlier log lines can describe
+        # a different camera, runtime, or detector attempt.
+        $launchId = [guid]::NewGuid().ToString('N')
+        $startInfo.EnvironmentVariables['WINCMD_SHIELD_LAUNCH_ID'] = $launchId
         $startInfo.Arguments = $pythonArgs -join " "
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
@@ -1304,7 +1424,7 @@ if __name__ == "__main__":
             $logTail = ""
             $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             if ($logPath -and (Test-Path $logPath)) {
-                $logTail = (Get-Content $logPath -Tail 30 | Out-String).Trim()
+                $logTail = (Get-Content $logPath -Tail 300 | Where-Object { $_.Contains("[launch:$launchId]") } | Out-String).Trim()
                 $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             }
             $cameraStatus = if ($failure.code -in @('camera_busy', 'camera_feed_unavailable', 'hardware_unavailable')) {
@@ -1317,7 +1437,9 @@ if __name__ == "__main__":
             return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
-        @{ success = $true; processId = $process.Id; cameraStatus = 'available'; shieldLifecycle = 'running' }
+        $startTicks = $null
+        try { $startTicks = $process.StartTime.ToUniversalTime().Ticks.ToString() } catch {}
+        @{ success = $true; processId = $process.Id; processStartTicks = $startTicks; cameraStatus = 'available'; shieldLifecycle = 'running' }
     }
     catch {
         @{ error = $true; message = 'Privacy Shield could not start.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'shield_start_failed' }

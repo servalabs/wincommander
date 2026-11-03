@@ -2384,6 +2384,7 @@ export function useBackend(retainCleanupScanErrors = false) {
       blurGaze: boolean = checkGaze,
       blurFaces: boolean = checkFaces,
       blurPhone: boolean = checkPhone,
+      lookAwayDelaySeconds: number = 0,
     ) => execute<{ success: boolean; processId?: number; message?: string }>("Start-PrivacyShield", {
       Camera: camera,
       CheckGaze: checkGaze,
@@ -2398,6 +2399,7 @@ export function useBackend(retainCleanupScanErrors = false) {
       Confidence: confidence,
       OverlayOpacity: overlayOpacity,
       WakeDelayMs: wakeDelayMs,
+      LookAwayDelaySeconds: lookAwayDelaySeconds,
       DeviceWakeMultiplier: deviceWakeMultiplier,
       MultiFaceWakeMultiplier: multiFaceWakeMultiplier,
       BufferFrames: bufferFrames,

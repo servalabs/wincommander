@@ -5,12 +5,7 @@
 /// boundary at or before that byte offset. Never panics, never splits a
 /// multi-byte codepoint, never allocates.
 ///
-/// `CompiledRuleSet::evaluate` takes truncation to `RuleSetLimits::
-/// max_text_bytes` as a precondition enforced by the CALLER — it does not
-/// re-check the length itself. This is the one correct way to do that
-/// truncation: `&text[..max_bytes]` panics whenever `max_bytes` lands mid
-/// codepoint, which a raw clipboard read makes routine (multi-byte UTF-8 is
-/// common in pasted text).
+/// The scanner applies this cap internally; I/O callers may also apply it early.
 pub fn truncate_for_match(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;

@@ -94,6 +94,61 @@ fn signed_merge_commits_configuration_locks_and_version_together() {
 }
 
 #[test]
+fn signed_look_away_delay_is_preserved_and_out_of_range_is_rejected_before_write() {
+    let fixture = Fixture::new();
+    let mut current = SETTINGS_CACHE.lock().unwrap().as_ref().unwrap().clone();
+    current.app.local_privacy_shield_look_away_delay_seconds = Some(7);
+    for (value, expected) in [(json!(0), Some(0)), (json!(10), Some(10)), (json!(300), Some(300)), (json!(301), None), (json!(null), None), (json!("10"), None)] {
+        let mut epoch = fixture.epoch(11, "merge");
+        epoch.config = json!({"privacy":{"privacyShield":{"gazeDetectionEnabled":false,"lookAwayDelaySeconds":value}}});
+        let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+            version: i64::from(epoch.version), config: &epoch.config, locked_paths: &epoch.locked_paths,
+            managed: epoch.managed, target_kind: "org", target_id: None,
+        });
+        epoch.signature = Some(STANDARD.encode(fixture.key.sign(&preimage).to_bytes()));
+        match expected {
+            Some(seconds) => {
+                let candidate = prepare(&current, &epoch).unwrap();
+                assert_eq!(candidate.ideal.privacy.privacy_shield.look_away_delay_seconds, Some(seconds));
+                assert_eq!(candidate.ideal.privacy.privacy_shield.gaze_detection_enabled, Some(false));
+                assert_eq!(candidate.app.local_privacy_shield_look_away_delay_seconds, Some(7));
+            }
+            None => assert!(prepare(&current, &epoch).is_err()),
+        }
+    }
+    current.ideal.privacy.privacy_shield.look_away_delay_seconds = Some(25);
+    current.ideal.privacy.privacy_shield.fleet_capture_on_phone = Some(true);
+    current.ideal.privacy.privacy_shield.fleet_capture_on_multi_face = Some(true);
+    let mut omitted = fixture.epoch(11, "merge");
+    omitted.config = json!({"privacy":{"privacyShield":{"gazeDetectionEnabled":false}}});
+    let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+        version: i64::from(omitted.version), config: &omitted.config, locked_paths: &omitted.locked_paths,
+        managed: omitted.managed, target_kind: "org", target_id: None,
+    });
+    omitted.signature = Some(STANDARD.encode(fixture.key.sign(&preimage).to_bytes()));
+    let candidate = prepare(&current, &omitted).unwrap();
+    assert_eq!(candidate.ideal.privacy.privacy_shield.look_away_delay_seconds, None);
+    assert_eq!(candidate.ideal.privacy.privacy_shield.fleet_capture_on_phone, None);
+    assert_eq!(candidate.ideal.privacy.privacy_shield.fleet_capture_on_multi_face, None);
+    assert_eq!(candidate.app.local_privacy_shield_look_away_delay_seconds, Some(7));
+    let mut overwritten = fixture.epoch(11, "overwrite");
+    overwritten.config = json!({"privacy":{"privacyShield":{"lookAwayDelaySeconds":10}}});
+    let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+        version: i64::from(overwritten.version), config: &overwritten.config, locked_paths: &overwritten.locked_paths,
+        managed: overwritten.managed, target_kind: "org", target_id: None,
+    });
+    overwritten.signature = Some(STANDARD.encode(fixture.key.sign(&preimage).to_bytes()));
+    assert_eq!(prepare(&current, &overwritten).unwrap().app.local_privacy_shield_look_away_delay_seconds, Some(7));
+    overwritten.config = json!({"privacy":{"privacyShield":{"localLookAwayDelaySeconds":55}}});
+    let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+        version: i64::from(overwritten.version), config: &overwritten.config, locked_paths: &overwritten.locked_paths,
+        managed: overwritten.managed, target_kind: "org", target_id: None,
+    });
+    overwritten.signature = Some(STANDARD.encode(fixture.key.sign(&preimage).to_bytes()));
+    assert!(prepare(&current, &overwritten).is_err());
+}
+
+#[test]
 fn overwrite_preserves_verification_key_connection_and_device_identity() {
     let f = Fixture::new();
     let before = f.value();

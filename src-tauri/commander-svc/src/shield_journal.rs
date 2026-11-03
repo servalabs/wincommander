@@ -80,6 +80,10 @@ pub(crate) fn detector_arguments(
         args.push(key.into());
         args.push(value);
     }
+    if let Some(seconds) = options.look_away_delay_seconds {
+        args.push("--look-away-delay-seconds".into());
+        args.push(seconds.to_string());
+    }
     for (flag, enabled) in [
         ("--check-gaze", options.check_gaze),
         ("--check-faces", options.check_faces),
@@ -381,6 +385,7 @@ mod tests {
     #[test]
     fn launch_arguments_reject_unbounded_and_non_integral_options() {
         let mut options = fleet_proto::ShieldNativeOptions {
+            look_away_delay_seconds: Some(10),
             check_gaze: true,
             check_faces: false,
             check_phone: false,
@@ -389,6 +394,7 @@ mod tests {
             blur_phone: false,
             capture_on_device: false,
             capture_on_multi_face: false,
+            fleet_video_only: None,
             model_level: "nano".into(),
             confidence: 0.5,
             overlay_opacity: 200,
@@ -400,6 +406,7 @@ mod tests {
         };
         let args = detector_arguments(0, "blur_notify", &options, 12).unwrap();
         assert!(args.contains(&"--check-gaze".to_string()));
+        assert!(args.windows(2).any(|pair| pair[0] == "--look-away-delay-seconds" && pair[1] == "10"));
         assert!(!args.contains(&"--check-phone".to_string()));
         assert!(detector_arguments(33, "blur_notify", &options, 12).is_err());
         assert!(detector_arguments(0, "other", &options, 12).is_err());

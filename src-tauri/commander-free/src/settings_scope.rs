@@ -8,6 +8,8 @@ pub(super) struct SystemStateScopeRule {
 /// Exhaustive SystemState leaf ownership. Each serialized leaf is classified
 /// exactly once; no fallback scope is allowed.
 pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
+    SystemStateScopeRule { path: "argus.dlp.enabled", scope: SettingsScope::Machine },
+    SystemStateScopeRule { path: "argus.dlp.running", scope: SettingsScope::Machine },
     SystemStateScopeRule {
         path: "device.cpu",
         scope: SettingsScope::Machine,
@@ -433,6 +435,14 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {
+        path: "privacy.privacyShield.lookAwayDetectionEnabled",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.lookAwayDelaySeconds",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
         path: "privacy.privacyShield.antiPeepingEnabled",
         scope: SettingsScope::User,
     },
@@ -478,6 +488,14 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
     },
     SystemStateScopeRule {
         path: "privacy.privacyShield.captureOnMultiFace",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.fleetCaptureOnPhone",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
+        path: "privacy.privacyShield.fleetCaptureOnMultiFace",
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {

@@ -83,7 +83,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
-use clipboard_guard_helper::actions::{ActionOutcome, ClipboardWriter, Win32Writer};
+use clipboard_guard_helper::actions::{ActionOutcome, Win32Writer};
 #[cfg(test)]
 use clipboard_guard_helper::engine::MatchOutcome;
 use clipboard_guard_helper::engine::{CombinedMatchOutcome, CombinedVerdict, MatchEngine};
@@ -94,7 +94,8 @@ use clipboard_guard_helper::policy::{ClipboardPolicyResponse, PolicySource, Poli
 use clipboard_guard_helper::read::{ClipboardTextSource, ReadOutcome, Win32TextSource};
 use clipboard_guard_helper::report::build_report;
 use wincmd_clip_rules::{
-    Action, BuiltinPattern, MatchKind, Rule, RuleId, Severity, StructuredKind, Verdict,
+    Action, BuiltinPattern, Finding, MatchKind, Rule, RuleId, Severity, StructuredKind,
+    Verdict,
 };
 use wincmd_shared::diagnostics::{
     DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
@@ -431,6 +432,7 @@ fn build_free_tier_rules(enabled: &EnabledCategories) -> (Vec<Rule>, HashMap<Rul
             // editor on this tier) — `locked` is a hint for a future
             // authoring UI, not enforced by `wincmd_clip_rules` itself.
             locked: true,
+            options: Default::default(),
         });
         lookup.insert(id, kind);
     }
@@ -452,10 +454,57 @@ fn local_policy_response(
     enabled: &EnabledCategories,
     custom: &ClipboardPolicyResponse,
 ) -> (ClipboardPolicyResponse, HashMap<RuleId, MatchedKind>) {
-    let (mut rules, lookup) = build_free_tier_rules(enabled);
+    let managed = MANAGED_FLEET_RULES.lock().unwrap().clone();
+    local_policy_response_for(enabled, custom, &managed)
+}
+
+fn local_policy_response_for(
+    enabled: &EnabledCategories,
+    custom: &ClipboardPolicyResponse,
+    managed: &ClipboardPolicyResponse,
+) -> (ClipboardPolicyResponse, HashMap<RuleId, MatchedKind>) {
+    let (_, lookup) = build_free_tier_rules(enabled);
+    let overrides: std::collections::HashSet<_> =
+        custom.rules.iter().map(|rule| rule.id.clone()).collect();
+    let mut rules = Vec::new();
+    for (mut rule, descriptor) in wincmd_clip_rules::builtin_rules()
+        .into_iter()
+        .zip(wincmd_clip_rules::detector_catalog())
+    {
+        if overrides.contains(&rule.id) {
+            continue;
+        }
+        let allowed = if let Some(kind) = lookup.get(&rule.id) {
+            enabled.allows(kind.category())
+        } else {
+            use wincmd_clip_rules::DetectorCategory::*;
+            match descriptor.category {
+                PaymentCard | BankAccount | NationalId | TaxId | Health | ContactInfo => {
+                    enabled.personal_data
+                }
+                PrivateKey | Crypto => enabled.keys_and_crypto,
+                _ => enabled.cloud_api,
+            }
+        };
+        rule.enabled &= allowed;
+        rule.actions = vec![Action::NotifyUser];
+        rules.push(rule);
+    }
     rules.extend(custom.rules.iter().cloned());
+    let catalog_ids: std::collections::HashSet<_> = wincmd_clip_rules::builtin_rules()
+        .into_iter()
+        .map(|rule| rule.id)
+        .collect();
+    let managed_ids: std::collections::HashSet<_> = managed
+        .effective_rules()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rule| rule.id)
+        .collect();
+    rules.retain(|rule| !catalog_ids.contains(&rule.id) || !managed_ids.contains(&rule.id));
     (
-        ClipboardPolicyResponse {
+        ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: custom.policy_version,
             rules,
         },
@@ -496,11 +545,8 @@ fn install_free_tier_policy(enabled: &EnabledCategories) -> Result<(), String> {
     install_local_policy(enabled, &custom)
 }
 
-/// Built-in heuristic rules keep their legacy length floor to avoid noisy
-/// matches. A user-authored local rule is explicit, so it may intentionally
-/// match a short phrase (for example, a person's name).
-fn should_evaluate_clipboard_text(text: &str, has_local_custom_rules: bool) -> bool {
-    text.len() >= 13 || has_local_custom_rules
+fn should_evaluate_clipboard_text(text: &str) -> bool {
+    !text.is_empty()
 }
 
 // ── Toast copy (byte-identical to the legacy engine) ─────────────────
@@ -771,7 +817,8 @@ static POLICY: Lazy<Mutex<PolicyStore>> = Lazy::new(|| Mutex::new(PolicyStore::n
 /// Persisted by the settings owner; this runtime holds only the live copy.
 /// Builtins are combined with these before they enter the local source.
 static LOCAL_CUSTOM_RULES: Lazy<Mutex<ClipboardPolicyResponse>> = Lazy::new(|| {
-    Mutex::new(ClipboardPolicyResponse {
+    Mutex::new(ClipboardPolicyResponse { reporting_binding:None,
+        content_rules: None,
         policy_version: FREE_TIER_POLICY_VERSION,
         rules: Vec::new(),
     })
@@ -780,7 +827,8 @@ static LOCAL_CUSTOM_RULES: Lazy<Mutex<ClipboardPolicyResponse>> = Lazy::new(|| {
 /// Last valid Fleet policy fetched from commander-svc. It remains live
 /// while Fleet is temporarily unavailable and is cleared only on unenrol.
 static MANAGED_FLEET_RULES: Lazy<Mutex<ClipboardPolicyResponse>> = Lazy::new(|| {
-    Mutex::new(ClipboardPolicyResponse {
+    Mutex::new(ClipboardPolicyResponse { reporting_binding:None,
+        content_rules: None,
         policy_version: 0,
         rules: Vec::new(),
     })
@@ -947,12 +995,16 @@ static RECENT: Lazy<Mutex<VecDeque<DetectionEvent>>> =
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DetectionEvent {
+    #[serde(default)]
+    pub truncated: bool,
     pub pattern: String,
     /// "warning" for credential-leak patterns; "danger" for
     /// malicious-command patterns (ClickFix / pastejacking). Frontend
     /// uses this to differentiate toast copy + colour.
     pub severity: String,
     pub detected_at: String,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
 }
 
 /// Content-free reports queued for the check-in path (plan §4.2 item 5).
@@ -961,9 +1013,18 @@ pub struct DetectionEvent {
 /// use `drain_paste_monitor_pending_reports` to actually flush these
 /// toward `CheckinBody.clipboard_events`.
 const PENDING_REPORTS_CAP: usize = 20;
-static PENDING_REPORTS: Lazy<Mutex<VecDeque<ClipboardEventReport>>> =
+#[derive(Clone)]
+struct ScopedClipboardReport { report: ClipboardEventReport, fleet_binding: Option<String> }
+static PENDING_REPORTS: Lazy<Mutex<VecDeque<ScopedClipboardReport>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(PENDING_REPORTS_CAP)));
 static FLEET_FLUSHING: AtomicBool = AtomicBool::new(false);
+
+#[path = "paste_monitor_content_metadata.rs"]
+mod content_metadata;
+#[path = "paste_monitor_protection.rs"]
+mod protection;
+#[path = "paste_monitor_policy_binding.rs"]
+mod policy_binding;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -997,52 +1058,41 @@ fn push_recent(ev: DetectionEvent) {
     q.push_back(ev);
 }
 
-fn push_pending_report(report: ClipboardEventReport) {
+fn push_pending_report(report: ClipboardEventReport, fleet_binding: Option<String>) {
     let mut q = PENDING_REPORTS.lock().unwrap();
     if q.len() == PENDING_REPORTS_CAP {
         q.pop_front();
     }
-    q.push_back(report);
+    q.push_back(ScopedClipboardReport {report, fleet_binding});
 }
 
-fn requeue_pending_reports_front(reports: Vec<ClipboardEventReport>) {
-    let mut q = PENDING_REPORTS.lock().unwrap();
-    for report in reports.into_iter().rev() {
-        if q.len() >= PENDING_REPORTS_CAP {
-            q.pop_back();
-        }
-        q.push_front(report);
-    }
-}
-
-/// Transfer pending content-free reports into Pro's authenticated clipboard
-/// queue. The stable event id is retained across retries, and Pro rejects a
-/// duplicate already in its queue, so a retry cannot create two Fleet events.
+/// Transfers scoped reports independently of local metadata; retries preserve the
+/// event ID and enrollment binding until the Pro outbox accepts or discards it.
 async fn flush_pending_reports_to_fleet() {
-    if FLEET_FLUSHING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let reports: Vec<ClipboardEventReport> = PENDING_REPORTS.lock().unwrap().drain(..).collect();
-    let mut unaccepted = Vec::new();
-    for (index, report) in reports.iter().enumerate() {
-        match crate::fleet_agent::fleet_report_clipboard_event(report.clone()).await {
-            Ok(_) => {}
-            Err(error) => {
+    if FLEET_FLUSHING.swap(true, Ordering::SeqCst) { return; }
+    let mut backoff = 1u64;
+    loop {
+        let scoped = {
+            let q = PENDING_REPORTS.lock().unwrap();
+            let Some(report) = q.front().cloned() else {
+                FLEET_FLUSHING.store(false, Ordering::SeqCst); return;
+            };
+            report
+        };
+        match crate::fleet_agent::fleet_report_clipboard_event(scoped.report.clone(), scoped.fleet_binding).await {
+            Ok(_) => {
+                HEALTH.lock().unwrap().svc_reachable = true;
+                backoff = 1;
+                let mut q = PENDING_REPORTS.lock().unwrap();
+                if q.front().is_some_and(|front| front.report.event_id == scoped.report.event_id) { q.pop_front(); }
+            }
+            Err(_) => {
                 HEALTH.lock().unwrap().svc_reachable = false;
-                crate::flow_bridge::flow_trace(format!(
-                    "[PasteMonitor] Fleet clipboard report remains queued: {error}"
-                ));
-                unaccepted.extend_from_slice(&reports[index..]);
-                break;
+                tokio::time::sleep(Duration::from_secs(backoff)).await;
+                backoff = (backoff * 2).min(30);
             }
         }
     }
-    if unaccepted.is_empty() {
-        HEALTH.lock().unwrap().svc_reachable = true;
-    } else {
-        requeue_pending_reports_front(unaccepted);
-    }
-    FLEET_FLUSHING.store(false, Ordering::SeqCst);
 }
 
 /// Build the content-free wire report for one emitted match — pulled out
@@ -1131,6 +1181,10 @@ fn handle_combined_emit(
     fleet_policy_version: i64,
     combined: CombinedVerdict,
     clipboard_hash: [u8; 32],
+    protection_outcome: ActionOutcome,
+    truncated: bool,
+    reporting_binding: Option<String>,
+    findings: Vec<Finding>,
 ) {
     let pattern = combined
         .matches
@@ -1152,14 +1206,22 @@ fn handle_combined_emit(
                 .unwrap()
                 .get(&matched.verdict.rule_id)
                 .cloned()
+                .or_else(|| {
+                    wincmd_clip_rules::builtin_rules()
+                        .into_iter()
+                        .find(|rule| rule.id == matched.verdict.rule_id)
+                        .map(|rule| rule.name)
+                })
         })
         .unwrap_or_else(|| "Organization clipboard rule".to_string());
     let severity = severity_label(combined.severity);
 
     let payload = DetectionEvent {
+        truncated,
         pattern: pattern.clone(),
         severity: severity.to_string(),
         detected_at: chrono::Utc::now().to_rfc3339(),
+        findings,
     };
     let _ = app.emit("paste-monitor-detected", &payload);
     // The clipboard match must exist outside the ephemeral frontend event.
@@ -1195,8 +1257,7 @@ fn handle_combined_emit(
         *PENDING_CLEAR.lock().unwrap() = Some(schedule_clear(Instant::now(), secs, clipboard_hash));
     }
 
-    let mut outcome = ActionOutcome::new();
-    let mut writer = Win32Writer::default();
+    let mut outcome = protection_outcome;
     for action in &combined.actions {
         match action {
             Action::NotifyUser => {
@@ -1207,18 +1268,7 @@ fn handle_combined_emit(
                     outcome.succeeded.push(*action);
                 }
             }
-            Action::ClearClipboard => {
-                outcome.attempted.push(*action);
-                if writer.clear() {
-                    outcome.succeeded.push(*action);
-                }
-            }
-            Action::QuarantineClipboard => {
-                outcome.attempted.push(*action);
-                if writer.quarantine("[Clipboard Guard quarantined this content]") {
-                    outcome.succeeded.push(*action);
-                }
-            }
+            Action::ClearClipboard | Action::QuarantineClipboard | Action::MaskMatches => {}
             // These actions are fulfilled only by the subsequent Fleet
             // submission, and local policy validation rejects them.
             Action::RecordLocalReceipt | Action::ReportFleet | Action::AlertAdmin => {}
@@ -1244,7 +1294,7 @@ fn handle_combined_emit(
             &fleet_outcome,
             matched.suppressed_since_last,
         );
-        push_pending_report(report);
+        push_pending_report(report, reporting_binding.clone());
         queued_fleet_report = true;
     }
     if queued_fleet_report {
@@ -1453,9 +1503,11 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
                 if let Some(family) = swap_hit {
                     let pattern = format!("Crypto Address Swap ({})", family.display());
                     let payload = DetectionEvent {
+                        truncated: false,
                         pattern: pattern.clone(),
                         severity: "danger".to_string(),
                         detected_at: chrono::Utc::now().to_rfc3339(),
+                        findings: Vec::new(),
                     };
                     let _ = app.emit("paste-monitor-detected", &payload);
                     let stamp = chrono::Utc::now();
@@ -1513,22 +1565,27 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
                     continue;
                 }
 
-                // ── Builtin/structured category matching via
-                //    wincmd_clip_rules. The legacy rules retain their
-                //    `< 13 bytes` noise floor, but a person-created local
-                //    phrase is an explicit request and must be allowed to
-                //    match short text such as "Parth".
-                let has_local_custom_rules = !LOCAL_CUSTOM_RULES.lock().unwrap().rules.is_empty();
-                if should_evaluate_clipboard_text(&text, has_local_custom_rules) {
-                    let (outcome, fleet_policy_version) = {
+                // Confidence and validation belong to each detector; short IDs and
+                // organization phrases must reach the shared matcher too.
+                if should_evaluate_clipboard_text(&text) {
+                    let (observation, fleet_policy_version, protection_outcome, replacement_hash, reporting_binding) = {
                         let policy = POLICY.lock().unwrap();
                         let fleet_policy_version = policy.fleet().policy_version;
-                        (
-                            engine.observe_sources(&policy, &text, Instant::now()),
-                            fleet_policy_version,
-                        )
+                        let observation = engine.observe_content_sources(&policy, &text, Instant::now());
+                        // Keep the installed policy stable through the conditional clipboard write.
+                        let (outcome, replacement_hash) = protection::apply(
+                            &observation.findings, &text, &observation.local_spans,
+                            &mut Win32Writer::default(), crate::license::has_paid_entitlement(),
+                        );
+                        (observation, fleet_policy_version, outcome, replacement_hash, content_metadata::current_binding())
                     };
-                    match outcome {
+                    if content_metadata::queue_findings(&observation.findings, reporting_binding.clone()) {
+                        tauri::async_runtime::spawn(content_metadata::flush());
+                    }
+                    if let Some(hash) = replacement_hash {
+                        *LAST_HASH.lock().unwrap() = Some(hash);
+                    }
+                    match observation.outcome {
                         CombinedMatchOutcome::NoMatch => {}
                         CombinedMatchOutcome::Suppressed { .. } => {
                             // Folded into the next Emit's
@@ -1537,7 +1594,20 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
                             // becomes a count, not an alert storm.
                         }
                         CombinedMatchOutcome::Emit { verdict } => {
-                            handle_combined_emit(&app, fleet_policy_version, verdict, h);
+                            handle_combined_emit(
+                                &app,
+                                fleet_policy_version,
+                                verdict,
+                                h,
+                                protection_outcome,
+                                observation.truncated,
+                                reporting_binding,
+                                observation
+                                    .findings
+                                    .into_iter()
+                                    .map(|(_, finding)| finding)
+                                    .collect(),
+                            );
                         }
                     }
                 }
@@ -1599,13 +1669,19 @@ pub async fn get_paste_monitor_categories() -> Result<EnabledCategories, String>
 }
 
 fn local_actions_are_safe(policy: &ClipboardPolicyResponse) -> bool {
+    if policy.content_rules.is_some() || policy.reporting_binding.is_some() {
+        return false;
+    }
     policy.rules.iter().all(|rule| {
         !rule.locked
             && !rule.actions.is_empty()
             && rule.actions.iter().all(|action| {
                 matches!(
                     action,
-                    Action::NotifyUser | Action::ClearClipboard | Action::QuarantineClipboard
+                    Action::NotifyUser
+                        | Action::ClearClipboard
+                        | Action::QuarantineClipboard
+                        | Action::MaskMatches
                 )
             })
     })
@@ -1630,6 +1706,17 @@ fn rules_have_cross_source_collision(
 pub(crate) fn replace_local_clipboard_guard_rules(
     policy: ClipboardPolicyResponse,
 ) -> Result<ClipboardPolicyResponse, String> {
+    if policy.rules.iter().any(|rule| {
+        rule.enabled
+            && rule.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    Action::ClearClipboard | Action::QuarantineClipboard | Action::MaskMatches
+                )
+            })
+    }) {
+        crate::license::require_paid("clipboard protection actions")?;
+    }
     if !local_actions_are_safe(&policy) {
         return Err("local clipboard rules may only notify, clear, or quarantine".to_string());
     }
@@ -1667,6 +1754,10 @@ pub async fn get_local_clipboard_guard_rules() -> Result<ClipboardPolicyResponse
 /// Fetch and atomically install a verified policy from commander-svc. A
 /// failed fetch deliberately retains the last valid Fleet source.
 pub async fn refresh_managed_clipboard_guard_rules() -> Result<(), String> {
+    let requested_binding = {
+        let _policy = POLICY.lock().unwrap();
+        content_metadata::current_binding()
+    };
     let response = SvcClient::new()
         .get_policy()
         .await
@@ -1674,31 +1765,77 @@ pub async fn refresh_managed_clipboard_guard_rules() -> Result<(), String> {
     let enabled = *ENABLED_CATEGORIES.lock().unwrap();
     let custom = LOCAL_CUSTOM_RULES.lock().unwrap().clone();
     let (local, _) = local_policy_response(&enabled, &custom);
-    if rules_have_cross_source_collision(&local, &response) {
+    let (candidate_local, lookup) = local_policy_response_for(&enabled, &custom, &response);
+    let effective_managed = ClipboardPolicyResponse { reporting_binding:None,
+        content_rules: None,
+        policy_version: response.policy_version,
+        rules: response
+            .effective_rules()
+            .map_err(|_| "managed content policy was rejected".to_string())?,
+    };
+    if rules_have_cross_source_collision(&candidate_local, &effective_managed) {
         return Err("managed clipboard policy reuses a local rule identifier".to_string());
     }
-    POLICY
-        .lock()
-        .unwrap()
-        .install_fleet(&response)
-        .map_err(|_| "managed clipboard policy was rejected".to_string())?;
-    *MANAGED_FLEET_RULES.lock().unwrap() = response;
+    {
+        let mut store = POLICY.lock().unwrap();
+        if !policy_binding::accepts_fetched_policy(requested_binding.as_deref(), content_metadata::current_binding().as_deref(), &response, store.fleet().policy_version) {
+            return Err("managed clipboard policy belongs to a changed enrollment or older revision".into());
+        }
+        store
+            .install_local(&candidate_local)
+            .map_err(|_| "local clipboard policy was rejected".to_string())?;
+        if store.install_fleet(&response).is_err() {
+            let _ = store.install_local(&local);
+            return Err("managed clipboard policy was rejected".to_string());
+        }
+        *MANAGED_FLEET_RULES.lock().unwrap() = response;
+        *RULE_LOOKUP.lock().unwrap() = lookup;
+        let mut health = HEALTH.lock().unwrap();
+        health.rules_compiled = store.rules_compiled_for(PolicySource::Local);
+        health.policy_current = true;
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_managed_clipboard_guard_rules() -> Result<ClipboardPolicyResponse, String> {
-    Ok(MANAGED_FLEET_RULES.lock().unwrap().clone())
+    let mut response = MANAGED_FLEET_RULES.lock().unwrap().clone();
+    response.rules = response
+        .effective_rules()
+        .map_err(|_| "managed content policy is unavailable".to_string())?;
+    Ok(response)
 }
 
-/// Called by Fleet only after an approved successful unenrolment. It never
-/// clears the user's builtins or custom rules.
+pub(crate) fn set_content_reporting_identity(policy: &wincmd_shared::fleet::PolicyEnvelope) {
+    clear_managed_content_source(content_metadata::policy_binding(policy), true);
+}
+
+/// Approved unenrollment removes only the managed source and its pending reports.
 pub fn clear_paste_monitor_fleet_policy_on_unenroll() {
-    POLICY.lock().unwrap().clear_fleet_on_unenroll();
-    *MANAGED_FLEET_RULES.lock().unwrap() = ClipboardPolicyResponse {
-        policy_version: 0,
-        rules: Vec::new(),
-    };
+    clear_managed_content_source(None, false);
+}
+
+fn clear_managed_content_source(binding: Option<String>, only_if_changed: bool) {
+    {
+        let mut store = POLICY.lock().unwrap();
+        if only_if_changed && content_metadata::current_binding() == binding { return; }
+        let empty = ClipboardPolicyResponse {
+            reporting_binding: None, content_rules: None, policy_version: 0, rules: Vec::new(),
+        };
+        let enabled = *ENABLED_CATEGORIES.lock().unwrap();
+        let custom = LOCAL_CUSTOM_RULES.lock().unwrap().clone();
+        let (local, lookup) = local_policy_response_for(&enabled, &custom, &empty);
+        store.clear_fleet_on_unenroll();
+        let local_result = store.install_local(&local);
+        *MANAGED_FLEET_RULES.lock().unwrap() = empty;
+        *RULE_LOOKUP.lock().unwrap() = lookup;
+        content_metadata::clear();
+        content_metadata::set_binding(binding);
+        PENDING_REPORTS.lock().unwrap().clear();
+        let mut health = HEALTH.lock().unwrap();
+        health.rules_compiled = store.rules_compiled_for(PolicySource::Local);
+        health.policy_current = local_result.is_ok();
+    }
 }
 
 /// Mute the watcher for N minutes. While snoozed the loop still runs
@@ -1771,7 +1908,7 @@ pub async fn get_paste_monitor_health() -> Result<HelperHealth, String> {
 /// for the call a check-in integrator should actually use to flush them.
 #[tauri::command]
 pub async fn get_paste_monitor_pending_reports() -> Result<Vec<ClipboardEventReport>, String> {
-    Ok(PENDING_REPORTS.lock().unwrap().iter().cloned().collect())
+    Ok(PENDING_REPORTS.lock().unwrap().iter().map(|scoped| scoped.report.clone()).collect())
 }
 
 /// Atomically return and clear every queued content-free report (plan
@@ -1781,7 +1918,7 @@ pub async fn get_paste_monitor_pending_reports() -> Result<Vec<ClipboardEventRep
 #[tauri::command]
 pub async fn drain_paste_monitor_pending_reports() -> Result<Vec<ClipboardEventReport>, String> {
     let mut q = PENDING_REPORTS.lock().unwrap();
-    Ok(q.drain(..).collect())
+    Ok(q.drain(..).map(|scoped| scoped.report).collect())
 }
 
 // ── Crypto-swap toggle (paid) ───────────────────────────────────────
@@ -1882,7 +2019,8 @@ mod tests {
         let (rules, lookup) = build_free_tier_rules(&enabled);
         let mut store = PolicyStore::new();
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: FREE_TIER_POLICY_VERSION,
                 rules,
             })
@@ -1913,6 +2051,18 @@ mod tests {
     // through the NEW wincmd_clip_rules-backed pipeline (plan's test
     // list: "Behaviour parity for each of the 8 legacy categories").
     // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn managed_removal_prepares_local_builtins_without_an_empty_intermediate_policy() {
+        let empty = ClipboardPolicyResponse { reporting_binding: None, content_rules: None, policy_version: 0, rules: vec![] };
+        let managed = ClipboardPolicyResponse { reporting_binding: Some("scope".into()), content_rules: None, policy_version: 10, rules: wincmd_clip_rules::builtin_rules() };
+        let enabled = EnabledCategories::default();
+        let (shadowed, _) = local_policy_response_for(&enabled, &empty, &managed);
+        assert!(shadowed.rules.is_empty());
+        let (restored, _) = local_policy_response_for(&enabled, &empty, &empty);
+        assert!(!restored.rules.is_empty());
+        assert!(wincmd_clip_rules::compile(&restored.rules, &wincmd_clip_rules::content_rule_limits()).is_ok());
+    }
 
     #[test]
     fn cloud_api_patterns_detected_as_warning() {
@@ -2176,9 +2326,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_local_rule_can_match_a_short_phrase() {
-        assert!(!should_evaluate_clipboard_text("Parth", false));
-        assert!(should_evaluate_clipboard_text("Parth", true));
+    fn short_identifiers_and_managed_phrases_reach_the_shared_detector() {
+        assert!(should_evaluate_clipboard_text("12345678Z"));
+        assert!(should_evaluate_clipboard_text("X1234567L"));
+        assert!(should_evaluate_clipboard_text("Parth"));
+        assert!(!should_evaluate_clipboard_text(""));
     }
 
     #[test]
@@ -2394,9 +2546,11 @@ mod tests {
         // from `clipboard_text` — so its content-free-ness holds
         // structurally, not by convention.
         let event = DetectionEvent {
+            truncated: false,
             pattern: kind.display_name().to_string(),
             severity: severity_label(verdict.severity).to_string(),
             detected_at: chrono::Utc::now().to_rfc3339(),
+            findings: Vec::new(),
         };
         let event_json = serde_json::to_string(&event).unwrap();
         assert!(!event_json.contains(SENTINEL));
@@ -2815,6 +2969,7 @@ mod tests {
             cooldown_seconds: 30,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         }
     }
 
@@ -2831,7 +2986,8 @@ mod tests {
             case_sensitive: false,
         };
         store
-            .install_local(&ClipboardPolicyResponse {
+            .install_local(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 0,
                 rules: vec![parth_rule],
             })
@@ -2849,7 +3005,8 @@ mod tests {
 
     #[test]
     fn local_custom_rules_reject_organisation_actions_fail_closed() {
-        let policy = ClipboardPolicyResponse {
+        let policy = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 1,
             rules: vec![custom_rule(
                 "11111111111111111111111111111111",
@@ -2862,7 +3019,8 @@ mod tests {
 
     #[test]
     fn local_custom_rules_reject_actionless_rules() {
-        let policy = ClipboardPolicyResponse {
+        let policy = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 0,
             rules: vec![custom_rule(
                 "12121212121212121212121212121212",
@@ -2876,11 +3034,13 @@ mod tests {
     #[test]
     fn disabled_rule_id_collisions_are_rejected_across_sources() {
         let id = "22222222222222222222222222222222";
-        let local = ClipboardPolicyResponse {
+        let local = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 1,
             rules: vec![custom_rule(id, vec![Action::NotifyUser], false)],
         };
-        let fleet = ClipboardPolicyResponse {
+        let fleet = ClipboardPolicyResponse { reporting_binding:None,
+            content_rules: None,
             policy_version: 2,
             rules: vec![custom_rule(id, vec![Action::ReportFleet], false)],
         };

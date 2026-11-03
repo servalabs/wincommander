@@ -7349,9 +7349,14 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 name = "wincmd-clip-rules"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
+ "base64 0.22.1",
  "regex",
+ "regex-automata",
+ "regex-syntax",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ts-rs",
 ]
 

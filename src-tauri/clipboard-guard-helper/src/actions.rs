@@ -76,6 +76,8 @@ pub trait ClipboardWriter: Send {
     /// a bounded read-back confirms the clipboard holds exactly that
     /// placeholder.
     fn quarantine(&mut self, placeholder: &str) -> bool;
+    /// Compare and replace under one clipboard lock; false if content changed.
+    fn replace_if_unchanged(&mut self, _expected: &str, _replacement: &str) -> bool { false }
 }
 
 /// Show the user a notification about the match. Kept as its own small
@@ -147,6 +149,14 @@ impl ClipboardWriter for Win32Writer {
     fn quarantine(&mut self, placeholder: &str) -> bool {
         self.write_and_verify(placeholder)
     }
+
+    fn replace_if_unchanged(&mut self, expected: &str, replacement: &str) -> bool {
+        let Ok(_clipboard) = clipboard_win::Clipboard::new_attempts(self.max_attempts as usize) else { return false; };
+        let Ok(actual) = clipboard_win::get::<String, _>(clipboard_win::formats::Unicode) else { return false; };
+        if actual != expected { return false; }
+        if clipboard_win::set(clipboard_win::formats::Unicode, replacement).is_err() { return false; }
+        matches!(clipboard_win::get::<String, _>(clipboard_win::formats::Unicode), Ok(actual) if actual == replacement)
+    }
 }
 
 #[cfg(not(windows))]
@@ -182,6 +192,9 @@ pub fn execute_local_actions(
             Action::QuarantineClipboard => {
                 outcome.mark(action, writer.quarantine(quarantine_placeholder))
             }
+            // This legacy entry point has no text/spans. Never claim a mask
+            // succeeded; content-aware callers use replace_if_unchanged.
+            Action::MaskMatches => outcome.mark(action, false),
             Action::RecordLocalReceipt | Action::ReportFleet | Action::AlertAdmin => {
                 // Handled by `mark_submission_actions` after the svc
                 // submission attempt — see module doc.

@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
+    /// Replace only matched local spans; never sends content to the server.
+    MaskMatches,
     /// Toast / native notification — no clipboard content in the body.
     NotifyUser,
     /// Erase the clipboard immediately.

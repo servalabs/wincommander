@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep the pinned upstream input byte-identical for generator hash verification.
+tools/import-secret-rules/gitleaks-v8.24.3.toml -text whitespace=-blank-at-eof

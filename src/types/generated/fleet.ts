@@ -8,7 +8,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * order here — sequencing is the endpoint's job, this crate only carries
  * the request.
  */
-export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
+export type Action = "mask_matches" | "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
 
 /**
  * Risk tier of a remote action — drives the safety-gate ladder in the fleet
@@ -99,7 +99,7 @@ export type AndroidFleetStatus = { framework_key_fingerprint: string, deadman_la
  */
 export type ArgusKindBucket = {
 /**
- * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access".
+ * High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance".
  */
 kind: string,
 /**
@@ -132,7 +132,7 @@ max_severity: string, };
  */
 export type ArgusSignal = { window_start: string, window_end: string,
 /**
- * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access"
+ * High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance"
  */
 kind: string,
 /**
@@ -184,6 +184,12 @@ export type BrandingView = { org_id: string, display_name: string, logo_url: str
  * (`regex_source` returns `None` — the three `Unicode*` variants).
  */
 export type BuiltinPattern = "aws_access_key" | "google_api_key" | "sendgrid_api_key" | "mailgun_api_key" | "twilio_account_sid" | "database_url_with_credentials" | "open_ai_project_key" | "open_ai_api_key" | "anthropic_api_key" | "git_hub_classic_token" | "git_hub_fine_grained_token" | "npm_token" | "stripe_live_secret" | "stripe_live_publishable" | "slack_token" | "discord_bot_token" | "private_key_pem" | "ssh_private_key_header" | "jwt" | "bitcoin_wif_private_key" | "powershell_encoded_payload" | "hidden_powershell_window" | "powershell_execution_policy_bypass" | "powershell_remote_download_execute" | "mshta_web_payload" | "certutil_web_download" | "regsvr32_web_payload" | "bitsadmin_web_transfer" | "curl_wget_pipe_to_shell" | "unicode_bidi_override" | "unicode_zero_width_in_code" | "unicode_confusable_url_host";
+
+export type BuiltinTuning = { detectorId: string, enabled: boolean, threshold: number, };
+
+export type Channel = "clipboard" | "removable" | "at_rest_scan";
+
+export type ChannelActions = { channel: Channel, actions: Array<Action>, };
 
 /**
  * Legacy-compatible command acknowledgement carried on the next check-in.
@@ -459,6 +465,10 @@ export type ConfirmTokenRequest = { device_id: DeviceId, catalog_id: string, };
  */
 export type ConfirmTokenResponse = { token: string, expires_at: string, };
 
+export type ContentRulesSubtree = { enabled: boolean, schemaVersion: number, revision: bigint, rules: Array<Rule>, tuning: ContentTuning, };
+
+export type ContentTuning = { builtins: Array<BuiltinTuning>, allowList: Array<string>, channelActions: Array<ChannelActions>, };
+
 /**
  * Create a new admin (super_admin only). The password is hashed server-side
  * (argon2id) and never stored or echoed in plaintext.
@@ -469,6 +479,10 @@ export type CreateAdminRequest = { email: string, password: string, role: AdminR
  * Create a device group (Admin+).
  */
 export type CreateGroupRequest = { name: string, };
+
+export type DetectorCategory = "payment_card" | "bank_account" | "national_id" | "tax_id" | "health" | "contact_info" | "cloud_key" | "token" | "private_key" | "connection_string" | "crypto" | "custom";
+
+export type DetectorDescriptor = { id: string, name: string, category: DetectorCategory, severity: Severity, defaultEnabled: boolean, threshold: number, };
 
 /**
  * Per-device Argus monitoring-coverage view for the admin (Feature B —
@@ -631,6 +645,8 @@ android_fleet_status: AndroidFleetStatus | null, };
  */
 export type DiskMetric = { name: string, total_gb: number, free_gb: number, };
 
+export type Encoding = "base64" | "hex";
+
 /**
  * `files.fetch_content` command payload. `path` must be echoed from a prior
  * `files.search`/`files.recent_downloads` result for the SAME device — never
@@ -675,6 +691,8 @@ created_at: string | null,
  * Windows file-attribute bitmask (0 on non-Windows agents).
  */
 attributes: number, };
+
+export type Finding = { ruleId: RuleId, ruleRevision: number, detectorId: string, category: DetectorCategory, score: number, count: number, reasons: Array<Reason>, severity: Severity, actions: Array<Action>, };
 
 /**
  * Typed failure surface shared with the admin panel so the UI can branch on
@@ -824,7 +842,7 @@ export type LoginResponse = { token: string, role: AdminRole, expires_at: string
 /**
  * What a rule matches against clipboard text.
  */
-export type MatchKind = { "kind": "phrase", "params": { value: string, case_sensitive: boolean, } } | { "kind": "regex", "params": { pattern: string, case_sensitive: boolean, } } | { "kind": "structured", "params": StructuredKind } | { "kind": "builtin", "params": BuiltinPattern };
+export type MatchKind = { "kind": "detector", "params": string } | { "kind": "phrase", "params": { value: string, case_sensitive: boolean, } } | { "kind": "regex", "params": { pattern: string, case_sensitive: boolean, } } | { "kind": "structured", "params": StructuredKind } | { "kind": "builtin", "params": BuiltinPattern };
 
 /**
  * Tenant identifier. `"local"` for single-tenant self-host installs; real
@@ -842,7 +860,11 @@ export type PendingSearchJob = { job_id: string, query: string, max_hits_per_dev
  * independently-revised sections in one server-signed envelope so every
  * agent receives the same policy decision atomically.
  */
-export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, enrollment_generation: string | null, config_revision: bigint | null, resolution_revision: bigint | null, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
+export type PolicyEnvelope = {
+/**
+ * Verified org reporting switch; only sent to content_rules_v1 agents.
+ */
+clipboard_guard_enabled: boolean, org_id: OrgId, device_id: DeviceId, enrollment_generation: string | null, config_revision: bigint | null, resolution_revision: bigint | null, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
 /**
  * Latest independent Shield revision for the organisation, including a
  * tombstone/empty shield section.  This prevents replaying an older
@@ -1005,6 +1027,8 @@ export type ReadinessSelfTestResult = { arm_predicate: ReadinessState, signed_di
  */
 export type ReadinessState = "pass" | "fail" | "unknown";
 
+export type Reason = { "kind": "checksum_valid" } | { "kind": "context_word" } | { "kind": "entropy_above" } | { "kind": "decoded", "encoding": Encoding } | { "kind": "keyword_prefilter" };
+
 /**
  * One entry in a device's Downloads folder, returned by the
  * `files.recent_downloads` command. Metadata only (name/path/size/mtime) —
@@ -1164,7 +1188,7 @@ snoozable: boolean,
  * Whether the console should allow editing this rule. Not read by
  * this crate — same as `snoozable`, a hint for the authoring UI.
  */
-locked: boolean, };
+locked: boolean, keywords: Array<string>, context: Array<string>, threshold: number, channels: Array<Channel>, allowList: Array<string>, channelActions: Array<ChannelActions>, };
 
 /**
  * A rule identifier: a canonical UUID rendered as either the hyphenated
@@ -1176,6 +1200,8 @@ locked: boolean, };
  * rule dodge `CooldownLedger`'s per-id cooldown by re-casing its id.
  */
 export type RuleId = string;
+
+export type RuleOptions = { keywords: Array<string>, context: Array<string>, threshold: number, channels: Array<Channel>, allowList: Array<string>, channelActions: Array<ChannelActions>, };
 
 /**
  * Bounds `compile()` enforces on an input ruleset. Every field is a hard
@@ -1194,9 +1220,7 @@ maxEnabledRules: number,
  */
 maxPatternBytes: number,
 /**
- * The clipboard-text read cap. NOT enforced by this crate — it's a
- * contract on the caller, who must truncate (via
- * `truncate_for_match`) before calling `CompiledRuleSet::evaluate`.
+ * Input cap enforced by scan(), cutting at a UTF-8 boundary.
  */
 maxTextBytes: number,
 /**
@@ -1207,15 +1231,13 @@ maxTextBytes: number,
  */
 regexSizeLimit: number,
 /**
- * Summed bound across every regex-backed rule in the set (custom
- * `Regex` rules AND regex-backed `Builtin` rules alike). The `regex`
- * crate doesn't expose a compiled program's actual byte size after a
- * successful build, so this is enforced by charging each successful
- * compile its full `regex_size_limit` allowance against a running
- * total — conservative (never under-counts worst-case memory), not
- * exact.
+ * Compiled regex and shared prefilter budget. Custom regexes are charged
+ * their full per-rule allowance; fixed catalog programs use the regex
+ * engine's memory accounting, allowing the shipped catalog within 8 MiB.
  */
 regexTotalSizeLimit: number, };
+
+export type ScanReport = { findings: Array<Finding>, truncated: boolean, };
 
 /**
  * Search backend a remote file-search request should use. Open/extensible —

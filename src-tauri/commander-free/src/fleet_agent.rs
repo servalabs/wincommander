@@ -1020,7 +1020,10 @@ async fn install_service_shield_policy(
 ) -> Result<(), String> {
     let args = serde_json::json!({"policy": envelope});
     match crate::svc_client::call("svc.fleet.install_policy", args.clone()).await {
-        Ok(_) => return Ok(()),
+        Ok(_) => {
+            crate::paste_monitor::set_content_reporting_identity(envelope);
+            return Ok(());
+        }
         Err(error) if service_policy_not_provisioned(&error) => {}
         Err(error) => return Err(error),
     }
@@ -1044,6 +1047,7 @@ async fn install_service_shield_policy(
     }
     crate::svc_client::call("svc.fleet.provision_trust", proof).await?;
     crate::svc_client::call("svc.fleet.install_policy", args).await?;
+    crate::paste_monitor::set_content_reporting_identity(envelope);
     Ok(())
 }
 
@@ -1059,7 +1063,11 @@ async fn refresh_cached_service_shield_policy(resp: &Value) -> Result<(), String
     refresh_cached_service_shield_policy_with(
         resp,
         crate::settings::read_settings,
-        |envelope, pinned| async move { install_service_shield_policy(&envelope, &pinned).await },
+        |envelope, pinned| async move {
+            install_service_shield_policy(&envelope, &pinned).await?;
+            if let Some(epoch)=envelope.config.as_ref() { crate::settings::relay_committed_content_epoch(epoch)?; }
+            Ok(())
+        },
     ).await
 }
 
@@ -1115,12 +1123,54 @@ fn validate_cached_shield_envelope(
 /// is machine-scoped. Refuse native Start when this profile has not adopted
 /// the service's current signed projection; another user's epoch write must
 /// not make stale local options look current.
-pub(crate) async fn verify_service_shield_profile() -> Result<(), String> {
+pub(crate) async fn verify_service_shield_profile() -> Result<Option<(u32, bool, bool, bool)>, String> {
     let settings = crate::settings::read_settings()?;
     let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
         .await
         .map_err(|_| "WinCommander service is unavailable; Shield cannot verify this machine's Fleet policy".to_string())?;
-    verify_shield_profile_against_service(&settings, &response)
+    verify_shield_profile_against_service(&settings, &response)?;
+    // This is derived from the verified service envelope, not stale local
+    // flags or a renderer-provided assertion.
+    let Some(shield) = response.pointer("/policy/config/config_json/privacy/privacyShield") else {
+        return Ok(None);
+    };
+    let delay = match shield.get("lookAwayDelaySeconds") {
+        None => 10,
+        Some(value) => value.as_u64().filter(|value| *value <= 300)
+            .ok_or("signed look-away delay is invalid")? as u32,
+    };
+    let enabled = signed_shield_look_away_detection(shield)?;
+    let capture_phone = signed_shield_capture_flag(shield, "fleetCaptureOnPhone")?;
+    let capture_faces = signed_shield_capture_flag(shield, "fleetCaptureOnMultiFace")?;
+    Ok(Some((delay, enabled, capture_phone, capture_faces)))
+}
+
+fn signed_shield_capture_flag(shield: &Value, key: &str) -> Result<bool, String> {
+    match shield.get(key) {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| "signed Shield capture setting is invalid".into()),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn signed_capture_is_disabled_when_absent_and_rejects_malformed_values() {
+    assert_eq!(signed_shield_capture_flag(&serde_json::json!({}), "fleetCaptureOnPhone"), Ok(false));
+    assert_eq!(signed_shield_capture_flag(&serde_json::json!({"fleetCaptureOnPhone": true}), "fleetCaptureOnPhone"), Ok(true));
+    assert!(signed_shield_capture_flag(&serde_json::json!({"fleetCaptureOnPhone": "true"}), "fleetCaptureOnPhone").is_err());
+}
+
+fn signed_shield_look_away_detection(shield: &Value) -> Result<bool, String> {
+    match shield.get("lookAwayDetectionEnabled") {
+        None => Ok(true),
+        Some(value) => value.as_bool().ok_or_else(|| "signed look-away detector setting is invalid".into()),
+    }
+}
+
+pub(crate) fn effective_shield_look_away_delay(settings: &crate::settings::AppSettings, fleet_delay: Option<u32>) -> Result<u32, String> {
+    let value = fleet_delay.unwrap_or_else(|| settings.app.local_privacy_shield_look_away_delay_seconds.unwrap_or(0));
+    if value > 300 { return Err("Look-away delay must be between 0 and 300 seconds".into()); }
+    Ok(value)
 }
 
 fn verify_shield_profile_against_service(
@@ -1293,17 +1343,13 @@ pub async fn fleet_report_privacy_shield_status(
     // same bounded truth. `None` is intentionally preserved when WMI cannot
     // expose the process command line: Pro/Fleet will then refuse Verified
     // rather than guessing from desired state or settings cache.
-    let mode = if matches!(
+    let read_back = if matches!(
         status.as_str(),
         "running_fleet_session" | "running_local_session" | "running" | "started"
     ) {
-        privacy_shield_status(&app)
-            .await
-            .ok()
-            .and_then(|read_back| fleet_shield_reported_mode(&read_back))
-    } else {
-        None
-    };
+        privacy_shield_status(&app).await.ok()
+    } else { None };
+    let mode = read_back.as_ref().and_then(fleet_shield_reported_mode);
     crate::sidecar::dispatch_paid_command(
         "fleet_agent_privacy_shield_status",
         serde_json::json!({
@@ -1882,6 +1928,16 @@ fn report_fleet_shield_once(
             .await
             {
                 Ok(Ok(_)) => return,
+                Ok(Err(error)) if error.contains("unknown privacy-shield status")
+                    && matches!(status.as_str(), "runtime_dependency_missing" | "model_download_failed" | "model_invalid") => {
+                    // Older Pro sidecars do not know the new bounded codes.
+                    // Preserve a terminal generic failure rather than leave
+                    // the command permanently applying during a staged update.
+                    if matches!(tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        fleet_report_privacy_shield_status(app.clone(), "start_failed".to_string(), None, command_id.clone()),
+                    ).await, Ok(Ok(_))) { return; }
+                }
                 Ok(Err(error)) => crate::log_message(
                     "warn",
                     &format!(
@@ -1925,7 +1981,11 @@ fn reconcile_fleet_shield_local_observation_keys(
     reported_for_command: &mut std::collections::BTreeSet<String>,
     status: &str,
 ) {
-    for prior in ["running_local_session", "stopped"] {
+    for prior in [
+        "running_local_session", "running", "stopped", "windows_camera_policy_denied",
+        "app_camera_permission_denied", "hardware_unavailable", "camera_busy",
+        "camera_feed_unavailable", "camera_status_unknown",
+    ] {
         if prior != status {
             reported_for_command.remove(&fleet_shield_report_key(None, prior));
         }
@@ -1953,10 +2013,28 @@ fn fleet_shield_camera_issue(status: &serde_json::Value) -> Option<&'static str>
     }
 }
 
+// Forward only closed diagnostic codes, never local messages or logs.
+fn fleet_shield_start_failure(started: &serde_json::Value, status: &serde_json::Value) -> &'static str {
+    match started.get("diagnosticCode").and_then(serde_json::Value::as_str) {
+        Some("runtime_unavailable" | "runtime_dependency_missing") => "runtime_dependency_missing",
+        Some("model_download_failed") => "model_download_failed",
+        Some("model_invalid") => "model_invalid",
+        Some("camera_busy") => "camera_busy",
+        Some("camera_feed_unavailable") => "camera_feed_unavailable",
+        Some("hardware_unavailable") => "hardware_unavailable",
+        Some("windows_camera_policy_denied") => "windows_camera_policy_denied",
+        Some("app_camera_permission_denied") => "app_camera_permission_denied",
+        _ => fleet_shield_camera_issue(status).unwrap_or("start_failed"),
+    }
+}
+
 fn fleet_shield_start_params(
     state: &crate::settings::FleetShieldDesiredState,
     shield: &crate::settings::PrivacyShieldSettings,
 ) -> Result<HashMap<String, String>, String> {
+    if shield.look_away_delay_seconds.is_some_and(|value| value > 300) {
+        return Err("Fleet supplied an invalid look-away delay".to_string());
+    }
     let blur_enabled = match state.mode.as_str() {
         "notify_only" => false,
         "blur_notify" => true,
@@ -1967,11 +2045,12 @@ fn fleet_shield_start_params(
         ("Mode".to_string(), state.mode.clone()),
         // Fleet observes all three classes.  The signed mode below controls
         // display blur only; Notify-only must never silently become blur.
-        ("CheckGaze".to_string(), "true".to_string()),
+        ("CheckGaze".to_string(), shield.look_away_detection_enabled.unwrap_or(true).to_string()),
         ("CheckFaces".to_string(), "true".to_string()),
         ("CheckPhone".to_string(), "true".to_string()),
         ("CaptureOnDevice".to_string(), "false".to_string()),
         ("CaptureOnMultiFace".to_string(), "false".to_string()),
+        ("FleetVideoOnly".to_string(), "true".to_string()),
         (
             "ModelLevel".to_string(),
             shield
@@ -1991,6 +2070,7 @@ fn fleet_shield_start_params(
             "WakeDelayMs".to_string(),
             shield.wake_delay_seconds.unwrap_or(150).to_string(),
         ),
+        ("LookAwayDelaySeconds".to_string(), shield.look_away_delay_seconds.unwrap_or(10).to_string()),
         (
             "DeviceWakeMultiplier".to_string(),
             shield.device_wake_multiplier.unwrap_or(5.0).to_string(),
@@ -2028,8 +2108,11 @@ fn local_shield_restart_params(
     camera_index: u32,
     observed: &ShieldNativeOptions,
     shield: &crate::settings::PrivacyShieldSettings,
+    local_delay: Option<u32>,
+    fleet_delay: Option<u32>,
 ) -> Result<HashMap<String, String>, String> {
     if !matches!(mode, "notify_only" | "blur_notify") || camera_index > 32 || !observed.is_bounded()
+        || fleet_delay.unwrap_or_else(|| local_delay.unwrap_or(0)) > 300
     {
         return Err("pre-pause local Shield options are unavailable".into());
     }
@@ -2037,16 +2120,20 @@ fn local_shield_restart_params(
     Ok(HashMap::from([
         ("Camera".into(), camera_index.to_string()),
         ("Mode".into(), mode.into()),
-        ("CheckGaze".into(), observed.check_gaze.to_string()),
+        ("CheckGaze".into(), fleet_delay.map_or(observed.check_gaze, |_| shield.look_away_detection_enabled.unwrap_or(true)).to_string()),
         ("CheckFaces".into(), observed.check_faces.to_string()),
         ("CheckPhone".into(), observed.check_phone.to_string()),
         (
             "CaptureOnDevice".into(),
-            observed.capture_on_device.to_string(),
+            if fleet_delay.is_none() && observed.fleet_video_only == Some(true) {
+                shield.capture_on_device.unwrap_or(false)
+            } else { observed.capture_on_device }.to_string(),
         ),
         (
             "CaptureOnMultiFace".into(),
-            observed.capture_on_multi_face.to_string(),
+            if fleet_delay.is_none() && observed.fleet_video_only == Some(true) {
+                shield.capture_on_multi_face.unwrap_or(false)
+            } else { observed.capture_on_multi_face }.to_string(),
         ),
         (
             "BlurGaze".into(),
@@ -2089,6 +2176,10 @@ fn local_shield_restart_params(
                 .wake_delay_seconds
                 .unwrap_or(observed.wake_delay_ms)
                 .to_string(),
+        ),
+        (
+            "LookAwayDelaySeconds".into(),
+            fleet_delay.unwrap_or_else(|| local_delay.unwrap_or(0)).to_string(),
         ),
         (
             "DeviceWakeMultiplier".into(),
@@ -2166,6 +2257,8 @@ fn fleet_shield_tuning_hash(shield: &crate::settings::PrivacyShieldSettings) -> 
     use sha2::{Digest, Sha256};
     let tuning = serde_json::json!({
         "gaze": shield.gaze_detection_enabled,
+        "look_away_detection_enabled": shield.look_away_detection_enabled,
+        "look_away_delay_seconds": shield.look_away_delay_seconds,
         "faces": shield.anti_peeping_enabled,
         "phone": shield.camera_hunter_enabled,
         "confidence": shield.confidence_threshold,
@@ -2176,6 +2269,8 @@ fn fleet_shield_tuning_hash(shield: &crate::settings::PrivacyShieldSettings) -> 
         "device_multiplier": shield.device_wake_multiplier,
         "face_multiplier": shield.multi_face_wake_multiplier,
         "capture_speed": shield.capture_speed,
+        "fleet_capture_on_phone": shield.fleet_capture_on_phone,
+        "fleet_capture_on_multi_face": shield.fleet_capture_on_multi_face,
         "notify_look_away": shield.look_away_notifications_enabled,
         "notify_multiple_faces": shield.multiple_faces_notifications_enabled,
         "notify_phone": shield.phone_notifications_enabled,
@@ -2214,6 +2309,20 @@ fn fleet_shield_intent_matches(
     latest == Some(expected) && latest_epoch == expected_epoch && latest_hash == expected_hash
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ShieldQuotaAction { Continue, Block, PreserveUnowned, StopOwned }
+
+fn shield_quota_action(exhausted: bool, running: bool, fleet_owned: bool) -> ShieldQuotaAction {
+    if !exhausted { ShieldQuotaAction::Continue }
+    else if !running { ShieldQuotaAction::Block }
+    else if fleet_owned { ShieldQuotaAction::StopOwned }
+    else { ShieldQuotaAction::PreserveUnowned }
+}
+
+fn fleet_shield_requires_takeover(enabled: bool, running: bool, fleet_owned: bool) -> bool {
+    enabled && running && !fleet_owned
+}
+
 fn fleet_shield_should_apply_stop(
     running: bool,
     state: &crate::settings::FleetShieldDesiredState,
@@ -2227,12 +2336,31 @@ fn fleet_shield_should_apply_stop(
 }
 
 async fn privacy_shield_status(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    crate::backend::run_backend_script_unlocked(
+    let result = crate::backend::run_backend_script_unlocked(
         app.clone(),
         "Get-PrivacyShieldStatus".to_string(),
         HashMap::new(),
-    )
-    .await
+    ).await;
+    publish_shield_launch_observation(result.as_ref().ok());
+    result
+}
+
+fn publish_shield_launch_observation(status: Option<&serde_json::Value>) {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    static LAST: std::sync::OnceLock<std::sync::Mutex<Option<(Instant, String)>>> = std::sync::OnceLock::new();
+    let origin = status.and_then(crate::backend::shield_launch_origin);
+    let identity = status.map(|value| format!("{}:{}:{:?}", value["processId"], value["processStartTicks"], origin)).unwrap_or_default();
+    let Ok(mut last) = LAST.get_or_init(|| std::sync::Mutex::new(None)).lock() else { return; };
+    if last.as_ref().is_some_and(|(at, prior)| prior == &identity && at.elapsed() < Duration::from_secs(15)) { return; }
+    let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else { return; };
+    let Ok(sampled_ms) = u64::try_from(elapsed.as_millis()) else { return; };
+    *last = Some((Instant::now(), identity));
+    drop(last);
+    tauri::async_runtime::spawn(async move {
+        let _ = crate::sidecar::dispatch_paid_command("fleet_agent_privacy_shield_origin", serde_json::json!({
+            "origin": origin, "sampledAtMs": sampled_ms,
+        })).await;
+    });
 }
 
 fn fleet_shield_running_state(status: &serde_json::Value) -> Result<bool, String> {
@@ -2389,6 +2517,11 @@ fn fleet_shield_launch_matches(
     if fleet_shield_reported_mode(status).as_deref() != Some(state.mode.as_str()) {
         return false;
     }
+    let fleet_capture_requested = params.get("FleetVideoOnly").is_some_and(|v| v == "true")
+        && ["CaptureOnDevice", "CaptureOnMultiFace"].iter().any(|key| params.get(*key).is_some_and(|v| v == "true"));
+    if fleet_capture_requested && status.pointer("/nativeOptions/fleetVideoOnly").and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
     let Some(observed) = fleet_shield_native_options(status, true) else {
         return false;
     };
@@ -2401,10 +2534,12 @@ fn fleet_shield_launch_matches(
         "blurPhone": params.get("BlurPhone") == Some(&"true".to_string()),
         "captureOnDevice": params.get("CaptureOnDevice") == Some(&"true".to_string()),
         "captureOnMultiFace": params.get("CaptureOnMultiFace") == Some(&"true".to_string()),
+        "fleetVideoOnly": if params.get("FleetVideoOnly").is_some_and(|v| v == "true") { Some(true) } else { None },
         "modelLevel": params.get("ModelLevel"),
         "confidence": params.get("Confidence").and_then(|v| v.parse::<f64>().ok()),
         "overlayOpacity": params.get("OverlayOpacity").and_then(|v| v.parse::<u32>().ok()),
         "wakeDelayMs": params.get("WakeDelayMs").and_then(|v| v.parse::<u32>().ok()),
+        "lookAwayDelaySeconds": params.get("LookAwayDelaySeconds").and_then(|v| v.parse::<u32>().ok()),
         "deviceWakeMultiplier": params.get("DeviceWakeMultiplier").and_then(|v| v.parse::<f64>().ok()),
         "multiFaceWakeMultiplier": params.get("MultiFaceWakeMultiplier").and_then(|v| v.parse::<f64>().ok()),
         "bufferFrames": params.get("BufferFrames").and_then(|v| v.parse::<u32>().ok()),
@@ -2420,6 +2555,7 @@ fn fleet_shield_stored_settings(
     shield: &crate::settings::PrivacyShieldSettings,
 ) -> ShieldStoredSettings {
     ShieldStoredSettings {
+        look_away_delay_seconds: shield.look_away_delay_seconds.filter(|value| *value <= 300),
         wake_delay_seconds: shield
             .wake_delay_seconds
             .filter(|value| (50..=1_500).contains(value)),
@@ -2454,18 +2590,17 @@ async fn apply_fleet_privacy_shield_policy(
     reported_for_command: &Arc<Mutex<std::collections::BTreeSet<String>>>,
 ) -> Result<(), String> {
     require_single_interactive_shield_session()?;
-    if let Err(error) = verify_service_shield_profile().await {
-        if error == "protected Fleet Shield configuration is unavailable" {
-            return observe_detargeted_stop(app, reported_for_command).await;
-        }
-        return Err(error);
-    }
+    let fleet_policy_active = match verify_service_shield_profile().await {
+        Ok(active) => active,
+        Err(error) if error == "protected Fleet Shield configuration is unavailable" => return observe_detargeted_stop(app, reported_for_command).await,
+        Err(error) => return Err(error),
+    };
     if let Some(transaction) = crate::settings::read_settings()?
         .app
         .fleet
         .privacy_shield_policy_transaction
     {
-        return resume_shield_policy_transaction(app, reported_for_command, transaction).await;
+        return resume_shield_policy_transaction(app, reported_for_command, transaction, fleet_policy_active).await;
     }
     let state = fleet_sync_authoritative_shield_state().await?;
     let Some(state) =
@@ -2477,9 +2612,9 @@ async fn apply_fleet_privacy_shield_policy(
         // agent or a Fleet-managed session.
         let local = privacy_shield_status(app).await?;
         let status = if fleet_shield_running_state(&local)? {
-            "running_local_session"
+            "running" // Existing process has no verified launch origin.
         } else {
-            "stopped"
+            fleet_shield_camera_issue(&local).unwrap_or("stopped")
         };
         report_fleet_shield_local_observation(app.clone(), reported_for_command, status);
         return Ok(());
@@ -2517,7 +2652,8 @@ async fn apply_fleet_privacy_shield_policy(
             .privacy_shield_applied_command_id
             .as_deref(),
         &state,
-    ) || (state.enabled
+    ) || fleet_shield_requires_takeover(state.enabled, running, settings.app.fleet.privacy_shield_session_owned)
+        || (state.enabled
         && running
         && settings
             .app
@@ -2548,9 +2684,9 @@ async fn apply_fleet_privacy_shield_policy(
                 app.clone(),
                 reported_for_command,
                 if running {
-                    "running_local_session"
+                    "running" // A cached ownership flag is not launch provenance.
                 } else {
-                    "stopped"
+                    fleet_shield_camera_issue(&before).unwrap_or("stopped")
                 },
             );
             return Ok(());
@@ -2595,12 +2731,43 @@ async fn apply_fleet_privacy_shield_policy(
                 app.clone(),
                 reported_for_command,
                 if running && !should_stop {
-                    "running_local_session"
+                    "running" // Existing process origin was not established.
                 } else {
                     "stopped"
                 },
             );
         }
+        return Ok(());
+    }
+
+    // Quota is charged by the existing minute task. Never restart while
+    // exhausted; if Fleet owns a running process, stop it under this lock.
+    let quota_action = shield_quota_action(
+        crate::shield_quota::is_quota_exhausted(), running,
+        settings.app.fleet.privacy_shield_session_owned,
+    );
+    if quota_action != ShieldQuotaAction::Continue {
+        if quota_action == ShieldQuotaAction::PreserveUnowned {
+            // Do not assert the local detector has stopped; the command has
+            // not taken ownership and cannot safely apply an exhausted Start.
+            report_fleet_shield_local_observation(app.clone(), reported_for_command, "running");
+            return Err("Privacy Shield takeover is blocked by the daily quota".into());
+        }
+        if quota_action == ShieldQuotaAction::StopOwned {
+            let stopped = crate::backend::run_backend_script_unlocked(
+                app.clone(), "Stop-PrivacyShield".to_string(), HashMap::new(),
+            ).await?;
+            if stopped.get("success").and_then(serde_json::Value::as_bool) != Some(true)
+                || fleet_shield_running_state(&privacy_shield_status(app).await?)?
+            {
+                return Err("Privacy Shield quota stop was not observed".to_string());
+            }
+            crate::settings::patch_settings(serde_json::json!({
+                "app": { "fleet": { "privacyShieldSessionOwned": false } }
+            }))?;
+            crate::set_tray_shield_running(app, false);
+        }
+        report_fleet_shield_once(app.clone(), reported_for_command, command_id, "quota_exhausted");
         return Ok(());
     }
 
@@ -2616,7 +2783,14 @@ async fn apply_fleet_privacy_shield_policy(
             "app": { "fleet": { "privacyShieldSessionOwned": true } }
         }))?;
         crate::set_tray_shield_running(app, true);
-        let params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
+        let mut params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
+        params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
+        params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+        if let Some(policy) = fleet_policy_active {
+            params.insert("CaptureOnDevice".into(), policy.2.to_string());
+            params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
+            params.insert("FleetVideoOnly".into(), "true".into());
+        }
         report_fleet_shield_once(
             app.clone(),
             reported_for_command,
@@ -2659,7 +2833,14 @@ async fn apply_fleet_privacy_shield_policy(
     if !fleet_shield_intent_still_current(&state, policy_epoch, &tuning_hash).await? {
         return Ok(());
     }
-    let params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
+    let mut params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
+    params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
+    params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+    if let Some(policy) = fleet_policy_active {
+        params.insert("CaptureOnDevice".into(), policy.2.to_string());
+        params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
+        params.insert("FleetVideoOnly".into(), "true".into());
+    }
     let started = crate::backend::run_backend_script_unlocked(
         app.clone(),
         "Start-PrivacyShield".to_string(),
@@ -2668,7 +2849,7 @@ async fn apply_fleet_privacy_shield_policy(
     .await?;
     if started.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
         let read_back = privacy_shield_status(app).await.unwrap_or(before);
-        let issue = fleet_shield_camera_issue(&read_back).unwrap_or("start_failed");
+        let issue = fleet_shield_start_failure(&started, &read_back);
         report_fleet_shield_once(app.clone(), reported_for_command, command_id, issue);
         return Ok(());
     }
@@ -2764,6 +2945,7 @@ async fn resume_shield_policy_transaction(
     app: &tauri::AppHandle,
     reported_for_command: &Arc<Mutex<std::collections::BTreeSet<String>>>,
     mut transaction: crate::settings::ShieldPolicyTransaction,
+    fleet_policy_active: Option<(u32, bool, bool, bool)>,
 ) -> Result<(), String> {
     let prior_failed = transaction.last_stage == Some(ShieldPolicyProgressStage::Failed);
     if prior_failed && !shield_retry_is_due(&transaction) && !transaction.local_stop_requested {
@@ -2924,7 +3106,7 @@ async fn resume_shield_policy_transaction(
     } else {
         state.ok_or_else(|| "Shield desired state is unavailable".to_string())?
     };
-    let params = if local_session {
+    let mut params = if local_session {
         local_shield_restart_params(
             &state.mode,
             transaction
@@ -2935,10 +3117,29 @@ async fn resume_shield_policy_transaction(
                 .as_ref()
                 .ok_or("pre-pause local Shield options are unavailable")?,
             &settings.ideal.privacy.privacy_shield,
+            settings.app.local_privacy_shield_look_away_delay_seconds,
+            fleet_policy_active.map(|policy| policy.0),
         )?
     } else {
         fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?
     };
+    if !local_session {
+        params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
+        params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+        if let Some(policy) = fleet_policy_active {
+            params.insert("CaptureOnDevice".into(), policy.2.to_string());
+            params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
+            params.insert("FleetVideoOnly".into(), "true".into());
+        }
+    }
+    if local_session {
+        if let Some((_, enabled, phone, faces)) = fleet_policy_active {
+            params.insert("CheckGaze".into(), enabled.to_string());
+            params.insert("CaptureOnDevice".into(), phone.to_string());
+            params.insert("CaptureOnMultiFace".into(), faces.to_string());
+            params.insert("FleetVideoOnly".into(), "true".into());
+        }
+    }
     if running && !fleet_shield_launch_matches(&native, &state, &params) {
         require_no_unverified_recovery_detector(true)?;
     }
@@ -2949,6 +3150,19 @@ async fn resume_shield_policy_transaction(
     )
     .await?;
     let started_by_attempt = !running;
+    if !running && crate::shield_quota::is_quota_exhausted() {
+        advance_shield_policy_progress(
+            &mut transaction,
+            ShieldPolicyProgressStage::Failed,
+            Some(ShieldPolicyProgressReason::StartRejected),
+        ).await?;
+        if let Some(command_id) = state.command_id.as_deref() {
+            report_fleet_shield_once(app.clone(), reported_for_command, Some(command_id), "quota_exhausted");
+        } else {
+            report_fleet_shield_local_observation(app.clone(), reported_for_command, "quota_exhausted");
+        }
+        return Err("Privacy Shield restart is blocked by the daily quota".into());
+    }
     let native = if running {
         native
     } else {
@@ -2978,10 +3192,11 @@ async fn resume_shield_policy_transaction(
             store_shield_policy_transaction(None)?;
             return Ok(());
         }
-        let started = crate::backend::run_backend_script_unlocked(
+        let started = crate::backend::run_backend_script_unlocked_with_origin(
             app.clone(),
             "Start-PrivacyShield".to_string(),
             params.clone(),
+            if local_session { None } else { Some("fleet") },
         )
         .await?;
         if started.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
@@ -3063,7 +3278,7 @@ async fn resume_shield_policy_transaction(
     advance_shield_policy_progress(&mut transaction, ShieldPolicyProgressStage::Verified, None)
         .await?;
     crate::settings::patch_settings(serde_json::json!({ "app": { "fleet": {
-        "privacyShieldSessionOwned": transaction.was_fleet_owned && !local_session,
+        "privacyShieldSessionOwned": !local_session,
         "privacyShieldAppliedRevision": state.revision,
         "privacyShieldAppliedCommandId": state.command_id.clone(),
         "privacyShieldAppliedTuningHash": transaction.expected_hash,
@@ -3075,7 +3290,7 @@ async fn resume_shield_policy_transaction(
         app.clone(),
         reported_for_command,
         state.command_id.as_deref(),
-        if transaction.was_fleet_owned && !local_session {
+        if !local_session {
             "running_fleet_session"
         } else {
             "running_local_session"
@@ -3155,14 +3370,16 @@ fn should_report_required_device_alert(settings: &crate::settings::AppSettings) 
 /// silently discard the match.
 pub async fn fleet_report_clipboard_event(
     report: ClipboardEventReport,
+    fleet_binding: Option<String>,
 ) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
     let settings = crate::settings::read_settings()?;
     if !settings.app.fleet.enabled {
         return Err("Fleet is not enabled on this device.".to_string());
     }
-    let args = serde_json::to_value(report)
+    let mut args = serde_json::to_value(report)
         .map_err(|_| "Clipboard event could not be encoded".to_string())?;
+    args["fleet_binding"] = serde_json::json!(fleet_binding);
     crate::sidecar::dispatch_paid_command("fleet_agent_clipboard_event", args).await
 }
 
@@ -3285,6 +3502,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn shield_start_failure_preserves_only_closed_diagnostics() {
+        let ready = serde_json::json!({"cameraAvailable": true});
+        for code in ["runtime_dependency_missing", "model_download_failed", "model_invalid", "camera_busy"] {
+            assert_eq!(super::fleet_shield_start_failure(&serde_json::json!({"diagnosticCode": code, "message": "private data"}), &ready), code);
+        }
+        assert_eq!(super::fleet_shield_start_failure(&serde_json::json!({"diagnosticCode": "runtime_unavailable"}), &ready), "runtime_dependency_missing");
+        assert_eq!(super::fleet_shield_start_failure(&serde_json::json!({"diagnosticCode": "private data"}), &ready), "start_failed");
+        assert_eq!(super::fleet_shield_start_failure(&serde_json::json!({}), &serde_json::json!({"cameraAvailable": false, "cameraStatus": "camera_busy"})), "camera_busy");
+    }
+
+    #[test]
     fn authority_read_error_rolls_back_only_the_newly_started_detector() {
         let unavailable = Err("authority unavailable".to_string());
         assert!(super::stop_after_authority_check(true, &unavailable));
@@ -3335,6 +3563,7 @@ mod tests {
             config: None,
             shield: None,
             shield_revision: 9,
+            clipboard_guard_enabled: false,
             signer_key: signer,
             signature: String::new(),
         };
@@ -3688,6 +3917,7 @@ mod tests {
             ..Default::default()
         };
         let params = super::fleet_shield_start_params(&state, &shield).unwrap();
+        assert_eq!(params["LookAwayDelaySeconds"], "10");
         assert_eq!(params["CheckGaze"], "true");
         assert_eq!(params["CheckFaces"], "true");
         assert_eq!(params["CheckPhone"], "true");
@@ -3695,6 +3925,42 @@ mod tests {
         assert_eq!(params["BlurFaces"], "false");
         assert_eq!(params["BlurPhone"], "false");
         assert_eq!(params["Mode"], "notify_only");
+        let mut explicit = shield.clone();
+        explicit.look_away_delay_seconds = Some(0);
+        assert_eq!(super::fleet_shield_start_params(&state, &explicit).unwrap()["LookAwayDelaySeconds"], "0");
+        explicit.look_away_delay_seconds = Some(23);
+        assert_eq!(super::fleet_shield_start_params(&state, &explicit).unwrap()["LookAwayDelaySeconds"], "23");
+        explicit.look_away_delay_seconds = Some(301);
+        assert!(super::fleet_shield_start_params(&state, &explicit).is_err());
+    }
+
+    #[test]
+    fn signed_detector_policy_defaults_enabled_and_rejects_malformed_values() {
+        assert_eq!(super::signed_shield_look_away_detection(&serde_json::json!({})).unwrap(), true);
+        assert_eq!(super::signed_shield_look_away_detection(&serde_json::json!({"lookAwayDetectionEnabled":false})).unwrap(), false);
+        assert!(super::signed_shield_look_away_detection(&serde_json::json!({"lookAwayDetectionEnabled":"false"})).is_err());
+    }
+
+    #[test]
+    fn fleet_signed_shield_settings_reach_launch_parameters() {
+        let shield: crate::settings::PrivacyShieldSettings = serde_json::from_value(serde_json::json!({
+            "lookAwayDelaySeconds": 25, "lookAwayDetectionEnabled": false, "wakeDelaySeconds": 550, "modelSize": "small",
+            "confidenceThreshold": 0.7, "blurOpacity": 180, "captureSpeed": 2,
+            "gazeDetectionEnabled": false, "antiPeepingEnabled": true, "cameraHunterEnabled": false,
+            "detectionBufferFrames": 3, "deviceWakeMultiplier": 4, "multiFaceWakeMultiplier": 6
+        })).unwrap();
+        let state = crate::settings::FleetShieldDesiredState {
+            enabled: true, mode: "blur_notify".into(), revision: 1,
+            updated_at: String::new(), command_id: None,
+        };
+        let params = super::fleet_shield_start_params(&state, &shield).unwrap();
+        for (key, value) in [("LookAwayDelaySeconds", "25"), ("WakeDelayMs", "550"),
+            ("ModelLevel", "small"), ("Confidence", "0.7"), ("OverlayOpacity", "180"),
+            ("CaptureSpeed", "2"), ("CheckGaze", "false"), ("BlurGaze", "false"), ("BlurFaces", "true"),
+            ("BlurPhone", "false"), ("BufferFrames", "3"), ("DeviceWakeMultiplier", "4"),
+            ("MultiFaceWakeMultiplier", "6")] {
+            assert_eq!(params[key], value, "{key}");
+        }
     }
 
     #[test]
@@ -3723,6 +3989,9 @@ mod tests {
     fn policy_hash_changes_for_each_fleet_shield_field() {
         let mut shield = crate::settings::PrivacyShieldSettings::default();
         let original = super::fleet_shield_tuning_hash(&shield);
+        shield.look_away_delay_seconds = Some(12);
+        assert_ne!(super::fleet_shield_tuning_hash(&shield), original);
+        shield.look_away_delay_seconds = None;
         shield.wake_delay_seconds = Some(160);
         assert_ne!(super::fleet_shield_tuning_hash(&shield), original);
         shield.wake_delay_seconds = None;
@@ -3763,6 +4032,7 @@ mod tests {
     #[test]
     fn stored_shield_settings_keep_independent_notification_and_blur_values() {
         let shield = crate::settings::PrivacyShieldSettings {
+            look_away_delay_seconds: Some(12),
             gaze_detection_enabled: Some(false),
             anti_peeping_enabled: Some(true),
             camera_hunter_enabled: Some(true),
@@ -3778,6 +4048,7 @@ mod tests {
             ..Default::default()
         };
         let stored = super::fleet_shield_stored_settings(&shield);
+        assert_eq!(stored.look_away_delay_seconds, Some(12));
         assert_eq!(stored.gaze_detection_enabled, Some(false));
         assert_eq!(stored.look_away_notifications_enabled, Some(false));
         assert_eq!(stored.anti_peeping_enabled, Some(true));
@@ -3879,9 +4150,10 @@ mod tests {
         let native = serde_json::json!({ "activeMode": "blur_notify", "cameraIndex": 0, "nativeOptions": {
             "checkGaze": true, "checkFaces": true, "checkPhone": true,
             "blurGaze": true, "blurFaces": false, "blurPhone": false,
-            "captureOnDevice": false, "captureOnMultiFace": false,
+            "captureOnDevice": false, "captureOnMultiFace": false, "fleetVideoOnly": true,
             "modelLevel": "medium", "confidence": 0.5, "overlayOpacity": 200,
             "wakeDelayMs": 150, "deviceWakeMultiplier": 5.0,
+            "lookAwayDelaySeconds": 10,
             "multiFaceWakeMultiplier": 5.0, "bufferFrames": 2, "captureSpeed": 1,
         }});
         assert!(super::fleet_shield_native_options(&native, true).is_some());
@@ -3900,6 +4172,17 @@ mod tests {
         };
         let params = super::fleet_shield_start_params(&state, &shield).unwrap();
         assert!(super::fleet_shield_launch_matches(&native, &state, &params));
+        let mut capture_params = params.clone();
+        capture_params.insert("CaptureOnDevice".into(), "true".into());
+        let mut capture_native = native.clone();
+        capture_native["nativeOptions"]["captureOnDevice"] = serde_json::json!(true);
+        capture_native["nativeOptions"].as_object_mut().unwrap().remove("fleetVideoOnly");
+        assert!(!super::fleet_shield_launch_matches(&capture_native, &state, &capture_params));
+        capture_native["nativeOptions"]["fleetVideoOnly"] = serde_json::json!(true);
+        assert!(super::fleet_shield_launch_matches(&capture_native, &state, &capture_params));
+        let mut old_detector = native.clone();
+        old_detector["nativeOptions"].as_object_mut().unwrap().remove("lookAwayDelaySeconds");
+        assert!(!super::fleet_shield_launch_matches(&old_detector, &state, &params));
         let mut changed_camera = native.clone();
         changed_camera["cameraIndex"] = serde_json::json!(2);
         assert!(!super::fleet_shield_launch_matches(
@@ -3991,6 +4274,24 @@ mod tests {
             reported,
             std::collections::BTreeSet::from([":stopped".to_string()])
         );
+    }
+
+    #[test]
+    fn exhausted_quota_stops_owned_once_and_never_restarts_on_later_ticks() {
+        use super::ShieldQuotaAction::*;
+        assert_eq!(super::shield_quota_action(true, true, true), StopOwned);
+        assert_eq!(super::shield_quota_action(true, false, false), Block);
+        assert_eq!(super::shield_quota_action(true, false, false), Block);
+        assert_eq!(super::shield_quota_action(true, true, false), PreserveUnowned);
+        assert_eq!(super::shield_quota_action(false, false, false), Continue);
+    }
+
+    #[test]
+    fn fleet_on_reconfigures_a_running_local_session_before_claiming_it() {
+        assert!(super::fleet_shield_requires_takeover(true, true, false));
+        assert!(!super::fleet_shield_requires_takeover(true, true, true));
+        assert!(!super::fleet_shield_requires_takeover(false, true, false));
+        assert!(!super::fleet_shield_requires_takeover(true, false, false));
     }
 
     #[test]
@@ -4571,13 +4872,36 @@ mod tests {
         let mut shield = crate::settings::PrivacyShieldSettings::default();
         shield.wake_delay_seconds = Some(240);
         let params =
-            super::local_shield_restart_params("notify_only", 2, &native, &shield).unwrap();
+            super::local_shield_restart_params("notify_only", 2, &native, &shield, None, None).unwrap();
         assert_eq!(params["Camera"], "2");
         assert_eq!(params["Mode"], "notify_only");
         assert_eq!(params["CheckGaze"], "false");
         assert_eq!(params["CaptureOnDevice"], "true");
         assert_eq!(params["WakeDelayMs"], "240");
         assert_eq!(params["BlurGaze"], "false");
+        assert_eq!(params["LookAwayDelaySeconds"], "0");
+        shield.look_away_delay_seconds = Some(25); // stale Fleet setting after de-target
+        assert_eq!(super::local_shield_restart_params("notify_only", 2, &native, &shield, Some(3), None).unwrap()["LookAwayDelaySeconds"], "3");
+        assert_eq!(super::local_shield_restart_params("notify_only", 2, &native, &shield, Some(3), Some(10)).unwrap()["LookAwayDelaySeconds"], "10");
+        let mut managed_native = native.clone();
+        managed_native.fleet_video_only = Some(true);
+        shield.capture_on_device = Some(false);
+        let restored = super::local_shield_restart_params("notify_only", 2, &managed_native, &shield, Some(3), None).unwrap();
+        assert_eq!(restored["CaptureOnDevice"], "false");
+    }
+
+    #[test]
+    fn look_away_delay_uses_verified_policy_scope() {
+        let mut settings = crate::settings::create_default_settings();
+        assert_eq!(super::effective_shield_look_away_delay(&settings, None).unwrap(), 0);
+        assert_eq!(super::effective_shield_look_away_delay(&settings, Some(10)).unwrap(), 10);
+        settings.ideal.privacy.privacy_shield.look_away_delay_seconds = Some(25);
+        settings.app.local_privacy_shield_look_away_delay_seconds = Some(3);
+        assert_eq!(super::effective_shield_look_away_delay(&settings, Some(25)).unwrap(), 25);
+        assert_eq!(super::effective_shield_look_away_delay(&settings, None).unwrap(), 3);
+        settings.ideal.privacy.privacy_shield.look_away_delay_seconds = Some(301);
+        assert!(super::effective_shield_look_away_delay(&settings, Some(301)).is_err());
+        assert_eq!(super::effective_shield_look_away_delay(&settings, None).unwrap(), 3);
     }
 
     /// ApplyError::is_transport() correctly distinguishes the two variants.
