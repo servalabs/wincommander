@@ -12,6 +12,7 @@ import ContextItemVisibilityCard from '../../src/components/tweaks/ContextItemVi
 import AdditionalAppPermissions from '../../src/panels/privacy/AdditionalAppPermissions';
 import IpFirewallCard from '../../src/panels/network/IpFirewallCard';
 import PortGuardHistory from '../../src/panels/network/PortGuardHistory';
+import ActivePorts from '../../src/components/network/ActivePorts';
 import type { PortGuardHit, PortGuardStatus } from '../../src/lib/portGuard';
 
 const fixture = window as typeof window & { __TAURI_INTERNALS__: unknown; selectedCalls: {command:string;params:Record<string,string>}[]; copiedReport: string };
@@ -35,6 +36,7 @@ fixture.__TAURI_INTERNALS__ = {
     if (command !== 'run_backend_script') throw new Error(`Fixture refuses native call: ${command}`);
     const name = String(args.command); const params = (args.params || {}) as Record<string, string>;
     fixture.selectedCalls.push({command:name,params});
+    if (name === 'Get-NetworkPorts') return {status:'ok',durationMs:1,truncated:false,totals:{tcp:1,udp:0,shown:1},rows:[{proto:'TCP',localAddr:'192.0.2.1',localPort:54321,remoteAddr:'198.51.100.4',remotePort:443,state:'ESTABLISHED',pid:42,processName:'fixture-browser',processPath:'C:\\private\\fixture.exe'}]};
     if (name === 'Get-UpdateRestartPolicyStatus') return structuredClone(restart);
     if (name === 'Set-UpdateRestartPolicy') {
       restart = params.Mode === 'revert' ? { ...restart, configured:false, policyExists:false, owned:false, scheduledMode:false, canPrepareSchedule:true, scheduleOwned:false } : { ...restart, configured:true, policyExists:true, owned:true, scheduledMode:true, canPrepareSchedule:false, scheduleOwned:params.Mode === 'applyWithSchedule' };
@@ -57,5 +59,5 @@ const portStatus: PortGuardStatus = {schemaVersion:2,running:true,desiredEnabled
 document.body.style.cssText = 'margin:0;padding:16px;min-width:0;height:auto;overflow:auto';
 document.documentElement.style.cssText = 'height:auto;overflow:auto';
 createRoot(document.getElementById('fixture')!).render(<QueryClientProvider client={new QueryClient()}><MotionPreferenceProvider><AppConfirmProvider>
-  <main style={{display:'grid',gap:16}}><UpdateRestartCard /><ShellVisibilityCard searchQuery="" /><ContextItemVisibilityCard searchQuery="" /><AdditionalAppPermissions searchQuery="" /><IpFirewallCard /><PortGuardHistory hits={[hit]} status={portStatus} stale={false} readError={null} busy={false} onClear={() => {}} /></main>
+  <main style={{display:'grid',gap:16}}><UpdateRestartCard /><ShellVisibilityCard searchQuery="" /><ContextItemVisibilityCard searchQuery="" /><AdditionalAppPermissions searchQuery="" /><IpFirewallCard /><PortGuardHistory hits={[hit]} status={portStatus} stale={false} readError={null} busy={false} onClear={() => {}} /><ActivePorts /></main>
 </AppConfirmProvider></MotionPreferenceProvider></QueryClientProvider>);

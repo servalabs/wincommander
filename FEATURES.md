@@ -63,6 +63,10 @@ the backend and private component before execution.
 - Active Ports can copy the currently visible connection snapshot as a text
   report. It reflects the selected filters and scan cap; it is not packet
   capture or a history of past connections.
+- An optional Active Ports session report samples local and remote endpoints
+  during refreshes, including rows hidden by filters. It can miss short-lived
+  connections and does not show traffic contents or establish direction. It is
+  memory-only, limited to 1,000 rows, and stops when the view closes.
 - Port Guard can copy its retained inbound observation history with coverage,
   dropped-event and retention information. It covers watched ports rather than
   all network traffic, and repeated observations are not necessarily separate

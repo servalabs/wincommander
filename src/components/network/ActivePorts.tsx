@@ -14,6 +14,8 @@ import SectionCard from "../shared/SectionCard";
 import WCSwitch from "../shared/WCSwitch";
 import { showError, showSuccess } from "../../utils/toast";
 import { formatNetworkSnapshotReport } from "./networkSnapshotReport";
+import { SampledNetworkHistory } from "./sampledNetworkHistory";
+import SampledNetworkHistoryCard from "./SampledNetworkHistoryCard";
 import {
     getServiceName,
     inferDirection,
@@ -278,7 +280,10 @@ export default function ActivePorts() {
     const [capturedAt, setCapturedAt] = useState<Date | null>(null);
     const [loading, setLoading] = useState(false);
     const [lastError, setLastError] = useState<string | null>(null);
-    const [paused, setPaused] = useState(false);
+    const [paused, setPaused] = useState(() => document.hidden);
+    const pausedRef = useRef(document.hidden);
+    const manualPauseRef = useRef(false);
+    const hiddenRef = useRef(document.hidden);
 
     const [proto, setProto] = useState<ProtoFilter>("all");
     const [state, setState] = useState<StateFilter>("all");
@@ -293,38 +298,61 @@ export default function ActivePorts() {
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
     const inFlight = useRef(false);
+    const history = useRef(new SampledNetworkHistory());
+    const [, setHistoryRevision] = useState(0);
+    const renderHistory = useCallback(() => setHistoryRevision(value => value + 1), []);
 
     const refresh = useCallback(async (silent: boolean) => {
         if (inFlight.current) return;
         inFlight.current = true;
+        const generation = history.current.running && !pausedRef.current ? history.current.generation : null;
+        const mayRecord = () => generation !== null && history.current.running && !pausedRef.current && generation === history.current.generation;
         if (!silent) setLoading(true);
         try {
             const res = await getNetworkPorts(1500);
             if (res.success && res.data) {
                 setData(res.data);
-                setCapturedAt(new Date());
+                const now = new Date();
+                setCapturedAt(now);
+                if (mayRecord()) { history.current.capture(res.data, now); renderHistory(); }
                 setLastError(null);
-            } else if (res.error) {
-                setLastError(res.error);
+            } else {
+                if (mayRecord()) { history.current.failed(); renderHistory(); }
+                if (res.error) setLastError(res.error);
             }
+        } catch {
+            if (mayRecord()) { history.current.failed(); renderHistory(); }
+            setLastError("Could not read active ports.");
         } finally {
             inFlight.current = false;
             if (!silent) setLoading(false);
         }
-    }, [getNetworkPorts]);
+    }, [getNetworkPorts, renderHistory]);
+
+    const setEffectivePause = useCallback((value: boolean) => {
+        if (pausedRef.current === value) return;
+        pausedRef.current = value;
+        if (value) history.current.breakContinuity();
+        setPaused(value);
+    }, []);
+
+    const changePause = useCallback((value: boolean) => {
+        manualPauseRef.current = value;
+        setEffectivePause(value || hiddenRef.current);
+    }, [setEffectivePause]);
 
     useEffect(() => {
-        refresh(false);
         if (paused) return;
+        refresh(false);
         const id = setInterval(() => refresh(true), POLL_INTERVAL_MS);
         return () => clearInterval(id);
     }, [refresh, paused]);
 
     useEffect(() => {
-        const onVis = () => setPaused(document.hidden);
+        const onVis = () => { hiddenRef.current = document.hidden; setEffectivePause(manualPauseRef.current || hiddenRef.current); };
         document.addEventListener("visibilitychange", onVis);
         return () => document.removeEventListener("visibilitychange", onVis);
-    }, []);
+    }, [setEffectivePause]);
 
     const enrichedRows: EnrichedRow[] = useMemo(() => (data?.rows ?? []).map(enrich), [data]);
 
@@ -494,18 +522,23 @@ export default function ActivePorts() {
                         role="switch"
                         aria-checked={paused}
                         tabIndex={0}
-                        onClick={() => setPaused((v) => !v)}
+                        onClick={() => changePause(!paused)}
                         onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                setPaused((v) => !v);
+                                changePause(!paused);
                             }
                         }}
                     >
-                        <WCSwitch checked={paused} onChange={setPaused} size="sm" />
+                        <WCSwitch checked={paused} onChange={changePause} size="sm" />
                         <span>Pause Port Monitoring</span>
                     </div>
                 </div>
+
+                <SampledNetworkHistoryCard history={history.current} paused={paused}
+                    onStart={() => { history.current.start(new Date()); renderHistory(); if (!paused) void refresh(false); }}
+                    onStop={() => { history.current.stop(); renderHistory(); }}
+                    onClear={() => { history.current.clear(); renderHistory(); }} />
 
                 {lastError && (
                     <div
