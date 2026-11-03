@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 
 #[cfg(windows)]
-#[path = "hybrid_free_anchor.rs"]
-mod anchor;
+use crate::hybrid_update_anchor as anchor;
 
 const LIMIT: usize = 65536;
 const NAME: &str = "hybrid-free-update-floor.json";

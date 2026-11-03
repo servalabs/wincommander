@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Replay resistance while the locally installed signed record is retained.
+//! Experimental replay resistance using installed and registry-backed signed records.
 use super::*;
 use std::io::Read;
+
+#[cfg(all(test, windows))]
+#[path = "hybrid_rollback_anchor_tests.rs"]
+mod anchor_tests;
 
 pub(super) fn check_installed_floor(
     metadata_path: &std::path::Path,
     candidate: &ProReleaseProof,
     version: Option<&str>,
     sha256: &str,
+    trust: &hybrid_release::HybridProTrust,
 ) -> Result<(), String> {
     let file = match std::fs::File::open(metadata_path) {
         Ok(file) => file,
@@ -23,7 +28,79 @@ pub(super) fn check_installed_floor(
     }
     let previous: ProInstallMetadata = serde_json::from_slice(&bytes)
         .map_err(|_| "validation:Current Pro release record is invalid")?;
-    check_previous(&previous, candidate, version, sha256, &hybrid_pro_trust()?)
+    check_previous(&previous, candidate, version, sha256, trust)
+}
+
+/// Preserve the signed floor separately from the replaceable install metadata.
+/// Advance before installation so a failed install can retry the same release.
+#[cfg(windows)]
+pub(super) fn check_and_record_floor(
+    metadata_path: &std::path::Path,
+    candidate: &ProReleaseProof,
+    version: Option<&str>,
+    sha256: &str,
+) -> Result<(), String> {
+    check_and_record_with_anchor(
+        metadata_path,
+        &crate::hybrid_update_anchor::Anchor::machine_pro(),
+        candidate,
+        version,
+        sha256,
+        &hybrid_pro_trust()?,
+    )
+}
+
+#[cfg(windows)]
+fn check_and_record_with_anchor(
+    metadata_path: &std::path::Path,
+    anchor: &crate::hybrid_update_anchor::Anchor,
+    candidate: &ProReleaseProof,
+    version: Option<&str>,
+    sha256: &str,
+    trust: &hybrid_release::HybridProTrust,
+) -> Result<(), String> {
+    check_installed_floor(metadata_path, candidate, version, sha256, trust)?;
+    record_anchor(anchor, candidate, version, sha256, trust)
+}
+
+#[cfg(not(windows))]
+pub(super) fn check_and_record_floor(
+    _metadata_path: &std::path::Path,
+    _candidate: &ProReleaseProof,
+    _version: Option<&str>,
+    _sha256: &str,
+) -> Result<(), String> {
+    Err("validation:Pro update registry protection requires Windows".into())
+}
+
+#[cfg(windows)]
+fn record_anchor(
+    anchor: &crate::hybrid_update_anchor::Anchor,
+    candidate: &ProReleaseProof,
+    version: Option<&str>,
+    sha256: &str,
+    trust: &hybrid_release::HybridProTrust,
+) -> Result<(), String> {
+    let envelope = candidate.hybrid_manifest.as_deref()
+        .ok_or("validation:Hybrid Pro release record is missing")?;
+    verify_hybrid_pro(envelope.as_bytes(), trust, version, sha256, None)?;
+    if let Some(bytes) = anchor.read()? {
+        let previous: ProInstallMetadata = serde_json::from_slice(&bytes)
+            .map_err(|_| "validation:Pro update registry record is invalid")?;
+        if previous.hybrid_manifest.is_none() {
+            return Err("validation:Pro update registry record lacks a hybrid signature".into());
+        }
+        check_previous(&previous, candidate, version, sha256, trust)?;
+    }
+    let record = ProInstallMetadata {
+        version: version.map(str::to_owned),
+        sha256: sha256.to_owned(),
+        signed_manifest: None,
+        hybrid_manifest: Some(envelope.to_owned()),
+    };
+    let bytes = serde_json::to_vec(&record)
+        .map_err(|_| "validation:Cannot encode Pro update registry record")?;
+    anchor.write(&bytes)
 }
 
 fn check_previous(
@@ -84,11 +161,15 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("installed.json");
         let proof = ProReleaseProof::default();
-        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64)).is_ok());
+        let trust = hybrid_release::HybridProTrust {
+            ed_key: [0; 32], pq_key: [0; 1952], ed_id: "ed".into(),
+            pq_id: "pq".into(), minimum_epoch: 1,
+        };
+        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64), &trust).is_ok());
         std::fs::write(&path, b"{damaged").unwrap();
-        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64)).is_err());
+        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64), &trust).is_err());
         std::fs::write(&path, vec![b' '; 65537]).unwrap();
-        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64)).is_err());
+        assert!(check_installed_floor(&path, &proof, Some("3.7.0"), &"a".repeat(64), &trust).is_err());
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }

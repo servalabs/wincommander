@@ -99,6 +99,9 @@ mod payments;
 mod port_monitor;
 mod print_log;
 mod pro_install;
+#[cfg(all(windows, any(feature = "experimental-pq-free-release", feature = "experimental-pq-pro-release")))]
+#[path = "updater/hybrid_free_anchor.rs"]
+mod hybrid_update_anchor;
 mod process_privileges;
 mod ransomware_monitor;
 #[cfg(windows)]

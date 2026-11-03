@@ -258,7 +258,7 @@ jobs:
             Write-Host '::notice::Free update registry ACL acceptance was not run: this runner is not elevated.'
             exit 0
           }
-          $test = 'updater::hybrid_free::floor::anchor::tests::secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl'
+          $test = 'hybrid_update_anchor::tests::secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl'
           $output = & cargo test --locked -p commander-free --lib --features experimental-pq-free-release $test -- --ignored --exact --nocapture 2>&1
           $code = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }

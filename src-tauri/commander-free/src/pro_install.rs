@@ -1515,7 +1515,7 @@ async fn install_pro_binary_machine(
     std::fs::create_dir_all(parent).map_err(|e| format!("disk:create install dir: {}", e))?;
     let _install_reservation = update_guard::reserve_install(&install_path)?;
     #[cfg(feature = "experimental-pq-pro-release")]
-    hybrid_rollback::check_installed_floor(
+    hybrid_rollback::check_and_record_floor(
         &pro_install_metadata_path()?, &signed_manifest, pro_version.as_deref(), &expected_sha256,
     )?;
     #[cfg(feature = "experimental-pq-pro-release")]

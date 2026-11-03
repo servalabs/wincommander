@@ -13,7 +13,9 @@ use windows_sys::Win32::{
 #[path = "hybrid_free_anchor_security.rs"]
 mod security;
 
-pub(super) struct Anchor {
+const LIMIT: usize = 65536;
+
+pub(crate) struct Anchor {
     root: HKEY,
     path: String,
     secured: bool,
@@ -31,15 +33,24 @@ fn wide(value: &str) -> Vec<u16> {
 }
 
 impl Anchor {
-    pub(super) fn machine() -> Self {
+    #[cfg(feature = "experimental-pq-free-release")]
+    pub(crate) fn machine() -> Self {
         Self {
             root: HKEY_LOCAL_MACHINE,
             path: r"SOFTWARE\ServaLabs\WinCommander\HybridFreeUpdate".into(),
             secured: true,
         }
     }
+    #[cfg(feature = "experimental-pq-pro-release")]
+    pub(crate) fn machine_pro() -> Self {
+        Self {
+            root: HKEY_LOCAL_MACHINE,
+            path: r"SOFTWARE\ServaLabs\WinCommander\HybridProUpdate".into(),
+            secured: true,
+        }
+    }
     #[cfg(test)]
-    pub(super) fn test_user(path: String) -> Self {
+    pub(crate) fn test_user(path: String) -> Self {
         Self {
             root: windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
             path,
@@ -47,7 +58,7 @@ impl Anchor {
         }
     }
     #[cfg(test)]
-    pub(super) fn test_secured(path: String) -> Self {
+    pub(crate) fn test_secured(path: String) -> Self {
         Self {
             root: windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
             path,
@@ -70,7 +81,7 @@ impl Anchor {
             let (parent_path, leaf) = self
                 .path
                 .rsplit_once('\\')
-                .ok_or("Free update registry path is invalid")?;
+                .ok_or("update registry path is invalid")?;
             let mut parent_handle = ptr::null_mut();
             let result = unsafe {
                 RegCreateKeyExW(
@@ -86,7 +97,7 @@ impl Anchor {
                 )
             };
             if result != ERROR_SUCCESS || parent_handle.is_null() {
-                return Err("Free update registry parent is unavailable".into());
+                return Err("update registry parent is unavailable".into());
             }
             Some((Key(parent_handle), wide(leaf)))
         } else {
@@ -120,7 +131,7 @@ impl Anchor {
             return Ok(None);
         }
         if result != ERROR_SUCCESS || handle.is_null() {
-            return Err("Free update registry is unavailable".into());
+            return Err("update registry is unavailable".into());
         }
         let key = Key(handle);
         if self.secured {
@@ -128,7 +139,7 @@ impl Anchor {
         }
         Ok(Some(key))
     }
-    pub(super) fn read(&self) -> Result<Option<Vec<u8>>, String> {
+    pub(crate) fn read(&self) -> Result<Option<Vec<u8>>, String> {
         let Some(key) = self.open(false)? else {
             return Ok(None);
         };
@@ -151,9 +162,9 @@ impl Anchor {
         if status != ERROR_SUCCESS
             || kind != REG_BINARY
             || length == 0
-            || length as usize > super::LIMIT
+            || length as usize > LIMIT
         {
-            return Err("Free update registry record is invalid".into());
+            return Err("update registry record is invalid".into());
         }
         let mut bytes = vec![0u8; length as usize];
         let status = unsafe {
@@ -167,17 +178,17 @@ impl Anchor {
             )
         };
         if status != ERROR_SUCCESS || kind != REG_BINARY || length as usize != bytes.len() {
-            return Err("Free update registry record changed during reading".into());
+            return Err("update registry record changed during reading".into());
         }
         Ok(Some(bytes))
     }
-    pub(super) fn write(&self, bytes: &[u8]) -> Result<(), String> {
-        if bytes.is_empty() || bytes.len() > super::LIMIT {
-            return Err("Free update registry record is invalid".into());
+    pub(crate) fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() || bytes.len() > LIMIT {
+            return Err("update registry record is invalid".into());
         }
         let key = self
             .open(true)?
-            .ok_or("Free update registry is unavailable")?;
+            .ok_or("update registry is unavailable")?;
         let value = wide("SignedFloor");
         let status = unsafe {
             RegSetValueExW(
@@ -190,17 +201,17 @@ impl Anchor {
             )
         };
         if status != ERROR_SUCCESS || unsafe { RegFlushKey(key.0) } != ERROR_SUCCESS {
-            return Err("Cannot save Free update registry record".into());
+            return Err("Cannot save update registry record".into());
         }
         if self.read()?.as_deref() != Some(bytes) {
-            return Err("Free update registry readback failed".into());
+            return Err("update registry readback failed".into());
         }
         Ok(())
     }
 }
 
 #[cfg(test)]
-pub(super) fn remove_test_key(path: &str) -> Result<(), String> {
+pub(crate) fn remove_test_key(path: &str) -> Result<(), String> {
     use windows_sys::Win32::System::Registry::{RegDeleteKeyExW, HKEY_CURRENT_USER};
     let status =
         unsafe { RegDeleteKeyExW(HKEY_CURRENT_USER, wide(path).as_ptr(), KEY_WOW64_64KEY, 0) };

@@ -35,7 +35,7 @@ impl Security {
             )
         } == 0
         {
-            return Err("Cannot prepare Free update registry security".into());
+            return Err("Cannot prepare update registry security".into());
         }
         Ok(Self {
             descriptor,
@@ -83,18 +83,18 @@ pub(super) fn verify(key: HKEY) -> Result<(), String> {
             &mut descriptor,
         ) != 0
         {
-            return Err("Cannot inspect Free update registry security".into());
+            return Err("Cannot inspect update registry security".into());
         }
         let descriptor = Descriptor(descriptor);
         if owner.is_null() || IsValidSid(owner) == 0 || dacl.is_null() || (*dacl).AceCount != 2 {
-            return Err("Free update registry security is unsafe".into());
+            return Err("update registry security is unsafe".into());
         }
         let mut control = 0;
         let mut revision = 0;
         if GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) == 0
             || control & SE_DACL_PROTECTED == 0
         {
-            return Err("Free update registry security is unsafe".into());
+            return Err("update registry security is unsafe".into());
         }
         let mut expected = [[0u32; 17]; 2];
         for (sid, kind) in expected
@@ -103,33 +103,33 @@ pub(super) fn verify(key: HKEY) -> Result<(), String> {
         {
             let mut len = 68;
             if CreateWellKnownSid(kind, ptr::null_mut(), sid.as_mut_ptr().cast(), &mut len) == 0 {
-                return Err("Cannot inspect Free update registry security".into());
+                return Err("Cannot inspect update registry security".into());
             }
         }
         if EqualSid(owner, expected[1].as_ptr().cast_mut().cast()) == 0 {
-            return Err("Free update registry owner is unsafe".into());
+            return Err("update registry owner is unsafe".into());
         }
         let mut found = [false; 2];
         for i in 0..(*dacl).AceCount {
             let mut ace = ptr::null_mut();
             if GetAce(dacl, u32::from(i), &mut ace) == 0 || ace.is_null() {
-                return Err("Free update registry security is unsafe".into());
+                return Err("update registry security is unsafe".into());
             }
             let (sid, mask) =
-                ace_sid(dacl, ace).ok_or("Free update registry security is unsafe")?;
+                ace_sid(dacl, ace).ok_or("update registry security is unsafe")?;
             if IsValidSid(sid) == 0 {
-                return Err("Free update registry security is unsafe".into());
+                return Err("update registry security is unsafe".into());
             }
             let index = (0..2)
                 .find(|&n| EqualSid(sid, expected[n].as_ptr().cast_mut().cast()) != 0)
-                .ok_or("Free update registry security is unsafe")?;
+                .ok_or("update registry security is unsafe")?;
             if found[index] || mask != KEY_ALL_ACCESS {
-                return Err("Free update registry security is unsafe".into());
+                return Err("update registry security is unsafe".into());
             }
             found[index] = true;
         }
         if found.iter().any(|found| !found) {
-            return Err("Free update registry security is unsafe".into());
+            return Err("update registry security is unsafe".into());
         }
     }
     Ok(())
