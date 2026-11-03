@@ -210,4 +210,36 @@ mod tests {
             .unwrap();
         assert!(!addresses.is_empty());
     }
+
+    #[test]
+    #[ignore = "requires network access to Cloudflare DNS"]
+    fn cloudflare_doh_negotiates_hybrid_tls() {
+        use rustls::pki_types::ServerName;
+        use std::net::TcpStream;
+
+        let address = "1.1.1.1:443".parse().unwrap();
+        let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(5)).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let name = ServerName::try_from("cloudflare-dns.com")
+            .unwrap()
+            .to_owned();
+        let mut config = hickory_resolver::net::tls::client_config().unwrap();
+        config.alpn_protocols = vec![b"h2".to_vec()];
+        let mut client = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+        while client.is_handshaking() {
+            client.complete_io(&mut socket).unwrap();
+        }
+        assert_eq!(
+            client
+                .negotiated_key_exchange_group()
+                .map(|group| group.name()),
+            Some(rustls::NamedGroup::X25519MLKEM768)
+        );
+        assert_eq!(client.alpn_protocol(), Some(b"h2".as_slice()));
+    }
 }
