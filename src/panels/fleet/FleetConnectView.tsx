@@ -3,6 +3,7 @@
 // the fleet; this card is for enrolling this device as an agent.
 
 import { useEffect, useRef, useState } from "react";
+import { FleetServiceContact } from "./FleetServiceContact";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -614,7 +615,7 @@ export default function FleetConnectView() {
           </Button>
         </div>
       )}
-      {status?.deviceId && <FleetSignedContact timestamp={status.lastSignedContactAt} />}
+      {status?.deviceId && <><FleetSignedContact timestamp={status.lastSignedContactAt} /><FleetServiceContact deviceId={status.deviceId} /></>}
     </div>
   );
 }

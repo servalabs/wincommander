@@ -517,6 +517,24 @@ pub async fn fleet_status() -> Result<serde_json::Value, String> {
     }
 }
 
+/// Historical observation for the service's machine trust, if its device ID
+/// matches. This does not establish that its enrollment matches the agent's.
+#[tauri::command]
+pub async fn fleet_service_contact_status(device_id: String) -> Result<serde_json::Value, String> {
+    let result = crate::svc_client::call(
+        "svc.fleet.contact_observation",
+        serde_json::json!({"operation":"get"}),
+    ).await?;
+    Ok(bound_service_contact_status(&device_id, &result))
+}
+
+fn bound_service_contact_status(device_id: &str, result: &serde_json::Value) -> serde_json::Value {
+    if result.get("deviceId").and_then(serde_json::Value::as_str) != Some(device_id) {
+        return serde_json::json!({"observation":null});
+    }
+    serde_json::json!({"observation":result.get("observation")})
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteCommandStateUpdate {
@@ -3604,6 +3622,14 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn service_contact_history_is_bound_to_the_requested_endpoint() {
+        let record = json!({"deviceId":"one", "observation":{"observed_unix_ms":1000}});
+        assert_eq!(super::bound_service_contact_status("one", &record)["observation"]["observed_unix_ms"], 1000);
+        assert!(super::bound_service_contact_status("two", &record)["observation"].is_null());
+        assert!(super::bound_service_contact_status("", &json!({}))["observation"].is_null());
+    }
 
     #[test]
     fn shield_start_failure_preserves_only_closed_diagnostics() {

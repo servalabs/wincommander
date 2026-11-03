@@ -28,6 +28,7 @@ test("another Windows profile sees active retry, terminal failure, then recovere
       calls.push(command);
       if (command === 'fleet_status') return { ...status };
       if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified' };
+      if (command === 'fleet_service_contact_status') return { observation: null };
       throw new Error('unexpected mutation: ' + command);
     } }));
     mock.module('@/hooks/useSettings', () => ({ getSettingsOnce: async () => ({ app: {}, deviceId: '' }) }));
@@ -55,7 +56,7 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     assert.match(host.querySelector('.fleet-connect-badge').textContent, /Linked/);
     assert.ok(!connect());
     assert.ok(!host.textContent.includes('enrollment rejected'));
-    assert.ok(calls.every(command => ['fleet_status', 'fleet_machine_trust_status'].includes(command)));
+    assert.ok(calls.every(command => ['fleet_status', 'fleet_machine_trust_status', 'fleet_service_contact_status'].includes(command)));
     await act(async () => { root.unmount(); });
     assert.equal(timers.size, 0);
     dom.window.close();

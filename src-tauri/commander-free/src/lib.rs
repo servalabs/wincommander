@@ -63,6 +63,7 @@ mod file_watch_trigger;
 mod firewall_audit;
 mod fleet_agent;
 mod fleet_local_arming;
+mod fleet_contact_relay;
 mod flow_bridge;
 mod flow_bundle;
 mod flow_capabilities;
@@ -3150,6 +3151,7 @@ pub fn run() {
             fleet_agent::fleet_machine_trust_status,
             fleet_agent::fleet_disconnect,
             fleet_agent::fleet_status,
+            fleet_agent::fleet_service_contact_status,
             fleet_agent::fleet_apply_pending_epoch,
             fleet_agent::fleet_update_posture_snapshot,
             fleet_agent::fleet_report_privacy_shield_status,

@@ -9,6 +9,10 @@ use fleet_proto::{EpochSigningInput, PolicyEnvelope};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
 
+#[path = "fleet_contact.rs"]
+mod contact;
+pub use contact::{ContactChallenge, ContactObservation};
+
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
 
@@ -84,6 +88,8 @@ struct Record {
     trust: FleetTrust,
     policy: Option<PolicyEnvelope>,
     audit: Vec<TrustAudit>,
+    #[serde(default)]
+    contact: Option<ContactObservation>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -99,6 +105,8 @@ struct PendingEnrollment {
 struct State {
     record: Option<Record>,
     pending: Option<PendingEnrollment>,
+    #[serde(skip)]
+    contact_challenge: Option<contact::PendingContact>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -354,8 +362,10 @@ impl FleetMachinePolicy {
                 trust,
                 policy: None,
                 audit,
+                contact: None,
             }),
             pending: None,
+            contact_challenge: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -399,8 +409,10 @@ impl FleetMachinePolicy {
                 trust: replacement,
                 policy: None,
                 audit,
+                contact: None,
             }),
             pending: None,
+            contact_challenge: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -445,8 +457,10 @@ impl FleetMachinePolicy {
                 trust: current.trust.clone(),
                 policy: Some(policy),
                 audit: current.audit.clone(),
+                contact: current.contact.clone(),
             }),
             pending: guard.pending.clone(),
+            contact_challenge: guard.contact_challenge.clone(),
         };
         self.persist(&next)?;
         *guard = next;
@@ -492,7 +506,131 @@ impl FleetMachinePolicy {
             .atomic_write(&self.path, &bytes)
             .map_err(|_| "store_unavailable")
     }
+
+    pub fn begin_contact(&self) -> Result<ContactChallenge, &'static str> {
+        self.begin_contact_with_clock(std::time::Instant::now)
+    }
+
+    fn begin_contact_with_clock(
+        &self,
+        now: impl FnOnce() -> std::time::Instant,
+    ) -> Result<ContactChallenge, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let trust = guard
+            .record
+            .as_ref()
+            .ok_or("not_provisioned")?
+            .trust
+            .clone();
+        let pending = contact::PendingContact::issue(trust, now())?;
+        let challenge = ContactChallenge {
+            nonce: pending.nonce.clone(),
+        };
+        guard.contact_challenge = Some(pending);
+        Ok(challenge)
+    }
+
+    pub fn contact_pending(&self, nonce: &str) -> bool {
+        let Ok(guard) = self.state.lock() else {
+            return false;
+        };
+        guard.contact_challenge.as_ref().is_some_and(|pending| {
+            pending.nonce == nonce
+                && pending.fresh(std::time::Instant::now())
+                && guard
+                    .record
+                    .as_ref()
+                    .is_some_and(|record| record.trust == pending.trust)
+        })
+    }
+
+    pub fn record_contact(
+        &self,
+        nonce: &str,
+        request: &[u8],
+        response: &[u8],
+        receipt: &str,
+    ) -> Result<ContactObservation, &'static str> {
+        self.record_contact_with_clock(nonce, request, response, receipt, || {
+            (std::time::Instant::now(), contact::observed_time())
+        })
+    }
+
+    fn record_contact_with_clock(
+        &self,
+        nonce: &str,
+        request: &[u8],
+        response: &[u8],
+        receipt: &str,
+        mut clock: impl FnMut() -> (std::time::Instant, Result<u64, &'static str>),
+    ) -> Result<ContactObservation, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        if guard
+            .contact_challenge
+            .as_ref()
+            .map_or(true, |pending| pending.nonce != nonce)
+        {
+            return Err("contact_not_pending");
+        }
+        // Consume matching attempts even when verification or persistence fails.
+        let pending = guard
+            .contact_challenge
+            .take()
+            .ok_or("contact_not_pending")?;
+        if !pending.fresh(clock().0) {
+            return Err("contact_expired");
+        }
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.trust != pending.trust {
+            return Err("binding_changed");
+        }
+        pending.verify(request, response, receipt)?;
+        let time = clock();
+        if !pending.fresh(time.0) {
+            return Err("contact_expired");
+        }
+        let observation = ContactObservation {
+            observed_unix_ms: time.1?,
+        };
+        if current
+            .contact
+            .as_ref()
+            .is_some_and(|old| old.observed_unix_ms > observation.observed_unix_ms)
+        {
+            return Err("contact_clock_rollback");
+        }
+        let mut next = guard.clone();
+        next.record.as_mut().ok_or("not_provisioned")?.contact = Some(observation.clone());
+        self.persist(&next)?;
+        *guard = next;
+        Ok(observation)
+    }
+
+    pub fn contact_observation(
+        &self,
+    ) -> Result<Option<(String, ContactObservation)>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        Ok(guard.record.as_ref().and_then(|record| {
+            record
+                .contact
+                .clone()
+                .map(|observation| (record.trust.device_id.clone(), observation))
+        }))
+    }
 }
+
+#[cfg(test)]
+#[path = "fleet_contact_test_support.rs"]
+mod contact_test_support;
+#[cfg(test)]
+#[path = "fleet_contact_tests.rs"]
+mod contact_tests;
+#[cfg(test)]
+#[path = "fleet_contact_binding_tests.rs"]
+mod contact_binding_tests;
+#[cfg(test)]
+#[path = "fleet_contact_bridge_tests.rs"]
+mod contact_bridge_tests;
 
 #[cfg(test)]
 mod tests {

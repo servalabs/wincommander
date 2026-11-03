@@ -654,6 +654,10 @@ async fn dispatch_verb(
         "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
 
+        "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
+            crate::fleet_contact_transfer::handle(store, args)
+                .map_err(|kind| VerbError::new("fleet_contact_unavailable", kind))),
+
         "svc.clipboard.report_event" => match trust_origin {
             Some(origin) => handle_report_event(clipboard_state, args, origin),
             // `authorize()` only ever returns `Some` for the `SessionHelper`

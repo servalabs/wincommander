@@ -74,6 +74,8 @@ mod reconciler;
 mod diagnostics;
 mod policy_store;
 mod fleet_machine_policy;
+#[cfg(windows)]
+mod fleet_contact_transfer;
 mod shield_journal;
 mod vault_access;
 

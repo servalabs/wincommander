@@ -453,6 +453,7 @@ type NotificationSink = Box<dyn Fn(String, serde_json::Value) + Send + Sync>;
 /// Keeping this identifier and its category list closed prevents the sidecar
 /// pipe from becoming a general local-command RPC surface.
 const FREE_FORENSIC_PROJECTION_FEATURE: &str = "free.system_cleanup.forensic_projection";
+const FREE_FLEET_CONTACT_FEATURE: &str = "free.fleet.contact_observation";
 
 fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'static str, String> {
     let object = args
@@ -489,6 +490,10 @@ async fn respond_to_free_request(
         "free_collector_refused"
     };
     let response = async {
+        if request.feature_id == FREE_FLEET_CONTACT_FEATURE {
+            crate::license::require_service_feature("fleet")?;
+            return crate::svc_client::call("svc.fleet.contact_observation", request.args).await;
+        }
         if request.feature_id == crate::fleet_local_arming::FEATURE_ID {
             crate::license::require_service_feature("fleet")?;
             let settings = crate::settings::read_settings()
@@ -559,6 +564,7 @@ async fn reader_loop<R>(
     session_token: String,
     on_notification: NotificationSink,
     free_forensic_writer: Option<Arc<Mutex<WriteHalf<NamedPipeServer>>>>,
+    fleet_contact_allowed: bool,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -641,6 +647,15 @@ async fn reader_loop<R>(
                     );
                     continue;
                 };
+                if request.feature_id == FREE_FLEET_CONTACT_FEATURE && fleet_contact_allowed {
+                    // Never hold the reader while a service call or its disk I/O is pending.
+                    // Only one observation request per process may be in flight.
+                    let token = session_token.clone();
+                    crate::fleet_contact_relay::try_spawn(async move {
+                        let _ = respond_to_free_request(request, token, writer).await;
+                    });
+                    continue;
+                }
                 if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE
                     && request.feature_id != crate::fleet_local_arming::FEATURE_ID
                 {
@@ -1401,6 +1416,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         token.clone(),
         on_notification,
         Some(write_half.clone()),
+        role == SessionRole::FleetAgent,
     ));
 
     Ok(ProSession {
@@ -2471,7 +2487,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // Pro writes (in order):
@@ -2543,7 +2559,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // Close Pro's side → reader hits EOF and exits.
@@ -2576,7 +2592,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // First frame: unsigned Response — reader must drop and keep reading.

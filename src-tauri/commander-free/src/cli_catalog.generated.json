@@ -8904,6 +8904,16 @@
       ]
     },
     {
+      "id": "tauri:fleet_service_contact_status",
+      "name": "fleet_service_contact_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetServiceContact.ts"
+      ]
+    },
+    {
       "id": "tauri:fleet_status",
       "name": "fleet_status",
       "transport": "tauri",
@@ -9088,6 +9098,14 @@
     {
       "id": "tauri:get_dead_mans_switch_config",
       "name": "get_dead_mans_switch_config",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "tauri:get_dead_mans_switch_status",
+      "name": "get_dead_mans_switch_status",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
