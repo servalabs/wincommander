@@ -59,12 +59,25 @@ fn set_status(
 }
 
 /// This is an observation of the service loop, never proof of current health.
-pub(crate) fn status(store: &FleetMachinePolicy) -> serde_json::Value {
+pub(crate) fn status(
+    store: &FleetMachinePolicy,
+    snapshot: Option<(&FleetTrust, u64)>,
+) -> serde_json::Value {
     let Ok(status) = status_slot().lock() else {
         return serde_json::json!({"state":"unconfirmed"});
     };
+    render_status(&status, snapshot, |trust, revision| {
+        store.credential_revision_is_current(trust, revision)
+    })
+}
+
+fn render_status(
+    status: &Status,
+    snapshot: Option<(&FleetTrust, u64)>,
+    is_current: impl FnOnce(&FleetTrust, u64) -> bool,
+) -> serde_json::Value {
     if let Some((trust, revision)) = &status.fence {
-        if !store.credential_revision_is_current(trust, *revision) {
+        if snapshot != Some((trust, *revision)) || !is_current(trust, *revision) {
             return serde_json::json!({"state":"unconfirmed"});
         }
     }

@@ -67,3 +67,71 @@ async fn disconnect_during_first_request_prevents_old_failover_request() {
     );
     first_server.await.unwrap();
 }
+
+#[test]
+fn reachability_is_never_paired_with_a_different_contact_snapshot() {
+    let old = FleetTrust {
+        org_id: "old-org".into(),
+        device_id: "device".into(),
+        enrollment_generation: "old-generation".into(),
+        signer_key: "old-key".into(),
+    };
+    let mut new = old.clone();
+    new.org_id = "new-org".into();
+    new.enrollment_generation = "new-generation".into();
+    let observed = Status {
+        state: "observed",
+        observed_unix_ms: Some(123),
+        fence: Some((old.clone(), 7)),
+    };
+    assert_eq!(
+        render_status(&observed, Some((&old, 7)), |_, _| true)["state"],
+        "observed"
+    );
+    // A rebind between contact and worker-status reads must never associate an
+    // old observation with the new trust, even if both revisions are equal.
+    assert_eq!(
+        render_status(&observed, Some((&new, 7)), |_, _| true)["state"],
+        "unconfirmed"
+    );
+    assert_eq!(
+        render_status(&observed, Some((&old, 8)), |_, _| true)["state"],
+        "unconfirmed"
+    );
+    assert_eq!(
+        render_status(&observed, Some((&old, 7)), |_, _| false)["state"],
+        "unconfirmed"
+    );
+    assert_eq!(
+        render_status(&observed, None, |_, _| true)["state"],
+        "unconfirmed"
+    );
+}
+
+#[test]
+fn credential_rotation_between_snapshot_and_status_is_unconfirmed() {
+    use crate::fleet_machine_policy::credential_integration_tests::{
+        setup_store, submit, TestProtector,
+    };
+    let store = setup_store();
+    submit(&store, "https://fleet.test", &[1; 32]).unwrap();
+    let credential = store.credential_snapshot(&TestProtector).unwrap().unwrap();
+    let captured = store.contact_state().unwrap().unwrap();
+    let observed = Status {
+        state: "observed",
+        observed_unix_ms: Some(123),
+        fence: Some((credential.trust.clone(), credential.revision)),
+    };
+    let render = |snapshot: &(_, _, _, _, _)| {
+        render_status(
+            &observed,
+            Some((&snapshot.0, snapshot.4)),
+            |trust, revision| store.credential_revision_is_current(trust, revision),
+        )
+    };
+    assert_eq!(render(&captured)["state"], "observed");
+    submit(&store, "https://fleet.test", &[2; 32]).unwrap();
+    let current = store.contact_state().unwrap().unwrap();
+    assert_eq!(render(&captured)["state"], "unconfirmed");
+    assert_eq!(render(&current)["state"], "unconfirmed");
+}

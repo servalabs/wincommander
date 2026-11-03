@@ -63,7 +63,7 @@ pub(crate) fn setup_store_for(origin: &str) -> FleetMachinePolicy {
     setup_for(origin).0
 }
 
-fn submit(store: &FleetMachinePolicy, origin: &str, secret: &[u8]) -> Result<u64, &'static str> {
+pub(crate) fn submit(store: &FleetMachinePolicy, origin: &str, secret: &[u8]) -> Result<u64, &'static str> {
     let binding = trust();
     let profile = TransportProfile {
         spki_pins: String::new(),

@@ -173,12 +173,16 @@ pub(crate) fn handle(store: &FleetMachinePolicy, args: Value) -> Result<Value, &
             Ok(json!({"connection_token":connection_token, "credential_clear_token":token}))
         }
         Operation::Get => {
+            let contact = store.contact_state()?;
             #[cfg(windows)]
-            let reachability = crate::fleet_transport::status(store);
+            let reachability = crate::fleet_transport::status(
+                store,
+                contact.as_ref().map(|(trust, _, _, _, revision)| (trust, *revision)),
+            );
             #[cfg(not(windows))]
             let reachability = json!({"state":"unconfirmed"});
-            match store.contact_state()? {
-                Some((trust, observation, token, connection_token)) => Ok(
+            match contact {
+                Some((trust, observation, token, connection_token, _revision)) => Ok(
                     json!({"deviceId": trust.device_id, "observation": observation, "service_reachability":reachability, "credential_clear_token":token,
                         "connection_token":connection_token,
                         "serviceTrust":{"orgId":trust.org_id,"deviceId":trust.device_id,"enrollmentGeneration":trust.enrollment_generation,"signerKey":trust.signer_key}}),

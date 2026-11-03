@@ -108,7 +108,7 @@ pub struct TransportProfile {
 }
 
 type TrustWithTransport = (FleetTrust, Vec<TrustAudit>, Vec<String>, Option<TransportProfile>, bool);
-type ContactState = (FleetTrust, Option<ContactObservation>, Option<String>, String);
+type ContactState = (FleetTrust, Option<ContactObservation>, Option<String>, String, u64);
 
 fn default_service_enabled() -> bool { true }
 
@@ -989,7 +989,7 @@ impl FleetMachinePolicy {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         guard.record.as_ref().map(|record| {
             let token = Some(Self::clear_token(record)?);
-            Ok((record.trust.clone(), record.contact.clone(), token, Self::connection_token_for(record)?))
+            Ok((record.trust.clone(), record.contact.clone(), token, Self::connection_token_for(record)?, record.credential_revision))
         }).transpose()
     }
 
