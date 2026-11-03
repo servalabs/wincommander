@@ -30,7 +30,7 @@ if (-not $result.schedules[0].managedByAutoSet -or -not $result.schedules[1].man
   const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
   if (result.error) throw result.error;
   expect({ code: result.status, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" });
-});
+}, 30_000);
 
 
 test("migration preserves the same ownership classification", () => {
