@@ -115,8 +115,14 @@ async fn staged_release_requires_hybrid_and_tauri_signatures_together() {
     let staged_manifest = serde_json::to_vec(&serde_json::json!({"version":version,"platforms":{
         "windows-x86_64":{"url":url,"signature":TEST_UPDATE_SIGNATURE}}}))
     .unwrap();
-    let payload =
-        free_release::stage_payload(&staged_manifest, &installer[..], version, "stable").unwrap();
+    let payload = free_release::stage_payload(
+        &staged_manifest,
+        &installer[..],
+        version,
+        "stable",
+        TEST_UPDATER_PUBLIC_KEY,
+    )
+    .unwrap();
     let inputs = free_release::prepare_release_from_reader(
         &payload,
         &installer[..],

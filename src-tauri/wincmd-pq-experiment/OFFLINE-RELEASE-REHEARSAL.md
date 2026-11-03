@@ -58,15 +58,17 @@ with `--features experimental-signer --bin wincmd-pq-free-release-prepare`.
 Use an independently trusted Free key file, not the Pro trust file:
 
 ```text
-wincmd-pq-free-release-prepare stage latest.json setup.exe 3.7.0 stable payload.json
+wincmd-pq-free-release-prepare stage latest.json setup.exe trusted-tauri.conf.json 3.7.0 stable payload.json
 wincmd-pq-free-release-prepare prepare payload.json setup.exe free-trust.json 3.7.0 stable 7 ed.msg pq.msg
 wincmd-pq-free-release-prepare finish payload.json setup.exe free-trust.json 3.7.0 stable 7 ed.sig pq.sig hybrid-stable.json
 ```
 
 Use `beta` and `hybrid-beta.json` for the beta channel. The stage command
 derives size and hash from the staged installer and checks the manifest's
-version and official Windows URL. It checks that a Tauri signature is present,
-but does not verify that signature or Authenticode. Prepare and finish stream
+version and official Windows URL. It verifies the prehashed Tauri signature
+and signed version while hashing the same installer stream, using the updater
+public key in the independently trusted Tauri configuration. Legacy non-prehashed
+signatures are rejected. It does not check Authenticode. Prepare and finish stream
 and recheck the same installer; finish requires both valid raw signatures.
 The operator must keep the installer unchanged through publication and verify
 the ordinary release checks separately. These commands do not provide a key

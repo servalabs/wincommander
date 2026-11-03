@@ -9,6 +9,9 @@ use serde::Deserialize;
 ))]
 use std::io::Read;
 
+#[cfg(feature = "experimental-signer")]
+mod tauri;
+
 const MAX_ENVELOPE: usize = 32 * 1024;
 const MAX_INSTALLER: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -180,6 +183,7 @@ pub fn stage_payload(
     artifact: impl Read,
     version: &str,
     channel: &str,
+    tauri_public_key: &str,
 ) -> Result<Vec<u8>, &'static str> {
     if manifest.len() > 32768 {
         return Err("Free manifest is too large");
@@ -203,7 +207,7 @@ pub fn stage_payload(
     if manifest.version != version || platform.signature.is_empty() {
         return Err("Free manifest does not match release");
     }
-    let (size, sha256) = read_artifact(artifact)?;
+    let (size, sha256) = tauri::verify(artifact, tauri_public_key, &platform.signature, version)?;
     let payload = serde_json::to_vec(&serde_json::json!({"format":"wincommander-free-release-v1", "version": version,
         "channel":channel, "platform":"windows-x86_64", "url":platform.url, "size":size, "sha256":sha256}))
         .map_err(|_| "cannot encode Free release")?;

@@ -332,7 +332,7 @@ try {
         if ($HybridPrepareTool) {
             $channel = if ($Beta) { 'beta' } else { 'stable' }
             $hybridPayload = Join-Path $script:WorkRoot "hybrid-$channel-payload.json"
-            & (Join-Path $PSScriptRoot 'stage-hybrid-free.ps1') -ToolPath $HybridPrepareTool -ManifestPath $assets.Manifest -InstallerPath $assets.Setup -Version $Version -Channel $channel -OutputPath $hybridPayload
+            & (Join-Path $PSScriptRoot 'stage-hybrid-free.ps1') -ToolPath $HybridPrepareTool -ManifestPath $assets.Manifest -InstallerPath $assets.Setup -TauriConfigPath (Join-Path $script:Root 'src-tauri/commander-free/tauri.conf.json') -Version $Version -Channel $channel -OutputPath $hybridPayload
             Write-Host "[staged] Experimental unsigned hybrid payload: $hybridPayload"
         }
         Write-Host "[ok] v$Version passed local manual-release staging. No R2 or GitHub publication was attempted." -ForegroundColor Green

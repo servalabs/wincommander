@@ -58,16 +58,22 @@ fn run(args: &[String]) -> Result<(), String> {
         return Err("expected stage, prepare or finish".into());
     }
     if args[1] == "stage" {
-        if args.len() != 7 {
+        if args.len() != 8 {
             return Err(
-                "usage: stage <latest.json> <installer> <version> <channel> <payload>".into(),
+                "usage: stage <latest.json> <installer> <trusted-tauri-config> <version> <channel> <payload>".into(),
             );
         }
         let manifest = read(&args[2], 32768)?;
         let file = File::open(&args[3]).map_err(|e| format!("cannot open installer: {e}"))?;
-        let payload = free_release::stage_payload(&manifest, file, &args[4], &args[5])
+        let config: serde_json::Value = serde_json::from_slice(&read(&args[4], 65536)?)
+            .map_err(|_| "invalid Tauri configuration")?;
+        let public_key = config
+            .pointer("/plugins/updater/pubkey")
+            .and_then(|value| value.as_str())
+            .ok_or("Tauri public key missing")?;
+        let payload = free_release::stage_payload(&manifest, file, &args[5], &args[6], public_key)
             .map_err(str::to_owned)?;
-        return write_new(&args[6], &payload);
+        return write_new(&args[7], &payload);
     }
     let count = match args[1].as_str() {
         "prepare" => 10,
@@ -156,25 +162,48 @@ mod tests {
         let path = |s: &str| dir.join(s).to_string_lossy().into_owned();
         let ed = SigningKey::from_bytes(&[42; 32]);
         let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
-        let url = "https://winupdates.servalabs.com/free/v3.7.0/WinCommander_3.7.0_x64-setup.exe";
-        let manifest = serde_json::json!({"version":"3.7.0", "notes":"test", "platforms":{"windows-x86_64":{"url":url,"signature":"placeholder"}}});
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/free-tauri-disposable.json"
+        ))
+        .unwrap();
+        let url = "https://winupdates.servalabs.com/free/v99.0.0/WinCommander_99.0.0_x64-setup.exe";
+        let manifest = serde_json::json!({"version":"99.0.0", "notes":"test", "platforms":{"windows-x86_64":{"url":url,"signature":fixture["signature"]}}});
+        let tauri = serde_json::json!({"plugins":{"updater":{"pubkey":fixture["publicKey"]}}});
         let config = serde_json::json!({"ed_key_id":"ed", "ed_public":URL_SAFE_NO_PAD.encode(ed.verifying_key().to_bytes()),
             "pq_key_id":"pq", "pq_public":URL_SAFE_NO_PAD.encode(pq.public_key().as_ref()), "minimum_epoch":7});
         std::fs::write(path("manifest"), serde_json::to_vec(&manifest).unwrap()).unwrap();
-        std::fs::write(path("installer"), b"disposable installer").unwrap();
+        std::fs::write(path("installer"), b"MZ").unwrap();
+        std::fs::write(path("tauri"), serde_json::to_vec(&tauri).unwrap()).unwrap();
         std::fs::write(path("trust"), serde_json::to_vec(&config).unwrap()).unwrap();
         let stage = vec![
             "tool".into(),
             "stage".into(),
             path("manifest"),
             path("installer"),
-            "3.7.0".into(),
+            path("tauri"),
+            "99.0.0".into(),
             "stable".into(),
             path("payload"),
         ];
         let mut wrong = stage.clone();
-        wrong[4] = "3.7.1".into();
+        wrong[5] = "99.0.1".into();
         assert!(run(&wrong).is_err());
+        let mut relabelled = manifest.clone();
+        relabelled["version"] = "99.0.1".into();
+        relabelled["platforms"]["windows-x86_64"]["url"] =
+            "https://winupdates.servalabs.com/free/v99.0.1/WinCommander_99.0.1_x64-setup.exe"
+                .into();
+        std::fs::write(path("manifest"), serde_json::to_vec(&relabelled).unwrap()).unwrap();
+        assert!(run(&wrong).is_err());
+        std::fs::write(path("manifest"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        std::fs::write(path("installer"), b"MX").unwrap();
+        assert!(run(&stage).is_err());
+        std::fs::write(path("installer"), b"MZ").unwrap();
+        let mut bad_tauri = tauri.clone();
+        bad_tauri["plugins"]["updater"]["pubkey"] = "bad".into();
+        std::fs::write(path("tauri"), serde_json::to_vec(&bad_tauri).unwrap()).unwrap();
+        assert!(run(&stage).is_err());
+        std::fs::write(path("tauri"), serde_json::to_vec(&tauri).unwrap()).unwrap();
         assert!(run(&stage).is_ok());
         assert!(run(&stage).is_err());
         let prepare = vec![
@@ -183,7 +212,7 @@ mod tests {
             path("payload"),
             path("installer"),
             path("trust"),
-            "3.7.0".into(),
+            "99.0.0".into(),
             "stable".into(),
             "7".into(),
             path("ed-msg"),
@@ -194,7 +223,7 @@ mod tests {
         assert!(run(&wrong_channel).is_err());
         std::fs::write(path("installer"), b"changed installer").unwrap();
         assert!(run(&prepare).is_err());
-        std::fs::write(path("installer"), b"disposable installer").unwrap();
+        std::fs::write(path("installer"), b"MZ").unwrap();
         assert!(run(&prepare).is_ok());
         let ed_sig = ed.sign(&std::fs::read(path("ed-msg")).unwrap()).to_bytes();
         let mut pq_sig = vec![0; 3309];
@@ -208,7 +237,7 @@ mod tests {
             path("payload"),
             path("installer"),
             path("trust"),
-            "3.7.0".into(),
+            "99.0.0".into(),
             "stable".into(),
             "7".into(),
             path("ed-sig"),
@@ -217,7 +246,7 @@ mod tests {
         ];
         std::fs::write(path("installer"), b"changed installer").unwrap();
         assert!(run(&finish).is_err());
-        std::fs::write(path("installer"), b"disposable installer").unwrap();
+        std::fs::write(path("installer"), b"MZ").unwrap();
         pq_sig[0] ^= 1;
         std::fs::write(path("pq-sig"), &pq_sig).unwrap();
         assert!(run(&finish).is_err());
@@ -241,12 +270,13 @@ mod tests {
         };
         let signed = std::fs::read(path("signed")).unwrap();
         let (release, _) =
-            free_release::verify_metadata(&signed, "3.7.0", "stable", url, &trust).unwrap();
-        assert!(free_release::verify_artifact(&release, b"disposable installer").is_ok());
-        assert!(free_release::verify_metadata(&signed, "3.7.0", "beta", url, &trust).is_err());
+            free_release::verify_metadata(&signed, "99.0.0", "stable", url, &trust).unwrap();
+        assert!(free_release::verify_artifact(&release, b"MZ").is_ok());
+        assert!(free_release::verify_metadata(&signed, "99.0.0", "beta", url, &trust).is_err());
         for name in [
             "manifest",
             "installer",
+            "tauri",
             "trust",
             "payload",
             "ed-msg",

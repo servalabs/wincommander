@@ -90,15 +90,25 @@ mod tests {
             pq_key_id: "pq",
             ml_dsa_65_public: &pp,
         };
-        let bytes = b"disposable installer";
-        let url = "https://winupdates.servalabs.com/free/v3.7.0/WinCommander_3.7.0_x64-setup.exe";
-        let manifest = serde_json::to_vec(&serde_json::json!({"version":"3.7.0", "platforms":{"windows-x86_64":{"url":url,"signature":"placeholder"}}})).unwrap();
-        let payload =
-            free_release::stage_payload(&manifest, &bytes[..], "3.7.0", "stable").unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/free-tauri-disposable.json"
+        ))
+        .unwrap();
+        let bytes = b"MZ";
+        let url = "https://winupdates.servalabs.com/free/v99.0.0/WinCommander_99.0.0_x64-setup.exe";
+        let manifest = serde_json::to_vec(&serde_json::json!({"version":"99.0.0", "platforms":{"windows-x86_64":{"url":url,"signature":fixture["signature"]}}})).unwrap();
+        let payload = free_release::stage_payload(
+            &manifest,
+            &bytes[..],
+            "99.0.0",
+            "stable",
+            fixture["publicKey"].as_str().unwrap(),
+        )
+        .unwrap();
         let messages = free_release::prepare_release_from_reader(
             &payload,
             &bytes[..],
-            "3.7.0",
+            "99.0.0",
             "stable",
             url,
             7,
@@ -111,7 +121,7 @@ mod tests {
         let envelope = free_release::finish_release(
             &payload,
             &bytes[..],
-            "3.7.0",
+            "99.0.0",
             "stable",
             7,
             &trust,
@@ -137,7 +147,7 @@ mod tests {
             path("record"),
             path("file"),
             path("trust"),
-            "3.7.0".into(),
+            "99.0.0".into(),
             "stable".into(),
         ];
         assert!(run(&args).is_ok());
@@ -145,7 +155,7 @@ mod tests {
         wrong[5] = "beta".into();
         assert!(run(&wrong).is_err());
         wrong[5] = "stable".into();
-        wrong[4] = "3.7.1".into();
+        wrong[4] = "99.0.1".into();
         assert!(run(&wrong).is_err());
         let mut stale = config.clone();
         stale["minimum_epoch"] = 8.into();
