@@ -11,6 +11,12 @@ export function privacyShieldStopError(
   if (/process identity|status could not be (read|verified)|stop could not be confirmed/i.test(reason)) {
     return "Privacy Shield status could not be verified. Refresh its status, then try again.";
   }
+  if (/access (?:is )?denied|unauthorizedaccess|permission denied/i.test(reason)) {
+    return "Windows denied access to the Privacy Shield process. Check the app's permissions, then refresh its status and try again.";
+  }
+  if (/timed out/i.test(reason)) {
+    return "Privacy Shield did not respond in time. Refresh its status before trying again.";
+  }
   return "Privacy Shield could not be stopped. Check its status and try again.";
 }
 

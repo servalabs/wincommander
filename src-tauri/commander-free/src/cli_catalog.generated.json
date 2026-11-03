@@ -10471,6 +10471,16 @@
       ]
     },
     {
+      "id": "tauri:reconcile_shared_shortcut_claim",
+      "name": "reconcile_shared_shortcut_claim",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/sharedShortcutClaims.ts"
+      ]
+    },
+    {
       "id": "tauri:reconcile_usb_guard",
       "name": "reconcile_usb_guard",
       "transport": "tauri",
@@ -10658,6 +10668,17 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/destructiveAuthz.ts"
+      ]
+    },
+    {
+      "id": "tauri:require_calculator_peek_hotkey",
+      "name": "require_calculator_peek_hotkey",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/StartupPinConfig.tsx",
+        "src/panels/secret/index.tsx"
       ]
     },
     {

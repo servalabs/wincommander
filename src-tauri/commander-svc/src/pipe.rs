@@ -381,15 +381,43 @@ pub(crate) async fn handle_connection(
                 Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                 Err(_) => Err("managed deployment peer authorization unavailable".into()),
             }
+        } else if req.feature_id == "svc.shared_shortcuts.set_claim" {
+            #[cfg(debug_assertions)]
+            let shortcut_started = std::time::Instant::now();
+            #[cfg(debug_assertions)]
+            crate::diagnostics::record_shared_shortcut_stage("auth_start", shortcut_started);
+            if !caller_privileged {
+                Err("shared shortcut claims require an elevated WinCommander session".into())
+            } else {
+                let gate = Arc::clone(&session_helper_gate);
+                let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+                let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+                let result = match tokio::task::spawn_blocking(move || gate.authorize_shared_shortcut_relay(client_pid, session, active)).await {
+                    Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                    Err(_) => Err("shared shortcut peer authorization unavailable".into()),
+                };
+                #[cfg(debug_assertions)]
+                crate::diagnostics::record_shared_shortcut_stage("auth_end", shortcut_started);
+                result
+            }
         } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy") {
+            #[cfg(debug_assertions)]
+            let policy_trace_started = if req.feature_id == "svc.fleet.get_policy" {
+                let started = std::time::Instant::now();
+                crate::diagnostics::record_shield_policy_stage("auth_start", started);
+                Some(started)
+            } else { None };
             let gate = Arc::clone(&session_helper_gate);
             let verb = req.feature_id.clone();
             let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
             let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
-            match tokio::task::spawn_blocking(move || gate.authorize_fleet_policy_relay(client_pid, &verb, session, active)).await {
+            let result = match tokio::task::spawn_blocking(move || gate.authorize_fleet_policy_relay(client_pid, &verb, session, active)).await {
                 Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                 Err(_) => Err("Fleet policy peer authorization unavailable".into()),
-            }
+            };
+            #[cfg(debug_assertions)]
+            if let Some(started) = policy_trace_started { crate::diagnostics::record_shield_policy_stage("auth_end", started); }
+            result
         } else {
             authorize_with_interactive_session(
             &req.feature_id,
@@ -597,6 +625,17 @@ async fn dispatch_verb(
             crate::personal_settings::handle(&feature_id, args, peer)
                 .await
                 .map_err(|kind| VerbError::new(kind, kind))
+        }
+        "svc.shared_shortcuts.set_claim" => {
+            if !shared_shortcut_dispatch_allowed(caller_privileged, trust_origin.is_some(),
+                peer.is_some_and(peer_has_active_interactive_session)) {
+                Err(VerbError::new("forbidden", "protected WinCommander session required"))
+            } else if let Some(peer) = peer {
+                crate::shared_shortcuts::handle(args, peer.caller_sid().to_owned())
+                    .await.map_err(|kind| VerbError::new(kind, kind))
+            } else {
+                Err(VerbError::new("forbidden", "active authenticated session required"))
+            }
         }
 
         APPLY_MACHINE_SETTING_VERB => handle_apply_machine_setting(args),
@@ -2701,6 +2740,10 @@ fn peer_has_active_interactive_session(peer: &AuthenticatedPipePeer) -> bool {
     session_is_active(peer.session_id(), wts_connect_state(peer.session_id()))
 }
 
+fn shared_shortcut_dispatch_allowed(privileged: bool, trusted: bool, active_session: bool) -> bool {
+    privileged && trusted && active_session
+}
+
 fn session_is_active(session_id: u32, state: Option<WTS_CONNECTSTATE_CLASS>) -> bool {
     session_id != 0 && state == Some(WTSActive)
 }
@@ -3523,7 +3566,15 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
         },
         "svc.fleet.get_policy" => {
             if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
+            #[cfg(debug_assertions)]
+            let trace_started = {
+                let started = std::time::Instant::now();
+                crate::diagnostics::record_shield_policy_stage("store_start", started);
+                started
+            };
             let (trust_bound, policy) = store.trust_and_policy().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            #[cfg(debug_assertions)]
+            crate::diagnostics::record_shield_policy_stage("store_end", trace_started);
             Ok(serde_json::json!({"trust_bound": trust_bound, "policy": policy}))
         },
         _ => Err(VerbError::new("bad_request", "unknown Fleet policy operation")),
@@ -5167,6 +5218,14 @@ mod tests {
         ));
         assert!(!session_is_active(7, None));
         assert!(!session_is_active(0, Some(WTSActive)));
+    }
+
+    #[test]
+    fn shared_shortcut_dispatch_rejects_unprivileged_or_untrusted_peers() {
+        assert!(!shared_shortcut_dispatch_allowed(false, true, true));
+        assert!(!shared_shortcut_dispatch_allowed(true, false, true));
+        assert!(!shared_shortcut_dispatch_allowed(true, true, false));
+        assert!(shared_shortcut_dispatch_allowed(true, true, true));
     }
 
     // ── authorize: table-driven over CapabilityClass ─────────────────────

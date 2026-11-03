@@ -507,6 +507,41 @@ pub(crate) fn record_vault_policy_save(operation_id: &str, stage: &'static str, 
     let _ = record_event(event);
 }
 
+#[cfg(debug_assertions)]
+pub(crate) fn record_shield_policy_stage(stage: &'static str, started: Instant) {
+    static EVENTS: AtomicU64 = AtomicU64::new(0);
+    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 { return; }
+    let event = shield_policy_stage_event(stage, started);
+    std::thread::spawn(move || { let _ = record_event(event); });
+}
+
+#[cfg(debug_assertions)]
+fn shield_policy_stage_event(stage: &'static str, started: Instant) -> DiagnosticEvent {
+    let mut event = vault_event("shield-policy-probe", "read_policy", DiagnosticOutcome::Succeeded,
+        "PSH.POLICY.TRACE", DiagnosticSeverity::Info, false, "none", started, BTreeMap::new());
+    event.feature = "privacy_shield".into();
+    event.stage = stage.into();
+    event
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn record_shared_shortcut_stage(stage: &'static str, started: Instant) {
+    static EVENTS: AtomicU64 = AtomicU64::new(0);
+    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 { return; }
+    let event = shared_shortcut_stage_event(stage, started);
+    std::thread::spawn(move || { let _ = record_event(event); });
+}
+
+#[cfg(debug_assertions)]
+fn shared_shortcut_stage_event(stage: &'static str, started: Instant) -> DiagnosticEvent {
+    let mut event = vault_event("shared-shortcut-probe", "set_claim",
+        DiagnosticOutcome::Succeeded, "SHARED.SHORTCUT.TRACE", DiagnosticSeverity::Info,
+        false, "none", started, BTreeMap::new());
+    event.feature = "shared_shortcuts".into();
+    event.stage = stage.into();
+    event
+}
+
 #[allow(clippy::too_many_arguments)] // Stable diagnostic fields are intentionally explicit at call sites.
 fn vault_event(
     operation_id: &str,
@@ -933,6 +968,30 @@ fn utc_date_from_days(days: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(debug_assertions)]
+    #[test]
+    fn shield_policy_trace_contains_only_fixed_stage_and_duration() {
+        for stage in ["auth_start", "auth_end", "store_start", "store_end"] {
+            let event = shield_policy_stage_event(stage, Instant::now());
+            assert!(event.validate().is_ok());
+            assert_eq!(event.stage, stage);
+            assert!(event.redacted_context.is_empty());
+            assert!(event.duration_ms.is_some());
+        }
+    }
+    #[cfg(debug_assertions)]
+    #[test]
+    fn shared_shortcut_trace_contains_only_fixed_stage_and_duration() {
+        for stage in ["auth_start", "auth_end", "store_start", "store_lock",
+            "store_open", "store_journal", "store_reconcile", "store_end"] {
+            let event = shared_shortcut_stage_event(stage, Instant::now());
+            assert!(event.validate().is_ok());
+            assert_eq!(event.feature, "shared_shortcuts");
+            assert_eq!(event.stage, stage);
+            assert!(event.redacted_context.is_empty());
+            assert!(event.duration_ms.is_some());
+        }
+    }
     #[test]
     fn every_vault_reason_is_stable() {
         for reason in VaultMountReason::ALL {

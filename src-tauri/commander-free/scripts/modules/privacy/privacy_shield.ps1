@@ -469,6 +469,15 @@ function Wait-PrivacyShieldReady {
     return $false
 }
 
+function Write-PrivacyShieldDebugStage {
+    param([ValidateSet('router', 'start', 'status', 'runtime', 'dependencies', 'launch', 'ready')][string]$Stage)
+    if ($env:WINCMD_SHIELD_DEBUG_TRACE -ne '1' -or -not $env:LOCALAPPDATA) { return }
+    try {
+        $path = Join-Path $env:LOCALAPPDATA 'WinCommander\logs\privacy_shield.log'
+        Add-Content -LiteralPath $path -Value "Shield debug stage: $Stage" -ErrorAction Stop
+    } catch {}
+}
+
 function Start-PrivacyShield {
     param(
         [int]$Camera = 0,
@@ -494,7 +503,9 @@ function Start-PrivacyShield {
     )
     
     try {
+        Write-PrivacyShieldDebugStage 'start'
         $status = Get-PrivacyShieldStatus
+        Write-PrivacyShieldDebugStage 'status'
         if ($status.error -or $status.shieldLifecycle -eq 'unknown') {
             return @{ error = $true; message = 'Privacy Shield status could not be confirmed. Refresh and try again.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'status_unavailable' }
         }
@@ -518,6 +529,7 @@ function Start-PrivacyShield {
         }
 
         $pythonExe = Resolve-PythonPath
+        Write-PrivacyShieldDebugStage 'runtime'
         if (-not $pythonExe) {
             return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
@@ -525,6 +537,7 @@ function Start-PrivacyShield {
         # Installation belongs to the explicit AI-runtime installer. Starting
         # protection must not block its policy mutex on hidden pip downloads.
         & $pythonExe -c 'import mediapipe, cv2, PyQt6, numpy, PIL' *>$null
+        Write-PrivacyShieldDebugStage 'dependencies'
         if ($LASTEXITCODE -ne 0) {
             return @{ error = $true; message = 'Privacy Shield AI runtime is incomplete. Install or repair the AI runtime, then try again.'; cameraStatus = $status.cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
         }
@@ -545,6 +558,13 @@ Optimized for low-overhead running on CPU efficiently.
 
 import sys
 import os
+if sys.platform == "win32":
+    # The launcher owns temporary drain pipes; keep native library output off
+    # those pipes after it exits so later writes cannot hit a closed reader.
+    _null_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(_null_fd, 1)
+    os.dup2(_null_fd, 2)
+    os.close(_null_fd)
 import json
 import time
 import argparse
@@ -668,25 +688,29 @@ OBJ_MODELS = {
 FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 MIN_MODEL_SIZE = 50_000  # 50 KB minimum - guards against empty/corrupt/partial downloads
 
-def classify_gaze(landmarks):
+def classify_gaze_with_reason(landmarks):
     try:
         nose, left, right = landmarks[1], landmarks[234], landmarks[454]
         width = right.x - left.x
         if width <= 0.01:
-            return "blackout"
+            return "blackout", "invalid"
         yaw = abs((nose.x - (left.x + right.x) / 2.0) / width)
         if not np.isfinite(yaw):
-            return "blackout"
-        if yaw >= 0.35:
-            return "blackout"
+            return "blackout", "invalid"
+        if yaw >= 0.46:
+            return "blackout", "full_turn"
         clipped = left.x <= 0.02 or right.x >= 0.98 or getattr(landmarks[10], "y", 0.5) <= 0.02 or getattr(landmarks[152], "y", 0.5) >= 0.98
         if clipped:
-            return "blur"
+            return "blur", "frame_edge"
         if yaw >= 0.12:
-            return "blur"
-        return "clear"
+            return "blur", "yaw"
+        return "clear", "clear"
     except (IndexError, AttributeError, TypeError, ValueError):
-        return "blackout"
+        return "blackout", "invalid"
+
+
+def classify_gaze(landmarks):
+    return classify_gaze_with_reason(landmarks)[0]
 
 
 def overlay_presentation(is_clear, reason):
@@ -716,13 +740,11 @@ class GazeState:
         self.streak = 0
 
     def observe(self, state):
-        if state == "clear":
-            self.state, self.pending, self.streak = "clear", "clear", 0
-        else:
-            self.streak = self.streak + 1 if state == self.pending else 1
-            self.pending = state
-            if self.streak >= self.buffer_frames:
-                self.state = state
+        self.streak = self.streak + 1 if state == self.pending else 1
+        self.pending = state
+        required = max(3, self.buffer_frames) if state == "blackout" else self.buffer_frames
+        if self.streak >= required:
+            self.state = state
         return self.state
 
 
@@ -770,6 +792,8 @@ class ShieldWorker(QThread):
         self._captured_for_multi_face = False
         self._capture_retry_at = {"device": 0.0, "multi_face": 0.0}
         self._gaze = GazeState(self.buffer_frames)
+        self._debug_gaze_reason = None
+        self._debug_gaze_events = 0
         self._device_detected_streak = 0
         self._multi_face_detected_streak = 0
         # Presence is noisier than the other detectors: a single missed
@@ -791,7 +815,7 @@ class ShieldWorker(QThread):
     def _observe_missing_face(self):
         self._no_face_detected_streak += 1
         self._face_recovery_streak = 0
-        if self.check_gaze and self._no_face_detected_streak >= self.buffer_frames:
+        if self.check_gaze and self._no_face_detected_streak >= max(6, self.buffer_frames * 2):
             self._presence_loss_active = True
         presence_lost = self.check_gaze and self._presence_loss_active
         hold_gaze_overlay = self.check_gaze and not presence_lost and self._is_locked and (
@@ -886,7 +910,13 @@ class ShieldWorker(QThread):
             return False
 
     def _check_gaze(self, landmarks):
-        return classify_gaze(landmarks)
+        state, reason = classify_gaze_with_reason(landmarks)
+        if (os.environ.get("WINCMD_SHIELD_DEBUG_TRACE") == "1" and
+                reason != self._debug_gaze_reason and self._debug_gaze_events < 32):
+            log(f"Gaze debug category: {reason}")
+            self._debug_gaze_reason = reason
+            self._debug_gaze_events += 1
+        return state
 
     def _start_webcam_recording(self, prefix: str, reason_key: str, post_roll_sec: float = 5.0):
         """Start recording webcam. Records while detection is active + post_roll_sec after it ends."""
@@ -1247,7 +1277,7 @@ class ShieldOverlay(QWidget):
         # Message Label
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet("color: white; background: transparent; font-weight: bold; font-family: Segoe UI; font-size: 30px;")
+        self.label.setStyleSheet("color: rgba(255, 50, 50, 200); background: transparent; font-weight: bold; font-family: Consolas; font-size: 48px;")
         self.label.setWordWrap(True)
         self.label.hide()
         
@@ -1293,7 +1323,7 @@ class ShieldOverlay(QWidget):
             self.blurred_screen = None
         else:
             if self.presentation == "blackout" or self.blurred_screen is None:
-                self.label.setText(reason.replace(" (FULL TURN)", "") + "\nLook at the screen to resume")
+                self.label.setText(reason.replace(" (FULL TURN)", ""))
                 self.label.show()
             else:
                 self.label.hide()
@@ -1532,17 +1562,16 @@ if __name__ == "__main__":
         # one-shot command runner's stdout/stderr handles: Rust waits for the
         # runner's output EOF, and inherited handles kept a Fleet Start
         # lifecycle stuck at "applying" until the detector was stopped.
-        # Drain both streams asynchronously rather than letting an occasional
-        # native-library warning fill a redirected pipe and stall detection.
+        # Drain natively: PowerShell scriptblock event handlers run without a
+        # runspace on callback threads and can terminate the launcher.
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
         
         $process = [System.Diagnostics.Process]::Start($startInfo)
+        Write-PrivacyShieldDebugStage 'launch'
         if ($process -and -not $process.HasExited) {
-            $process.add_OutputDataReceived({ param($sender, $eventArgs) })
-            $process.add_ErrorDataReceived({ param($sender, $eventArgs) })
-            $process.BeginOutputReadLine()
-            $process.BeginErrorReadLine()
+            $null = $process.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
+            $null = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
             $process.StandardInput.Write($embeddedScript)
             $process.StandardInput.Close()
         }
@@ -1568,6 +1597,7 @@ if __name__ == "__main__":
             return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
+        Write-PrivacyShieldDebugStage 'ready'
         @{ success = $true; processId = $process.Id; cameraStatus = 'available'; shieldLifecycle = 'running'; ready = $true; activeMode = if ($Mode) { $Mode } elseif ($BlurGaze -or $BlurFaces -or $BlurPhone) { 'blur_notify' } else { 'notify_only' } }
     }
     catch {

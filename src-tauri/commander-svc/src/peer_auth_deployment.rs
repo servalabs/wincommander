@@ -70,6 +70,43 @@ pub(crate) fn deployment_session_is_permitted(
 }
 
 impl SessionHelperGate {
+    pub(crate) fn authorize_shared_shortcut_relay(
+        &self,
+        pid: u32,
+        captured_session: u32,
+        active: bool,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        let identity = self.probe.identity(pid)?;
+        self.authorize_shared_shortcut_observation(&identity, captured_session, active, || {
+            acl::verify_path(&identity.canonical_image_path)
+        })
+    }
+
+    fn authorize_shared_shortcut_observation(
+        &self,
+        identity: &PeerIdentitySnapshot,
+        captured_session: u32,
+        active: bool,
+        verify: impl FnOnce() -> Result<(), PeerAuthError>,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        if !active || captured_session == 0 || identity.session_id != captured_session {
+            return Err(PeerAuthError::WrongSession);
+        }
+        let installed_free = self.allowed_root.as_ref()
+            .map(|root| root.join("wincommander-free.exe"))
+            .is_some_and(|expected| paths_equal(&identity.canonical_image_path, &expected));
+        #[cfg(debug_assertions)]
+        let staged_dev = dev_helper_matches(&identity.canonical_image_path);
+        #[cfg(not(debug_assertions))]
+        let staged_dev = false;
+        if !installed_free && !staged_dev {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        verify()?;
+        self.check_rate_limit(identity, "svc.shared_shortcuts.set_claim", Instant::now())?;
+        Ok(TrustOrigin::SessionHelperPinned)
+    }
+
     /// Fleet policy only: admit a protected Free/Pro helper from its actual
     /// active Windows session, including RDP, while retaining path and ACL
     /// checks. The session comes from the captured pipe token, never the UI.

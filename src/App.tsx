@@ -32,6 +32,7 @@ import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
 import useBackend from "./hooks/useBackend";
 import { shouldReconcileCalculatorShortcuts, syncCalculatorShortcuts } from "./panels/privacy/calculatorShortcuts";
+import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "./hooks/sharedShortcutClaims";
 import { getCalculatorGateGeneration } from "./hooks/startupWindow";
 import { FlowSettingsRecovery } from "./components/startup/FlowSettingsRecovery";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
@@ -1550,28 +1551,29 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
   const { mode, setMode } = useAuthMode();
   const { appSettings, startupDataState } = useAppState();
   const { setWinCommanderCalculatorShortcuts } = useBackend();
-  const calculatorShortcutsChecked = useRef(false);
-  const [calculatorShortcutWarning, setCalculatorShortcutWarning] = useState<string | null>(null);
+  const sharedShortcutsChecked = useRef(false);
 
   useEffect(() => {
-    if (calculatorShortcutsChecked.current || !appSettings || startupDataState === "stale") return;
+    if (sharedShortcutsChecked.current || !appSettings || startupDataState === "stale" || showCalc !== null || mode !== "real") return;
+    sharedShortcutsChecked.current = true;
     const pin = appSettings.ideal?.privacy?.startupPin;
-    if (!shouldReconcileCalculatorShortcuts({
-      unlocked: showCalc === null,
-      decoy: mode === "decoy",
+    const reconcileCalculator = shouldReconcileCalculatorShortcuts({
+      unlocked: true,
+      decoy: false,
       hasRealPin: !!pin?.realHash,
       enabled: pin?.enabled !== false,
       hideMode: appSettings.ideal?.identity?.hideWinCommander === true,
-    })) return;
-    calculatorShortcutsChecked.current = true;
-    void syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true).then(setCalculatorShortcutWarning);
+    });
+    void (async () => {
+      const calculatorClaim = await syncSharedShortcutClaim("calculator", reconcileCalculator);
+      const hideClaim = await syncSharedShortcutClaim("hide");
+      const accountWarning = reconcileCalculator
+        ? await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, hideClaim.managed)
+        : null;
+      const warnings = [calculatorClaim.warning, hideClaim.warning, ...shortcutWarningsAfterReconciliation(accountWarning ? [accountWarning] : [], hideClaim.warning)].filter(Boolean);
+      if (warnings.length) showWarning(`Shortcuts need attention: ${warnings.join(" ")}`);
+    })();
   }, [appSettings, mode, setWinCommanderCalculatorShortcuts, showCalc, startupDataState]);
-
-  useEffect(() => {
-    if (!calculatorShortcutWarning || showCalc !== null || mode !== "real") return;
-    showWarning(`Calculator Lock shortcuts need attention: ${calculatorShortcutWarning}`);
-    setCalculatorShortcutWarning(null);
-  }, [calculatorShortcutWarning, mode, showCalc]);
 
   useEffect(() => {
     let mounted = true;

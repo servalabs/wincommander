@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { ShieldStatusGate, shouldProbeShieldCamera, verifiedShieldStatus } from "./privacyShieldStatus";
+import { ShieldStatusGate, hasVerifiedRunningDetector, shouldProbeShieldCamera, verifiedShieldStatus } from "./privacyShieldStatus";
 
 describe("Privacy Shield verified status", () => {
+  test("a failed Start reconciles only a fresh ready detector", () => {
+    expect(hasVerifiedRunningDetector({ success: true, data: { running: true, detectorProcessRunning: true, shieldLifecycle: "running" } })).toBe(true);
+    for (const value of [
+      { success: false, data: { running: true, detectorProcessRunning: true, shieldLifecycle: "running" } },
+      { success: true, data: { running: true, detectorProcessRunning: true, shieldLifecycle: "starting" } },
+      { success: true, data: { running: true, detectorProcessRunning: false, shieldLifecycle: "running" } },
+      { success: true, data: { running: true, detectorProcessRunning: true, shieldLifecycle: "running", error: true } },
+      { success: true, data: {} },
+    ]) expect(hasVerifiedRunningDetector(value)).toBe(false);
+  });
   test("accepts only a confirmed running or stopped lifecycle", () => {
     for (const value of [null, {}, { running: true, phase: "starting" },
       { running: false, phase: "running" }, { running: true, phase: "stopped" }]) {

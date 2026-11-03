@@ -31,6 +31,7 @@ mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
 mod calculator_handoff;
+mod shared_shortcut_claim;
 mod context_menu_scrub;
 mod context_menu_shred;
 mod context_scrub_failure;
@@ -282,12 +283,15 @@ fn calculator_gate_generation(app: tauri::AppHandle) -> Result<Option<u32>, Stri
 #[tauri::command]
 fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if is_calculator_peek_hotkey(&hotkey) {
+        return Err("Ctrl+Shift+G is reserved for Calculator Lock.".into());
+    }
     let state = app
         .try_state::<PanicHotkeyState>()
         .ok_or_else(|| "PanicHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
     // Unregister the old shortcut
-    if !current.is_empty() {
+    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     // Register the new one
@@ -307,11 +311,14 @@ fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Stri
 #[tauri::command]
 fn update_search_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if is_calculator_peek_hotkey(&hotkey) {
+        return Err("Ctrl+Shift+G is reserved for Calculator Lock.".into());
+    }
     let state = app
         .try_state::<SearchHotkeyState>()
         .ok_or_else(|| "SearchHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
-    if !current.is_empty() {
+    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     if !hotkey.is_empty() {
@@ -336,26 +343,88 @@ fn register_hide_peek_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(),
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    // Hide: remove from taskbar and screen; tray stays invisible in
-                    // hidden/calc mode (the user re-peeks via the hotkey again).
-                    let _ = window.set_skip_taskbar(true);
-                    let _ = window.hide();
-                    // Keep tray icon hidden regardless of mode — it was already
-                    // hidden/shown correctly at startup or apply_wincommander_hide_mode.
-                    log_message_src("info", "core", "[Hotkey] peek/hide: hiding window");
-                } else {
-                    log_message_src("info", "core", "[Hotkey] peek/hide: revealing window");
-                    // Single shared reveal implementation — it handles calc-mode
-                    // re-entry, the unminimize-before-show ordering, the visible-flag
-                    // resync, and the deferred foreground workaround. This branch used
-                    // to re-implement all of that with show() before unminimize().
-                    reveal_main_window(app);
-                }
-            }
+            toggle_hide_peek(app);
         })
         .map_err(|e| e.to_string())
+}
+
+const CALCULATOR_PEEK_HOTKEY: &str = "Ctrl+Shift+G";
+static CALCULATOR_PEEK_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+fn is_calculator_peek_hotkey(hotkey: &str) -> bool {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+    match (Shortcut::from_str(hotkey), Shortcut::from_str(CALCULATOR_PEEK_HOTKEY)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn calculator_peek_requires_gate(hidden: bool, armed: bool) -> bool {
+    hidden && armed
+}
+
+fn is_custom_hide_peek_hotkey(hotkey: &str) -> bool {
+    !hotkey.is_empty() && !is_calculator_peek_hotkey(hotkey)
+}
+
+fn toggle_hide_peek(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.set_skip_taskbar(true);
+            let _ = window.hide();
+        } else {
+            reveal_main_window(app);
+        }
+    }
+}
+
+fn register_calculator_peek_hotkey(app: &tauri::AppHandle) -> Result<(), String> {
+    let result = app.global_shortcut()
+        .on_shortcut(CALCULATOR_PEEK_HOTKEY, |app, _shortcut, event| {
+            if event.state() != ShortcutState::Pressed { return; }
+            if calculator_peek_requires_gate(wincommander_is_hidden(), startup_auth::startup_pin_is_configured_sync()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = startup_auth::enter_calculator_mode_with(window, true);
+                }
+            } else if app.try_state::<HideHotkeyState>()
+                .and_then(|state| state.0.lock().ok().map(|key| is_calculator_peek_hotkey(&key)))
+                .unwrap_or(false)
+            {
+                toggle_hide_peek(app);
+            }
+        })
+        .map_err(|error| error.to_string());
+    CALCULATOR_PEEK_REGISTERED.store(result.is_ok(), Ordering::Release);
+    result
+}
+
+#[tauri::command]
+fn require_calculator_peek_hotkey(app: tauri::AppHandle) -> Result<(), String> {
+    if CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)
+        && app.global_shortcut().is_registered(CALCULATOR_PEEK_HOTKEY) {
+        Ok(())
+    } else {
+        Err("Ctrl+Shift+G is unavailable. Release it in the other application and try again.".into())
+    }
+}
+
+#[cfg(test)]
+mod calculator_peek_hotkey_tests {
+    use super::{calculator_peek_requires_gate, is_calculator_peek_hotkey, is_custom_hide_peek_hotkey};
+
+    #[test]
+    fn fixed_peek_remains_reserved_and_opens_gate_only_when_both_modes_are_on() {
+        assert!(is_calculator_peek_hotkey("Ctrl+Shift+G"));
+        assert!(!is_calculator_peek_hotkey("Ctrl+Shift+H"));
+        assert!(!is_calculator_peek_hotkey(""));
+        assert!(!is_custom_hide_peek_hotkey("Ctrl+Shift+G"));
+        assert!(is_custom_hide_peek_hotkey("Ctrl+Shift+H"));
+        assert!(!is_custom_hide_peek_hotkey(""));
+        assert!(calculator_peek_requires_gate(true, true));
+        assert!(!calculator_peek_requires_gate(true, false));
+        assert!(!calculator_peek_requires_gate(false, true));
+    }
 }
 
 /// Update the hide-peek hotkey at runtime.
@@ -376,14 +445,14 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
         g.clone()
     };
 
-    if !old.is_empty() {
+    if is_custom_hide_peek_hotkey(&old) {
         let _ = app.global_shortcut().unregister(old.as_str());
     }
     // Register whenever a hotkey is set so it works as an always-on hide/unhide
     // toggle — the handler hides a visible window and shows a hidden one. (It
     // used to register only while already hidden, so a freshly-set hotkey did
     // nothing until the app was hidden some other way.)
-    if !hotkey.is_empty() {
+    if is_custom_hide_peek_hotkey(&hotkey) {
         register_hide_peek_hotkey(&app, &hotkey)?;
     }
 
@@ -1272,7 +1341,7 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
             .and_then(|s| s.0.lock().ok().map(|g| g.clone()))
             .unwrap_or_default();
 
-        if !hotkey_str.is_empty() {
+        if is_custom_hide_peek_hotkey(&hotkey_str) {
             // Always unregister first — makes this call idempotent if invoked twice.
             let _ = app.global_shortcut().unregister(hotkey_str.as_str());
             // Keep it registered in BOTH states so it stays an always-on
@@ -2143,7 +2212,10 @@ pub fn run() {
                     .try_state::<HideHotkeyState>()
                     .and_then(|hs| hs.0.lock().ok().map(|g| g.clone()))
                     .unwrap_or_default();
-                if !startup_hotkey.is_empty() {
+                if let Err(error) = register_calculator_peek_hotkey(app.handle()) {
+                    log_message_src("error", "core", &format!("[Hotkey] Calculator peek registration failed: {error}"));
+                }
+                if is_custom_hide_peek_hotkey(&startup_hotkey) {
                     log_message_src(
                         "info",
                         "core",
@@ -2452,6 +2524,8 @@ pub fn run() {
             camera_presence::dashboard_camera_presence,
             calculator_gate_generation,
             calculator_handoff::open_windows_calculator,
+            require_calculator_peek_hotkey,
+            shared_shortcut_claim::reconcile_shared_shortcut_claim,
             exit_app,
             open_search_files_from_shortcut,
             reveal_main_window_for_security_alert,

@@ -38,6 +38,13 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn request_timeout_for(feature_id: &str) -> std::time::Duration {
     match feature_id {
+        // Debug service authorization hashes the protected debug executable;
+        // unoptimized hashing can exceed the normal release reply deadline.
+        #[cfg(debug_assertions)]
+        "svc.fleet.get_policy" => std::time::Duration::from_secs(30),
+        // Reconciliation verifies shortcut identity and security metadata and
+        // commits a durable recovery journal before returning its read-back.
+        "svc.shared_shortcuts.set_claim" => std::time::Duration::from_secs(30),
         "svc.bluetooth.policy.set_blocked" => std::time::Duration::from_secs(90),
         "svc.bluetooth.policy.status" => std::time::Duration::from_secs(10),
         // Policy saves resolve Windows principals and apply/read back permissions.
@@ -491,6 +498,22 @@ mod tests {
             request_timeout_for("svc.vault.get_policy"),
             SVC_TRANSPORT_TIMEOUT
         );
+    }
+
+    #[test]
+    fn shield_policy_read_allows_debug_hash_verification_without_changing_release_timeout() {
+        let expected = if cfg!(debug_assertions) { std::time::Duration::from_secs(30) } else { SVC_TRANSPORT_TIMEOUT };
+        assert_eq!(request_timeout_for("svc.fleet.get_policy"), expected);
+        assert_eq!(request_timeout_for("svc.vault.get_policy"), SVC_TRANSPORT_TIMEOUT);
+    }
+
+    #[test]
+    fn shared_shortcut_reconciliation_has_a_bounded_mutation_deadline() {
+        assert_eq!(
+            request_timeout_for("svc.shared_shortcuts.set_claim"),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(request_timeout_for("svc.vault.get_policy"), SVC_TRANSPORT_TIMEOUT);
     }
 
     #[test]

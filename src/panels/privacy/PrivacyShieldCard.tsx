@@ -20,8 +20,8 @@ import {
     resolveLocalFleetPrivacyShieldControl,
 } from "../../lib/fleetPrivacyShieldControl";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
-import { confirmPrivacyShieldStop } from "../../lib/privacyShieldStop";
-import { ShieldStatusGate, shouldProbeShieldCamera } from "../../lib/privacyShieldStatus";
+import { confirmPrivacyShieldStop, privacyShieldStopError } from "../../lib/privacyShieldStop";
+import { ShieldStatusGate, hasVerifiedRunningDetector, shouldProbeShieldCamera } from "../../lib/privacyShieldStatus";
 import { defaultPrivacyShieldConfig, hydratePrivacyShieldConfig, privacyShieldConfigPatch } from "../../lib/privacyShieldConfig";
 
 // Module-level cache — survives panel unmount/remount
@@ -449,8 +449,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     await invoke("update_tray_shield_label", { running: false }).catch(() => {});
                 }
             }
-        } catch {
-            if (gate.canApplyAction(actionRevision)) setStopError("Privacy Shield stop could not be confirmed. Refresh its status and try again.");
+        } catch (error) {
+            if (gate.canApplyAction(actionRevision)) setStopError(privacyShieldStopError({ success: false, error: String(error) }));
         } finally {
             if (gate.endAction(actionRevision)) {
                 setOperationPending(false);
@@ -590,7 +590,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 } else {
                     setCaptureDeliveryStatus(null);
                     const err = (res.error || "").toLowerCase();
-                    if (statusGate.current.canApplyAction(actionRevision)) setStopError(res.error || "Privacy Shield could not start. Check the camera and AI runtime, then try again.");
+                    const observed = await executeBackendCommand<{ running?: boolean; detectorProcessRunning?: boolean; shieldLifecycle?: string; error?: boolean | null; activeMode?: PrivacyShieldMode | null }>("Get-PrivacyShieldStatus", { SkipCameraProbe: true });
+                    if (statusGate.current.canApplyAction(actionRevision)) {
+                        if (hasVerifiedRunningDetector(observed)) {
+                            setPrivacyShieldRunning(true);
+                            setActiveShieldMode(observed.data?.activeMode === "blur_notify" || observed.data?.activeMode === "notify_only" ? observed.data.activeMode : null);
+                            setStopError("Privacy Shield is running, but its start response could not be confirmed. Check its settings and stop it if needed.");
+                        } else setStopError(res.error || "Privacy Shield could not start. Check the camera and AI runtime, then try again.");
+                    }
                     if (err.includes("python is required") || err.includes("missing python dependency")) setAiRuntimeInstalled(false);
                     else if (err.includes('camera') || err.includes('webcam') || err.includes('cap.read') || err.includes('videocapture') || err.includes('no camera') || err.includes('no webcam')) {
                         // A failed open can mean a busy camera, permission, or a
@@ -619,7 +626,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.STOP.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "unknown" } });
                 }
             }
-        } catch (e) { if (statusGate.current.canApplyAction(actionRevision)) setStopError(targetState ? "Privacy Shield could not start. Check the camera and AI runtime, then try again." : "Privacy Shield could not be stopped. Check its status and try again."); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
+        } catch (e) { if (statusGate.current.canApplyAction(actionRevision)) setStopError(targetState ? "Privacy Shield could not start. Check the camera and AI runtime, then try again." : privacyShieldStopError({ success: false, error: String(e) })); recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); }
         finally {
             clearTimeout(loadingTimeout);
             if (statusGate.current.endAction(actionRevision)) {
@@ -893,6 +900,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                         <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
                                         <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
                                     </div>
+                                    <p className="text-[10px] text-[var(--shield-text-muted)]">
+                                        Saved captures and incident details are in %LOCALAPPDATA%\WinCommander\shield_captures. Paste that path into File Explorer to view them. Captures older than 7 days are removed the next time Shield starts.
+                                    </p>
                                     {appSettings?.app?.fleet?.enabled === true && (
                                         <ShieldOption label="Send incident captures to Fleet"
                                             tooltip="Uploads saved incident screenshots and webcam recordings to this device’s Fleet organization. Off by default; turning this off stops future uploads."

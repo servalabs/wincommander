@@ -1,4 +1,5 @@
 import type { BackendResponse } from "../../hooks/useBackend";
+import type { SharedShortcutManaged } from "../../hooks/sharedShortcutClaims";
 
 type ShortcutResult = { status: string; itemsChanged: number; warnings?: string[] };
 let shortcutQueue: Promise<void> = Promise.resolve();
@@ -16,12 +17,13 @@ export function shouldReconcileCalculatorShortcuts(input: {
 }
 
 export async function syncCalculatorShortcuts(
-  update: (hidden: boolean) => Promise<BackendResponse<ShortcutResult>>,
+  update: (hidden: boolean, managed?: SharedShortcutManaged) => Promise<BackendResponse<ShortcutResult>>,
   hidden: boolean,
+  managed?: SharedShortcutManaged,
 ): Promise<string | null> {
   const operation = shortcutQueue.then(async () => {
     try {
-      const response = await update(hidden);
+      const response = await update(hidden, managed);
       if (!response.success) return response.error || "Could not update Calculator shortcuts.";
       if (!response.data || response.data.status === "error") return "Could not update Calculator shortcuts.";
       return response.data.warnings?.join(" ") || null;

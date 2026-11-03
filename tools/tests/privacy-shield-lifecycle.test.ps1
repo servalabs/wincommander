@@ -15,6 +15,7 @@ $script:acceptGracefulStop = $true
 $script:requests = @()
 $script:forced = @()
 $script:exitBeforeOpen = $false
+$script:denyKill = $false
 function Get-PrivacyShieldCameraAvailability { $script:cameraProbes++; throw 'hardware enumeration must not run during Stop' }
 function Get-PrivacyShieldPidFromMarker { return $null }
 function Get-CimInstance {
@@ -43,7 +44,7 @@ function Get-Process {
     }
     $process = [pscustomobject]@{ Id=$Id; Handle=1 }
     $process | Add-Member ScriptMethod WaitForExit { param($Timeout) return @($script:items | Where-Object { $_.ProcessId -eq $this.Id }).Count -eq 0 }
-    $process | Add-Member ScriptMethod Kill { $script:forced += $this.Id; Stop-Process -Id $this.Id }
+    $process | Add-Member ScriptMethod Kill { if ($script:denyKill) { throw 'access denied' }; $script:forced += $this.Id; Stop-Process -Id $this.Id }
     $process | Add-Member ScriptMethod Dispose { }
     return $process
 }
@@ -63,6 +64,13 @@ $script:acceptGracefulStop = $false
 $script:items += [pscustomobject]@{ Name='python.exe'; SessionId=$session; ProcessId=9005; CommandLine='--wc-privacy-shield' }
 $fallback = Stop-PrivacyShield
 if ($fallback.success -ne $true -or ($script:forced -join ',') -ne '9005') { throw 'stalled detector fallback did not stop its retained process' }
+
+$script:items += [pscustomobject]@{ Name='python.exe'; SessionId=$session; ProcessId=9007; CommandLine='--wc-privacy-shield' }
+$script:denyKill = $true
+$denied = Stop-PrivacyShield
+if ($denied.error -ne $true -or @($script:items | Where-Object { $_.ProcessId -eq 9007 }).Count -ne 1) { throw 'denied termination was reported as a successful stop' }
+$script:denyKill = $false
+$script:items = @($script:items | Where-Object { $_.ProcessId -ne 9007 })
 
 $script:items += [pscustomobject]@{ Name='python.exe'; SessionId=$session; ProcessId=9004; CommandLine='--wc-privacy-shield' }
 $script:changedIdentity = $true

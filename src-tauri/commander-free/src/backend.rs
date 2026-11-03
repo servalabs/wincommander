@@ -5976,9 +5976,12 @@ pub(crate) async fn run_backend_script_with_timeout(
     } else {
         ""
     };
+    let shield_debug_stage = if cfg!(debug_assertions) && command == "Start-PrivacyShield" {
+        "Write-PrivacyShieldDebugStage 'router'\n"
+    } else { "" };
     let full_script = format!(
-        "{}\n\n{}{}\n\n{}\n\n{}Invoke-BackendCommand",
-        core_utils, additional_modules, command_module, core_router, machine_wide_assertion
+        "{}\n\n{}{}\n\n{}\n\n{}{}Invoke-BackendCommand",
+        core_utils, additional_modules, command_module, core_router, machine_wide_assertion, shield_debug_stage
     );
 
     // Execute PowerShell via stdin (memory-only, never writes to disk)
@@ -5993,6 +5996,8 @@ pub(crate) async fn run_backend_script_with_timeout(
     let mut shield_capture_delivery_status = None;
     if command == "Start-PrivacyShield" {
         cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
+        if cfg!(debug_assertions) { cmd.env("WINCMD_SHIELD_DEBUG_TRACE", "1"); }
+        else { cmd.env_remove("WINCMD_SHIELD_DEBUG_TRACE"); }
         // Media is separate from Shield enforcement. Missing enrollment or an
         // older/offline sidecar leaves captures local and never delays Start
         // indefinitely or inherits a caller-supplied upload binding.

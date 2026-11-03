@@ -29,6 +29,14 @@ fn main() {
 
 #[cfg(windows)]
 mod personal_settings;
+#[cfg(windows)]
+mod shared_shortcuts_link;
+#[cfg(windows)]
+mod shared_shortcuts_file;
+#[cfg(windows)]
+mod shared_shortcuts_acl;
+#[cfg(windows)]
+mod shared_shortcuts;
 mod settings_host;
 #[cfg(any(windows, test))]
 mod managed_deployment;

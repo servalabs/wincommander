@@ -124,6 +124,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.get_trust"
             | "svc.fleet.install_policy"
             | "svc.fleet.get_policy"
+            | "svc.shared_shortcuts.set_claim"
             | "svc.vault.get_policy"
             | "svc.vault.list_principals"
             | "svc.vault.apply_owner_fragment"
@@ -358,6 +359,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
         "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.get_trust" => CapabilityClass::Privileged,
         "svc.fleet.install_policy" | "svc.fleet.get_policy" => CapabilityClass::SessionHelper,
+        "svc.shared_shortcuts.set_claim" => CapabilityClass::SessionHelper,
 
         // ── Ink Receipt (D-2 / plan §4.3, §5) ─────────────────────────────
         "svc.ink_receipt.get_policy" => CapabilityClass::ReadOnly,
@@ -691,6 +693,13 @@ mod tests {
             classify_verb("svc.policy.install_epoch"),
             CapabilityClass::SessionHelper
         );
+    }
+
+    #[test]
+    fn shared_shortcut_claim_is_a_known_session_helper_verb() {
+        let verb = "svc.shared_shortcuts.set_claim";
+        assert!(is_known_verb(verb));
+        assert_eq!(classify_verb(verb), CapabilityClass::SessionHelper);
     }
 
     #[test]

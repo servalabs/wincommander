@@ -5,6 +5,7 @@ import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError, showWarning } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
 import { syncCalculatorShortcuts } from "./calculatorShortcuts";
+import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
 
 const MODES = [
   { mode: "real",    label: "Real PIN",    desc: "Opens full configuration" },
@@ -54,13 +55,19 @@ export default function StartupPinConfig() {
     const duplicate = MODES.find((m) => m.mode !== mode && inputs[m.mode].trim() === pin);
     if (duplicate) { showError(`PIN must be different from ${duplicate.label}`); return; }
     try {
+      if (mode === "real" && appSettings?.ideal?.identity?.hideWinCommander === true) {
+        await invoke("require_calculator_peek_hotkey");
+      }
       await invoke("register_startup_pin", { mode, plaintext: pin });
       setInputs((i) => ({ ...i, [mode]: "" }));
       await refreshSettings();
       showSuccess(`${MODES.find((m) => m.mode === mode)!.label} saved`);
       if (mode === "real") {
-        const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
-        if (warning) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warning}`);
+        const shared = await syncSharedShortcutClaim("calculator", true);
+        if (shared.warning) showWarning(shared.warning);
+        const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, shared.managed);
+        const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
+        if (warnings.length) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warnings.join(" ")}`);
         await invoke("update_autostart_task_identity", { covered: true }).catch(() => {});
         try {
           await invoke("enter_calculator_mode");
@@ -77,8 +84,11 @@ export default function StartupPinConfig() {
       await refreshSettings();
       showSuccess("PIN cleared");
       if (mode === "real") {
+        const shared = await syncSharedShortcutClaim("calculator", false);
+        if (shared.warning) showWarning(shared.warning);
         const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
-        if (warning) showWarning(`Calculator Lock is off, but shortcuts need attention: ${warning}`);
+        const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
+        if (warnings.length) showWarning(`Calculator Lock is off, but shortcuts need attention: ${warnings.join(" ")}`);
       }
       if (mode === "real") await invoke("update_autostart_task_identity", { covered: !!appSettings?.ideal?.identity?.hideWinCommander }).catch(() => {});
     } catch (e) { showError(String(e)); }

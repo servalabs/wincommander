@@ -271,28 +271,19 @@ pub async fn set_startup_pin_enabled(app: tauri::AppHandle, enabled: bool) -> Re
     if enabled {
         crate::license::require_paid("startup PIN gate")?;
     }
-    let mut s = crate::settings::read_settings().map_err(|e| format!("read settings: {e}"))?;
-    if enabled && s.ideal.privacy.startup_pin.real_hash.is_none() {
-        return Err("Set a Real PIN before turning on the calculator lock.".into());
-    }
-    s.ideal.privacy.startup_pin.enabled = Some(enabled);
-    let result = crate::settings::write_settings(&s).map_err(|e| format!("write settings: {e}"));
+    let s = crate::settings::set_calculator_lock_enabled(enabled)
+        .map_err(|e| format!("write settings: {e}"))?;
     // Keep CalculatorMode registry DWORD in sync (contract: read by R5/NSIS).
-    if result.is_ok() {
-        let is_calc = gate_enabled(&s.ideal.privacy.startup_pin);
-        crate::write_wc_registry_dword("CalculatorMode", if is_calc { 1 } else { 0 });
-        // Turning the lock OFF drops the Calculator disguise live (the session
-        // is no longer armed, so exit_calculator_mode wouldn't have restored
-        // branding). Hide/unhide via the peek hotkey keeps working — the tray
-        // restore here honours Hide-WinCommander mode.
-        if !enabled {
-            crate::set_calc_mode_active(&app, false);
-            if let Some(window) = app.get_webview_window("main") {
-                restore_wincommander_identity(&window, "WinCommander");
-            }
+    let is_calc = gate_enabled(&s.ideal.privacy.startup_pin);
+    crate::write_wc_registry_dword("CalculatorMode", if is_calc { 1 } else { 0 });
+    // Turning the lock OFF restores branding while respecting Hide mode.
+    if !enabled {
+        crate::set_calc_mode_active(&app, false);
+        if let Some(window) = app.get_webview_window("main") {
+            restore_wincommander_identity(&window, "WinCommander");
         }
     }
-    result
+    Ok(())
 }
 
 /// mode: "real" | "decoy" | "destroy"

@@ -32,6 +32,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { showError, showSuccess, showWarning } from "../../utils/toast";
 import { syncCalculatorShortcuts } from "../privacy/calculatorShortcuts";
+import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
 import VisibilityTable from "./VisibilityTable";
 import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
@@ -296,25 +297,32 @@ function LockDisguiseSection() {
     const lockArmed = hasRealPin && startupPin?.enabled !== false;
     const lockOnCloseChecked = lockArmed && (appSettings?.app?.lockPanelOnClose ?? true);
     const isHideModeActive = !!appSettings?.ideal?.identity?.hideWinCommander;
+    const [lockBusy, setLockBusy] = useState(false);
     const handleToggleLock = useCallback(async (next: boolean) => {
         if (next && !hasRealPin) {
             showError("Type a Real PIN below and press Set to turn the calculator lock on.");
             return;
         }
+        setLockBusy(true);
         try {
+            if (next && isHideModeActive) await invoke("require_calculator_peek_hotkey");
             await invoke("set_startup_pin_enabled", { enabled: next });
             await refreshSettings();
-            const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next);
-            if (warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${warning}`);
+            const shared = await syncSharedShortcutClaim("calculator", next);
+            const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next, shared.managed);
+            const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
+            if (warnings.length || shared.warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${[...warnings, shared.warning].filter(Boolean).join(" ")}`);
             invoke("update_autostart_task_identity", { covered: next || isHideModeActive }).catch(() => {});
             if (next) {
                 await invoke("enter_calculator_mode").catch(() => {});
             }
-            showSuccess(next
+            if (!warnings.length && !shared.warning) showSuccess(next
                 ? "Calculator lock on — calculator mode is active."
                 : "Calculator lock off — saved PINs were kept.");
         } catch (e) {
             showError(`Failed to update calculator lock: ${e}`);
+        } finally {
+            setLockBusy(false);
         }
     }, [hasRealPin, refreshSettings, isHideModeActive, setWinCommanderCalculatorShortcuts]);
 
@@ -440,6 +448,10 @@ function LockDisguiseSection() {
         let calculatorNeedsReapply = false;
         try {
             if (hidden && lockArmed) {
+                try { await invoke("require_calculator_peek_hotkey"); }
+                catch (error) { showError(String(error)); return; }
+            }
+            if (hidden && lockArmed) {
                 // Transfer the original shortcut snapshots to Hide mode before
                 // it hides them. Each feature can then be disabled independently.
                 calculatorNeedsReapply = true;
@@ -448,8 +460,9 @@ function LockDisguiseSection() {
             }
             const result = await setWinCommanderVisibility(hidden);
             if (result.success && result.data) {
+                const shared = await syncSharedShortcutClaim("hide", hidden);
                 if (lockArmed) {
-                    const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
+                    const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, shared.managed);
                     calculatorNeedsReapply = false;
                     if (warning) showWarning(`Calculator Lock shortcuts need attention: ${warning}`);
                 } else if (!hidden) {
@@ -463,14 +476,21 @@ function LockDisguiseSection() {
                 await invoke("update_autostart_task_identity", { covered: hidden || lockArmed }).catch(() => {});
                 patchAppSettings({ ideal: { identity: { hideWinCommander: hidden } } }).catch(reportSettingsWriteFailure);
                 await refreshHardening();
-                showSuccess(hidden ? "WinCommander hidden — window and tray removed." : "WinCommander visible — window and tray restored.");
+                const warnings = shortcutWarningsAfterReconciliation(result.data.warnings ?? [], shared.warning);
+                if (warnings.length || shared.warning) {
+                    showWarning(`Visibility changed, but shortcuts or settings need attention: ${[...warnings, shared.warning].filter(Boolean).join(" ")}`);
+                } else {
+                    showSuccess(hidden ? "WinCommander hidden — window and tray removed." : "WinCommander visible — window and tray restored.");
+                }
             } else if (!result.success) {
                 showError(result.error || "Failed to update WinCommander visibility.");
             }
         } finally {
             if (calculatorNeedsReapply) {
-                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true);
-                if (warning) showWarning(`Calculator Lock shortcuts need attention: ${warning}`);
+                const shared = await syncSharedShortcutClaim("calculator", true);
+                const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, shared.managed);
+                const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
+                if (warnings.length || shared.warning) showWarning(`Calculator Lock shortcuts need attention: ${[...warnings, shared.warning].filter(Boolean).join(" ")}`);
             }
             setWcBusy(false);
         }
@@ -531,8 +551,8 @@ function LockDisguiseSection() {
                     <div className="dgz-block-head">
                         <span className="dgz-block-title">Calculator lock</span>
                         <div className="sec-header-switch">
-                            <span>{lockArmed ? "On" : "Off"}</span>
-                            <Switch checked={lockArmed} onCheckedChange={handleToggleLock} aria-label="Calculator lock" />
+                            <span>{lockBusy ? "Updating…" : lockArmed ? "On" : "Off"}</span>
+                            <Switch checked={lockArmed} onCheckedChange={handleToggleLock} disabled={lockBusy} aria-label="Calculator lock" />
                         </div>
                     </div>
                     <p className="dgz-hint">

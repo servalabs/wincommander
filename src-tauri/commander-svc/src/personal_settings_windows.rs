@@ -93,7 +93,7 @@ pub(super) fn store_root() -> StoreResult<PathBuf> {
     }
 }
 
-pub(super) fn secure_directory(root: &Path) -> StoreResult<Vec<File>> {
+pub(crate) fn secure_directory(root: &Path) -> StoreResult<Vec<File>> {
     let mut guards = Vec::new();
     // Keeping each ancestor open without DELETE sharing prevents path substitution.
     let ancestors: Vec<_> = root.ancestors().skip(1).collect();
@@ -211,7 +211,7 @@ fn verify_private(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn open_record(path: &Path, create: bool) -> io::Result<File> {
+pub(crate) fn open_record(path: &Path, create: bool) -> io::Result<File> {
     let descriptor = Descriptor::new()?;
     let attributes = descriptor.attributes();
     let handle = unsafe {
@@ -234,7 +234,7 @@ pub(super) fn open_record(path: &Path, create: bool) -> io::Result<File> {
     Ok(file)
 }
 
-pub(super) fn replace(source: &Path, destination: &Path) -> StoreResult<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> StoreResult<()> {
     if unsafe {
         MoveFileExW(
             wide(source).as_ptr(),

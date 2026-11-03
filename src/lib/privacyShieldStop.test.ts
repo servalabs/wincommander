@@ -14,6 +14,11 @@ describe("Privacy Shield Stop results", () => {
   test("distinguishes an unverifiable detector state from a generic Stop error", () => {
     expect(privacyShieldStopError({ success: false, error: "Privacy Shield process identity changed before stop." })).toContain("Refresh its status");
   });
+  test("explains permission failures and timeouts without exposing raw details", () => {
+    expect(privacyShieldStopError({ success: false, error: "Access is denied. private detail" })).toContain("Windows denied access");
+    expect(privacyShieldStopError({ success: false, error: "operation timed out" })).toContain("did not respond in time");
+    expect(privacyShieldStopError({ success: false, error: "Access is denied. private detail" })).not.toContain("private detail");
+  });
   test("does not expose arbitrary backend error details", () => {
     expect(privacyShieldStopError({ success: false, error: "private device detail" })).not.toContain("private device detail");
   });

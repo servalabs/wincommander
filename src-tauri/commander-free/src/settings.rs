@@ -3184,6 +3184,24 @@ pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
     })
 }
 
+fn prepare_calculator_lock(settings: &AppSettings, enabled: bool) -> Result<AppSettings, String> {
+    if enabled && settings.ideal.privacy.startup_pin.real_hash.is_none() {
+        return Err("Set a Real PIN before turning on the calculator lock.".into());
+    }
+    let mut updated = settings.clone();
+    updated.ideal.privacy.startup_pin.enabled = Some(enabled);
+    Ok(updated)
+}
+
+pub(crate) fn set_calculator_lock_enabled(enabled: bool) -> Result<AppSettings, String> {
+    mutate_settings_with(
+        |settings| prepare_calculator_lock(settings, enabled),
+        crate::license::has_paid_entitlement(),
+        write_settings_internal,
+        |old, new| crate::flow_bridge::on_settings_written(old, new),
+    )
+}
+
 fn patch_settings_with(
     mut patch: serde_json::Value,
     paid: bool,
@@ -5236,6 +5254,45 @@ mod tests {
             Some(true)
         );
         assert_eq!(reread.policy.locked_paths, locked_paths);
+    }
+
+    #[test]
+    fn calculator_lock_toggle_preserves_a_concurrent_settings_change() {
+        let _lock = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        warm_cache_with_defaults();
+        mutate_settings_with(
+            |settings| {
+                let mut updated = settings.clone();
+                updated.ideal.privacy.startup_pin.real_hash = Some("test-hash".into());
+                Ok(updated)
+            },
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        let stale = cached_settings().unwrap();
+        patch_settings_with(
+            serde_json::json!({"app": {"theme": "light"}}),
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(write_settings_with(&stale, |_| Ok(())).is_err());
+        let committed = mutate_settings_with(
+            |settings| prepare_calculator_lock(settings, true),
+            false,
+            |_| Ok(()),
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(committed.app.theme, "light");
+        assert_eq!(committed.ideal.privacy.startup_pin.enabled, Some(true));
+        assert_eq!(committed.ideal.privacy.startup_pin.real_hash.as_deref(), Some("test-hash"));
+        assert!(prepare_calculator_lock(&create_default_settings(), true).is_err());
     }
 
     #[test]

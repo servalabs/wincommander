@@ -5,10 +5,29 @@ $scriptPath = Join-Path $PSScriptRoot 'sync-dev-service.ps1'
 $parseErrors = $null
 $tree = [Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$null, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'The development service script does not parse.' }
-foreach ($name in @('Assert-NoReparsePoint', 'Assert-ProtectedPath', 'Invoke-SafeServiceRecovery', 'Get-PriorRecoveryPlan', 'Test-SimpleServiceImagePath')) {
+foreach ($name in @('Assert-NoReparsePoint', 'Assert-ProtectedPath', 'Invoke-SafeServiceRecovery', 'Get-PriorRecoveryPlan', 'Test-SimpleServiceImagePath', 'Invoke-NonElevatedVaultGuard', 'Assert-NoActiveVaultsUnlessAllowed')) {
     $definition = $tree.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $definition) { throw "Missing staging validator: $name" }
     Invoke-Expression $definition.Extent.Text
+}
+$script:guardCalled = $false
+Invoke-NonElevatedVaultGuard { throw [System.UnauthorizedAccessException]::new('protected') } { $script:guardCalled = $true }
+if ($script:guardCalled) { throw 'An unreadable journal did not defer to the elevated guard.' }
+Invoke-NonElevatedVaultGuard {} { $script:guardCalled = $true }
+if (-not $script:guardCalled) { throw 'A readable journal skipped the non-elevated guard.' }
+$activeMountRegistry = Join-Path $env:TEMP ('wc-vault-guard-' + [guid]::NewGuid().ToString('N') + '.json')
+$AllowVaultDismount = $false
+try {
+    [IO.File]::WriteAllText($activeMountRegistry, '{"mounts":{}}')
+    Assert-NoActiveVaultsUnlessAllowed
+    foreach ($invalid in @('{"mounts":{"fixture":{"drive_letter":"Z"}}}', '{invalid')) {
+        [IO.File]::WriteAllText($activeMountRegistry, $invalid)
+        $refused = $false
+        try { Assert-NoActiveVaultsUnlessAllowed } catch { $refused = $true }
+        if (-not $refused) { throw 'The elevated guard accepted active or unreadable Vault state.' }
+    }
+} finally {
+    Remove-Item -LiteralPath $activeMountRegistry -Force -ErrorAction SilentlyContinue
 }
 $knownImage = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-SimpleServiceImagePath $knownImage)) { throw 'An existing simple executable path was rejected.' }

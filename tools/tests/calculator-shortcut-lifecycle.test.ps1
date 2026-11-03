@@ -24,6 +24,9 @@ function New-TestLink([string]$Path, [string]$Target) {
     $link.Save()
 }
 function Read-Bytes([string]$Path) { [Convert]::ToBase64String([IO.File]::ReadAllBytes($Path)) }
+function Get-TestReplacement([string]$Root) {
+    Join-Path $Root 'calculator..lnk'
+}
 
 try {
     New-Item -ItemType Directory -Path $env:APPDATA,$env:ProgramData,$script:programs,$script:desktop,$script:quickLaunch -Force | Out-Null
@@ -39,6 +42,11 @@ try {
     function Get-WinCommanderCalculatorProgramsPath { $script:programs }
     function Get-WinCommanderCalculatorDesktopPath { $script:desktop }
     function Get-WinCommanderCalculatorUserRoots { @($script:programs,$script:desktop,$script:quickLaunch) }
+    function Test-WinCommanderCalculatorSharedReplacement {
+        param([string]$Path, [bool]$SharedDesktop, [bool]$SharedStart)
+        return ($SharedDesktop -and $Path -ieq (Get-TestReplacement $script:desktop)) -or
+            ($SharedStart -and $Path -ieq (Get-TestReplacement $script:programs))
+    }
     function Get-WinCommanderExePath { $script:target }
     function Get-WinCommanderStartMenuTargets { @($script:shared) }
     function Invoke-ShellChangeNotify {}
@@ -59,7 +67,7 @@ try {
     foreach ($path in $originals) { Assert-True (-not (Test-Path -LiteralPath $path)) 'Original user shortcut was not replaced' }
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:programs 'ServaLabs'))) 'Empty owned product folders remained visible'
     Assert-True (Test-Path -LiteralPath (Join-Path $script:programs 'Vendor')) 'An unrelated shortcut folder was removed'
-    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk')) 'Calculator shortcut is missing' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Calculator shortcut is missing' }
     Assert-True ((Read-Bytes $script:shared) -ceq $sharedBytes) 'Shared shortcut changed'
     Assert-True ((Read-Bytes $pinned) -ceq $pinnedBytes) 'Pinned shortcut changed'
     Assert-True ((Read-Bytes $unrelated) -ceq $unrelatedBytes) 'Unrelated shortcut changed'
@@ -68,7 +76,85 @@ try {
     $restored = Set-WinCommanderCalculatorShortcuts $false
     Assert-True ($restored.status -eq 'restored') 'Disable failed'
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Original shortcut bytes were not restored exactly' }
-    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Owned Calculator shortcut was not removed' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $root))) 'Owned Calculator shortcut was not removed' }
+
+    # Migrate only the previous release's exact generated links, preserving
+    # original snapshots and unrelated Windows Calculator entries.
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    $migrationStatePath = Join-Path $env:APPDATA 'WinCommander\calc_shortcut_state.json'
+    $migration = Get-Content -LiteralPath $migrationStatePath -Raw | ConvertFrom-Json
+    foreach ($entry in $migration.generatedCalculatorLinks) {
+        $old = Join-Path (Split-Path $entry.path -Parent) $(if ((Split-Path $entry.path -Parent) -ieq $script:desktop) { 'Calculator+.lnk' } else { 'Calculator.lnk' })
+        Move-Item -LiteralPath $entry.path -Destination $old
+        $entry.path = $old
+    }
+    $migration.createdCalculatorLinks = @($migration.generatedCalculatorLinks | ForEach-Object { $_.path })
+    $migration | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $migrationStatePath -Encoding UTF8
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
+        $oldName = if ($root -ieq $script:desktop) { 'Calculator+.lnk' } else { 'Calculator.lnk' }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root $oldName))) 'Old generated shortcut was not migrated'
+        Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Replacement shortcut was not created'
+    }
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Migration lost an original shortcut' }
+    $null = Set-WinCommanderCalculatorShortcuts -Hidden $true -SharedDesktop $true -SharedStart $false
+    Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $script:desktop))) 'Verified shared Desktop created a duplicate account alias'
+    Assert-True (Test-Path -LiteralPath (Get-TestReplacement $script:programs)) 'Unmanaged Start surface did not get an account fallback'
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'One-surface shared replacement lost an original shortcut' }
+    $null = Set-WinCommanderCalculatorShortcuts -Hidden $true -SharedDesktop $false -SharedStart $true
+    Assert-True (Test-Path -LiteralPath (Get-TestReplacement $script:desktop)) 'Unmanaged Desktop did not get an account fallback'
+    Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $script:programs))) 'Verified shared Start created a duplicate account alias'
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Other-surface shared replacement lost an original shortcut' }
+    function Test-WinCommanderCalculatorSharedReplacement { param([string]$Path, [bool]$SharedDesktop, [bool]$SharedStart) return $false }
+    $unverified = Set-WinCommanderCalculatorShortcuts -Hidden $true -SharedDesktop $true -SharedStart $true
+    Assert-True (Test-Path -LiteralPath (Get-TestReplacement $script:desktop)) 'Unverified shared Desktop suppressed the account fallback'
+    Assert-True (Test-Path -LiteralPath (Get-TestReplacement $script:programs)) 'Unverified shared Start suppressed the account fallback'
+    Assert-True (@($unverified.warnings).Count -ge 2) 'Unverified shared replacements did not report warnings'
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    function Test-WinCommanderCalculatorSharedReplacement {
+        param([string]$Path, [bool]$SharedDesktop, [bool]$SharedStart)
+        return ($SharedDesktop -and $Path -ieq (Get-TestReplacement $script:desktop)) -or
+            ($SharedStart -and $Path -ieq (Get-TestReplacement $script:programs))
+    }
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    $migration = Get-Content -LiteralPath $migrationStatePath -Raw | ConvertFrom-Json
+    foreach ($entry in $migration.generatedCalculatorLinks) {
+        $old = Join-Path (Split-Path $entry.path -Parent) 'Calculator+.lnk'
+        Move-Item -LiteralPath $entry.path -Destination $old
+        $entry.path = $old
+    }
+    $migration.createdCalculatorLinks = @($migration.generatedCalculatorLinks | ForEach-Object { $_.path })
+    $migration | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $migrationStatePath -Encoding UTF8
+    $null = Set-WinCommanderCalculatorShortcuts -Hidden $true -SharedDesktop $true -SharedStart $true
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator+.lnk'))) 'Legacy plus shortcut remained visible'
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $script:desktop))) 'Managed Desktop duplicated the shared replacement'
+    Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $script:programs))) 'Managed Start duplicated the shared replacement'
+    Assert-True (Test-Path -LiteralPath (Get-TestReplacement $script:quickLaunch)) 'Unmanaged Quick Launch fallback is missing'
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Managed migration lost an original shortcut' }
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    $bothFlag = Get-WinCommanderHideFlagPath
+    New-Item -ItemType Directory -Path (Split-Path $bothFlag -Parent) -Force | Out-Null
+    [IO.File]::WriteAllText($bothFlag, '')
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $root))) 'Both modes left a calculator alias visible' }
+    Remove-Item -LiteralPath $bothFlag
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Turning Hide off did not restore the calculator alias' }
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Both-mode transition lost an original shortcut' }
+    $windowsCalculatorLink = Join-Path $script:programs 'Calculator.lnk'
+    New-TestLink $windowsCalculatorLink $script:otherTarget
+    $windowsCalculatorBytes = Read-Bytes $windowsCalculatorLink
+    $null = Set-WinCommanderCalculatorShortcuts $true
+    $null = Set-WinCommanderCalculatorShortcuts $false
+    Assert-True ((Read-Bytes $windowsCalculatorLink) -ceq $windowsCalculatorBytes) 'An unrelated Calculator entry was changed'
+    Remove-Item -LiteralPath $windowsCalculatorLink
 
     # Disabling the lock while Hide WinCommander remains active must remove
     # Calculator aliases without exposing the saved WinCommander shortcuts.
@@ -80,7 +166,7 @@ try {
     Assert-True ($deferred.status -eq 'deferred') 'Hide mode did not report deferred original restoration'
     Assert-True (-not $deferred.warnings) 'Deferred restoration reported a false shortcut failure'
     foreach ($path in $originals) { Assert-True (-not (Test-Path -LiteralPath $path)) 'Lock off exposed a shortcut while Hide mode remained active' }
-    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Calculator shortcut remained after lock off' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $root))) 'Calculator shortcut remained after lock off' }
     $deferredState = Join-Path $env:APPDATA 'WinCommander\calc_shortcut_state.json'
     Assert-True (Test-Path -LiteralPath $deferredState) 'Deferred original recovery state was discarded'
     Remove-Item -LiteralPath $hideFlag
@@ -93,11 +179,11 @@ try {
     # Lock still needs account Start and Desktop entries without restoring them.
     foreach ($path in $originals) { Remove-Item -LiteralPath $path }
     $null = Set-WinCommanderCalculatorShortcuts $true
-    Assert-True (Test-Path -LiteralPath (Join-Path $script:programs 'Calculator.lnk')) 'Calculator Start shortcut was not created without originals'
-    Assert-True (Test-Path -LiteralPath (Join-Path $script:desktop 'Calculator.lnk')) 'Calculator Desktop shortcut was not created without an original'
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:programs 'calculator..lnk')) 'Calculator Start shortcut was not created without originals'
+    Assert-True (Test-Path -LiteralPath (Join-Path $script:desktop 'calculator..lnk')) 'Calculator Desktop shortcut was not created without an original'
     $null = Set-WinCommanderCalculatorShortcuts $false
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:programs 'Calculator.lnk'))) 'Calculator Start shortcut remained after disabling'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:desktop 'Calculator.lnk'))) 'Calculator Desktop shortcut remained after disabling'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:programs 'calculator..lnk'))) 'Calculator Start shortcut remained after disabling'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:desktop 'calculator..lnk'))) 'Calculator Desktop shortcut remained after disabling'
     foreach ($path in $originals) {
         Assert-True (-not (Test-Path -LiteralPath $path)) 'Hide mode original returned when Calculator Lock was disabled'
         New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force | Out-Null
@@ -125,7 +211,7 @@ try {
     function Get-WinCommanderExePath { $script:target }
     Remove-Item -LiteralPath $legacyLink
 
-    $collision = Join-Path $script:desktop 'Calculator.lnk'
+    $collision = Join-Path $script:desktop 'calculator..lnk'
     New-TestLink $collision $script:otherTarget
     $collisionBytes = Read-Bytes $collision
     $null = Set-WinCommanderCalculatorShortcuts $true
@@ -169,14 +255,14 @@ try {
     function Get-WinCommanderCalculatorLauncherPath { param([string]$Executable) if ($Executable -ieq $script:target) { $script:otherTarget } }
     $null = Set-WinCommanderCalculatorShortcuts $true
     foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
-        $replacement = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $root 'Calculator.lnk'))
+        $replacement = (New-Object -ComObject WScript.Shell).CreateShortcut((Get-TestReplacement $root))
         Assert-True ($replacement.TargetPath -ieq $script:otherTarget) 'A previously generated shortcut was not migrated to the real launcher'
         Assert-True ($replacement.IconLocation -ieq "$script:otherTarget,0") 'The launcher icon was not selected'
     }
     $null = Set-WinCommanderCalculatorShortcuts $false
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Launcher migration lost an original shortcut snapshot' }
     foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) {
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $root 'Calculator.lnk'))) 'Migrated launcher shortcut was not removed on disable'
+        Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $root))) 'Migrated launcher shortcut was not removed on disable'
     }
     function Get-WinCommanderCalculatorLauncherPath { param([string]$Executable) return $null }
 

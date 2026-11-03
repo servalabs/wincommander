@@ -1018,6 +1018,7 @@ dependencies = [
  "wincmd-clip-rules",
  "wincmd-shared",
  "wincmd-volume",
+ "windows 0.62.2",
  "windows-service",
  "windows-sys 0.61.2",
  "zeroize",

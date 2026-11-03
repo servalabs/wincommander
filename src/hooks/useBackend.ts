@@ -2423,8 +2423,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       }),
     setWinCommanderVisibility: (hidden: boolean) =>
       execute<{ status: string; itemsChanged: number; warnings?: string[] }>("Set-WinCommanderVisibility", { Hidden: hidden }),
-    setWinCommanderCalculatorShortcuts: (hidden: boolean) =>
-      execute<{ status: string; itemsChanged: number; warnings?: string[] }>("Set-WinCommanderCalculatorShortcuts", { Hidden: hidden }),
+    setWinCommanderCalculatorShortcuts: (hidden: boolean, managed?: { desktop: boolean; start: boolean }) =>
+      execute<{ status: string; itemsChanged: number; warnings?: string[] }>("Set-WinCommanderCalculatorShortcuts", { Hidden: hidden, SharedDesktop: managed?.desktop === true, SharedStart: managed?.start === true }),
     restartExplorer: () => execute("Restart-Explorer"),
     /** Opens a file/folder path in Explorer via the Rust `open_path` command
      *  (not a PowerShell dispatch — same underlying command every "Open in

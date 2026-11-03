@@ -2077,6 +2077,16 @@ function Get-WinCommanderStartMenuTargets {
     return $paths | Select-Object -Unique
 }
 
+function Test-WinCommanderManagedSharedShortcut {
+    param([string]$Path)
+    $programs = [Environment]::GetFolderPath('CommonPrograms')
+    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    $managed = @()
+    if ($programs) { $managed += Join-Path $programs 'ServaLabs\WinCommander\WinCommander.lnk' }
+    if ($desktop) { $managed += Join-Path $desktop 'WinCommander.lnk' }
+    return $managed -contains $Path
+}
+
 function Get-WinCommanderUninstallKeys {
     $keys = New-Object System.Collections.Generic.List[string]
 
@@ -2162,12 +2172,13 @@ function Get-WinCommanderExePath {
         try {
             $props = Get-ItemProperty $key -ErrorAction SilentlyContinue
             if ($props.DisplayIcon) {
-                $exePath = $props.DisplayIcon -replace ',\s*-?\d+\s*$', ''  # strip ,index suffix
+                $exePath = (($props.DisplayIcon -replace ',\s*-?\d+\s*$', '').Trim()).Trim('"')
                 if ((Test-Path $exePath) -and $exePath -match '\.exe$') { return $exePath }
             }
             if ($props.InstallLocation) {
+                $installLocation = ([string]$props.InstallLocation).Trim().Trim('"')
                 foreach ($name in @('WinCommander.exe', 'wincommander-free.exe')) {
-                    $c = Join-Path $props.InstallLocation $name
+                    $c = Join-Path $installLocation $name
                     if (Test-Path $c) { return $c }
                 }
             }
@@ -2210,25 +2221,25 @@ function Set-WinCommanderVisibility {
     $itemsChanged = 0
     $warnings = @()
     $statePath = Get-WinCommanderVisibilityStatePath
+    $shortcutRoots = @(Get-WinCommanderCalculatorUserRoots)
     if ([string]::IsNullOrEmpty($statePath)) {
-        $warnings += "State path unavailable: ProgramData environment variable is not set. State will not be saved or restored."
+        return @{ error = $true; message = 'State path unavailable; visibility was not changed.' }
     }
 
     try {
         if ($Hidden) {
+            $existingFlag = Get-WinCommanderHideFlagPath
+            if ($existingFlag -and (Test-Path -LiteralPath $existingFlag) -and $statePath -and (Test-Path -LiteralPath $statePath)) {
+                return @{ status = 'hidden'; itemsChanged = 0 }
+            }
+            if ($statePath -and (Test-Path -LiteralPath $statePath)) {
+                return @{ error = $true; message = 'Previous shortcut recovery is incomplete. Restore it before hiding WinCommander again.' }
+            }
             $state = @{
                 hiddenShortcuts = @()
                 uninstallKeys   = @()
                 hiddenRunValues = @()
                 hiddenAppPaths  = @()
-            }
-
-            # Write the flag file so a cold-start also starts hidden.
-            $flagPath = Get-WinCommanderHideFlagPath
-            if (-not [string]::IsNullOrEmpty($flagPath)) {
-                $flagDir = Split-Path -Path $flagPath -Parent
-                if (-not (Test-Path $flagDir)) { New-Item -ItemType Directory -Path $flagDir -Force | Out-Null }
-                Set-Content -Path $flagPath -Value "" -Force
             }
 
             # ── PHASE 1: COLLECT all data before any mutations ───────────────────
@@ -2256,37 +2267,55 @@ function Set-WinCommanderVisibility {
             }
 
             $wsh = New-Object -ComObject WScript.Shell
+            $exe = Get-WinCommanderExePath
+            $ownedTargets = if ($exe) { @(Get-WinCommanderCalculatorOwnedTargets $exe) } else { @() }
             $seenShortcutPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($target in Get-WinCommanderStartMenuTargets) {
                 try {
+                    if (-not (Test-WinCommanderCalculatorUserPath $target $shortcutRoots)) {
+                        if (Test-Path -LiteralPath $target) {
+                            if (Test-WinCommanderManagedSharedShortcut $target) { $warnings += 'Shared WinCommander shortcuts need service reconciliation.' }
+                            else { $warnings += 'A shared shortcut was left unchanged for other Windows accounts.' }
+                        }
+                        continue
+                    }
                     if (Test-Path $target -PathType Leaf) {
                         if (-not $seenShortcutPaths.Add($target)) { continue }
                         $entry = @{ path = $target }
                         try {
                             $sc = $wsh.CreateShortcut($target)
+                            if ($ownedTargets -notcontains $sc.TargetPath) { $warnings += 'An unrelated shortcut was left unchanged.'; continue }
+                            $bytes = [IO.File]::ReadAllBytes($target)
+                            if ($bytes.Length -gt 1048576) { throw 'Shortcut exceeds the preservation limit.' }
+                            $entry.originalBytes = [Convert]::ToBase64String($bytes)
                             $entry.targetPath       = $sc.TargetPath
                             $entry.workingDirectory = $sc.WorkingDirectory
                             $entry.iconLocation     = $sc.IconLocation
                             $entry.arguments        = $sc.Arguments
                             $entry.description      = $sc.Description
                             $entry.windowStyle      = $sc.WindowStyle
-                        } catch { $warnings += "Shortcut read ${target}: $($_.Exception.Message)" }
+                        } catch { $warnings += "Shortcut read ${target}: $($_.Exception.Message)"; continue }
                         $state.hiddenShortcuts += $entry
                     }
                     elseif (Test-Path $target -PathType Container) {
                         Get-ChildItem -Path $target -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
                             $lnkPath = $_.FullName
+                            if (-not (Test-WinCommanderCalculatorUserPath $lnkPath $shortcutRoots)) { return }
                             if (-not $seenShortcutPaths.Add($lnkPath)) { return }
                             $entry = @{ path = $lnkPath }
                             try {
                                 $sc = $wsh.CreateShortcut($lnkPath)
+                                if ($ownedTargets -notcontains $sc.TargetPath) { $warnings += 'An unrelated shortcut was left unchanged.'; return }
+                                $bytes = [IO.File]::ReadAllBytes($lnkPath)
+                                if ($bytes.Length -gt 1048576) { throw 'Shortcut exceeds the preservation limit.' }
+                                $entry.originalBytes = [Convert]::ToBase64String($bytes)
                                 $entry.targetPath       = $sc.TargetPath
                                 $entry.workingDirectory = $sc.WorkingDirectory
                                 $entry.iconLocation     = $sc.IconLocation
                                 $entry.arguments        = $sc.Arguments
                                 $entry.description      = $sc.Description
                                 $entry.windowStyle      = $sc.WindowStyle
-                            } catch { $warnings += "Shortcut read $($_.FullName): $($_.Exception.Message)" }
+                            } catch { $warnings += "Shortcut read $($_.FullName): $($_.Exception.Message)"; return }
                             $state.hiddenShortcuts += $entry
                         }
                     }
@@ -2326,6 +2355,14 @@ function Set-WinCommanderVisibility {
                 }
             }
 
+            # Cold starts may hide only after the recovery snapshot is durable.
+            $flagPath = Get-WinCommanderHideFlagPath
+            if (-not [string]::IsNullOrEmpty($flagPath)) {
+                $flagDir = Split-Path -Path $flagPath -Parent
+                if (-not (Test-Path $flagDir)) { New-Item -ItemType Directory -Path $flagDir -Force | Out-Null }
+                Set-Content -Path $flagPath -Value "" -Force -ErrorAction Stop
+            }
+
             # ── PHASE 3: APPLY MUTATIONS (state is already on disk) ──────────────
 
             # Rename Run/RunOnce values.
@@ -2343,12 +2380,17 @@ function Set-WinCommanderVisibility {
                 try {
                     $p = "$($entry.path)"
                     if (-not (Test-Path $p)) { continue }
+                    if ($entry.originalBytes -and [Convert]::ToBase64String([IO.File]::ReadAllBytes($p)) -cne $entry.originalBytes) {
+                        $warnings += 'A shortcut changed while hiding; it was left unchanged.'
+                        continue
+                    }
                     Remove-Item -Path $p -Force -ErrorAction Stop
                     $itemsChanged++
                 } catch { $warnings += "Shortcut delete $($entry.path): $($_.Exception.Message)" }
             }
             # Remove now-empty shortcut folders.
             foreach ($target in (Get-WinCommanderStartMenuTargets | Where-Object { Test-Path $_ -PathType Container })) {
+                if (-not (Test-WinCommanderCalculatorUserPath $target $shortcutRoots)) { continue }
                 $remaining = Get-ChildItem $target -ErrorAction SilentlyContinue
                 if (-not $remaining) { Remove-Item $target -Force -ErrorAction SilentlyContinue }
             }
@@ -2417,10 +2459,41 @@ function Set-WinCommanderVisibility {
             foreach ($entry in $stateShortcuts) {
                 try {
                     $path = "$($entry.path)"
-                    if (Test-Path $path) { continue }   # already exists
+                    if (-not (Test-WinCommanderCalculatorUserPath $path $shortcutRoots)) {
+                        $warnings += 'A legacy shared shortcut needs separate recovery; its recovery record was retained.'
+                        $shortcutErrors++; continue
+                    }
+                    if (Test-Path -LiteralPath $path) {
+                        if ($entry.originalBytes) {
+                            $matchesSaved = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -ceq $entry.originalBytes
+                        } else {
+                            $existing = $wsh.CreateShortcut($path)
+                            $matchesSaved = -not [string]::IsNullOrEmpty("$($entry.targetPath)") -and
+                                $existing.TargetPath -ieq "$($entry.targetPath)" -and
+                                $existing.WorkingDirectory -ieq "$($entry.workingDirectory)" -and
+                                $existing.IconLocation -ieq "$($entry.iconLocation)" -and
+                                $existing.Arguments -ceq "$($entry.arguments)" -and
+                                $existing.Description -ceq "$($entry.description)" -and
+                                [int]$existing.WindowStyle -eq [int]$entry.windowStyle
+                            if ($matchesSaved) { $warnings += 'A legacy shortcut matches saved properties, but its original file bytes were not recorded.' }
+                        }
+                        if (-not $matchesSaved) {
+                            $warnings += 'An original shortcut path is occupied; the recovery record was retained.'
+                            $shortcutErrors++
+                        }
+                        continue
+                    }
 
                     $parentDir = Split-Path $path -Parent
                     if (-not (Test-Path $parentDir)) { New-Item -ItemType Directory -Path $parentDir -Force | Out-Null }
+
+                    if ($entry.originalBytes) {
+                        $bytes = [Convert]::FromBase64String($entry.originalBytes)
+                        if ($bytes.Length -gt 1048576) { throw 'Saved shortcut exceeds the preservation limit.' }
+                        $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                        try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+                        $itemsChanged++; continue
+                    }
 
                     $target      = "$($entry.targetPath)"
                     $savedTarget = $target
@@ -2458,6 +2531,7 @@ function Set-WinCommanderVisibility {
         # Always run this as a safety net regardless of whether Strategy A ran.
         foreach ($target in Get-WinCommanderStartMenuTargets) {
             try {
+                if (-not (Test-WinCommanderCalculatorUserPath $target $shortcutRoots)) { continue }
                 # Direct .lnk hidden as .lnk.wc-hidden
                 $hiddenLnk = "$target.wc-hidden"
                 if ((Test-Path $hiddenLnk) -and -not (Test-Path $target)) {
@@ -2476,7 +2550,8 @@ function Set-WinCommanderVisibility {
             catch { $warnings += "Shortcut rename-back ${target}: $($_.Exception.Message)" }
         }
 
-        if ($stateShortcuts.Count -eq 0 -and $shortcutErrors -eq 0) {
+        $hasShortcutSnapshot = $savedState -and $null -ne $savedState.PSObject.Properties['hiddenShortcuts'] -and $null -ne $savedState.hiddenShortcuts
+        if (-not $hasShortcutSnapshot -and $stateShortcuts.Count -eq 0 -and $shortcutErrors -eq 0) {
             # Strategy A had nothing to restore and Strategy B may have handled it via .wc-hidden files.
             # If neither found anything, warn but don't block.
             if ($itemsChanged -eq 0) {
@@ -2655,20 +2730,55 @@ function Get-WinCommanderCalculatorOwnedTargets {
         (Join-Path $installation 'wincommander-pro.exe')) | Where-Object { $_ } | Select-Object -Unique
 }
 
-function Get-WinCommanderCalculatorUserRoots {
-    $roots = @((Get-WinCommanderCalculatorProgramsPath), [Environment]::GetFolderPath('Desktop'), "$env:USERPROFILE\Desktop", (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch'))
+function Get-WinCommanderCalculatorDesktopRoots {
+    $roots = @((Get-WinCommanderCalculatorDesktopPath), "$env:USERPROFILE\Desktop")
     foreach ($oneDrive in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
         if ($oneDrive) { $roots += (Join-Path $oneDrive 'Desktop') }
     }
     return @($roots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }
 
+function Get-WinCommanderCalculatorUserRoots {
+    return @(@((Get-WinCommanderCalculatorProgramsPath), (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch')) + @(Get-WinCommanderCalculatorDesktopRoots) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
 function Get-WinCommanderCalculatorReplacementPath {
     param([string]$Path, [string[]]$Roots)
     foreach ($root in ($Roots | Sort-Object Length -Descending)) {
-        if (Test-WinCommanderCalculatorUserPath $Path @($root)) { return (Join-Path $root 'Calculator.lnk') }
+        if (Test-WinCommanderCalculatorUserPath $Path @($root)) {
+            return (Join-Path $root 'calculator..lnk')
+        }
     }
     return $null
+}
+
+function Test-WinCommanderCalculatorSharedReplacement {
+    param([string]$Path, [bool]$SharedDesktop, [bool]$SharedStart)
+    $sharedPath = $null
+    if ($SharedStart -and $Path -ieq (Join-Path (Get-WinCommanderCalculatorProgramsPath) 'calculator..lnk')) {
+        $sharedPath = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'ServaLabs\WinCommander\calculator..lnk'
+    }
+    if ($SharedDesktop) {
+        foreach ($root in Get-WinCommanderCalculatorDesktopRoots) {
+            if ($Path -ieq (Join-Path $root 'calculator..lnk')) {
+                $sharedPath = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'calculator..lnk'
+                break
+            }
+        }
+    }
+    if (-not $sharedPath) { return $false }
+    try {
+        $item = Get-Item -LiteralPath $sharedPath -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+        $owner = ([Security.Principal.NTAccount](Get-Acl -LiteralPath $sharedPath -ErrorAction Stop).Owner).Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin @('S-1-5-18', 'S-1-5-32-544')) { return $false }
+        $exe = Get-WinCommanderExePath
+        if (-not $exe) { return $false }
+        $launcher = Get-WinCommanderCalculatorLauncherPath $exe
+        if (-not $launcher) { return $false }
+        $link = (New-Object -ComObject WScript.Shell).CreateShortcut($sharedPath)
+        return $link.TargetPath -ieq $launcher -and $link.IconLocation -ieq "$launcher,0"
+    } catch { return $false }
 }
 
 function Get-WinCommanderCalculatorShortcutFiles {
@@ -2732,7 +2842,12 @@ function Set-WinCommanderCalculatorShortcuts {
         $true  — delete shortcuts and save metadata to calc_shortcut_state.json.
         $false — recreate shortcuts from saved metadata and delete the state file.
     #>
-    param([bool]$Hidden = $true)
+    param([bool]$Hidden = $true, [bool]$SharedDesktop = $false, [bool]$SharedStart = $false)
+
+    $hideFlag = Get-WinCommanderHideFlagPath
+    if ($Hidden -and $hideFlag -and (Test-Path -LiteralPath $hideFlag)) {
+        return Set-WinCommanderCalculatorShortcuts -Hidden $false
+    }
 
     $stateDir     = Join-Path $env:APPDATA 'WinCommander'
     $statePath    = "$stateDir\calc_shortcut_state.json"
@@ -2744,7 +2859,8 @@ function Set-WinCommanderCalculatorShortcuts {
             $statePath = $oldStatePath
         }
     }
-    $calculatorLink = Join-Path (Get-WinCommanderCalculatorProgramsPath) 'Calculator.lnk'
+    $calculatorLink = Join-Path (Get-WinCommanderCalculatorProgramsPath) 'calculator..lnk'
+    $legacyCalculatorLink = Join-Path (Get-WinCommanderCalculatorProgramsPath) 'Calculator.lnk'
     $userRoots    = @(Get-WinCommanderCalculatorUserRoots)
     $itemsChanged = 0
     $warnings     = @()
@@ -2777,7 +2893,7 @@ function Set-WinCommanderCalculatorShortcuts {
             foreach ($path in @($previous.createdCalculatorLinks)) {
                 if ($path -and (Test-WinCommanderCalculatorUserPath $path $userRoots)) { [void]$created.Add([string]$path) }
             }
-            if ($calculatorCreated) { [void]$created.Add($calculatorLink) }
+            if ($calculatorCreated -and -not @($previous.createdCalculatorLinks | Where-Object { $_ }).Count) { [void]$created.Add($legacyCalculatorLink) }
             $generated = @{}
             foreach ($entry in @($previous.generatedCalculatorLinks)) {
                 if ($entry -and $entry.path -and $entry.originalBytes) { $generated[[string]$entry.path] = [string]$entry.originalBytes }
@@ -2785,6 +2901,7 @@ function Set-WinCommanderCalculatorShortcuts {
             $scanCapped = $false
             foreach ($target in Get-WinCommanderStartMenuTargets) {
                 if (-not (Test-WinCommanderCalculatorUserPath $target $userRoots) -and (Test-Path -LiteralPath $target)) {
+                    if (Test-WinCommanderManagedSharedShortcut $target) { $warnings += 'Shared WinCommander shortcuts need service reconciliation.'; continue }
                     $warnings += 'A shared WinCommander shortcut remains visible to all Windows accounts.'
                     break
                 }
@@ -2826,14 +2943,36 @@ function Set-WinCommanderCalculatorShortcuts {
                 $desktop = Join-Path $env:USERPROFILE 'Desktop'
             }
             if ($desktop -and (Test-Path -LiteralPath $desktop -PathType Container)) {
-                $desktopLink = Join-Path $desktop 'Calculator.lnk'
+                $desktopLink = Join-Path $desktop 'calculator..lnk'
                 if (Test-WinCommanderCalculatorUserPath $desktopLink $userRoots) { $desired += $desktopLink }
+            }
+            if ($SharedStart -and -not (Test-WinCommanderCalculatorSharedReplacement $calculatorLink $false $true)) {
+                $warnings += 'The shared Start calculator shortcut could not be verified; an account fallback was kept.'
+            }
+            if ($SharedDesktop -and $desktop -and -not (Test-WinCommanderCalculatorSharedReplacement (Join-Path $desktop 'calculator..lnk') $true $false)) {
+                $warnings += 'The shared Desktop calculator shortcut could not be verified; an account fallback was kept.'
+            }
+            $legacyCreated = @($created | Where-Object {
+                $replacement = Get-WinCommanderCalculatorReplacementPath $_ $userRoots
+                $replacement -and ($_ -ine $replacement -or (Test-WinCommanderCalculatorSharedReplacement $replacement $SharedDesktop $SharedStart))
+            })
+            foreach ($path in $legacyCreated) {
+                $replacement = Get-WinCommanderCalculatorReplacementPath $path $userRoots
+                if ($replacement) { $desired += $replacement }
             }
             foreach ($entry in $shortcuts) {
                 $replacement = Get-WinCommanderCalculatorReplacementPath $entry.path $userRoots
                 if ($replacement) { $desired += $replacement }
             }
+            $sharedReady = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
             foreach ($path in ($desired | Select-Object -Unique)) {
+                if (Test-WinCommanderCalculatorSharedReplacement $path $SharedDesktop $SharedStart) {
+                    if ((Test-Path -LiteralPath $path) -and -not $created.Contains($path) -and -not $seen.Contains($path)) {
+                        $warnings += 'An existing account calculator shortcut was left unchanged.'
+                    }
+                    [void]$sharedReady.Add($path)
+                    continue
+                }
                 if (-not (Test-Path -LiteralPath $path)) { [void]$created.Add($path) }
                 elseif (-not $created.Contains($path)) { $warnings += 'An existing Calculator shortcut was left unchanged.' }
             }
@@ -2841,7 +2980,9 @@ function Set-WinCommanderCalculatorShortcuts {
             $state = @{ hiddenShortcuts = @($shortcuts); calculatorShortcutCreated = $created.Contains($calculatorLink); createdCalculatorLinks = @($created); generatedCalculatorLinks = @($generated.GetEnumerator() | ForEach-Object { @{ path = $_.Key; originalBytes = $_.Value } }) }
             Write-WinCommanderCalculatorShortcutState $statePath $state
             $ready = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($path in $sharedReady) { [void]$ready.Add($path) }
             foreach ($path in $created) {
+                if ($legacyCreated -contains $path) { continue }
                 try {
                     $exists = Test-Path -LiteralPath $path
                     $canMigrate = $exists -and $generated.ContainsKey($path) -and
@@ -2852,7 +2993,7 @@ function Set-WinCommanderCalculatorShortcuts {
                         $link.TargetPath = $launchExe
                         $link.WorkingDirectory = Split-Path -Parent $launchExe
                         $link.IconLocation = if ($launchExe -ine $exe) { "$launchExe,0" } else { "$env:SystemRoot\System32\calc.exe,0" }
-                        $link.Description = 'Calculator'
+                        $link.Description = [IO.Path]::GetFileNameWithoutExtension($path)
                         $link.Save()
                         $generated[$path] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
                         $itemsChanged++
@@ -2862,6 +3003,26 @@ function Set-WinCommanderCalculatorShortcuts {
                 } catch { $warnings += "Calculator shortcut: $($_.Exception.Message)" }
             }
 
+            $state.generatedCalculatorLinks = @($generated.GetEnumerator() | ForEach-Object { @{ path = $_.Key; originalBytes = $_.Value } })
+            Write-WinCommanderCalculatorShortcutState $statePath $state
+
+            foreach ($path in $legacyCreated) {
+                $replacement = Get-WinCommanderCalculatorReplacementPath $path $userRoots
+                if (-not $replacement -or -not $ready.Contains($replacement)) { continue }
+                try {
+                    if (Test-Path -LiteralPath $path) {
+                        if (-not $generated.ContainsKey($path) -or $generated[$path] -cne [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) {
+                            $warnings += 'A previous Calculator shortcut changed externally; it was left unchanged.'
+                            continue
+                        }
+                        Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                        $itemsChanged++
+                    }
+                    [void]$created.Remove($path)
+                    $generated.Remove($path)
+                } catch { $warnings += "Previous Calculator shortcut: $($_.Exception.Message)" }
+            }
+            $state.createdCalculatorLinks = @($created)
             $state.generatedCalculatorLinks = @($generated.GetEnumerator() | ForEach-Object { @{ path = $_.Key; originalBytes = $_.Value } })
             Write-WinCommanderCalculatorShortcutState $statePath $state
 
@@ -2923,12 +3084,12 @@ function Set-WinCommanderCalculatorShortcuts {
             $keepOriginalsHidden = $stateShortcuts.Count -gt 0 -and $hideFlagPath -and (Test-Path -LiteralPath $hideFlagPath)
 
             $shortcutErrors = 0
-            $created = @($savedState.createdCalculatorLinks)
+            $created = @($savedState.createdCalculatorLinks | Where-Object { $_ })
             $generated = @{}
             foreach ($entry in @($savedState.generatedCalculatorLinks)) {
                 if ($entry -and $entry.path -and $entry.originalBytes) { $generated[[string]$entry.path] = [string]$entry.originalBytes }
             }
-            if ($savedState.calculatorShortcutCreated -eq $true) { $created += $calculatorLink }
+            if ($savedState.calculatorShortcutCreated -eq $true -and -not $created.Count) { $created += $legacyCalculatorLink }
             foreach ($path in ($created | Where-Object { $_ } | Select-Object -Unique)) {
                 if (-not (Test-WinCommanderCalculatorUserPath $path $userRoots)) { continue }
                 if (-not (Test-Path -LiteralPath $path)) { continue }

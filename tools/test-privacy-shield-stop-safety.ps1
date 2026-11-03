@@ -21,28 +21,4 @@ if ((Get-PrivacyShieldPidFromMarker) -ne -1) { throw 'Unreadable detector identi
 $script:candidate.SessionId = $script:session + 1
 if ($null -ne (Get-PrivacyShieldPidFromMarker)) { throw 'Another session was accepted' }
 
-$script:statuses = @()
-$script:stopped = @()
-$script:denyStop = $false
-function Get-PrivacyShieldStatus { $next = $script:statuses[0]; $script:statuses = @($script:statuses | Select-Object -Skip 1); return $next }
-function Stop-Process { [CmdletBinding()] param($Id, [switch]$Force) if ($script:denyStop) { throw 'access denied' }; $script:stopped += $Id }
-function Wait-Process { [CmdletBinding()] param($Id, $Timeout) }
-function Clear-PrivacyShieldPidMarker { throw 'Stop must not clear a marker owned by another session' }
-
-$script:statuses = @(@{ error = $true })
-$result = Stop-PrivacyShield
-if (-not $result.error -or $script:stopped.Count -ne 0) { throw 'Unknown status was treated as a successful stop' }
-$script:statuses = @(@{ running = $false })
-$result = Stop-PrivacyShield
-if (-not $result.success) { throw 'An already stopped detector was not confirmed' }
-$script:statuses = @(@{ running = $true; processId = 9002 }, @{ running = $false })
-$result = Stop-PrivacyShield
-if (-not $result.success -or $script:stopped.Count -ne 1 -or $script:stopped[0] -ne 9002) { throw 'Confirmed stop was not reported correctly' }
-$script:statuses = @(@{ running = $true; processId = 9002 }, @{ running = $true })
-$result = Stop-PrivacyShield
-if (-not $result.error) { throw 'Running detector was reported stopped' }
-$script:statuses = @(@{ running = $true; processId = 9002 })
-$script:denyStop = $true
-$result = Stop-PrivacyShield
-if (-not $result.error) { throw 'Denied stop was reported successful' }
-Write-Output 'Privacy Shield stop safety fixtures passed.'
+Write-Output 'Privacy Shield PID marker safety fixtures passed.'

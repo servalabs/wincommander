@@ -1124,7 +1124,26 @@ pub(crate) async fn verify_service_shield_profile() -> Result<(), String> {
 async fn service_shield_policy() -> Result<Value, String> {
     crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
         .await
-        .map_err(|error| shield_service_error(&error).to_string())
+        .map_err(|error| {
+            crate::log_message_src(
+                "warn",
+                "core",
+                &format!("[FleetPrivacyShield] service policy failure stage: {}", shield_service_error_stage(&error)),
+            );
+            shield_service_error(&error).to_string()
+        })
+}
+
+fn shield_service_error_stage(error: &str) -> &'static str {
+    if error.starts_with("service connect failed:") { "connect" }
+    else if error.starts_with("service Hello write") { "hello_write" }
+    else if error.starts_with("service Hello acknowledgement") { "hello_ack" }
+    else if error.starts_with("service request write") { "request_write" }
+    else if error.starts_with("service reply timed out") { "reply_timeout" }
+    else if error.starts_with("service reply read failed") { "reply_read" }
+    else if error.starts_with("Service identity could not be verified") { "service_identity" }
+    else if error.starts_with("service rejected request:") { "service_rejection" }
+    else { "other" }
 }
 
 async fn service_shield_profile_is_bound() -> Result<bool, String> {
@@ -1161,7 +1180,15 @@ fn shield_service_error(error: &str) -> &'static str {
 
 #[cfg(test)]
 mod shield_service_error_tests {
-    use super::{shield_service_error, shield_supervisor_requires_policy_lock};
+    use super::{shield_service_error, shield_service_error_stage, shield_supervisor_requires_policy_lock};
+
+    #[test]
+    fn policy_diagnostics_report_only_fixed_stages() {
+        assert_eq!(shield_service_error_stage("service connect failed: private detail"), "connect");
+        assert_eq!(shield_service_error_stage("service Hello acknowledgement timed out"), "hello_ack");
+        assert_eq!(shield_service_error_stage("service reply timed out"), "reply_timeout");
+        assert_eq!(shield_service_error_stage("unexpected private detail"), "other");
+    }
 
     #[test]
     fn only_confirmed_unbound_devices_skip_the_policy_mutex() {

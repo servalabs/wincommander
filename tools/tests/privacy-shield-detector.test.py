@@ -41,7 +41,8 @@ class GazeTests(unittest.TestCase):
     def test_missing_landmark_frame_keeps_gaze_protection_until_presence_loss(self):
         worker = env["ShieldWorker"](buffer_frames=2)
         worker._lock_reason = "LOOK AWAY"
-        self.assertEqual(worker._observe_missing_face(), (False, True))
+        for _ in range(5):
+            self.assertEqual(worker._observe_missing_face(), (False, True))
         self.assertEqual(worker._observe_missing_face(), (True, False))
 
     def test_symmetric_mild_turn_blurs_strong_turn_blacks_out(self):
@@ -49,14 +50,22 @@ class GazeTests(unittest.TestCase):
         for sign in [-1, 1]:
             self.assertEqual(classify(landmarks(sign * 0.04)), "clear")
             self.assertEqual(classify(landmarks(sign * 0.2)), "blur")
-            self.assertEqual(classify(landmarks(sign * 0.45)), "blackout")
+            self.assertEqual(classify(landmarks(sign * 0.4)), "blur")
+            self.assertEqual(classify(landmarks(sign * 0.5)), "blackout")
         self.assertEqual(classify(landmarks(left=0.01)), "blur")
-        self.assertEqual(classify(landmarks(yaw=0.45, left=-0.1)), "blackout")
+        self.assertEqual(classify(landmarks(yaw=0.5, left=-0.1)), "blackout")
         half_face = landmarks()
         half_face[10].y = -0.1
         self.assertEqual(classify(half_face), "blur")
         self.assertEqual(classify(landmarks(left=0.5, right=0.5)), "blackout")
         self.assertEqual(classify(landmarks(float("nan"))), "blackout")
+
+    def test_debug_reason_distinguishes_turn_from_frame_edge_without_values(self):
+        classify = env["classify_gaze_with_reason"]
+        self.assertEqual(classify(landmarks()), ("clear", "clear"))
+        self.assertEqual(classify(landmarks(0.2)), ("blur", "yaw"))
+        self.assertEqual(classify(landmarks(left=0.01)), ("blur", "frame_edge"))
+        self.assertEqual(classify(landmarks(0.5)), ("blackout", "full_turn"))
 
     def test_short_noise_does_not_blur_and_full_turn_can_escalate(self):
         state = env["GazeState"](2)
@@ -65,7 +74,9 @@ class GazeTests(unittest.TestCase):
         self.assertEqual(state.observe("blur"), "clear")
         self.assertEqual(state.observe("blur"), "blur")
         self.assertEqual(state.observe("blackout"), "blur")
+        self.assertEqual(state.observe("blackout"), "blur")
         self.assertEqual(state.observe("blackout"), "blackout")
+        self.assertEqual(state.observe("clear"), "blackout")
         self.assertEqual(state.observe("clear"), "clear")
 
     def test_full_turn_has_message_and_mild_turn_reuses_blurred_background(self):
@@ -89,9 +100,14 @@ class GazeTests(unittest.TestCase):
         overlay.update_state(False, "LOOK AWAY (FULL TURN)")
         self.assertEqual(overlay.presentation, "blackout")
         self.assertFalse(overlay.label.isHidden())
-        self.assertTrue(overlay.label.text().startswith("LOOK AWAY\n"))
+        self.assertEqual(overlay.label.text(), "LOOK AWAY")
         self.assertNotIn("FULL TURN", overlay.label.text())
-        self.assertIn("Look at the screen", overlay.label.text())
+        self.assertIn("rgba(255, 50, 50, 200)", overlay.label.styleSheet())
+        self.assertIn("Consolas", overlay.label.styleSheet())
+        self.assertEqual(overlay.grab().toImage().pixelColor(0, 0), QColor("black"))
+        overlay.update_state(False, "PRESENCE LOST")
+        self.assertEqual(overlay.presentation, "blackout")
+        self.assertEqual(overlay.label.text(), "PRESENCE LOST")
         self.assertEqual(overlay.grab().toImage().pixelColor(0, 0), QColor("black"))
         overlay.update_state(False, "LOOK AWAY")
         self.assertEqual(overlay.blurred_screen.cacheKey(), key)

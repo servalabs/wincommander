@@ -23,6 +23,12 @@ export function shouldProbeShieldCamera(lastProbeAt: number, now: number, force:
   return force || lastProbeAt === 0 || now - lastProbeAt >= 30_000;
 }
 
+export function hasVerifiedRunningDetector(response: { success: boolean; data?: { running?: boolean; detectorProcessRunning?: boolean; shieldLifecycle?: string; error?: boolean | null } }): boolean {
+  const status = response.data;
+  return response.success && status?.error !== true && status?.running === true
+    && status.detectorProcessRunning === true && status.shieldLifecycle === "running";
+}
+
 // A verified lifecycle event supersedes every status request already in flight.
 export class ShieldStatusGate {
   private revision = 0;
