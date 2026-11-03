@@ -29,6 +29,9 @@ use hybrid_release::{fetch_hybrid_pro, hybrid_pro_trust, verify_hybrid_pro};
 #[cfg(feature = "experimental-pq-pro-release")]
 #[path = "pro_install/hybrid_rollback.rs"]
 mod hybrid_rollback;
+#[cfg(feature = "experimental-pq-pro-release")]
+#[path = "pro_install/hybrid_history.rs"]
+mod hybrid_history;
 
 
 #[path = "../../runtime-support/pro_update_guard.rs"]

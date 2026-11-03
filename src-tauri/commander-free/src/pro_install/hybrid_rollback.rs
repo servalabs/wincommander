@@ -40,13 +40,15 @@ pub(super) fn check_and_record_floor(
     version: Option<&str>,
     sha256: &str,
 ) -> Result<(), String> {
+    let trust = hybrid_pro_trust()?;
+    super::hybrid_history::configured(&trust)?;
     check_and_record_with_anchor(
         metadata_path,
         &crate::hybrid_update_anchor::Anchor::machine_pro(),
         candidate,
         version,
         sha256,
-        &hybrid_pro_trust()?,
+        &trust,
     )
 }
 
@@ -110,20 +112,25 @@ fn check_previous(
     sha256: &str,
     trust: &hybrid_release::HybridProTrust,
 ) -> Result<(), String> {
+    let historical = super::hybrid_history::configured(trust)?;
+    check_previous_with_history(previous, candidate, version, sha256, trust, historical.as_ref())
+}
+
+pub(super) fn check_previous_with_history(
+    previous: &ProInstallMetadata,
+    candidate: &ProReleaseProof,
+    version: Option<&str>,
+    sha256: &str,
+    trust: &hybrid_release::HybridProTrust,
+    historical: Option<&super::hybrid_history::HistoricalTrust>,
+) -> Result<(), String> {
     // Existing classical records have no hybrid floor; allow the first migration.
     let Some(old_record) = previous.hybrid_manifest.as_deref() else {
         return Ok(());
     };
-    // Authenticate old evidence with the same keys even after the build's
-    // candidate minimum increases; the candidate still meets current policy.
-    let mut historical_trust = trust.clone();
-    historical_trust.minimum_epoch = 1;
-    let previous_epoch = verify_hybrid_pro(
-        old_record.as_bytes(),
-        &historical_trust,
-        previous.version.as_deref(),
-        &previous.sha256,
-        None,
+    let previous_epoch = super::hybrid_history::verify_previous(
+        old_record.as_bytes(), trust, previous.version.as_deref(), &previous.sha256,
+        historical,
     )
     .map_err(|_| "validation:Current hybrid Pro release record cannot be trusted")?;
     let new_record = candidate
