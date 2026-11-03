@@ -40,10 +40,12 @@ pub(crate) async fn install_update(
 ) -> Result<(), String> {
     #[cfg(feature = "experimental-pq-free-release")]
     {
-        let bytes = hybrid_free::verified_bytes(update, channel, staged).await?;
+        let verified = hybrid_free::verified_bytes(update, channel, staged).await?;
+        require_selected_channel(channel)?;
+        let _floor_lock = hybrid_free::record_before_install(&verified)?;
         require_selected_channel(channel)?;
         update
-            .install(bytes)
+            .install(verified.bytes)
             .map_err(|e| format!("Install failed: {e}"))
     }
     #[cfg(not(feature = "experimental-pq-free-release"))]
@@ -67,7 +69,9 @@ async fn download_for_staging(
 ) -> Result<Vec<u8>, String> {
     #[cfg(feature = "experimental-pq-free-release")]
     {
-        hybrid_free::verified_bytes(update, channel, None).await
+        hybrid_free::verified_bytes(update, channel, None)
+            .await
+            .map(|verified| verified.bytes)
     }
     #[cfg(not(feature = "experimental-pq-free-release"))]
     {

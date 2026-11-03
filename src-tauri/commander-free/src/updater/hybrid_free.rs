@@ -4,6 +4,23 @@ use crate::settings::UpdateChannel;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use wincmd_pq_experiment::{free_release, jws, Purpose};
 
+#[path = "hybrid_free_floor.rs"]
+mod floor;
+
+pub(super) struct VerifiedUpdate {
+    pub(super) bytes: Vec<u8>,
+    envelope: Vec<u8>,
+    version: String,
+    channel: UpdateChannel,
+}
+
+pub(super) fn record_before_install(
+    verified: &VerifiedUpdate,
+) -> Result<crate::paths::MachineStateLock, String> {
+    let trust = Trust::configured()?;
+    floor::record(verified, &trust)
+}
+
 struct Trust {
     ed: [u8; 32],
     pq: [u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN],
@@ -170,7 +187,7 @@ pub(super) async fn verified_bytes(
     update: &tauri_plugin_updater::Update,
     channel: UpdateChannel,
     staged: Option<Vec<u8>>,
-) -> Result<Vec<u8>, String> {
+) -> Result<VerifiedUpdate, String> {
     let trust = Trust::configured()?;
     let envelope = fetch_metadata(&update.version, channel).await?;
     let release = metadata(
@@ -185,7 +202,12 @@ pub(super) async fn verified_bytes(
         None => download_bounded(&release.url, release.size).await?,
     };
     verify_package(update, &release, &bytes)?;
-    Ok(bytes)
+    Ok(VerifiedUpdate {
+        bytes,
+        envelope,
+        version: update.version.clone(),
+        channel,
+    })
 }
 
 fn verify_package(
