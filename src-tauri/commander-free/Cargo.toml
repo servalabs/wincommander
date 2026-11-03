@@ -32,6 +32,8 @@ test = false
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
 portable = []
+# Isolated validation only; this does not enable licence issuance or caching.
+experimental-pq-licence = ["dep:wincmd-pq-experiment"]
 # Closed lab controls for debug artifacts only. This intentionally adds no
 # generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
@@ -114,6 +116,7 @@ hmac = "0.13"
 # Tauri uses tokio internally but doesn't re-export time/rt features.
 tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
 wincmd-shared = { path = "../wincmd-shared" }
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
 wincmd-service-auth = { path = "../wincmd-service-auth" }
 fleet-proto = { path = "../fleet-proto", optional = true }
 wincmd-search = { path = "../wincmd-search" }

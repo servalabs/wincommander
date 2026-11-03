@@ -1176,6 +1176,30 @@ fn parse_and_verify_claims(
     serde_json::from_str(payload).map_err(|e| format!("Invalid signed payload: {}", e))
 }
 
+/// Experimental validation only. Not used by activation, cache, or service IPC.
+/// Persistent rollback protection and coordinated deployment are still required.
+#[cfg(feature = "experimental-pq-licence")]
+#[allow(dead_code)]
+fn parse_and_verify_hybrid_claims(
+    envelope: &[u8],
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(LicenseClaims, u64), &'static str> {
+    if envelope.is_empty()
+        || envelope.len() > 32 * 1024
+        || trust.purpose != wincmd_pq_experiment::Purpose::Licence
+    {
+        return Err("Invalid licence envelope");
+    }
+    let verified = wincmd_pq_experiment::jws::verify(envelope, trust)
+        .map_err(|_| "Invalid licence signature")?;
+    if verified.payload.is_empty() || verified.payload.len() > 16 * 1024 {
+        return Err("Invalid licence payload");
+    }
+    let claims =
+        serde_json::from_slice(&verified.payload).map_err(|_| "Invalid licence payload")?;
+    Ok((claims, verified.epoch))
+}
+
 fn status_from_cached(
     cached: &CachedLicense,
     claims: &LicenseClaims,
@@ -1830,6 +1854,56 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_licence_claims_require_both_signatures_and_local_policy() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../commander-svc/src/fixtures/hybrid-licence-test.json"
+        ))
+        .unwrap();
+        let ed: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(fixture["publicEd"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = URL_SAFE_NO_PAD
+            .decode(fixture["publicPq"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let trust = jws::Trust {
+            purpose: Purpose::Licence,
+            minimum_epoch: 7,
+            ed_key_id: "ed-key",
+            ed25519_public: &ed,
+            pq_key_id: "pq-key",
+            ml_dsa_65_public: &pq,
+        };
+        let token = serde_json::to_vec(&fixture["jws"]).unwrap();
+        let (claims, epoch) = parse_and_verify_hybrid_claims(&token, &trust).unwrap();
+        assert_eq!(claims.device_hash, "device-test");
+        assert_eq!((claims.iat, claims.exp, epoch), (1000, 2000, 7));
+        for index in 0..2 {
+            let mut changed = fixture["jws"].clone();
+            let mut sig = URL_SAFE_NO_PAD
+                .decode(changed["signatures"][index]["signature"].as_str().unwrap())
+                .unwrap();
+            sig[0] ^= 1;
+            changed["signatures"][index]["signature"] = URL_SAFE_NO_PAD.encode(sig).into();
+            assert!(
+                parse_and_verify_hybrid_claims(&serde_json::to_vec(&changed).unwrap(), &trust)
+                    .is_err()
+            );
+        }
+        let stale = jws::Trust {
+            minimum_epoch: 8,
+            ..trust
+        };
+        assert!(parse_and_verify_hybrid_claims(&token, &stale).is_err());
+        assert!(parse_and_verify_hybrid_claims(&vec![b' '; 32 * 1024 + 1], &stale).is_err());
+    }
 
     #[test]
     fn device_license_removal_requires_an_elevated_administrator_token() {

@@ -225,6 +225,8 @@ jobs:
       - run: cargo test --workspace --no-fail-fast
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
+      - name: Test experimental desktop licence validation
+        run: cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence_claims_require_both_signatures_and_local_policy
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
   # its TypeScript check + dependency audit run in THAT repo's CI, not here. A

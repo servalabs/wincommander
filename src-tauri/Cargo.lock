@@ -981,6 +981,7 @@ dependencies = [
  "webview2-com 0.38.2",
  "webview2-com 0.39.1",
  "wincmd-clip-rules",
+ "wincmd-pq-experiment",
  "wincmd-search",
  "wincmd-service-auth",
  "wincmd-shared",
