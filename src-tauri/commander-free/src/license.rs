@@ -233,6 +233,9 @@ struct WorkerActivateRequest<'a> {
 struct WorkerRefreshRequest<'a> {
     payload: &'a str,
     signature: &'a str,
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hybrid: Option<&'a str>,
     #[serde(rename = "deviceHash")]
     device_hash: &'a str,
     #[serde(rename = "appId")]
@@ -1605,6 +1608,8 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         .json(&WorkerRefreshRequest {
             payload: &cached.token.payload,
             signature: &cached.token.signature,
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: cached.token.hybrid.as_deref(),
             device_hash: &device_hash,
             app_id: APP_ID,
             app_version: env!("CARGO_PKG_VERSION"),
@@ -2138,16 +2143,43 @@ mod tests {
         let refresh = WorkerRefreshRequest {
             payload: "payload",
             signature: "signature",
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: Some("hybrid-proof"),
             device_hash: "device-a",
             app_id: APP_ID,
             app_version: "test",
             is_portable: false,
         };
         let refresh_json = serde_json::to_value(refresh).expect("serialize refresh");
+        #[cfg(feature = "experimental-pq-licence")]
+        assert_eq!(
+            refresh_json.get("hybrid").and_then(|value| value.as_str()),
+            Some("hybrid-proof")
+        );
+        #[cfg(not(feature = "experimental-pq-licence"))]
+        assert!(refresh_json.get("hybrid").is_none());
         assert!(
             refresh_json.get("seatHeartbeat").is_none(),
             "routine paid refreshes must never request a seat write"
         );
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_licence_refresh_preserves_the_exact_proof() {
+        let proof = "{\"payload\":\"exact\",\"signatures\":[]}";
+        let request = WorkerRefreshRequest {
+            payload: "payload",
+            signature: "signature",
+            hybrid: Some(proof),
+            device_hash: "device-a",
+            app_id: APP_ID,
+            app_version: "test",
+            is_portable: false,
+        };
+        let serialized = serde_json::to_string(&request).expect("serialize refresh");
+        let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse refresh");
+        assert_eq!(parsed["hybrid"], proof);
     }
 
     #[test]
