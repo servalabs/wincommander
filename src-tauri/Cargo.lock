@@ -1001,6 +1001,7 @@ name = "commander-svc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base64 0.22.1",
  "ed25519-dalek 3.0.0",
  "fleet-agent-core",

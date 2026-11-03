@@ -3,6 +3,9 @@
 use super::*;
 use std::{io::Read, sync::Mutex};
 
+#[path = "license_cache_history.rs"]
+mod history;
+
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -26,6 +29,7 @@ pub(super) fn write(
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
@@ -44,16 +48,28 @@ pub(super) fn write(
         Err(_) => return Err("license cache is unavailable"),
     };
     if let Some(existing) = existing {
-        check_previous(&existing, candidate, public_key, trust)?;
+        check_previous_with_history(&existing, candidate, public_key, trust, old_trust.as_ref())?;
     }
     atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
 }
 
+#[cfg(test)]
 fn check_previous(
     bytes: &[u8],
     candidate: &StoreLicenseCacheRequest,
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
+    check_previous_with_history(bytes, candidate, public_key, trust, old_trust.as_ref())
+}
+
+fn check_previous_with_history(
+    bytes: &[u8],
+    candidate: &StoreLicenseCacheRequest,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    old_trust: Option<&history::HistoricalTrust>,
 ) -> Result<(), &'static str> {
     let existing: ExistingCache =
         serde_json::from_slice(bytes).map_err(|_| "license cache is invalid")?;
@@ -69,7 +85,18 @@ fn check_previous(
     if previous.hybrid.is_none() {
         return Ok(());
     }
-    validate_dual_request(&previous, public_key, trust)?;
+    let previous_epoch = history::verify_previous(&previous, trust, old_trust)?;
+    let candidate_proof = candidate
+        .hybrid
+        .as_deref()
+        .ok_or("hybrid license is required")?;
+    let candidate_verified = validate_hybrid_request(candidate_proof.as_bytes(), trust)?;
+    if candidate_verified.payload != candidate.payload.as_bytes() {
+        return Err("hybrid license does not match the classical license");
+    }
+    if candidate_verified.epoch < previous_epoch {
+        return Err("license cache would restore an older signing epoch");
+    }
     let old: SignedClaims =
         serde_json::from_str(&previous.payload).map_err(|_| "license cache is invalid")?;
     let new: SignedClaims =
