@@ -988,7 +988,8 @@ async fn verify_published_pro_request(
     if crate::sidecar::pro_hash_is_accepted(expected_sha256) {
         return Ok(None);
     }
-    let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest()
+    let version = pro_version.ok_or("validation:Pro release version is missing")?;
+    let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest_for_pro(version)
         .await
         .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?;
     if !signed_pro_matches(&signed, pro_version, expected_sha256) {
@@ -1588,6 +1589,16 @@ mod machine_update_tests {
             .json()
             .await
             .unwrap();
+        let (_, versioned) = crate::investigator_install::manifest::fetch_manifest_for_pro(
+            published["version"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(super::signed_pro_matches(
+            &versioned,
+            published["version"].as_str(),
+            published["sha256"].as_str().unwrap(),
+        ));
         assert!(super::signed_pro_matches(
             &signed,
             published["version"].as_str(),

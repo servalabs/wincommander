@@ -141,13 +141,63 @@ pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> 
 }
 
 pub async fn fetch_manifest() -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
+    fetch_verified_manifest(None).await
+}
+
+/// Fetch the matching version first. Older published releases only have a
+/// latest pointer, which is usable only after the caller checks its version.
+pub(crate) async fn fetch_manifest_for_pro(
+    version: &str,
+) -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
+    let url = versioned_manifest_url(version)?;
+    fetch_verified_manifest(Some(url)).await
+}
+
+fn versioned_manifest_url(version: &str) -> Result<String, String> {
+    let parts: Vec<_> = version.split('.').collect();
+    if !(parts.len() == 3 || parts.len() == 4)
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err("validation:invalid Pro release version".into());
+    }
+    let numbers: Vec<u64> = parts
+        .iter()
+        .map(|part| part.parse())
+        .collect::<Result<_, _>>()
+        .map_err(|_| "validation:invalid Pro release version")?;
+    let mut canonical = format!("{}.{}.{}", numbers[0], numbers[1], numbers[2]);
+    if numbers.get(3).is_some_and(|revision| *revision != 0) {
+        canonical.push_str(&format!(".{}", numbers[3]));
+    }
+    Ok(format!(
+        "https://{}/investigator/v{canonical}/latest.json",
+        crate::pro_install::ALLOWED_UPDATE_HOST
+    ))
+}
+
+async fn fetch_verified_manifest(
+    versioned_url: Option<String>,
+) -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
     let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))
         .map_err(|e| format!("network:{}", e))?;
+    let url = versioned_url.clone().unwrap_or_else(manifest_url);
     let response = client
-        .get(manifest_url())
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("network:{}", e))?;
+    let response = if versioned_url.is_some() && response.status() == reqwest::StatusCode::NOT_FOUND
+    {
+        client
+            .get(manifest_url())
+            .send()
+            .await
+            .map_err(|e| format!("network:{}", e))?
+    } else {
+        response
+    };
     if !response.status().is_success() {
         return Err(format!(
             "network:manifest returned HTTP {}",
@@ -165,6 +215,28 @@ pub async fn fetch_manifest() -> Result<(SignedManifestEnvelope, InvestigatorMan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versioned_pro_manifest_url_cannot_escape_approved_path() {
+        assert_eq!(
+            versioned_manifest_url("3.6.7.0").unwrap(),
+            "https://winupdates.servalabs.com/investigator/v3.6.7/latest.json"
+        );
+        assert_eq!(
+            versioned_manifest_url("3.6.7.2").unwrap(),
+            "https://winupdates.servalabs.com/investigator/v3.6.7.2/latest.json"
+        );
+        for invalid in [
+            "",
+            "3.6",
+            "3.6.7/../../pro",
+            "3.6.7?x=1",
+            "3.6.7.0.1",
+            "9999999999999999999999.1.1",
+        ] {
+            assert!(versioned_manifest_url(invalid).is_err());
+        }
+    }
 
     #[test]
     fn wincommander_minisign_envelope_verifies_before_manifest_parsing() {
