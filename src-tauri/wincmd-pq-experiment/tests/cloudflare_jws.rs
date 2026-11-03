@@ -4,10 +4,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use wincmd_pq_experiment::{jws, Purpose, VerifyError, ML_DSA_65_PUBLIC_KEY_LEN};
 
-#[test]
-fn workers_jws_requires_both_signatures() {
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("cloudflare-jws-v1.json")).unwrap();
+fn verify_fixture(text: &str) {
+    let fixture: serde_json::Value = serde_json::from_str(text).unwrap();
     let ed: [u8; 32] = URL_SAFE_NO_PAD
         .decode(fixture["publicEd"].as_str().unwrap())
         .unwrap()
@@ -43,4 +41,14 @@ fn workers_jws_requires_both_signatures() {
             Some(VerifyError::InvalidSignature)
         );
     }
+}
+
+#[test]
+fn workers_jws_requires_both_signatures() {
+    verify_fixture(include_str!("cloudflare-jws-v1.json"));
+}
+
+#[test]
+fn workers_signer_jws_requires_both_signatures() {
+    verify_fixture(include_str!("cloudflare-jws-signer-v1.json"));
 }
