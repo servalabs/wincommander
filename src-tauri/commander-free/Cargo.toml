@@ -79,6 +79,8 @@ tauri-plugin-opener = "2"
 # the time the watcher fires, so an in-app toast wouldn't be seen.
 tauri-plugin-notification = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Prefer hybrid post-quantum key exchange when the server supports it.
+rustls = { version = "0.23", default-features = false, features = ["prefer-post-quantum"] }
 # Cloudflare DoH resolver to circumvent ISP-level DNS blocks of our update
 # host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
 # transitively and we need binary-compatible TLS roots.
