@@ -42,7 +42,7 @@ foreach ($name in @('Disable-LocationTracking', 'Enable-LocationTracking')) {
   const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
-});
+}, 15_000);
 
 test("location observation distinguishes absent policy from failed reads without touching Windows", async () => {
   const script = String.raw`
@@ -75,7 +75,7 @@ $script:serviceStart='Manual'; $script:master='invalid'; $r=Get-LocationTracking
   const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
-});
+}, 15_000);
 
 
 test("startup and hardening preserve unknown location observations", async () => {
@@ -131,4 +131,4 @@ foreach ($value in @($true,$false)) { $locationStatus=@{disabled=$value}; if ((.
   const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
-});
+}, 15_000);

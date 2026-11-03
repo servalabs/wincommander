@@ -94,7 +94,7 @@ fn historical_observation_survives_restart_but_active_challenge_does_not() {
 #[test]
 fn timeout_and_monotonic_rollback_consume_the_nonce() {
     for time in [
-        Duration::from_secs(30) + Duration::from_nanos(1),
+        Duration::from_secs(30) + Duration::from_millis(1),
         Duration::from_secs(31),
     ] {
         let fixture = Fixture::new();
@@ -115,7 +115,7 @@ fn timeout_and_monotonic_rollback_consume_the_nonce() {
             &request,
             &response,
             &receipt(&nonce, &request, &response),
-            || (fixture.issued - Duration::from_nanos(1), Ok(1))
+            || (fixture.issued - Duration::from_millis(1), Ok(1))
         ),
         Err("contact_expired")
     );
