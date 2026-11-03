@@ -250,6 +250,9 @@ struct WorkerRefreshRequest<'a> {
 struct WorkerDeactivateRequest<'a> {
     payload: &'a str,
     signature: &'a str,
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hybrid: Option<&'a str>,
     #[serde(rename = "deviceHash")]
     device_hash: &'a str,
     #[serde(rename = "appId")]
@@ -1836,6 +1839,8 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
         .json(&WorkerDeactivateRequest {
             payload: &cached.token.payload,
             signature: &cached.token.signature,
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: cached.token.hybrid.as_deref(),
             device_hash: &device_hash,
             app_id: APP_ID,
         })
@@ -2180,6 +2185,23 @@ mod tests {
         let serialized = serde_json::to_string(&request).expect("serialize refresh");
         let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse refresh");
         assert_eq!(parsed["hybrid"], proof);
+    }
+
+    #[test]
+    fn hybrid_licence_deactivation_serializes_the_expected_request() {
+        let request = WorkerDeactivateRequest {
+            payload: "payload",
+            signature: "signature",
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: Some("{\"proof\":\"exact\"}"),
+            device_hash: "device-a",
+            app_id: APP_ID,
+        };
+        let serialized = serde_json::to_value(request).expect("serialize deactivation");
+        #[cfg(feature = "experimental-pq-licence")]
+        assert_eq!(serialized["hybrid"], "{\"proof\":\"exact\"}");
+        #[cfg(not(feature = "experimental-pq-licence"))]
+        assert!(serialized.get("hybrid").is_none());
     }
 
     #[test]
